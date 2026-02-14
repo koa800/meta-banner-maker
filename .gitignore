@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.DS_Store
+*.png
+.cursor/
+client_secret.json
+token.json
+token_*.json
+GWS/
+cpa_*.py
+thankyou-page.html
+chatgpt_*.md
