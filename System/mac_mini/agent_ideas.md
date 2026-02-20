@@ -73,7 +73,7 @@
 
 ### コミュニケーション最適化
 - [x] **ミーティング前準備エージェント**: カレンダー参加者をpeople-profiles.jsonでルックアップしカテゴリ付きで朝の通知に表示（`_notify_today_calendar` 強化）
-- [ ] **フォローアップ提案**: 「〇〇さんと〇日連絡なし。近況確認しますか？」
+- [x] **フォローアップ提案**: contact_state.jsonに接触記録→週次statsにカテゴリ別閾値(上司30日/横21日/メンバー14日)でLINE通知
 
 ### コンテンツ管理
 - [ ] **AI学習コンテンツ更新監視**: 競合コンテンツ・最新AI情報を週1でスキャンして更新提案
@@ -129,6 +129,8 @@
 - **calendar_manager.py 参加者表示**: list_eventsで参加者(self以外)をdisplayName表示
 - **generate_video_script コマンド**: 「スクリプト作成: [条件]」でTikTok/YouTube広告台本を自動生成
 - **calendar tokenハング防止**: tools.pyでtoken未存在時に即座にToolResult(success=False)返却
+- **フォローアップ追跡**: local_agent.pyのreply_suggestion後にcontact_state.jsonへ接触時刻記録
+- **週次フォローアップ通知**: scheduler.py _check_follow_up_suggestionsでカテゴリ別閾値チェック
 
 ---
 
