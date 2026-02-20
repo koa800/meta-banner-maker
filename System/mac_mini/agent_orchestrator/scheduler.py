@@ -352,6 +352,7 @@ class TaskScheduler:
 
     async def _notify_today_calendar(self, send_line_notify):
         """今日のカレンダー予定をLINE通知（予定がなければスキップ）"""
+        import json as _json
         from datetime import date
         try:
             result = tools.calendar_list(account="personal", days=1)
@@ -359,19 +360,65 @@ class TaskScheduler:
                 return
 
             today_str = date.today().strftime("%Y/%m/%d")
+            # people-profiles.json を読み込んで名前→プロファイルの辞書を作成
+            master_dir = os.path.expanduser(
+                self.config.get("paths", {}).get("master_dir", "~/agents/Master")
+            )
+            profiles_path = os.path.join(master_dir, "people-profiles.json")
+            profiles = {}
+            try:
+                if os.path.exists(profiles_path):
+                    with open(profiles_path, encoding="utf-8") as pf:
+                        raw = _json.load(pf)
+                    for key, val in raw.items():
+                        entry = val.get("latest", val)
+                        name = entry.get("name", key)
+                        email = entry.get("email", "")
+                        category = entry.get("category", "")
+                        summary = entry.get("capability_summary", "")[:60]
+                        profiles[key] = {"name": name, "email": email, "category": category, "summary": summary}
+                        if email:
+                            profiles[email] = profiles[key]
+            except Exception:
+                pass
+
+            # カレンダー出力をパース
             # 各行: "  [id] 2026-02-21T10:00:00+09:00 ~ ...  タイトル"
+            # 次行: "    参加者: 三上 功太, ..."
             events = []
-            for line in result.output.splitlines():
+            lines = result.output.splitlines()
+            i = 0
+            while i < len(lines):
+                line = lines[i]
                 m = re.match(r"\s*\[.+?\]\s+(\S+)\s*~\s*\S+\s+(.+)", line)
                 if m:
                     dt_str = m.group(1)
                     title = m.group(2).strip()
-                    # 時刻抽出 (T付きならhh:mm、日付のみなら "終日")
-                    if "T" in dt_str:
-                        time_part = dt_str.split("T")[1][:5]  # "10:00"
-                    else:
-                        time_part = "終日"
-                    events.append(f"  {time_part} {title}")
+                    time_part = dt_str.split("T")[1][:5] if "T" in dt_str else "終日"
+                    # 次行が参加者行かチェック
+                    attendee_info = ""
+                    if i + 1 < len(lines) and "参加者:" in lines[i + 1]:
+                        att_str = lines[i + 1].split("参加者:", 1)[1].strip()
+                        att_names = [a.strip() for a in att_str.split(",")]
+                        matched = []
+                        for att in att_names[:4]:
+                            # emailまたは名前でマッチング
+                            prof = profiles.get(att)
+                            if not prof:
+                                # 部分一致
+                                for k, v in profiles.items():
+                                    if att in k or att in v.get("name", ""):
+                                        prof = v
+                                        break
+                            if prof and prof.get("category"):
+                                matched.append(f"{prof['name']}({prof['category']})")
+                            elif att and "@" not in att:
+                                matched.append(att)
+                        if matched:
+                            attendee_info = f" [{', '.join(matched[:3])}]"
+                        i += 1  # 参加者行をスキップ
+                    events.append(f"  {time_part} {title}{attendee_info}")
+                i += 1
 
             if not events:
                 return
