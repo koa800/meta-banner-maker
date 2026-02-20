@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月20日 |
+| 最終更新 | 2026年2月20日（caffeinate対応・Starter移行確認） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -145,7 +145,7 @@
 | `Master/people-identities.json` | 人物識別データ |
 | `Master/reply_feedback.json` | フィードバック学習データ（修正例・スタイルノート） |
 | `Master/self_clone/projects/kohara/1_Core/IDENTITY.md` | 甲原海人の言語スタイル定義 |
-| `Master/self_clone/projects/kohara/1_Core/SELF_PROFILE.md` | 甲原海人のコアプロファイル（要記入） |
+| `Master/self_clone/projects/kohara/1_Core/SELF_PROFILE.md` | 甲原海人のコアプロファイル |
 
 ---
 
@@ -202,7 +202,8 @@ bash System/line_bot_local/sync_data.sh
 
 | 項目 | 内容 |
 |------|------|
-| Render スリープ | 無料枠は15分間アクセスなしでスリープ。fetch_tasks timeout=35s で対応 |
+| Render プラン | Starter（$7/月）。Zero Downtime デプロイ・スリープなし |
+| Macスリープ対策 | launchd plist に `caffeinate -s` を追加。エージェント起動中はMacスリープ防止 |
 | /tmp リセット | Render 再起動時に `pending_messages` が消える。`1`/`2` で「対象が見つかりません」が出たら Render 再起動と判断 |
 | macOS TCC | launchd から Desktop は直接アクセス不可。Library 版でキャッシュ経由でアクセス |
 | LINE webhook重複 | 同一 message_id のタスクは1件のみキューイング済み |
@@ -223,7 +224,9 @@ bash System/line_bot_local/sync_data.sh
 - [x] デプロイ完了通知
 - [x] Q&A自動回答システム
 - [x] SELF_PROFILE.md の記入（価値観・判断軸）
-- [x] Renderスリープ防止（launchd定期ping、10分間隔）
+- [x] Renderスリープ防止（Starter移行済み・スリープなし）
+- [x] Macスリープ対策（caffeinate -s でエージェント起動中はスリープ防止）
+- [x] 2コマンドのai_suggestion未取得時も学習するよう修正
 
 ---
 
