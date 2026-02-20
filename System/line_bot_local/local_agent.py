@@ -481,6 +481,7 @@ def call_claude_api(instruction: str, task: dict):
         # ===== 返信案生成タスクの専用処理 =====
         if function_name == "generate_reply_suggestion":
             original_message = arguments.get("original_message", task.get("original_text", ""))
+            quoted_text = arguments.get("quoted_text", "")  # 引用返信の場合のボット返信テキスト
             message_id = arguments.get("message_id", "")
             group_name = arguments.get("group_name", "")
             msg_id_short = message_id[:4] if message_id else "----"
@@ -547,6 +548,10 @@ def call_claude_api(instruction: str, task: dict):
             if self_profile:
                 self_profile_section = f"\n【甲原海人のコアプロファイル（価値観・判断軸）】\n{self_profile[:600]}\n"
 
+            quoted_section = ""
+            if quoted_text:
+                quoted_section = f"\n【引用元（ボットが送った返信・この内容へのリプライです）】\n{quoted_text}\n"
+
             prompt = f"""あなたは甲原海人本人として返信を書きます。
 以下の全情報を統合し、甲原海人が実際に送るようなメッセージを生成してください。
 
@@ -560,7 +565,7 @@ def call_claude_api(instruction: str, task: dict):
 推奨挨拶: {comm_greeting or 'お疲れ様！'}
 {goals_context}{notes_text}
 {profile_info}
-
+{quoted_section}
 【受信メッセージ】
 グループ: {group_name}
 内容: {original_message}
@@ -570,7 +575,7 @@ def call_claude_api(instruction: str, task: dict):
 - 50文字以内を目安に簡潔に
 - 相手固有のスタイルノートと口調の癖をそのまま再現する
 - メモ・現在の取り組みがあれば文脈として活用する
-
+{('- 引用元の内容を踏まえた返信にすること' if quoted_text else '')}
 返信文:"""
 
             response = client.messages.create(
@@ -587,12 +592,17 @@ def call_claude_api(instruction: str, task: dict):
 
             # 秘書グループ向けの整形済みメッセージを生成
             profile_badge = f"👤 {sender_name}{category_line}" if profile else f"👤 {sender_name}"
+            quoted_line = ""
+            if quoted_text:
+                q_preview = quoted_text[:50] + "..." if len(quoted_text) > 50 else quoted_text
+                quoted_line = f"📌 引用元: 「{q_preview}」\n"
             result = (
-                f"💡 返信案\n"
+                f"{'💬 引用返信案' if quoted_text else '💡 返信案'}\n"
                 f"{profile_badge}\n"
                 f"\n"
                 f"グループ: {group_name}\n"
                 f"「{original_message[:80]}{'...' if len(original_message) > 80 else ''}」\n"
+                f"{quoted_line}"
                 f"\n"
                 f"返信案:\n{reply_suggestion}\n"
                 f"\n"
