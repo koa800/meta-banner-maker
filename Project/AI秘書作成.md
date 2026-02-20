@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月21日（個人DM対応追加） |
+| 最終更新 | 2026年2月21日（リスク対策・Orchestrator強化・個人DM対応） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -212,6 +212,9 @@ bash System/line_bot_local/sync_data.sh
 | Mac Mini rsync | TCC制限でcron rsyncが失敗するため、Desktop MacのGit post-commitフックから rsync を実行（line_bot_local/も同期対象） |
 | Orchestrator SYSTEM_DIR | tools.py の SYSTEM_DIR は __file__ ベースで動的解決（Desktop/Mac Mini両対応）。ハードコードしないこと |
 | LINE Notify廃止 | LINE Notify は2025年3月終了。Render `/notify` エンドポイント + LINE Messaging API push_message で代替 |
+| Google OAuth token.json | `~/agents/token.json` に保存。access tokenは1時間で失効するがrefresh_tokenで自動更新。oauth_health_checkが毎朝9時に監視 |
+| MacBook機種変更 | `Project/MacBook移行ガイド.md` 参照。Mac Mini側は完全自律稼働のため影響なし。SSHキーとpost-commitフックの再設定のみ必要 |
+| タスク失敗通知 | Orchestratorのタスクが失敗するとLINE通知（2時間レート制限）。health_check/oauth_health_checkは除外 |
 
 ---
 
@@ -223,7 +226,23 @@ bash System/line_bot_local/sync_data.sh
 |------------|------|--------|
 | `com.linebot.localagent` | LINE Bot ポーリング・返信案生成 | — |
 | `com.addness.agent-orchestrator` | タスクスケジューラ・修復エージェント | 8500 |
+| `com.addness.sync-from-macbook` | MacBook→Mac Mini 5分自動同期 | — |
 | `com.prevent.sleep` | Macスリープ防止（caffeinate） | — |
+
+### Orchestratorスケジュール
+
+| タスク | スケジュール | 内容 |
+|--------|------------|------|
+| `mail_inbox_personal` | 毎時 :00 | personalメール処理・返信待ちLINE通知 |
+| `mail_inbox_kohara` | 毎時 :30 | koharaメール処理・返信待ちLINE通知 |
+| `ai_news` | 毎朝 8:00 | AIニュース収集・要約・通知 |
+| `addness_fetch` | 3日ごと 8:00 | Addnessゴールツリー取得 |
+| `daily_addness_digest` | 毎朝 8:30 | 期限超過・直近期限ゴールをLINE通知 |
+| `oauth_health_check` | 毎朝 9:00 | Google OAuth有効性チェック・失敗時通知 |
+| `weekly_idea_proposal` | 毎週月曜 9:00 | agent_ideas.mdのP0/P1タスクをLINE提案 |
+| `daily_report` | 毎夜 21:00 | 日次タスク集計をLINE通知 |
+| `health_check` | 5分ごと | API使用量チェック・90%超でLINE警告 |
+| `repair_check` | 30分ごと | ログエラー検知・自動修復提案 |
 
 ### Orchestrator 通知フロー
 
@@ -235,6 +254,22 @@ Mac Mini Orchestrator
         → SECRETARY_GROUP_ID（秘書グループ）
 ```
 
+### コード同期アーキテクチャ
+
+```
+MacBook Desktop (cursor/)
+  │
+  ├── コミット → post-commit フック → rsync → Mac Mini (~/agents/)  [即時]
+  │                                  └── mac_mini/agent_orchestrator/ 変更時は自動再起動
+  │
+  └── Mac Mini LaunchAgent (com.addness.sync-from-macbook)  [5分ごと fallback]
+       └── sync_from_macbook.sh → SSH → MacBook → rsync
+           └── 失敗時: LINE通知
+```
+
+**同期対象ディレクトリ:** `System/`, `line_bot_local/`, `Master/`, `Project/`, `Skills/`
+**除外:** `addness_chrome_profile/`, `addness_data/`, `qa_sync/`, `mail_review_web/`, `*.log`, `addness_session.json`
+
 ### 関連ファイル（Mac Mini）
 
 | パス | 説明 |
@@ -242,8 +277,9 @@ Mac Mini Orchestrator
 | `System/mac_mini/agent_orchestrator/` | Orchestratorパッケージ |
 | `System/mac_mini/agent_orchestrator/notifier.py` | LINE通知ディスパッチャ（Render経由） |
 | `System/mac_mini/agent_orchestrator/config.yaml` | エージェント設定（パス・スケジュール等） |
-| `~/agents/sync_agent.sh` | local_agent.py タイムスタンプ同期（Mac Mini上） |
+| `~/agents/sync_from_macbook.sh` | Mac Mini側同期スクリプト（失敗時LINE通知付き） |
 | `.git/hooks/post-commit` | コミット時にDesktopからMac MiniへrsyncするGitフック |
+| `Project/MacBook移行ガイド.md` | MacBook機種変更時の移行手順書 |
 
 ---
 
@@ -276,41 +312,142 @@ Mac Mini Orchestrator
 - [x] qa_monitor 本番有効化（config.json `qa_monitor_enabled: true`）
 - [x] post-commit hook 拡張（line_bot_local/同期追加・config.json変更時も再起動・Orchestrator変更時も再起動）
 - [x] 個人DM対応（メンバーからのDMを秘書グループに通知→承認→返信・学習フロー）
-- [ ] **Addness連携（計画中）** — AddnessチャットをCursor/Claudeの実行コンテキストとして直接参照し、チャット内の議論をそのまま実装に移す仕組み
+- [x] Addness Goal Tree Watch（タスク自動抽出パイプライン実装完了）
+- [x] 個人DM対応（メンバーからのDMを秘書グループに通知→承認→返信・comm_profile活用）
+- [x] Mac Mini双方向自動同期（post-commitフック + 5分ごとLaunchAgent）
+- [x] Orchestrator日次LINEレポート（毎夜9時に成功率・エラー集計を通知）
+- [x] タスク失敗LINE通知（失敗時にLINE通知・2時間レート制限で重複防止）
+- [x] Google OAuth監視（毎朝9時にtoken.json + API認証テスト・失敗時LINE通知）
+- [x] 同期失敗LINE通知（sync_from_macbook.shのrsyncエラー時にLINE通知）
+- [x] API使用量警告（直近1時間が90%超でLINE通知）
+- [x] スケジュールステータスAPI（GET /schedule/status で全ジョブの次回実行・最終成功を確認可能）
+- [x] MacBook移行ガイド作成（`Project/MacBook移行ガイド.md`・1ヶ月後の機種変更向け）
 
 ---
 
-## Addness連携構想（2026/02/21）
+## Addness連携（Goal Tree Watch → タスク抽出 → 実行）
 
-### 目的
+### 思想
 
-Addnessチャット（AIエージェント「Addy」含む）で行った思考・意思決定を、Cursor/Claudeがそのまま実行・実装に移せるようにする。「考える場所」と「実行する場所」をシームレスに繋ぐ。
+Addnessはビジョン・ゴール定義・タスク分解の場。Cursor/Claude Code等は実行の場。
+この2つをシームレスに繋ぐため、Addnessの構造化されたGoal Treeデータを定期的にウォッチし、「今すぐ実行できるタスク」を抽出してCursor/Claude等に自動提示する。
 
-### 想定フロー
+> **注意**: チャット内容のリアルタイム連携ではなく、Goal Tree（構造化データ）をベースにした連携。
+
+### アーキテクチャ
 
 ```
-Addnessチャット（考える・決める）
-  ↓  直接参照（API / MCP / ブラウザ）
-Cursor / Claude（実行する・作る）
+┌────────────────────────┐     Playwright      ┌──────────────────────────────┐
+│  Addness ウェブアプリ     │  <── ログイン+巡回  │  addness_fetcher.py          │
+│  Goal Tree / Preview API │  ── JSON取得 ──>    │  - セッション管理              │
+│  2503ノード / 456プレビュー│                     │  - API Response インターセプト  │
+└────────────────────────┘                     │  → addness_data/latest.json   │
+                                                └──────────────────────────────┘
+                                                               │
+                                                     latest.json│
+                                                               ▼
+                                                ┌──────────────────────────────┐
+                                                │  addness_to_context.py        │
+                                                │  - GoalNode構造化              │
+                                                │  - .cursor/rules/addness-goals.mdc │
+                                                │  - Master/addness-goal-tree.md │
+                                                └──────────────────────────────┘
+                                                               │
+                                                     latest.json│
+                                                               ▼
+                                                ┌──────────────────────────────┐
+                                                │  addness_task_extractor.py    │
+                                                │  - 実行可能タスク抽出          │
+                                                │  - 優先度スコアリング          │
+                                                │  - 委任先超過タスク検知         │
+                                                │  → Master/actionable-tasks.md │
+                                                │  → .cursor/rules/addness-actionable.mdc │
+                                                └──────────────────────────────┘
+                                                               │
+                                                  Cursorルール  │ 自動注入
+                                                               ▼
+                                                ┌──────────────────────────────┐
+                                                │  Cursor / Claude Code         │
+                                                │  (MacBook / Mac Mini)         │
+                                                │                               │
+                                                │  addness-actionable.mdc で     │
+                                                │  実行可能タスクを常に認識       │
+                                                │  → タスクの実行・実装           │
+                                                └──────────────────────────────┘
 ```
 
-### 実現手段の候補
+### パイプライン実行
 
-| 手段 | 概要 | 前提条件 |
-|------|------|----------|
-| MCP Server | Addnessチャット履歴をMCPリソースとして公開 → Cursorが直接参照 | Addness APIでチャット取得が可能 |
-| ポーリング + コンテキスト注入 | AI秘書がチャットをポーリング → Cursor用ファイルに書き込み | APIでチャット取得が可能 |
-| ブラウザ参照 | Cursor内蔵ブラウザでAddnessチャット画面を読む | ログイン認証の突破が必要 |
+```bash
+# 1. Addnessからデータ取得（ブラウザ自動操作）
+python3 System/addness_fetcher.py
 
-### 情報境界ルール
+# 2. Goal Tree構造化 + Cursorルール生成
+python3 System/addness_to_context.py
 
-- AI秘書 → Addness: **業務関連情報のみ**送信可。個人情報・プライベートな内容は送信禁止
-- Addness → AI秘書: 取得した情報はローカルのみで利用
+# 3. 実行可能タスク抽出
+python3 System/addness_task_extractor.py
+
+# ワンライナー
+python3 System/addness_fetcher.py && python3 System/addness_to_context.py && python3 System/addness_task_extractor.py
+```
+
+### 出力ファイル
+
+| パス | 説明 |
+|------|------|
+| `addness_data/latest.json` | 生データ（APIレスポンス全量） |
+| `.cursor/rules/addness-goals.mdc` | 全体Goal Tree（Cursor自動注入） |
+| `Master/addness-goal-tree.md` | 全体Goal Tree（フル版） |
+| `.cursor/rules/addness-actionable.mdc` | 実行可能タスクTOP15（Cursor自動注入） |
+| `Master/actionable-tasks.md` | 実行可能タスク全量（詳細版） |
+
+### タスク抽出ロジック
+
+**抽出条件:**
+1. 甲原海人が直接担当
+2. 完了していない
+3. リーフノード（未完了の子がない）= 今すぐ着手できる
+
+**優先度スコアリング:**
+- リーフノード: +50
+- 直接担当: +30
+- 実行中: +20 / 検討中: +10
+- 期限超過: +40 / 今週期限: +25
+- 説明あり: +10
+
+**カテゴリ分類:**
+- 🔴 期限超過（即対応）
+- ⚡ 今週期限
+- 🔄 実行中
+- 🔍 検討中（着手可能）
+- ⚠️ 委任先で期限超過（フォロー推奨）
+- 👁 ウォッチ中（子タスクが進行中）
+
+### 関連ファイル
+
+| パス | 説明 |
+|------|------|
+| `System/addness_fetcher.py` | Playwright でAddnessからデータ取得 |
+| `System/addness_to_context.py` | GoalNode構造化・ゴールツリー生成 |
+| `System/addness_task_extractor.py` | 実行可能タスク抽出・優先度付け |
+| `System/addness_session.json` | Addnessセッション（自動管理） |
+| `System/addness_config.json` | Addness接続設定 |
 
 ### ステータス
 
-- Addness側のチャットAPIの仕様確認が必要（Webhook/REST/認証方式）
-- 開発チーム（小松くん等）に確認予定
+- [x] データ取得パイプライン（addness_fetcher.py）
+- [x] Goal Tree構造化（addness_to_context.py）
+- [x] 実行可能タスク抽出（addness_task_extractor.py）
+- [x] Cursorルール自動注入（addness-actionable.mdc）
+- [ ] 定期実行の自動化（cron/launchd）
+- [ ] Mac Mini からの定期実行統合
+
+### 旧MCP Context Pipe（アーカイブ）
+
+初期構想としてMCPサーバー経由でAddnessチャット内容をリアルタイム連携する方式を実装したが、
+「チャット内容のリアルタイム同期」よりも「Goal Treeの構造化データからタスクを抽出」する方が本質的と判断し、
+Goal Tree Watchアプローチに切り替え。MCPサーバー（`System/addness_mcp_server/`）はRender上に残存。
 
 ---
 
