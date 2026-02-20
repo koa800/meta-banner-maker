@@ -11,6 +11,7 @@ import sys
 import json
 import time
 import subprocess
+import threading
 import requests
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -233,21 +234,20 @@ def complete_task(task_id: str, success: bool, message: str, error: str = None, 
 # ===== デスクトップ通知 =====
 
 def show_notification(title: str, message: str, sound: bool = True):
-    """macOSデスクトップ通知を表示"""
-    # メッセージ内の特殊文字をエスケープ
-    message = message.replace('"', '\\"').replace('\n', ' ')
-    title = title.replace('"', '\\"')
-    
-    sound_cmd = 'sound name "Glass"' if sound else ""
-    
-    script = f'''
-    display notification "{message}" with title "{title}" {sound_cmd}
-    '''
-    
-    try:
-        subprocess.run(["osascript", "-e", script], check=True, capture_output=True)
-    except Exception as e:
-        print(f"通知エラー: {e}")
+    """macOSデスクトップ通知を表示（別スレッドで実行: LaunchAgentでのハング対策）"""
+    def _notify():
+        try:
+            _msg = message.replace('"', '\\"').replace('\n', ' ')
+            _title = title.replace('"', '\\"')
+            sound_cmd = 'sound name "Glass"' if sound else ""
+            script = f'display notification "{_msg}" with title "{_title}" {sound_cmd}'
+            subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True, timeout=5
+            )
+        except Exception:
+            pass
+    threading.Thread(target=_notify, daemon=True).start()
 
 
 # ===== Cursor自動実行 =====

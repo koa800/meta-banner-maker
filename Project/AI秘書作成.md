@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月20日（オーナー直接送信メッセージへの引用返信検知修正） |
+| 最終更新 | 2026年2月20日（Mac Mini show_notification LaunchAgentハング修正） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -231,6 +231,7 @@ bash System/line_bot_local/sync_data.sh
 - [x] 1/2フォールバックを返信案通知時刻で選ぶよう修正（誤送信バグ）
 - [x] pending_messages永続化（Render永続ディスク /data）
 - [x] オーナー直接送信メッセージへの引用返信も検知するよう修正（sent_group_messages追跡範囲拡張）
+- [x] show_notification LaunchAgentハング修正（threading.Thread化でメインスレッドブロッキング解消）
 
 ---
 
