@@ -10,8 +10,21 @@ DESKTOP_AGENT="$PROJECT_ROOT/System/line_bot_local/local_agent.py"
 echo "🔄 LINE Bot データ同期中..."
 mkdir -p "$LIB_DATA"
 
-# データファイル同期
-cp "$PROJECT_ROOT/Master/people-profiles.json" "$LIB_DATA/people-profiles.json" 2>/dev/null && echo "✅ people-profiles.json"
+# --- people-profiles.json は双方向同期（LINEメモが含まれるため） ---
+PROFILES_SRC="$PROJECT_ROOT/Master/people-profiles.json"
+PROFILES_DST="$LIB_DATA/people-profiles.json"
+if [ -f "$PROFILES_DST" ]; then
+    LIB_TIME=$(stat -f "%m" "$PROFILES_DST" 2>/dev/null || echo 0)
+    DST_TIME=$(stat -f "%m" "$PROFILES_SRC" 2>/dev/null || echo 0)
+    if [ "$LIB_TIME" -gt "$DST_TIME" ]; then
+        cp "$PROFILES_DST" "$PROFILES_SRC" && echo "✅ people-profiles.json (Library→Desktop: メモ保持)"
+    else
+        cp "$PROFILES_SRC" "$PROFILES_DST" && echo "✅ people-profiles.json (Desktop→Library)"
+    fi
+else
+    cp "$PROFILES_SRC" "$PROFILES_DST" 2>/dev/null && echo "✅ people-profiles.json (初回)"
+fi
+
 cp "$PROJECT_ROOT/Master/people-identities.json" "$LIB_DATA/people-identities.json" 2>/dev/null && echo "✅ people-identities.json"
 cp "$PROJECT_ROOT/Master/self_clone/projects/kohara/1_Core/IDENTITY.md" "$LIB_DATA/IDENTITY.md" 2>/dev/null && echo "✅ IDENTITY.md"
 cp "$PROJECT_ROOT/Master/self_clone/projects/kohara/1_Core/SELF_PROFILE.md" "$LIB_DATA/SELF_PROFILE.md" 2>/dev/null && echo "✅ SELF_PROFILE.md"

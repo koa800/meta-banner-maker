@@ -223,7 +223,6 @@ bash System/line_bot_local/sync_data.sh
 - [x] デプロイ完了通知
 - [x] Q&A自動回答システム
 - [x] SELF_PROFILE.md の記入（価値観・判断軸）
-- [ ] pending_messages の永続化（Redis等）→ Render再起動耐性
 - [x] Renderスリープ防止（launchd定期ping、10分間隔）
 
 ---
