@@ -2,7 +2,7 @@
 
 > **使い方**: Mac miniが定期的にここを読んで「次にこれをやりませんか？」と提案する。
 > アイデアを思いついたら追加する。完了したものは `[x]` にする。
-> 最終更新: 2026-02-21
+> 最終更新: 2026-02-21 (リスク対策追加)
 
 ---
 
@@ -114,6 +114,12 @@
 - 毎週月曜9:00 未着手P0/P1アイデアをLINEで提案（`weekly_idea_proposal`）
 - 重要メール検知→返信待ち件数をLINE通知（scheduler.py `_notify_mail_result`）
 - qa_monitor.py 本番稼働（config.json `qa_monitor_enabled: true`）
+
+### リスク対策（2026-02-21）
+- **Google OAuth監視**: 毎朝9:00 token.jsonとGoogle API認証チェック、失敗時LINE通知（`oauth_health_check`）
+- **同期失敗通知**: sync_from_macbook.shの同期エラー時にLINE通知
+- **API使用量警告**: 直近1時間のAPI使用量が90%超でLINE通知（health_check強化）
+- **MacBook移行ガイド**: `Project/MacBook移行ガイド.md` 作成（1ヶ月後の機種変更に対応）
 
 ---
 
