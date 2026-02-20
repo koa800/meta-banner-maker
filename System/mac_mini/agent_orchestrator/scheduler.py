@@ -330,33 +330,94 @@ class TaskScheduler:
         logger.info(f"Weekly idea proposal sent: {task_text[:80]}")
 
     async def _run_daily_addness_digest(self):
-        """毎朝8:30: Addnessゴールから期限超過・今日期限のタスクをLINE通知"""
+        """毎朝8:30: actionable-tasks.mdから期限超過・実行中タスクをLINE通知"""
         from .notifier import send_line_notify
         from datetime import date
 
-        goal_tree_path = os.path.expanduser(
-            os.path.join(self.config.get("paths", {}).get("master_dir", "~/Desktop/cursor/Master"),
-                         "addness-goal-tree.md")
-        )
-        if not os.path.exists(goal_tree_path):
-            logger.warning("addness-goal-tree.md not found")
+        master_dir = self.config.get("paths", {}).get("master_dir", "~/agents/Master")
+        actionable_path = os.path.expanduser(os.path.join(master_dir, "actionable-tasks.md"))
+        goal_tree_path = os.path.expanduser(os.path.join(master_dir, "addness-goal-tree.md"))
+
+        # actionable-tasks.md を優先使用、なければ旧方式 goal-tree にフォールバック
+        if os.path.exists(actionable_path):
+            await self._digest_from_actionable(actionable_path, send_line_notify)
+        elif os.path.exists(goal_tree_path):
+            await self._digest_from_goal_tree(goal_tree_path, send_line_notify)
+        else:
+            logger.warning("Neither actionable-tasks.md nor addness-goal-tree.md found")
+
+    async def _digest_from_actionable(self, path: str, send_line_notify):
+        """actionable-tasks.md から日次ダイジェストを生成"""
+        from datetime import date
+        today_str = date.today().strftime("%Y/%m/%d")
+
+        with open(path, encoding="utf-8") as f:
+            content = f.read()
+
+        # データ更新日時の取得
+        update_m = re.search(r"更新日時[^\|]*\|\s*(.+)", content)
+        data_date = update_m.group(1).strip() if update_m else "不明"
+
+        # セクション別パース（🔴期限超過 / 🔄実行中）
+        overdue_items = []
+        in_progress_items = []
+        current_section = ""
+
+        for line in content.splitlines():
+            if "🔴 期限超過" in line:
+                current_section = "overdue"
+            elif "🔄 実行中" in line:
+                current_section = "in_progress"
+            elif re.match(r"^## ", line):
+                current_section = "other"
+
+            if current_section == "overdue":
+                m = re.match(r"^\d+\.\s+\*\*(.+?)\*\*", line)
+                if m:
+                    title = m.group(1).strip()[:50]
+                    # 期限情報を含める
+                    deadline_m = re.search(r"期限[：:]\s*(\d{4}/\d{2}/\d{2})", line)
+                    if deadline_m:
+                        title += f"（期限: {deadline_m.group(1)}）"
+                    overdue_items.append(title)
+
+            elif current_section == "in_progress":
+                m = re.match(r"^\d+\.\s+\*\*(.+?)\*\*", line)
+                if m:
+                    in_progress_items.append(m.group(1).strip()[:50])
+
+        if not overdue_items and not in_progress_items:
+            logger.info("No urgent Addness tasks for today")
             return
 
+        parts = [f"\n📋 今日のタスク（{today_str}）\n━━━━━━━━━━━━"]
+        if overdue_items:
+            parts.append(f"🔴 期限超過 ({len(overdue_items)}件):")
+            parts.extend(f"  ・{t}" for t in overdue_items[:4])
+        if in_progress_items:
+            parts.append(f"🔄 実行中:")
+            parts.extend(f"  ・{t}" for t in in_progress_items[:3])
+        parts.append(f"━━━━━━━━━━━━\n📅 データ: {data_date}")
+
+        message = "\n".join(parts)
+        task_id = self.memory.log_task_start("daily_addness_digest")
+        ok = send_line_notify(message)
+        self.memory.log_task_end(task_id, "success" if ok else "error")
+        logger.info(f"Daily digest sent: {len(overdue_items)} overdue, {len(in_progress_items)} in_progress")
+
+    async def _digest_from_goal_tree(self, path: str, send_line_notify):
+        """goal-tree.md から日次ダイジェストを生成（fallback）"""
+        from datetime import date
         today = date.today()
         today_str = today.strftime("%Y/%m/%d")
 
-        with open(goal_tree_path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             lines = f.readlines()
 
-        overdue = []
-        due_today = []
-        due_soon = []  # 7日以内
-
+        overdue, due_today, due_soon = [], [], []
         for line in lines:
-            # 甲原担当かどうか
             if "甲原" not in line and "kohara" not in line.lower() and "koa" not in line.lower():
                 continue
-            # 期限を探す
             m = re.search(r"期限[：:]\s*(\d{4}/\d{2}/\d{2})", line)
             if not m:
                 continue
@@ -365,18 +426,15 @@ class TaskScheduler:
                 deadline = date.fromisoformat(deadline_str.replace("/", "-"))
             except ValueError:
                 continue
-
-            # ゴール名（**で囲まれた部分 or 行全体）
             title_m = re.search(r"\*\*(.+?)\*\*", line)
             title = title_m.group(1) if title_m else line.strip()[:60]
-
             delta = (deadline - today).days
             if delta < 0:
                 overdue.append(f"🔴 {title}（{deadline_str}）")
             elif delta == 0:
                 due_today.append(f"🟡 {title}（本日期限）")
             elif delta <= 7:
-                due_soon.append(f"🟠 {title}（残{delta}日 {deadline_str}）")
+                due_soon.append(f"🟠 {title}（残{delta}日）")
 
         if not overdue and not due_today and not due_soon:
             logger.info("No urgent Addness goals for today")
@@ -391,11 +449,10 @@ class TaskScheduler:
             parts.append("【今週期限】\n" + "\n".join(due_soon[:5]))
         parts.append("━━━━━━━━━━━━")
 
-        message = "\n".join(parts)
         task_id = self.memory.log_task_start("daily_addness_digest")
-        ok = send_line_notify(message)
+        ok = send_line_notify("\n".join(parts))
         self.memory.log_task_end(task_id, "success" if ok else "error")
-        logger.info("Daily Addness digest sent")
+        logger.info("Daily Addness digest sent (from goal tree)")
 
     async def _run_render_health_check(self):
         """Renderサーバーの死活監視（30分ごと）"""
