@@ -101,10 +101,41 @@ class TaskScheduler:
         await self._execute_tool("ai_news", tools.ai_news_notify)
 
     async def _run_mail_personal(self):
-        await self._execute_tool("mail_inbox_personal", tools.mail_run, account="personal")
+        result = await self._execute_tool("mail_inbox_personal", tools.mail_run, account="personal")
+        await self._notify_mail_result(result, "personal")
 
     async def _run_mail_kohara(self):
-        await self._execute_tool("mail_inbox_kohara", tools.mail_run, account="kohara")
+        result = await self._execute_tool("mail_inbox_kohara", tools.mail_run, account="kohara")
+        await self._notify_mail_result(result, "kohara")
+
+    async def _notify_mail_result(self, result: tools.ToolResult, account: str):
+        """メール処理結果をLINE通知（返信待ちがある場合のみ）"""
+        if not result.success or not result.output:
+            return
+        from .notifier import send_line_notify
+
+        waiting_m = re.search(r"返信待ち[：:]\s*(\d+)\s*件", result.output)
+        delete_m = re.search(r"削除確認[：:]\s*(\d+)\s*件", result.output)
+
+        waiting = int(waiting_m.group(1)) if waiting_m else 0
+        delete = int(delete_m.group(1)) if delete_m else 0
+
+        if waiting <= 0:
+            return
+
+        account_label = "personal" if account == "personal" else "kohara"
+        message = (
+            f"\n📬 メール確認 ({account_label})\n"
+            f"━━━━━━━━━━━━\n"
+            f"返信待ち: {waiting}件"
+            + (f" / 削除確認: {delete}件" if delete > 0 else "")
+            + f"\n━━━━━━━━━━━━"
+        )
+        ok = send_line_notify(message)
+        if ok:
+            logger.info(f"Mail notification sent for {account}: waiting={waiting}")
+        else:
+            logger.warning(f"Mail notification failed for {account}")
 
     async def _run_addness_goal_check(self):
         result = await self._execute_tool("addness_to_context", tools.addness_to_context)

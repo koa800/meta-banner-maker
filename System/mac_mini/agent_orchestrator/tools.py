@@ -14,7 +14,8 @@ from .shared_logger import get_logger
 
 logger = get_logger("tools")
 
-SYSTEM_DIR = os.path.expanduser("~/Desktop/cursor/System")
+_orch_dir = os.path.dirname(os.path.abspath(__file__))   # agent_orchestrator/
+SYSTEM_DIR = os.path.dirname(os.path.dirname(_orch_dir))  # System/
 VENV_PYTHON = os.path.expanduser("~/agent-env/bin/python3")
 
 
