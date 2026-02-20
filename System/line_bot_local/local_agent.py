@@ -619,6 +619,59 @@ def call_claude_api(instruction: str, task: dict):
             )
             return True, result
 
+        # ===== コンテキスト分析タスク（「次に何すべき？」等） =====
+        if function_name == "context_query":
+            question = arguments.get("question", instruction)
+
+            # actionable-tasks.md を読み込む
+            actionable_path = _PROJECT_ROOT / "Master" / "actionable-tasks.md"
+            actionable_content = ""
+            if actionable_path.exists():
+                try:
+                    actionable_content = actionable_path.read_text(encoding="utf-8")[:3000]
+                except Exception:
+                    pass
+
+            # mail_manager.py で返信待ち件数を取得
+            mail_status_text = ""
+            try:
+                import subprocess, sys as _sys
+                mail_py = Path(__file__).parent.parent / "mail_manager.py"
+                if mail_py.exists():
+                    r = subprocess.run(
+                        [_sys.executable, str(mail_py), "--account", "personal", "status"],
+                        capture_output=True, text=True, timeout=30
+                    )
+                    if r.returncode == 0 and r.stdout.strip():
+                        mail_status_text = f"\n【メール状況（personal）】\n{r.stdout.strip()[:300]}"
+            except Exception:
+                pass
+
+            # 日時
+            today_str = datetime.now().strftime("%Y/%m/%d (%A)")
+
+            context_prompt = f"""あなたは甲原海人のAI秘書です。
+今日の日付: {today_str}
+
+以下の情報をもとに、「{question}」に答えてください。
+
+【Addnessゴール・タスク状況】
+{actionable_content or '（データなし）'}
+{mail_status_text}
+
+【回答ルール】
+- 今すぐやるべきことを優先度順に3〜5件リスト
+- 各項目に理由or期限を添える
+- 500文字以内、LINEで読みやすい形式
+"""
+            response = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=600,
+                system="あなたは甲原海人のAI秘書です。質問に対してコンパクトで実用的な回答をしてください。",
+                messages=[{"role": "user", "content": context_prompt}]
+            )
+            return True, response.content[0].text.strip()
+
         # ===== その他タスクの汎用処理 =====
         sender_context = build_sender_context(sender_name)
 

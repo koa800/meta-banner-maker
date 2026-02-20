@@ -331,7 +331,7 @@ class TaskScheduler:
         logger.info(f"Weekly idea proposal sent: {task_text[:80]}")
 
     async def _run_daily_addness_digest(self):
-        """毎朝8:30: actionable-tasks.mdから期限超過・実行中タスクをLINE通知"""
+        """毎朝8:30: actionable-tasks.md（タスク）+ カレンダー（今日の予定）をLINE通知"""
         from .notifier import send_line_notify
         from datetime import date
 
@@ -346,6 +346,49 @@ class TaskScheduler:
             await self._digest_from_goal_tree(goal_tree_path, send_line_notify)
         else:
             logger.warning("Neither actionable-tasks.md nor addness-goal-tree.md found")
+
+        # 今日のカレンダーを別メッセージで通知（独立して動作）
+        await self._notify_today_calendar(send_line_notify)
+
+    async def _notify_today_calendar(self, send_line_notify):
+        """今日のカレンダー予定をLINE通知（予定がなければスキップ）"""
+        from datetime import date
+        try:
+            result = tools.calendar_list(account="personal", days=1)
+            if not result.success or not result.output or "予定はありません" in result.output:
+                return
+
+            today_str = date.today().strftime("%Y/%m/%d")
+            # 各行: "  [id] 2026-02-21T10:00:00+09:00 ~ ...  タイトル"
+            events = []
+            for line in result.output.splitlines():
+                m = re.match(r"\s*\[.+?\]\s+(\S+)\s*~\s*\S+\s+(.+)", line)
+                if m:
+                    dt_str = m.group(1)
+                    title = m.group(2).strip()
+                    # 時刻抽出 (T付きならhh:mm、日付のみなら "終日")
+                    if "T" in dt_str:
+                        time_part = dt_str.split("T")[1][:5]  # "10:00"
+                    else:
+                        time_part = "終日"
+                    events.append(f"  {time_part} {title}")
+
+            if not events:
+                return
+
+            message = (
+                f"\n📅 今日の予定 ({today_str})\n"
+                "━━━━━━━━━━━━\n"
+                + "\n".join(events[:8])
+                + "\n━━━━━━━━━━━━"
+            )
+            ok = send_line_notify(message)
+            if ok:
+                logger.info(f"Calendar digest sent: {len(events)} events")
+            else:
+                logger.warning("Calendar digest notification failed")
+        except Exception as e:
+            logger.debug(f"Calendar digest error: {e}")
 
     async def _digest_from_actionable(self, path: str, send_line_notify):
         """actionable-tasks.md から日次ダイジェストを生成"""

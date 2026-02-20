@@ -103,11 +103,19 @@ def mail_status(account: str = "personal") -> ToolResult:
 
 # --------------- Calendar ---------------
 
-def calendar_list(account: str = "personal", days: int = 7) -> ToolResult:
-    return _run_script(
-        os.path.join(SYSTEM_DIR, "calendar_manager.py"),
-        ["--account", account, "list", str(days)]
-    )
+def calendar_list(account: str = "personal", days: int = 7, target_date: str = None) -> ToolResult:
+    """カレンダーの予定を取得。
+    target_date: 特定日 (YYYY-MM-DD)。未指定の場合は本日から days 日分（ただし calendar_manager.py
+    は target_date なしで次30日分を返す）。days=1 かつ target_date 未指定なら今日の日付を使用。
+    """
+    from datetime import date
+    args = ["--account", account, "list"]
+    if target_date:
+        args.append(target_date)
+    elif days == 1:
+        args.append(date.today().isoformat())
+    # days>1 の場合は target_date なしで次30日分を返す（calendar_manager.py の仕様）
+    return _run_script(os.path.join(SYSTEM_DIR, "calendar_manager.py"), args)
 
 
 # --------------- Sheets ---------------
