@@ -617,6 +617,18 @@ def call_claude_api(instruction: str, task: dict):
                 f"1 → 承認して送信\n"
                 f"2 [別の内容] → 編集して送信"
             )
+            # 接触記録を更新（フォローアップ追跡用）
+            if sender_name:
+                _contact_state_path = Path(__file__).parent / "contact_state.json"
+                try:
+                    contact_state = {}
+                    if _contact_state_path.exists():
+                        contact_state = json.loads(_contact_state_path.read_text(encoding="utf-8"))
+                    contact_state[sender_name] = datetime.now().isoformat()
+                    _contact_state_path.write_text(json.dumps(contact_state, ensure_ascii=False, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
+
             return True, result
 
         # ===== LP自動ドラフト生成タスク =====

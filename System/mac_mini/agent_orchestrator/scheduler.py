@@ -681,6 +681,73 @@ class TaskScheduler:
         ok = send_line_notify("\n".join(parts))
         logger.info(f"Weekly stats sent: {total} tasks, {success_rate}% success, {qa_count} Q&As")
 
+        # フォローアップ提案（contact_state.json から長期未接触の人を検出）
+        await self._check_follow_up_suggestions(send_line_notify)
+
+    async def _check_follow_up_suggestions(self, send_line_notify):
+        """長期未接触の人をpeople-profiles.jsonとcontact_state.jsonで検出しLINE通知"""
+        import json as _json
+        from datetime import datetime as _dt, timedelta
+
+        contact_state_path = os.path.expanduser("~/agents/line_bot_local/contact_state.json")
+        profiles_path = os.path.expanduser(
+            os.path.join(self.config.get("paths", {}).get("master_dir", "~/agents/Master"),
+                         "people-profiles.json")
+        )
+        if not os.path.exists(contact_state_path) or not os.path.exists(profiles_path):
+            logger.debug("Follow-up check: missing contact_state.json or people-profiles.json")
+            return
+
+        try:
+            with open(contact_state_path, encoding="utf-8") as f:
+                contact_state = _json.load(f)
+            with open(profiles_path, encoding="utf-8") as f:
+                profiles = _json.load(f)
+        except Exception as e:
+            logger.debug(f"Follow-up check: load error: {e}")
+            return
+
+        now = _dt.now()
+        # カテゴリ別閾値（日数）
+        THRESHOLDS = {
+            "上司": 30,
+            "横（並列）": 21,
+            "直下メンバー": 14,
+            "メンバー": 14,
+        }
+        suggestions = []
+        for key, val in profiles.items():
+            entry = val.get("latest", val)
+            name = entry.get("name", key)
+            category = entry.get("category", "")
+            threshold_days = THRESHOLDS.get(category)
+            if not threshold_days:
+                continue  # 閾値未定義のカテゴリはスキップ
+            last_contact_str = contact_state.get(name)
+            if not last_contact_str:
+                continue  # 接触記録なし（初回は提案しない）
+            try:
+                last_contact = _dt.fromisoformat(last_contact_str)
+                days_since = (now - last_contact).days
+                if days_since >= threshold_days:
+                    suggestions.append((days_since, name, category))
+            except (ValueError, TypeError):
+                pass
+
+        if not suggestions:
+            logger.debug("Follow-up check: no overdue contacts")
+            return
+
+        # 最も古い順で最大5件
+        suggestions.sort(reverse=True)
+        parts = [f"\n💬 フォローアップ提案\n━━━━━━━━━━━━"]
+        for days, name, category in suggestions[:5]:
+            parts.append(f"  {name}({category}) — {days}日未連絡")
+        parts.append("━━━━━━━━━━━━")
+
+        ok = send_line_notify("\n".join(parts))
+        logger.info(f"Follow-up suggestions sent: {len(suggestions[:5])} people")
+
     async def _run_repair_check(self):
         if _repair_agent_ref is None:
             logger.warning("Repair agent not initialized, skipping repair check")
