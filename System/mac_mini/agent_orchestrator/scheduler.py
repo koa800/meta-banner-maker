@@ -246,6 +246,25 @@ class TaskScheduler:
             except Exception as e:
                 logger.debug(f"Q&A state check error: {e}")
 
+        # local_agent.py の生存確認（agent.log 更新時刻チェック）
+        agent_log = os.path.expanduser("~/agents/line_bot_local/agent.log")
+        if os.path.exists(agent_log):
+            try:
+                import time
+                log_age_min = (time.time() - os.path.getmtime(agent_log)) / 60
+                if log_age_min > 30:
+                    logger.warning(f"local_agent may be stale: log not updated for {log_age_min:.0f} min")
+                    state_key = "local_agent_stale_notified"
+                    last_n = self.memory.get_state(state_key)
+                    if not last_n or (datetime.now() - datetime.fromisoformat(last_n)).total_seconds() > 3600:
+                        send_line_notify(
+                            f"\n⚠️ local_agent 停止の可能性\nログが{log_age_min:.0f}分間更新されていません\n"
+                            f"com.linebot.localagent を確認してください"
+                        )
+                        self.memory.set_state(state_key, datetime.now().isoformat())
+            except Exception as e:
+                logger.debug(f"local_agent log check error: {e}")
+
         running_jobs = len(self.scheduler.get_jobs())
         self.memory.set_state("health_status", "ok")
         self.memory.set_state("running_jobs", str(running_jobs))
