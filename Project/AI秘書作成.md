@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月21日（orchestrator_status・addness_sync・mail_check コマンド追加） |
+| 最終更新 | 2026年2月21日（ヘルプコマンド・手動トリガー系コマンド群完成） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -368,6 +368,7 @@ MacBook Desktop (cursor/)
 - [x] orchestrator_statusコマンド（「状態確認」でOrchestrator稼働状況・スケジュールをLINE返答）
 - [x] addness_syncコマンド（「Addness更新」でaddness_to_context.py即時実行→件数サマリー返答）
 - [x] mail_checkコマンド（「メール確認」でmail_manager.py run即時実行→処理結果返答）
+- [x] ヘルプコマンド（「ヘルプ」「コマンド一覧」で全機能一覧を表示・Claude API呼び出しなし）
 
 ---
 
