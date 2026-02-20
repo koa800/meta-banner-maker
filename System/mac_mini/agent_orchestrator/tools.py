@@ -109,6 +109,15 @@ def calendar_list(account: str = "personal", days: int = 7, target_date: str = N
     は target_date なしで次30日分を返す）。days=1 かつ target_date 未指定なら今日の日付を使用。
     """
     from datetime import date
+    # OAuthトークンが存在しない場合は即座にエラー返却（ヘッドレス環境でのハング防止）
+    token_file = "token_calendar.json" if account == "kohara" else f"token_calendar_{account}.json"
+    token_path = os.path.join(SYSTEM_DIR, token_file)
+    if not os.path.exists(token_path):
+        return ToolResult(
+            success=False, output="",
+            error=f"Calendar token not found: {token_path} — run calendar auth setup first",
+            return_code=1
+        )
     args = ["--account", account, "list"]
     if target_date:
         args.append(target_date)
