@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月21日（Mac Mini Orchestratorデプロイ・LINE通知切り替え完了） |
+| 最終更新 | 2026年2月21日（P1タスク完了: SYSTEM_DIR修正・メールLINE通知・qa_monitor有効化） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -25,8 +25,9 @@
                                    ポーリング │ (10秒間隔)
                                               ▼
                                ┌──────────────────────────────┐
-                               │  PC常駐エージェント (Mac)       │
-                               │  ~/Library/LineBot/local_agent.py │
+                               │  Mac Mini 常駐エージェント      │
+                               │  ~/agents/line_bot_local/      │
+                               │  local_agent.py                │
                                │  - Claude Sonnet で返信案生成  │
                                │  - フィードバック学習          │
                                │  - people-profiles.json参照   │
@@ -57,9 +58,9 @@
 5. **Googleカレンダー連携**: 「明日14時に会議入れて」で予定追加
 6. **PC委譲タスク**: 日報入力などの複雑タスクをCursorに転送
 
-### Phase 3: PC常駐エージェント（完了）
-7. **launchd常駐**: `~/Library/LineBot/local_agent.py` をlaunchdで自動起動
-8. **Desktop TCC回避**: macOS TCC制限のため `~/Library/LineBot/` を起点とし、Desktop配下はキャッシュ経由でアクセス
+### Phase 3: Mac Mini 常駐エージェント（完了）
+7. **launchd常駐**: Mac Mini `~/agents/line_bot_local/local_agent.py` をlaunchdで自動起動
+8. **Mac Mini TCC回避**: macOS TCC制限のため `~/agents/` を作業ディレクトリとして使用
 9. **デプロイ完了通知**: Render起動時にLINEへ通知（gunicorn multi-worker対応・重複防止）
 
 ### Phase 4: 人物プロファイル × フィードバック学習（完了）
@@ -128,13 +129,12 @@
 | `System/line_bot/qa_handler.py` | Q&A処理ハンドラ |
 | `System/line_bot/requirements.txt` | Python依存関係 |
 
-### ローカル側（PC常駐エージェント）
+### ローカル側（Mac Mini 常駐エージェント）
 | パス | 説明 |
 |------|------|
-| `~/Library/LineBot/local_agent.py` | **実行ファイル**（launchdから起動） |
-| `~/Library/LineBot/data/` | キャッシュデータ（TCC回避用） |
-| `~/Library/LineBot/logs/agent.log` | 実行ログ |
-| `~/Library/LaunchAgents/com.linebot.localagent.plist` | launchd設定 |
+| `~/agents/line_bot_local/local_agent.py` | **実行ファイル**（Mac Mini launchdから起動） |
+| `~/agents/line_bot_local/agent.log` | 実行ログ（LaunchAgent StandardOutPath） |
+| `~/Library/LaunchAgents/com.linebot.localagent.plist` | launchd設定（Mac Mini） |
 | `System/line_bot_local/local_agent.py` | Desktop版（開発・編集用） |
 | `System/line_bot_local/sync_data.sh` | Desktop ↔ Library 双方向同期 |
 
@@ -189,7 +189,7 @@ bash System/line_bot_local/sync_data.sh
 | `ANTHROPIC_API_KEY` | Claude API認証（返信案生成） |
 | `OWNER_USER_ID` | オーナー（甲原海人）のLINE User ID |
 | `SECRETARY_GROUP_ID` | AI秘書とのやりとり部屋のGroup ID |
-| `LOCAL_AGENT_TOKEN` | PC常駐エージェント認証用 |
+| `LOCAL_AGENT_TOKEN` | PC常駐エージェント・Mac Mini Orchestrator認証用（Mac Mini側の `AGENT_TOKEN` と同値） |
 | `GOOGLE_CREDENTIALS_JSON` | Google Calendar用サービスアカウント |
 | `GOOGLE_CALENDAR_ID` | カレンダーID |
 | `PINECONE_API_KEY` | Pinecone API認証（Q&A） |
@@ -209,7 +209,8 @@ bash System/line_bot_local/sync_data.sh
 | macOS TCC | launchd から Desktop は直接アクセス不可。Library 版でキャッシュ経由でアクセス |
 | LINE webhook重複 | 同一 message_id のタスクは1件のみキューイング済み |
 | Mac Mini TCC制限 | LaunchAgent から `~/Desktop/` は直接アクセス不可。`~/agents/` を作業ディレクトリに使用 |
-| Mac Mini rsync | TCC制限でcron rsyncが失敗するため、Desktop MacのGit post-commitフックから rsync を実行 |
+| Mac Mini rsync | TCC制限でcron rsyncが失敗するため、Desktop MacのGit post-commitフックから rsync を実行（line_bot_local/も同期対象） |
+| Orchestrator SYSTEM_DIR | tools.py の SYSTEM_DIR は __file__ ベースで動的解決（Desktop/Mac Mini両対応）。ハードコードしないこと |
 | LINE Notify廃止 | LINE Notify は2025年3月終了。Render `/notify` エンドポイント + LINE Messaging API push_message で代替 |
 
 ---
@@ -270,6 +271,10 @@ Mac Mini Orchestrator
 - [x] Mac Mini Agent Orchestratorデプロイ（FastAPI + APScheduler, port 8500）
 - [x] LINE Notify廃止対応（Render /notify エンドポイント + LINE Messaging API push_message）
 - [x] Mac Mini rsync TCC制限対応（Git post-commitフックでDesktop→Mac MiniへrsyncをDesktop側から実行）
+- [x] SYSTEM_DIR Critical Bug修正（tools.py を __file__ ベースの動的パスに変更・Mac Mini/Desktop両対応）
+- [x] メール処理後LINE通知（返信待ちがある場合に秘書グループへ自動通知）
+- [x] qa_monitor 本番有効化（config.json `qa_monitor_enabled: true`）
+- [x] post-commit hook 拡張（line_bot_local/同期追加・config.json変更時も再起動・Orchestrator変更時も再起動）
 
 ---
 
