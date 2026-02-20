@@ -302,42 +302,38 @@ def reset_state():
 
 
 def mark_all_existing_as_processed(service):
-    """現在存在するすべての質問を処理済みとしてマーク"""
+    """現在存在するすべての質問を処理済みとしてマーク（sent_idsに登録）"""
     state = load_state()
-    if "processed" not in state:
-        state["processed"] = {}
-    
+    sent_ids = set(state.get("sent_ids", []))
     total_marked = 0
-    
+
     for sheet_name, config in SHEET_CONFIGS.items():
         try:
             result = service.spreadsheets().values().get(
                 spreadsheetId=QA_SPREADSHEET_ID,
                 range=f"{sheet_name}!{config['range']}"
             ).execute()
-            
+
             rows = result.get('values', [])
-            
+
             if len(rows) <= 1:
                 continue
-            
-            # すべての行を処理済みとしてマーク
-            if sheet_name not in state["processed"]:
-                state["processed"][sheet_name] = []
-            
-            for i in range(2, len(rows) + 1):
-                if i not in state["processed"][sheet_name]:
-                    state["processed"][sheet_name].append(i)
+
+            for i, row in enumerate(rows[1:], start=2):
+                qid = generate_question_id(sheet_name, row, i, config)
+                if qid not in sent_ids:
+                    sent_ids.add(qid)
                     total_marked += 1
-            
+
             print(f"  {sheet_name}: {len(rows) - 1} 行")
-        
+
         except Exception as e:
             print(f"  ⚠️ シート「{sheet_name}」のエラー: {e}")
-    
+
+    state["sent_ids"] = list(sent_ids)
     state["last_check"] = datetime.now().isoformat()
     save_state(state)
-    print(f"\n✅ 合計 {total_marked} 行を処理済みとしてマークしました")
+    print(f"\n✅ 合計 {total_marked} 件を処理済みとしてマークしました")
 
 
 # CLI用
