@@ -21,6 +21,7 @@ _PROJECT_ROOT = _AGENT_DIR.parent.parent
 PEOPLE_PROFILES_JSON = _PROJECT_ROOT / "Master" / "people-profiles.json"
 PEOPLE_IDENTITIES_JSON = _PROJECT_ROOT / "Master" / "people-identities.json"
 SELF_IDENTITY_MD = _PROJECT_ROOT / "Master" / "self_clone" / "projects" / "kohara" / "1_Core" / "IDENTITY.md"
+FEEDBACK_FILE = _PROJECT_ROOT / "Master" / "reply_feedback.json"  # フィードバック学習データ
 
 
 def _load_self_identity() -> str:
@@ -31,6 +32,68 @@ def _load_self_identity() -> str:
     except Exception:
         pass
     return ""
+
+
+def load_feedback_examples() -> list:
+    """保存済みフィードバック例を読み込む"""
+    try:
+        if FEEDBACK_FILE.exists():
+            return json.loads(FEEDBACK_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return []
+
+
+def save_feedback_example(fb: dict):
+    """フィードバックを保存（最大50件、古いものを削除）"""
+    examples = load_feedback_examples()
+    examples.append(fb)
+    examples = examples[-50:]
+    FEEDBACK_FILE.write_text(
+        json.dumps(examples, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+
+
+def build_feedback_prompt_section(sender_name: str = "", sender_category: str = "") -> str:
+    """プロンプトに注入するフィードバックセクションを生成"""
+    examples = load_feedback_examples()
+    if not examples:
+        return ""
+
+    note_parts = []
+    for fb in examples:
+        if fb.get("type") == "note":
+            note_parts.append(f"・{fb.get('note', '')}")
+
+    corrections = [f for f in examples if f.get("type") == "correction"]
+    sorted_corrections = sorted(
+        corrections,
+        key=lambda f: (f.get("sender_name") == sender_name, f.get("timestamp", "")),
+        reverse=True
+    )[:5]
+
+    parts = []
+    for i, fb in enumerate(sorted_corrections, 1):
+        orig = fb.get("original_message", "")[:50]
+        ai_s = fb.get("ai_suggested", "")[:60]
+        actual = fb.get("actual_sent", "")[:60]
+        sname = fb.get("sender_name", "不明")
+        parts.append(
+            f"[修正例{i}] 送信者: {sname}\n"
+            f"  受信: 「{orig}」\n"
+            f"  AI案（不採用）: 「{ai_s}」\n"
+            f"  実際に送った返信: 「{actual}」"
+        )
+
+    section = ""
+    if note_parts or parts:
+        section = "\n【過去の学習データ（優先して参考にすること）】\n"
+        if note_parts:
+            section += "スタイルノート:\n" + "\n".join(note_parts) + "\n"
+        if parts:
+            section += "\n".join(parts) + "\n"
+    return section
 
 # Anthropic SDK
 try:
@@ -343,6 +406,25 @@ def call_claude_api(instruction: str, task: dict):
             or ""
         )
 
+        # ===== フィードバック保存タスク =====
+        if function_name == "capture_feedback":
+            fb_type = arguments.get("type", "note")
+            fb_data = {
+                **{k: v for k, v in arguments.items() if k != "type"},
+                "type": fb_type,
+                "timestamp": datetime.now().isoformat(),
+            }
+            save_feedback_example(fb_data)
+            if fb_type == "note":
+                note_preview = fb_data.get("note", "")[:40]
+                print(f"   📝 スタイルノート保存: 「{note_preview}」")
+                return True, f"📝 スタイルノート保存済み"
+            else:
+                sender = fb_data.get("sender_name", "")
+                actual = fb_data.get("actual_sent", "")[:30]
+                print(f"   📝 修正例保存: {sender} → 「{actual}」")
+                return True, f"📝 修正例を学習しました"
+
         # ===== 返信案生成タスクの専用処理 =====
         if function_name == "generate_reply_suggestion":
             original_message = arguments.get("original_message", task.get("original_text", ""))
@@ -391,12 +473,16 @@ def call_claude_api(instruction: str, task: dict):
                     "- OK: 「了解です！」「分かりました！」「どうでしょうか？」"
                 )
 
+            # フィードバック学習データを読み込む（口調改善のコア）
+            sender_cat = profile.get("category", "") if profile else ""
+            feedback_section = build_feedback_prompt_section(sender_name, sender_cat)
+
             prompt = f"""あなたは甲原海人本人として返信を書きます。
 以下の【言語スタイル定義】に厳密に従い、甲原海人が実際に送るようなメッセージを生成してください。
 
 【言語スタイル定義】
 {identity_style}
-
+{feedback_section}
 ---
 
 【送信者情報】
