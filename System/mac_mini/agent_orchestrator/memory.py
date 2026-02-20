@@ -18,8 +18,11 @@ class MemoryStore:
         self._init_db()
 
     def _init_db(self):
-        with self._conn() as conn:
-            conn.executescript("""
+        """Create tables if they don't exist. Safe to call multiple times (idempotent)."""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS task_log (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     task_name TEXT NOT NULL,
@@ -30,8 +33,9 @@ class MemoryStore:
                     result_summary TEXT,
                     error_message TEXT,
                     metadata TEXT
-                );
-
+                )
+            """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS api_calls (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     provider TEXT NOT NULL,
@@ -39,18 +43,21 @@ class MemoryStore:
                     tokens_used INTEGER DEFAULT 0,
                     cost_estimate REAL DEFAULT 0.0,
                     task_name TEXT
-                );
-
+                )
+            """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS agent_state (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL,
                     updated_at TEXT NOT NULL
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_task_log_name ON task_log(task_name);
-                CREATE INDEX IF NOT EXISTS idx_task_log_started ON task_log(started_at);
-                CREATE INDEX IF NOT EXISTS idx_api_calls_time ON api_calls(called_at);
+                )
             """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_task_log_name ON task_log(task_name)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_task_log_started ON task_log(started_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_api_calls_time ON api_calls(called_at)")
+            conn.commit()
+        finally:
+            conn.close()
 
     @contextmanager
     def _conn(self):
@@ -59,6 +66,13 @@ class MemoryStore:
         try:
             yield conn
             conn.commit()
+        except sqlite3.OperationalError as e:
+            conn.rollback()
+            if "no such table" in str(e):
+                # テーブルが消えていた場合は再作成してから再スロー
+                conn.close()
+                self._init_db()
+            raise
         finally:
             conn.close()
 
