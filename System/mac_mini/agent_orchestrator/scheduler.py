@@ -356,7 +356,7 @@ class TaskScheduler:
 
         # データ更新日時の取得
         update_m = re.search(r"更新日時[^\|]*\|\s*(.+)", content)
-        data_date = update_m.group(1).strip() if update_m else "不明"
+        data_date = update_m.group(1).strip().rstrip("|").strip() if update_m else "不明"
 
         # セクション別パース（🔴期限超過 / 🔄実行中）
         overdue_items = []
