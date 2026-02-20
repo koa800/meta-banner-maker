@@ -619,6 +619,51 @@ def call_claude_api(instruction: str, task: dict):
             )
             return True, result
 
+        # ===== LP自動ドラフト生成タスク =====
+        if function_name == "generate_lp_draft":
+            product = arguments.get("product", "スキルプラス")
+            target_audience = arguments.get("target_audience", "副業・起業希望者")
+            message_axis = arguments.get("message_axis", "")
+            tone = arguments.get("tone", "実績重視・親しみやすい")
+
+            # ブランドコンテキストを読み込む（SELF_PROFILE.md）
+            brand_context = ""
+            try:
+                profile_path = _PROJECT_ROOT / "Master" / "self_clone" / "projects" / "kohara" / "1_Core" / "SELF_PROFILE.md"
+                if profile_path.exists():
+                    brand_context = profile_path.read_text(encoding="utf-8")[:800]
+            except Exception:
+                pass
+
+            lp_prompt = f"""あなたは高変換率LPのコピーライターです。
+以下の条件で日本語LPの構成案・コピーを作成してください。
+
+【商品・サービス】{product}
+【ターゲット】{target_audience}
+【訴求軸】{message_axis or '未指定（最も効果的な軸を選んでください）'}
+【トーン】{tone}
+
+【ブランド背景】
+{brand_context or '（なし）'}
+
+【出力形式】（LINEで読めるよう500文字以内に収める）
+1. ファーストビュー見出し案（3パターン）
+2. サブキャッチ（1行）
+3. CTA（ボタン文言）案（2パターン）
+4. 推奨ベネフィット訴求（3点）
+
+実践的なコピーを出力してください。"""
+
+            response = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=700,
+                system="あなたはROAS・CVR改善実績のあるLPコピーライターです。具体的で変換率の高いコピーを作成してください。",
+                messages=[{"role": "user", "content": lp_prompt}]
+            )
+            draft = response.content[0].text.strip()
+            result_text = f"📝 LPドラフト: {product}\n━━━━━━━━━━━━\n{draft}\n━━━━━━━━━━━━\n💡 フル版はCursorで展開できます"
+            return True, result_text
+
         # ===== コンテキスト分析タスク（「次に何すべき？」等） =====
         if function_name == "context_query":
             question = arguments.get("question", instruction)
