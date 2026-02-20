@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月21日（addness_sync・mail_check・手動トリガーコマンド追加） |
+| 最終更新 | 2026年2月21日（orchestrator_status・addness_sync・mail_check コマンド追加） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -122,6 +122,7 @@
 | 「スクリプト作成: 商品名 [タイプ]」 | 広告動画台本自動生成・フック+問題提起+CTA構成（generate_video_script） |
 | 「バナー作成: 商品名 [プラットフォーム]」 | バナー広告コンセプト5案生成・ヘッドライン+ビジュアル+CTA（generate_banner_concepts） |
 | 「誰に頼む？ [タスク内容]」 | people-profiles.jsonからタスクに最適な担当者候補をClaude推薦（who_to_ask） |
+| 「状態確認」「エージェント状態」 | Orchestratorの稼働状況・本日タスク数・次回スケジュールを返答（orchestrator_status） |
 | 「Addness更新」「タスク更新」 | addness_to_context.pyを即時実行→actionable-tasks.md再生成→件数サマリー返答（addness_sync） |
 | 「メール確認」「メールチェック」 | mail_manager.py runを即時実行→返信待ち件数と概要を返答（mail_check） |
 
@@ -364,6 +365,7 @@ MacBook Desktop (cursor/)
 - [x] weekly_content_suggestionsスケジューラ（毎週水曜10:00にai_news.log分析→コンテンツ更新提案）
 - [x] who_to_askコマンド（「誰に頼む？」でpeople-profiles.jsonからタスク担当候補をClaude推薦）
 - [x] POST /schedule/run/{task_name}（Orchestratorスケジュールタスクの手動トリガーAPI）
+- [x] orchestrator_statusコマンド（「状態確認」でOrchestrator稼働状況・スケジュールをLINE返答）
 - [x] addness_syncコマンド（「Addness更新」でaddness_to_context.py即時実行→件数サマリー返答）
 - [x] mail_checkコマンド（「メール確認」でmail_manager.py run即時実行→処理結果返答）
 

@@ -778,6 +778,47 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
             except Exception as e:
                 return False, f"who_to_ask 実行エラー: {str(e)}"
 
+        # ===== Orchestrator状態確認タスク =====
+        if function_name == "orchestrator_status":
+            orch_base = "http://localhost:8500"
+            try:
+                # ヘルスチェック
+                health_resp = requests.get(f"{orch_base}/health", timeout=5)
+                health = health_resp.json() if health_resp.status_code == 200 else {}
+                # スケジュール状態
+                sched_resp = requests.get(f"{orch_base}/schedule/status", timeout=5)
+                schedule = sched_resp.json() if sched_resp.status_code == 200 else {}
+
+                today = health.get("today", {})
+                total = today.get("tasks_total", "?")
+                success = today.get("tasks_success", "?")
+                errors = today.get("tasks_errors", "?")
+
+                # 直近5ジョブの次回実行時刻
+                jobs = schedule.get("jobs", [])
+                upcoming = sorted(
+                    [j for j in jobs if j.get("next_run")],
+                    key=lambda j: j["next_run"]
+                )[:3]
+                sched_lines = [
+                    f"  {j['id']}: {j['next_run'][11:16]}"
+                    for j in upcoming
+                ]
+
+                parts = [
+                    f"🤖 Orchestrator状態",
+                    f"━━━━━━━━━━━━",
+                    f"本日: {success}/{total}件成功 ({errors}件エラー)",
+                    f"スケジュール済み: {schedule.get('total', '?')}ジョブ",
+                    "",
+                    f"直近スケジュール:",
+                ]
+                parts.extend(sched_lines or ["  （取得失敗）"])
+                parts.append("━━━━━━━━━━━━")
+                return True, "\n".join(parts)
+            except Exception as e:
+                return False, f"Orchestrator接続エラー: {str(e)[:150]}\n（Mac Mini Orchestratorが起動していない可能性があります）"
+
         # ===== Addness同期タスク =====
         if function_name == "addness_sync":
             addness_to_context_py = Path(__file__).parent.parent / "addness_to_context.py"
