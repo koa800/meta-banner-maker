@@ -119,6 +119,7 @@
 | 「日報入れて」 | 日報入力をCursorに委譲 |
 | 「次何？」「次にやることは？」 | Addness+メール状況をClaudeが分析→優先行動リスト返答（context_query） |
 | 「LP作成: 商品名 ターゲット」 | LP構成案+キャッチコピー3案+CTA自動生成（generate_lp_draft） |
+| 「スクリプト作成: 商品名 [タイプ]」 | 広告動画台本自動生成・フック+問題提起+CTA構成（generate_video_script） |
 
 ---
 
@@ -332,6 +333,8 @@ MacBook Desktop (cursor/)
 - [x] calendar_manager.py 参加者表示機能追加（list_eventsで参加者displayName出力）
 - [x] context_queryコマンド（「次何？」でAddness+メール+Claude分析→優先行動リスト返答）
 - [x] generate_lp_draftコマンド（「LP作成: 商品名」でLP構成案+キャッチコピー自動生成）
+- [x] generate_video_scriptコマンド（「スクリプト作成: 商品名」でTikTok/YouTube広告台本自動生成）
+- [x] calendar_list トークン未存在時のハング防止（token file存在チェックで即時フェイル）
 
 ---
 

@@ -52,7 +52,7 @@
 ### LP・CR制作支援
 - [x] **LPコピー自動ドラフト**: 「LP作成: [条件]」でファーストビュー見出し3案+CTA+ベネフィット訴求を生成（local_agent.py `generate_lp_draft`）
   - *根拠*: LP実装が複数期限超過。制作スピードアップが最短経路
-- [ ] **動画スクリプト自動生成**: 広告クリエイティブの台本をブリーフから自動生成
+- [x] **動画スクリプト自動生成**: 「スクリプト作成: [条件]」でTikTok/YouTube広告台本を自動生成（`generate_video_script`）
 - [ ] **バナー構成案バリエーション生成**: 10本同時にコンセプト案を出す
 
 ### 報告シート自動入力
@@ -127,6 +127,8 @@
 - **context_query コマンド**: LINEから「次何？」でAddness+メール+Claudeが優先行動を回答
 - **generate_lp_draft コマンド**: 「LP作成: [条件]」でLP構成案・キャッチコピー自動生成
 - **calendar_manager.py 参加者表示**: list_eventsで参加者(self以外)をdisplayName表示
+- **generate_video_script コマンド**: 「スクリプト作成: [条件]」でTikTok/YouTube広告台本を自動生成
+- **calendar tokenハング防止**: tools.pyでtoken未存在時に即座にToolResult(success=False)返却
 
 ---
 
