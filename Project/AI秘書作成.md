@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月21日（P2/P3: バナー生成・アフィリエイト提案・東北大リマインダー） |
+| 最終更新 | 2026年2月21日（P3/P4: 競合分析・週次ボトルネック分析・月次競合チェック） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -251,6 +251,7 @@ bash System/line_bot_local/sync_data.sh
 | `health_check` | 5分ごと | API使用量・Q&Aモニター・local_agent停止を検知してLINE警告 |
 | `repair_check` | 30分ごと | ログエラー検知・自動修復提案 |
 | `weekly_affiliate_ideas` | 毎週金曜 10:00 | アフィリエイターサポートコンテンツ案をClaude生成してLINE通知 |
+| `monthly_competitor_analysis` | 毎月1日 10:00 | 競合比較チェックリストをClaude生成してLINE通知 |
 
 ### Orchestrator 通知フロー
 
@@ -341,6 +342,8 @@ MacBook Desktop (cursor/)
 - [x] generate_banner_conceptsコマンド（「バナー作成: 商品名」でバナー広告コンセプト5案自動生成）
 - [x] weekly_affiliate_ideasスケジューラ（毎週金曜10:00にアフィリエイターサポートコンテンツ案をClaude生成）
 - [x] 特殊期限リマインダー（東北大学研究コラボ2026/08/31の90/30/7/3/1日前にLINE通知）
+- [x] 週次ボトルネック分析（weekly_stats実行時にClaudeがactionable-tasks.mdを分析して最大課題を通知）
+- [x] monthly_competitor_analysisスケジューラ（毎月1日10:00に競合チェックリストをClaude生成）
 
 ---
 

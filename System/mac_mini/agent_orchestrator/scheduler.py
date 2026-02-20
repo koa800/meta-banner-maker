@@ -46,6 +46,7 @@ class TaskScheduler:
             "oauth_health_check": self._run_oauth_health_check,
             "render_health_check": self._run_render_health_check,
             "weekly_affiliate_ideas": self._run_weekly_affiliate_ideas,
+            "monthly_competitor_analysis": self._run_monthly_competitor_analysis,
         }
 
     def setup(self):
@@ -685,8 +686,119 @@ class TaskScheduler:
         ok = send_line_notify("\n".join(parts))
         logger.info(f"Weekly stats sent: {total} tasks, {success_rate}% success, {qa_count} Q&As")
 
+        # 今週のボトルネック分析（actionable-tasks.md から Claude で分析）
+        await self._notify_weekly_bottleneck(send_line_notify)
+
         # フォローアップ提案（contact_state.json から長期未接触の人を検出）
         await self._check_follow_up_suggestions(send_line_notify)
+
+    async def _notify_weekly_bottleneck(self, send_line_notify):
+        """今週のボトルネックをClaudeで分析してLINE通知"""
+        import anthropic as _anthropic
+        from datetime import date
+
+        master_dir = self.config.get("paths", {}).get("master_dir", "~/agents/Master")
+        actionable_path = os.path.expanduser(os.path.join(master_dir, "actionable-tasks.md"))
+        if not os.path.exists(actionable_path):
+            return
+
+        try:
+            with open(actionable_path, encoding="utf-8") as f:
+                content = f.read()[:3000]
+        except Exception:
+            return
+
+        try:
+            client = _anthropic.Anthropic()
+            response = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=400,
+                system="あなたはスキルプラス事業の戦略アドバイザーです。簡潔に要点を伝えてください。",
+                messages=[{"role": "user", "content": f"""以下のAddnessタスク状況を分析し、
+今週の最大のボトルネックを1〜2件特定してください。
+
+【タスク状況】
+{content}
+
+【出力形式（200文字以内）】
+🔍 今週のボトルネック:
+・[最重要課題] 〜 理由を1行で
+・[次点] 〜 理由を1行で（あれば）
+
+具体的で行動につながる内容にしてください。"""}]
+            )
+            analysis = response.content[0].text.strip()
+            ok = send_line_notify(
+                f"\n{analysis}\n"
+                f"━━━━━━━━━━━━"
+            )
+            if ok:
+                logger.info("Weekly bottleneck analysis sent")
+        except Exception as e:
+            logger.debug(f"Weekly bottleneck analysis error: {e}")
+
+    async def _run_monthly_competitor_analysis(self):
+        """毎月1日10:00: 競合比較チェックリストをClaudeで生成してLINE通知"""
+        from .notifier import send_line_notify
+        from datetime import date
+        import anthropic as _anthropic
+
+        today_str = date.today().strftime("%Y/%m")
+
+        # actionable-tasks.md から事業コンテキスト取得
+        master_dir = self.config.get("paths", {}).get("master_dir", "~/agents/Master")
+        actionable_path = os.path.expanduser(os.path.join(master_dir, "actionable-tasks.md"))
+        context = ""
+        if os.path.exists(actionable_path):
+            try:
+                with open(actionable_path, encoding="utf-8") as f:
+                    content = f.read()
+                # KPI関連行を抽出
+                lines = [l for l in content.splitlines() if any(k in l for k in ["ROAS", "CVR", "CPA", "KPI", "期限"])]
+                context = "\n".join(lines[:10])
+            except Exception:
+                pass
+
+        try:
+            client = _anthropic.Anthropic()
+            response = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=500,
+                system="あなたはAI副業教育市場のマーケティング専門家です。",
+                messages=[{"role": "user", "content": f"""スキルプラス（AI副業・広告コース）の月次競合比較フレームワークを生成してください。
+今月: {today_str}
+
+【今月の事業KPI参考】
+{context or 'ROAS≥100%, CVR≥15%, CPA≤2500円が目標'}
+
+【出力形式】（400文字以内・LINEで読める形式）
+📊 {today_str} 競合チェック項目:
+
+確認すべき競合（3社）:
+・[競合A名] — チェックポイント
+・[競合B名] — チェックポイント
+・[競合C名] — チェックポイント
+
+今月注目すべき訴求ポイント（自社優位性）:
+・1〜2件
+
+スキルプラスに即した現実的な内容にしてください。"""}]
+            )
+            analysis = response.content[0].text.strip()
+            message = (
+                f"\n📊 月次競合チェック ({today_str})\n"
+                f"━━━━━━━━━━━━\n"
+                f"{analysis}\n"
+                f"━━━━━━━━━━━━\n"
+                f"💡 実際のデータは各媒体で確認してください"
+            )
+            task_id = self.memory.log_task_start("monthly_competitor_analysis")
+            ok = send_line_notify(message)
+            self.memory.log_task_end(task_id, "success" if ok else "error",
+                                     result_summary=analysis[:100])
+            logger.info("Monthly competitor analysis sent")
+        except Exception as e:
+            logger.error(f"Monthly competitor analysis failed: {e}")
 
     async def _check_follow_up_suggestions(self, send_line_notify):
         """長期未接触の人をpeople-profiles.jsonとcontact_state.jsonで検出しLINE通知"""
