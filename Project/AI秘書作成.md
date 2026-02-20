@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月20日（Mac Mini show_notification LaunchAgentハング修正） |
+| 最終更新 | 2026年2月21日（Mac Mini Orchestratorデプロイ・LINE通知切り替え完了） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -208,6 +208,41 @@ bash System/line_bot_local/sync_data.sh
 | データ永続化 | Render永続ディスク `/data` を使用。`DATA_DIR=/data` 環境変数で設定済み。デプロイ後も状態が消えない |
 | macOS TCC | launchd から Desktop は直接アクセス不可。Library 版でキャッシュ経由でアクセス |
 | LINE webhook重複 | 同一 message_id のタスクは1件のみキューイング済み |
+| Mac Mini TCC制限 | LaunchAgent から `~/Desktop/` は直接アクセス不可。`~/agents/` を作業ディレクトリに使用 |
+| Mac Mini rsync | TCC制限でcron rsyncが失敗するため、Desktop MacのGit post-commitフックから rsync を実行 |
+| LINE Notify廃止 | LINE Notify は2025年3月終了。Render `/notify` エンドポイント + LINE Messaging API push_message で代替 |
+
+---
+
+## Mac Mini エージェント構成
+
+### 稼働中サービス
+
+| LaunchAgent | 役割 | ポート |
+|------------|------|--------|
+| `com.linebot.localagent` | LINE Bot ポーリング・返信案生成 | — |
+| `com.addness.agent-orchestrator` | タスクスケジューラ・修復エージェント | 8500 |
+| `com.prevent.sleep` | Macスリープ防止（caffeinate） | — |
+
+### Orchestrator 通知フロー
+
+```
+Mac Mini Orchestrator
+  → POST /notify (Bearer AGENT_TOKEN)
+    → Render app.py /notify endpoint
+      → LINE Messaging API push_message
+        → SECRETARY_GROUP_ID（秘書グループ）
+```
+
+### 関連ファイル（Mac Mini）
+
+| パス | 説明 |
+|------|------|
+| `System/mac_mini/agent_orchestrator/` | Orchestratorパッケージ |
+| `System/mac_mini/agent_orchestrator/notifier.py` | LINE通知ディスパッチャ（Render経由） |
+| `System/mac_mini/agent_orchestrator/config.yaml` | エージェント設定（パス・スケジュール等） |
+| `~/agents/sync_agent.sh` | local_agent.py タイムスタンプ同期（Mac Mini上） |
+| `.git/hooks/post-commit` | コミット時にDesktopからMac MiniへrsyncするGitフック |
 
 ---
 
@@ -232,6 +267,9 @@ bash System/line_bot_local/sync_data.sh
 - [x] pending_messages永続化（Render永続ディスク /data）
 - [x] オーナー直接送信メッセージへの引用返信も検知するよう修正（sent_group_messages追跡範囲拡張）
 - [x] show_notification LaunchAgentハング修正（threading.Thread化でメインスレッドブロッキング解消）
+- [x] Mac Mini Agent Orchestratorデプロイ（FastAPI + APScheduler, port 8500）
+- [x] LINE Notify廃止対応（Render /notify エンドポイント + LINE Messaging API push_message）
+- [x] Mac Mini rsync TCC制限対応（Git post-commitフックでDesktop→Mac MiniへrsyncをDesktop側から実行）
 
 ---
 
