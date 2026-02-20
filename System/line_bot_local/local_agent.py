@@ -757,6 +757,27 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
             result_text = f"🎨 バナー構成案: {product} ({platform})\n━━━━━━━━━━━━\n{concepts}\n━━━━━━━━━━━━\n💡 採用案はCursorで画像生成プロンプトに展開できます"
             return True, result_text
 
+        # ===== 委託先推薦タスク（「誰に頼む？」等） =====
+        if function_name == "who_to_ask":
+            task_description = arguments.get("task_description", instruction)
+            who_to_ask_py = Path(__file__).parent.parent / "who_to_ask.py"
+            if not who_to_ask_py.exists():
+                return False, "who_to_ask.pyが見つかりません"
+            try:
+                import subprocess, sys as _sys
+                r = subprocess.run(
+                    [_sys.executable, str(who_to_ask_py), task_description],
+                    capture_output=True, text=True, timeout=60
+                )
+                if r.returncode == 0 and r.stdout.strip():
+                    result_text = f"👥 委託先推薦\n━━━━━━━━━━━━\n{r.stdout.strip()[:700]}\n━━━━━━━━━━━━"
+                    return True, result_text
+                else:
+                    err = r.stderr.strip()[:200] if r.stderr else "不明なエラー"
+                    return False, f"who_to_ask エラー: {err}"
+            except Exception as e:
+                return False, f"who_to_ask 実行エラー: {str(e)}"
+
         # ===== コンテキスト分析タスク（「次に何すべき？」等） =====
         if function_name == "context_query":
             question = arguments.get("question", instruction)

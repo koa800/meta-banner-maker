@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月21日（P3/P4: 競合分析・週次ボトルネック・コンテンツ更新監視） |
+| 最終更新 | 2026年2月21日（who_to_ask・/schedule/run エンドポイント追加） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -121,6 +121,7 @@
 | 「LP作成: 商品名 ターゲット」 | LP構成案+キャッチコピー3案+CTA自動生成（generate_lp_draft） |
 | 「スクリプト作成: 商品名 [タイプ]」 | 広告動画台本自動生成・フック+問題提起+CTA構成（generate_video_script） |
 | 「バナー作成: 商品名 [プラットフォーム]」 | バナー広告コンセプト5案生成・ヘッドライン+ビジュアル+CTA（generate_banner_concepts） |
+| 「誰に頼む？ [タスク内容]」 | people-profiles.jsonからタスクに最適な担当者候補をClaude推薦（who_to_ask） |
 
 ---
 
@@ -254,6 +255,19 @@ bash System/line_bot_local/sync_data.sh
 | `monthly_competitor_analysis` | 毎月1日 10:00 | 競合比較チェックリストをClaude生成してLINE通知 |
 | `weekly_content_suggestions` | 毎週水曜 10:00 | 最新AIニュースを分析してコンテンツ更新提案をLINE通知 |
 
+### Orchestrator API エンドポイント（port 8500）
+
+| エンドポイント | メソッド | 説明 |
+|-------------|---------|------|
+| `/health` | GET | ヘルスチェック・本日のタスクサマリー |
+| `/tasks` | GET | 直近50件のタスク実行ログ |
+| `/stats` | GET | 直近24時間のタスク統計 |
+| `/schedule/status` | GET | 全ジョブの次回実行時刻・最終成功 |
+| `/schedule/run/{task_name}` | POST | スケジュールタスクを手動トリガー |
+| `/run/{tool_name}` | POST | ツールを直接実行（TOOL_REGISTRYに登録されたもの） |
+| `/repair/run` | POST | 修復チェックを手動実行 |
+| `/repair/status` | GET | 修復ブランチのペンディング状態確認 |
+
 ### Orchestrator 通知フロー
 
 ```
@@ -346,6 +360,8 @@ MacBook Desktop (cursor/)
 - [x] 週次ボトルネック分析（weekly_stats実行時にClaudeがactionable-tasks.mdを分析して最大課題を通知）
 - [x] monthly_competitor_analysisスケジューラ（毎月1日10:00に競合チェックリストをClaude生成）
 - [x] weekly_content_suggestionsスケジューラ（毎週水曜10:00にai_news.log分析→コンテンツ更新提案）
+- [x] who_to_askコマンド（「誰に頼む？」でpeople-profiles.jsonからタスク担当候補をClaude推薦）
+- [x] POST /schedule/run/{task_name}（Orchestratorスケジュールタスクの手動トリガーAPI）
 
 ---
 

@@ -148,7 +148,6 @@ class AgentOrchestrator:
         @app.get("/schedule/status")
         async def schedule_status():
             """Get schedule status: next run time and last execution for all jobs."""
-            from datetime import timezone
             jobs = self.task_scheduler.scheduler.get_jobs()
             result = []
             for job in jobs:
@@ -162,6 +161,21 @@ class AgentOrchestrator:
                     "last_failure_notified": last_err,
                 })
             return {"jobs": result, "total": len(result)}
+
+        @app.post("/schedule/run/{task_name}")
+        async def schedule_run(task_name: str):
+            """Manually trigger a scheduled task by name."""
+            task_fn = self.task_scheduler._task_map.get(task_name)
+            if task_fn is None:
+                available = list(self.task_scheduler._task_map.keys())
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": f"Unknown task: {task_name}", "available": available}
+                )
+            # バックグラウンドで非同期実行（レスポンスをブロックしない）
+            asyncio.create_task(task_fn())
+            logger.info(f"Manual trigger: {task_name}")
+            return {"status": "triggered", "task": task_name}
 
         return app
 
