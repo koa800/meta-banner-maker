@@ -19,6 +19,10 @@ from pathlib import Path
 # ---- プロファイルパス ----
 _AGENT_DIR = Path(__file__).parent
 _PROJECT_ROOT = _AGENT_DIR.parent.parent
+# System/ ディレクトリを動的に解決（Desktop: parent.parent, Mac Mini: parent.parent/System/）
+_SYSTEM_DIR = _AGENT_DIR.parent
+if not (_SYSTEM_DIR / "mail_manager.py").exists():
+    _SYSTEM_DIR = _SYSTEM_DIR / "System"
 PEOPLE_PROFILES_JSON = _PROJECT_ROOT / "Master" / "people-profiles.json"
 PEOPLE_IDENTITIES_JSON = _PROJECT_ROOT / "Master" / "people-identities.json"
 SELF_IDENTITY_MD = _PROJECT_ROOT / "Master" / "self_clone" / "projects" / "kohara" / "1_Core" / "IDENTITY.md"
@@ -760,7 +764,7 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
         # ===== 委託先推薦タスク（「誰に頼む？」等） =====
         if function_name == "who_to_ask":
             task_description = arguments.get("task_description", instruction)
-            who_to_ask_py = Path(__file__).parent.parent / "who_to_ask.py"
+            who_to_ask_py = _SYSTEM_DIR / "who_to_ask.py"
             if not who_to_ask_py.exists():
                 return False, "who_to_ask.pyが見つかりません"
             try:
@@ -938,7 +942,7 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
 
         # ===== Addness同期タスク =====
         if function_name == "addness_sync":
-            addness_to_context_py = Path(__file__).parent.parent / "addness_to_context.py"
+            addness_to_context_py = _SYSTEM_DIR / "addness_to_context.py"
             if not addness_to_context_py.exists():
                 return False, "addness_to_context.pyが見つかりません"
             try:
@@ -971,7 +975,7 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
             account = arguments.get("account", "personal")
             if account not in ("personal", "kohara"):
                 account = "personal"
-            mail_py = Path(__file__).parent.parent / "mail_manager.py"
+            mail_py = _SYSTEM_DIR / "mail_manager.py"
             if not mail_py.exists():
                 return False, "mail_manager.pyが見つかりません"
             try:
@@ -1005,7 +1009,7 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
             mail_status_text = ""
             try:
                 import subprocess, sys as _sys
-                mail_py = Path(__file__).parent.parent / "mail_manager.py"
+                mail_py = _SYSTEM_DIR / "mail_manager.py"
                 if mail_py.exists():
                     r = subprocess.run(
                         [_sys.executable, str(mail_py), "--account", "personal", "status"],
