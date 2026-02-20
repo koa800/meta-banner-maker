@@ -103,7 +103,17 @@
 
 ## ✅ 完了
 
-（完了したものをここに移動）
+### P0 インフラ
+- `local_agent.py` をMac miniに移行（~/agents/line_bot_local/local_agent.py）
+- Mac mini Orchestrator起動（com.addness.agent-orchestrator, port 8500）
+- 環境変数・OAuthトークンをMac miniに移行（AGENT_TOKEN・ANTHROPIC_API_KEY）
+- ヘルスチェック通知がLINEに届いているか確認
+
+### P1 ゴール直結
+- 毎朝8:30 Addness日次ダイジェストをLINE送信（`daily_addness_digest`）
+- 毎週月曜9:00 未着手P0/P1アイデアをLINEで提案（`weekly_idea_proposal`）
+- 重要メール検知→返信待ち件数をLINE通知（scheduler.py `_notify_mail_result`）
+- qa_monitor.py 本番稼働（config.json `qa_monitor_enabled: true`）
 
 ---
 
