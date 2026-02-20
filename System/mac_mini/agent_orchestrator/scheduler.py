@@ -9,6 +9,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 import os
 import re
+from datetime import datetime
 
 from . import tools
 from .memory import MemoryStore
@@ -74,6 +75,9 @@ class TaskScheduler:
         self.scheduler.shutdown()
         logger.info("Scheduler shut down")
 
+    # タスク失敗通知を送らないタスク（頻繁すぎるもの）
+    _NO_FAILURE_NOTIFY = {"health_check", "oauth_health_check"}
+
     async def _execute_tool(self, task_name: str, tool_fn, **kwargs) -> tools.ToolResult:
         task_id = self.memory.log_task_start(task_name, metadata=kwargs)
         try:
@@ -86,13 +90,40 @@ class TaskScheduler:
             )
             if result.success:
                 logger.info(f"Task '{task_name}' completed successfully")
+                self.memory.set_state(f"last_success_{task_name}", datetime.now().isoformat())
             else:
                 logger.error(f"Task '{task_name}' failed: {result.error[:200]}")
+                if task_name not in self._NO_FAILURE_NOTIFY:
+                    self._maybe_notify_task_failure(task_name, result.error or "不明なエラー")
             return result
         except Exception as e:
             self.memory.log_task_end(task_id, "error", error_message=str(e))
             logger.exception(f"Task '{task_name}' raised an exception")
+            if task_name not in self._NO_FAILURE_NOTIFY:
+                self._maybe_notify_task_failure(task_name, str(e))
             raise
+
+    def _maybe_notify_task_failure(self, task_name: str, error_msg: str):
+        """タスク失敗をLINE通知（2時間以内に同タスクの通知済みならスキップ）"""
+        from .notifier import send_line_notify
+        now = datetime.now()
+        state_key = f"failure_notified_{task_name}"
+        last_notified = self.memory.get_state(state_key)
+        if last_notified:
+            try:
+                last_dt = datetime.fromisoformat(last_notified)
+                if (now - last_dt).total_seconds() < 7200:
+                    return  # 2時間以内は通知済み
+            except (ValueError, TypeError):
+                pass
+        ok = send_line_notify(
+            f"\n⚠️ タスクエラー: {task_name}\n"
+            f"━━━━━━━━━━━━\n"
+            f"{error_msg[:250]}\n"
+            f"━━━━━━━━━━━━"
+        )
+        if ok:
+            self.memory.set_state(state_key, now.isoformat())
 
     async def _run_addness_fetch(self):
         await self._execute_tool("addness_fetch", tools.addness_fetch)
@@ -144,16 +175,38 @@ class TaskScheduler:
             logger.info("Addness goal context updated for daily review")
 
     async def _run_daily_report(self):
+        from .notifier import send_line_notify
+        from datetime import date
         summary = self.memory.get_daily_summary()
         stats = self.memory.get_task_stats(since_hours=24)
-        report = (
+
+        total = summary["tasks_total"]
+        success = summary["tasks_success"]
+        errors = summary["tasks_errors"]
+        success_rate = round(100 * success / total) if total > 0 else 0
+
+        error_tasks = [name for name, s in stats.items() if s.get("error", 0) > 0]
+
+        report_lines = [
+            f"\n📊 日次レポート ({date.today().strftime('%m/%d')})",
+            "━━━━━━━━━━━━",
+            f"タスク: {success}/{total}件成功 ({success_rate}%)",
+            f"APIコール: {summary['api_calls']}回",
+        ]
+        if error_tasks:
+            report_lines.append(f"⚠️ エラー: {', '.join(error_tasks[:5])}")
+        report_lines.append("━━━━━━━━━━━━")
+
+        send_line_notify("\n".join(report_lines))
+
+        report_text = (
             f"--- Daily Agent Report ---\n"
-            f"Tasks: {summary['tasks_total']} total, {summary['tasks_success']} success, {summary['tasks_errors']} errors\n"
+            f"Tasks: {total} total, {success} success, {errors} errors\n"
             f"API calls: {summary['api_calls']} (tokens: {summary['api_tokens']})\n"
             f"Task breakdown: {stats}"
         )
-        logger.info(report)
-        self.memory.set_state("last_daily_report", report)
+        logger.info(report_text)
+        self.memory.set_state("last_daily_report", report_text)
 
     async def _run_health_check(self):
         from .notifier import send_line_notify

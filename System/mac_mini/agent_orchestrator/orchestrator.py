@@ -145,6 +145,24 @@ class AgentOrchestrator:
             summary = self.repair_agent.get_pending_fix_summary()
             return {"has_pending_fix": summary is not None, "summary": summary}
 
+        @app.get("/schedule/status")
+        async def schedule_status():
+            """Get schedule status: next run time and last execution for all jobs."""
+            from datetime import timezone
+            jobs = self.task_scheduler.scheduler.get_jobs()
+            result = []
+            for job in jobs:
+                next_run = job.next_run_time
+                last_run = self.memory.get_state(f"last_success_{job.id}")
+                last_err = self.memory.get_state(f"failure_notified_{job.id}")
+                result.append({
+                    "id": job.id,
+                    "next_run": next_run.isoformat() if next_run else None,
+                    "last_success": last_run,
+                    "last_failure_notified": last_err,
+                })
+            return {"jobs": result, "total": len(result)}
+
         return app
 
     async def start(self):
