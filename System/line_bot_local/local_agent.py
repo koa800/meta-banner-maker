@@ -778,6 +778,58 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
             except Exception as e:
                 return False, f"who_to_ask 実行エラー: {str(e)}"
 
+        # ===== Addness同期タスク =====
+        if function_name == "addness_sync":
+            addness_to_context_py = Path(__file__).parent.parent / "addness_to_context.py"
+            if not addness_to_context_py.exists():
+                return False, "addness_to_context.pyが見つかりません"
+            try:
+                import subprocess, sys as _sys
+                r = subprocess.run(
+                    [_sys.executable, str(addness_to_context_py)],
+                    capture_output=True, text=True, timeout=120
+                )
+                if r.returncode != 0:
+                    return False, f"Addness同期エラー: {r.stderr.strip()[:300]}"
+                # actionable-tasks.md の先頭要約を返す
+                actionable_path = _PROJECT_ROOT / "Master" / "actionable-tasks.md"
+                summary = ""
+                if actionable_path.exists():
+                    lines = actionable_path.read_text(encoding="utf-8").splitlines()
+                    # 期限超過件数と実行中件数をカウント
+                    overdue_count = sum(1 for l in lines if "🔴" in l)
+                    inprog_count = sum(1 for l in lines if "🔄" in l)
+                    # 更新日時を取得
+                    from datetime import datetime as _dt
+                    mtime = actionable_path.stat().st_mtime
+                    updated = _dt.fromtimestamp(mtime).strftime("%m/%d %H:%M")
+                    summary = f"🔴 期限超過: {overdue_count}件 / 🔄 実行中: {inprog_count}件\n更新: {updated}"
+                return True, f"✅ Addness同期完了\n━━━━━━━━━━━━\n{summary or 'データを更新しました'}\n━━━━━━━━━━━━"
+            except Exception as e:
+                return False, f"Addness同期実行エラー: {str(e)}"
+
+        # ===== メール即時確認タスク =====
+        if function_name == "mail_check":
+            account = arguments.get("account", "personal")
+            if account not in ("personal", "kohara"):
+                account = "personal"
+            mail_py = Path(__file__).parent.parent / "mail_manager.py"
+            if not mail_py.exists():
+                return False, "mail_manager.pyが見つかりません"
+            try:
+                import subprocess, sys as _sys
+                r = subprocess.run(
+                    [_sys.executable, str(mail_py), "--account", account, "run"],
+                    capture_output=True, text=True, timeout=120
+                )
+                if r.returncode == 0 and r.stdout.strip():
+                    return True, f"📬 メール確認 ({account})\n━━━━━━━━━━━━\n{r.stdout.strip()[:600]}\n━━━━━━━━━━━━"
+                else:
+                    err = r.stderr.strip()[:300] if r.stderr else "処理完了（結果なし）"
+                    return False, f"メール確認エラー: {err}"
+            except Exception as e:
+                return False, f"メール確認実行エラー: {str(e)}"
+
         # ===== コンテキスト分析タスク（「次に何すべき？」等） =====
         if function_name == "context_query":
             question = arguments.get("question", instruction)
