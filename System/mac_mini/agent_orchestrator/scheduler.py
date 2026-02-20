@@ -43,6 +43,7 @@ class TaskScheduler:
             "weekly_idea_proposal": self._run_weekly_idea_proposal,
             "daily_addness_digest": self._run_daily_addness_digest,
             "oauth_health_check": self._run_oauth_health_check,
+            "render_health_check": self._run_render_health_check,
         }
 
     def setup(self):
@@ -75,8 +76,8 @@ class TaskScheduler:
         self.scheduler.shutdown()
         logger.info("Scheduler shut down")
 
-    # タスク失敗通知を送らないタスク（頻繁すぎるもの）
-    _NO_FAILURE_NOTIFY = {"health_check", "oauth_health_check"}
+    # タスク失敗通知を送らないタスク（自前でエラーハンドリングするもの）
+    _NO_FAILURE_NOTIFY = {"health_check", "oauth_health_check", "render_health_check"}
 
     async def _execute_tool(self, task_name: str, tool_fn, **kwargs) -> tools.ToolResult:
         task_id = self.memory.log_task_start(task_name, metadata=kwargs)
@@ -209,6 +210,7 @@ class TaskScheduler:
         self.memory.set_state("last_daily_report", report_text)
 
     async def _run_health_check(self):
+        import json as _json
         from .notifier import send_line_notify
         api_calls = self.memory.get_api_calls_last_hour()
         limit = self.config.get("safety", {}).get("api_call_limit_per_hour", 100)
@@ -220,6 +222,29 @@ class TaskScheduler:
             )
         elif api_calls > limit * 0.8:
             logger.warning(f"API call rate high: {api_calls}/{limit} in last hour")
+
+        # Q&Aモニターの最終チェック時刻を確認（2時間以上未更新なら警告）
+        qa_state_path = os.path.expanduser("~/agents/line_bot_local/qa_monitor_state.json")
+        if os.path.exists(qa_state_path):
+            try:
+                with open(qa_state_path) as f:
+                    qa_state = _json.load(f)
+                last_check = qa_state.get("last_check")
+                if last_check:
+                    dt = datetime.fromisoformat(last_check.replace("Z", "+00:00"))
+                    age_hours = (datetime.now().astimezone() - dt).total_seconds() / 3600
+                    if age_hours > 4:
+                        logger.warning(f"Q&A monitor stale: last check {age_hours:.1f}h ago")
+                        state_key = "qa_monitor_stale_notified"
+                        last_n = self.memory.get_state(state_key)
+                        if not last_n or (datetime.now() - datetime.fromisoformat(last_n)).total_seconds() > 14400:
+                            send_line_notify(
+                                f"\n⚠️ Q&Aモニター停止の可能性\n最終チェック: {age_hours:.0f}時間前\n"
+                                f"local_agent.py が正常に動作しているか確認してください"
+                            )
+                            self.memory.set_state(state_key, datetime.now().isoformat())
+            except Exception as e:
+                logger.debug(f"Q&A state check error: {e}")
 
         running_jobs = len(self.scheduler.get_jobs())
         self.memory.set_state("health_status", "ok")
@@ -352,6 +377,43 @@ class TaskScheduler:
         ok = send_line_notify(message)
         self.memory.log_task_end(task_id, "success" if ok else "error")
         logger.info("Daily Addness digest sent")
+
+    async def _run_render_health_check(self):
+        """Renderサーバーの死活監視（30分ごと）"""
+        import json as _json
+        import urllib.request
+        from .notifier import send_line_notify
+
+        server_url = os.environ.get("LINE_BOT_SERVER_URL", "https://line-mention-bot-mmzu.onrender.com")
+        try:
+            req = urllib.request.Request(server_url + "/", headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                body = resp.read().decode("utf-8", errors="replace")
+                if resp.status == 200:
+                    self.memory.set_state("render_last_ok", datetime.now().isoformat())
+                    logger.debug(f"Render health OK: {body[:100]}")
+                    return
+                else:
+                    raise Exception(f"HTTP {resp.status}")
+        except Exception as e:
+            err_str = str(e)[:150]
+            logger.warning(f"Render health check failed: {err_str}")
+
+            # 直近30分以内に通知済みならスキップ
+            last_notified = self.memory.get_state("render_health_notified")
+            if last_notified:
+                try:
+                    if (datetime.now() - datetime.fromisoformat(last_notified)).total_seconds() < 1800:
+                        return
+                except (ValueError, TypeError):
+                    pass
+
+            ok = send_line_notify(
+                f"\n⚠️ Renderサーバー応答なし\n{server_url}\n\nエラー: {err_str}\n"
+                f"LINE秘書が応答できていない可能性があります"
+            )
+            if ok:
+                self.memory.set_state("render_health_notified", datetime.now().isoformat())
 
     async def _run_oauth_health_check(self):
         """Google OAuthトークンの有効性チェック（日次）"""

@@ -46,6 +46,9 @@ schedule:
   oauth_health_check:
     cron: "0 9 * * *"            # 毎日 朝9:00
     enabled: true
+  render_health_check:
+    interval_minutes: 30         # 30分ごと（Renderコールドスタート前提）
+    enabled: true
 
 webhook:
   host: "0.0.0.0"
