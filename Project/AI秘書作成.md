@@ -204,7 +204,7 @@ bash System/line_bot_local/sync_data.sh
 |------|------|
 | Render プラン | Starter（$7/月）。Zero Downtime デプロイ・スリープなし |
 | Macスリープ対策 | launchd plist に `caffeinate -s` を追加。エージェント起動中はMacスリープ防止 |
-| /tmp リセット | Render 再起動時に `pending_messages` が消える。`1`/`2` で「対象が見つかりません」が出たら Render 再起動と判断 |
+| データ永続化 | Render永続ディスク `/data` を使用。`DATA_DIR=/data` 環境変数で設定済み。デプロイ後も状態が消えない |
 | macOS TCC | launchd から Desktop は直接アクセス不可。Library 版でキャッシュ経由でアクセス |
 | LINE webhook重複 | 同一 message_id のタスクは1件のみキューイング済み |
 
@@ -227,6 +227,8 @@ bash System/line_bot_local/sync_data.sh
 - [x] Renderスリープ防止（Starter移行済み・スリープなし）
 - [x] Macスリープ対策（caffeinate -s でエージェント起動中はスリープ防止）
 - [x] 2コマンドのai_suggestion未取得時も学習するよう修正
+- [x] 1/2フォールバックを返信案通知時刻で選ぶよう修正（誤送信バグ）
+- [x] pending_messages永続化（Render永続ディスク /data）
 
 ---
 
