@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月21日（リスク対策・Orchestrator強化・個人DM対応） |
+| 最終更新 | 2026年2月21日（P2/P3機能: context_query・LP生成・ミーティング準備） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -117,6 +117,8 @@
 | 「明日14時に会議入れて」 | Googleカレンダーに予定追加 |
 | 「今日の予定を教えて」 | カレンダー予定を表示 |
 | 「日報入れて」 | 日報入力をCursorに委譲 |
+| 「次何？」「次にやることは？」 | Addness+メール状況をClaudeが分析→優先行動リスト返答（context_query） |
+| 「LP作成: 商品名 ターゲット」 | LP構成案+キャッチコピー3案+CTA自動生成（generate_lp_draft） |
 
 ---
 
@@ -324,6 +326,12 @@ MacBook Desktop (cursor/)
 - [x] API使用量警告（直近1時間が90%超でLINE通知）
 - [x] スケジュールステータスAPI（GET /schedule/status で全ジョブの次回実行・最終成功を確認可能）
 - [x] MacBook移行ガイド作成（`Project/MacBook移行ガイド.md`・1ヶ月後の機種変更向け）
+- [x] calendar_listバグ修正（tools.pyのdays=1で今日の日付を自動設定・`"7"`を日付として渡すバグ解消）
+- [x] 日次ダイジェスト+カレンダー統合（毎朝8:30の通知に今日の予定を追加）
+- [x] ミーティング準備ブリーフィング（カレンダー参加者をpeople-profiles.jsonでルックアップ・カテゴリ付きで表示）
+- [x] calendar_manager.py 参加者表示機能追加（list_eventsで参加者displayName出力）
+- [x] context_queryコマンド（「次何？」でAddness+メール+Claude分析→優先行動リスト返答）
+- [x] generate_lp_draftコマンド（「LP作成: 商品名」でLP構成案+キャッチコピー自動生成）
 
 ---
 
