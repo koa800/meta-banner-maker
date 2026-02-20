@@ -2,7 +2,7 @@
 
 > **使い方**: Mac miniが定期的にここを読んで「次にこれをやりませんか？」と提案する。
 > アイデアを思いついたら追加する。完了したものは `[x]` にする。
-> 最終更新: 2026-02-21 (P2/P3実装: LP自動ドラフト・context_query・ミーティング準備)
+> 最終更新: 2026-02-21 (P2バナー構成案生成・スケジュール修正)
 
 ---
 
@@ -53,7 +53,7 @@
 - [x] **LPコピー自動ドラフト**: 「LP作成: [条件]」でファーストビュー見出し3案+CTA+ベネフィット訴求を生成（local_agent.py `generate_lp_draft`）
   - *根拠*: LP実装が複数期限超過。制作スピードアップが最短経路
 - [x] **動画スクリプト自動生成**: 「スクリプト作成: [条件]」でTikTok/YouTube広告台本を自動生成（`generate_video_script`）
-- [ ] **バナー構成案バリエーション生成**: 10本同時にコンセプト案を出す
+- [x] **バナー構成案バリエーション生成**: 10本同時にコンセプト案を出す（`generate_banner_concepts`）
 
 ### 報告シート自動入力
 - [ ] **日次KPI報告（1分の作業）を自動化**: Addness/広告媒体からデータを取得してシートに記入
@@ -131,6 +131,8 @@
 - **calendar tokenハング防止**: tools.pyでtoken未存在時に即座にToolResult(success=False)返却
 - **フォローアップ追跡**: local_agent.pyのreply_suggestion後にcontact_state.jsonへ接触時刻記録
 - **週次フォローアップ通知**: scheduler.py _check_follow_up_suggestionsでカテゴリ別閾値チェック
+- **generate_banner_concepts コマンド**: 「バナー作成: [条件]」でバナー広告コンセプト5案自動生成（ヘッドライン+ビジュアル+CTA）
+- **addness_goal_check スケジュール**: Orchestratorで毎朝9時にaddness_to_context実行（定期実行統合完了）
 
 ---
 

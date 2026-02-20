@@ -722,6 +722,41 @@ TikTok/Instagram向けの引きの強い台本を作成してください。"""
             result_text = f"🎬 動画台本: {product} ({video_type})\n━━━━━━━━━━━━\n{script}\n━━━━━━━━━━━━\n💡 Cursorで拡張版を作成できます"
             return True, result_text
 
+        # ===== バナー構成案生成タスク =====
+        if function_name == "generate_banner_concepts":
+            product = arguments.get("product", "スキルプラス")
+            platform = arguments.get("platform", "Meta広告")
+            target_audience = arguments.get("target_audience", "副業・起業希望者")
+            count = min(int(arguments.get("count", 5)), 10)
+
+            banner_prompt = f"""あなたは高CTR・高CVRの広告バナーを設計するクリエイティブディレクターです。
+以下の条件でバナー広告のコンセプト案を{count}パターン生成してください。
+
+【商品・サービス】{product}
+【掲載プラットフォーム】{platform}
+【ターゲット層】{target_audience}
+
+【各パターンの出力形式】
+パターンX:
+- ヘッドライン: （キャッチコピー・15文字以内）
+- サブコピー: （補足・20文字以内）
+- ビジュアル: （画像・動画の構成案を1文で）
+- CTA: （ボタン文言）
+- 訴求軸: （この案が刺さる理由を1行で）
+
+多様な訴求軸（実績数字・感情・ベネフィット・緊急性など）でバリエーションを出してください。
+LINEで読める形式で、合計600文字以内に収めてください。"""
+
+            response = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=800,
+                system="あなたはROAS・CTR改善実績のある広告クリエイティブディレクターです。具体的で成果の出るバナー案を作成してください。",
+                messages=[{"role": "user", "content": banner_prompt}]
+            )
+            concepts = response.content[0].text.strip()
+            result_text = f"🎨 バナー構成案: {product} ({platform})\n━━━━━━━━━━━━\n{concepts}\n━━━━━━━━━━━━\n💡 採用案はCursorで画像生成プロンプトに展開できます"
+            return True, result_text
+
         # ===== コンテキスト分析タスク（「次に何すべき？」等） =====
         if function_name == "context_query":
             question = arguments.get("question", instruction)
