@@ -41,6 +41,7 @@ class TaskScheduler:
             "health_check": self._run_health_check,
             "repair_check": self._run_repair_check,
             "weekly_idea_proposal": self._run_weekly_idea_proposal,
+            "weekly_stats": self._run_weekly_stats,
             "daily_addness_digest": self._run_daily_addness_digest,
             "oauth_health_check": self._run_oauth_health_check,
             "render_health_check": self._run_render_health_check,
@@ -539,6 +540,56 @@ class TaskScheduler:
                 logger.info(f"OAuth health check: QA stats failed (non-auth): {result.error[:100]}")
         else:
             logger.info("OAuth health check OK")
+
+    async def _run_weekly_stats(self):
+        """毎週月曜9:30: 先週のシステム稼働サマリーをLINE通知"""
+        import json as _json
+        from .notifier import send_line_notify
+        from datetime import date
+
+        stats = self.memory.get_task_stats(since_hours=168)  # 7日間
+        total = sum(sum(v.values()) for v in stats.values())
+        success = sum(v.get("success", 0) for v in stats.values())
+        error = sum(v.get("error", 0) for v in stats.values())
+        success_rate = round(100 * success / total) if total > 0 else 0
+        error_tasks = [name for name, s in stats.items() if s.get("error", 0) > 0]
+
+        # Q&A通知済み件数
+        qa_state_path = os.path.expanduser("~/agents/line_bot_local/qa_monitor_state.json")
+        qa_count = 0
+        if os.path.exists(qa_state_path):
+            try:
+                with open(qa_state_path) as f:
+                    qa_count = len(_json.load(f).get("sent_ids", []))
+            except Exception:
+                pass
+
+        # Addnessデータ鮮度
+        actionable_path = os.path.expanduser(
+            os.path.join(self.config.get("paths", {}).get("master_dir", "~/agents/Master"),
+                         "actionable-tasks.md")
+        )
+        data_age_note = ""
+        if os.path.exists(actionable_path):
+            import time
+            age_days = (time.time() - os.path.getmtime(actionable_path)) / 86400
+            if age_days > 3:
+                data_age_note = f"\n⚠️ Addnessデータ: {age_days:.0f}日前（要更新）"
+
+        parts = [
+            f"\n📊 週次サマリー ({date.today().strftime('%m/%d')})",
+            "━━━━━━━━━━━━",
+            f"タスク実行: {success}/{total}件成功 ({success_rate}%)",
+            f"Q&A通知済み: {qa_count}件累計",
+        ]
+        if error_tasks:
+            parts.append(f"⚠️ エラー: {', '.join(error_tasks[:4])}")
+        if data_age_note:
+            parts.append(data_age_note)
+        parts.append("━━━━━━━━━━━━")
+
+        ok = send_line_notify("\n".join(parts))
+        logger.info(f"Weekly stats sent: {total} tasks, {success_rate}% success, {qa_count} Q&As")
 
     async def _run_repair_check(self):
         if _repair_agent_ref is None:
