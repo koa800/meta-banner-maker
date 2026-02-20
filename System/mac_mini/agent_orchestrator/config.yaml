@@ -43,6 +43,9 @@ schedule:
   daily_addness_digest:
     cron: "30 8 * * *"           # 毎日 朝8:30
     enabled: true
+  oauth_health_check:
+    cron: "0 9 * * *"            # 毎日 朝9:00
+    enabled: true
 
 webhook:
   host: "0.0.0.0"

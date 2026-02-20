@@ -41,6 +41,7 @@ class TaskScheduler:
             "repair_check": self._run_repair_check,
             "weekly_idea_proposal": self._run_weekly_idea_proposal,
             "daily_addness_digest": self._run_daily_addness_digest,
+            "oauth_health_check": self._run_oauth_health_check,
         }
 
     def setup(self):
@@ -155,9 +156,16 @@ class TaskScheduler:
         self.memory.set_state("last_daily_report", report)
 
     async def _run_health_check(self):
+        from .notifier import send_line_notify
         api_calls = self.memory.get_api_calls_last_hour()
         limit = self.config.get("safety", {}).get("api_call_limit_per_hour", 100)
-        if api_calls > limit * 0.8:
+        if api_calls > limit * 0.9:
+            logger.warning(f"API call rate critical: {api_calls}/{limit} in last hour")
+            send_line_notify(
+                f"\n⚠️ API使用量警告\n直近1時間: {api_calls}/{limit}回\n"
+                f"API制限に近づいています。Anthropicダッシュボードを確認してください。"
+            )
+        elif api_calls > limit * 0.8:
             logger.warning(f"API call rate high: {api_calls}/{limit} in last hour")
 
         running_jobs = len(self.scheduler.get_jobs())
@@ -291,6 +299,55 @@ class TaskScheduler:
         ok = send_line_notify(message)
         self.memory.log_task_end(task_id, "success" if ok else "error")
         logger.info("Daily Addness digest sent")
+
+    async def _run_oauth_health_check(self):
+        """Google OAuthトークンの有効性チェック（日次）"""
+        import json
+        from .notifier import send_line_notify
+
+        token_path = os.path.expanduser("~/agents/token.json")
+
+        # token.jsonの存在確認
+        if not os.path.exists(token_path):
+            send_line_notify(
+                "\n⚠️ OAuth警告\ntoken.jsonが見つかりません\n"
+                "Q&A監視・メール・カレンダーが動作していない可能性があります\n"
+                "MacBookから再セットアップが必要です"
+            )
+            logger.error("token.json not found")
+            return
+
+        # refresh_tokenの存在確認
+        try:
+            with open(token_path) as f:
+                token_data = json.load(f)
+        except Exception as e:
+            send_line_notify(f"\n⚠️ OAuth警告\ntoken.json読み込みエラー: {str(e)[:150]}")
+            logger.error(f"Failed to read token.json: {e}")
+            return
+
+        if not token_data.get("refresh_token"):
+            send_line_notify(
+                "\n⚠️ OAuth警告\nrefresh_tokenが存在しません\n再認証が必要です"
+            )
+            logger.error("No refresh_token in token.json")
+            return
+
+        # 実際にGoogle APIを呼び出して認証が通るか確認
+        result = await self._execute_tool("oauth_health_check", tools.qa_stats)
+        if not result.success:
+            err_lower = (result.error or "").lower()
+            auth_keywords = ["auth", "token", "credential", "403", "401", "permission", "access"]
+            if any(k in err_lower for k in auth_keywords):
+                send_line_notify(
+                    f"\n⚠️ Google OAuth エラー\nGoogle API認証に失敗しました\n"
+                    f"MacBookで再認証が必要な場合があります\n\nエラー:\n{result.error[:200]}"
+                )
+                logger.error(f"OAuth health check: auth error: {result.error[:200]}")
+            else:
+                logger.info(f"OAuth health check: QA stats failed (non-auth): {result.error[:100]}")
+        else:
+            logger.info("OAuth health check OK")
 
     async def _run_repair_check(self):
         if _repair_agent_ref is None:
