@@ -482,6 +482,7 @@ def call_claude_api(instruction: str, task: dict):
         if function_name == "generate_reply_suggestion":
             original_message = arguments.get("original_message", task.get("original_text", ""))
             quoted_text = arguments.get("quoted_text", "")  # 引用返信の場合のボット返信テキスト
+            context_messages = arguments.get("context_messages", [])  # メンション直前の会話文脈
             message_id = arguments.get("message_id", "")
             group_name = arguments.get("group_name", "")
             msg_id_short = message_id[:4] if message_id else "----"
@@ -552,6 +553,11 @@ def call_claude_api(instruction: str, task: dict):
             if quoted_text:
                 quoted_section = f"\n【引用元（ボットが送った返信・この内容へのリプライです）】\n{quoted_text}\n"
 
+            context_section = ""
+            if context_messages:
+                ctx_text = "\n".join(context_messages)
+                context_section = f"\n【メンション直前の会話文脈（参考）】\n{ctx_text}\n"
+
             prompt = f"""あなたは甲原海人本人として返信を書きます。
 以下の全情報を統合し、甲原海人が実際に送るようなメッセージを生成してください。
 
@@ -565,7 +571,7 @@ def call_claude_api(instruction: str, task: dict):
 推奨挨拶: {comm_greeting or 'お疲れ様！'}
 {goals_context}{notes_text}
 {profile_info}
-{quoted_section}
+{context_section}{quoted_section}
 【受信メッセージ】
 グループ: {group_name}
 内容: {original_message}
@@ -575,7 +581,7 @@ def call_claude_api(instruction: str, task: dict):
 - 50文字以内を目安に簡潔に
 - 相手固有のスタイルノートと口調の癖をそのまま再現する
 - メモ・現在の取り組みがあれば文脈として活用する
-{('- 引用元の内容を踏まえた返信にすること' if quoted_text else '')}
+{('- 会話文脈を踏まえた流れのある返信にすること' if context_messages else '')}{('- 引用元の内容を踏まえた返信にすること' if quoted_text else '')}
 返信文:"""
 
             response = client.messages.create(
