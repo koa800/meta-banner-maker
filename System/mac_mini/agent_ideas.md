@@ -76,7 +76,7 @@
 - [x] **フォローアップ提案**: contact_state.jsonに接触記録→週次statsにカテゴリ別閾値(上司30日/横21日/メンバー14日)でLINE通知
 
 ### コンテンツ管理
-- [ ] **AI学習コンテンツ更新監視**: 競合コンテンツ・最新AI情報を週1でスキャンして更新提案
+- [x] **AI学習コンテンツ更新監視**: 競合コンテンツ・最新AI情報を週1でスキャンして更新提案（`weekly_content_suggestions`・毎週水曜10:00）
 - [x] **東北大学研究コラボ進捗リマインダー**（2026/08/31期限）→ scheduler._check_special_reminders で90/30/7/3/1日前に通知
 
 ---
@@ -137,6 +137,7 @@
 - **_check_special_reminders**: 東北大学研究コラボ(2026/08/31)等の重要期限を90/30/7/3/1日前にLINE通知
 - **_notify_weekly_bottleneck**: weekly_stats時にClaudeがactionable-tasks.md分析→今週の最大ボトルネック通知
 - **monthly_competitor_analysis**: 毎月1日10:00に競合比較チェックリストをClaude生成してLINE通知
+- **weekly_content_suggestions**: 毎週水曜10:00にai_news.logを分析→スキルプラスのコンテンツ更新提案
 
 ---
 

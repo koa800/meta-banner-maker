@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月21日（P3/P4: 競合分析・週次ボトルネック分析・月次競合チェック） |
+| 最終更新 | 2026年2月21日（P3/P4: 競合分析・週次ボトルネック・コンテンツ更新監視） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -252,6 +252,7 @@ bash System/line_bot_local/sync_data.sh
 | `repair_check` | 30分ごと | ログエラー検知・自動修復提案 |
 | `weekly_affiliate_ideas` | 毎週金曜 10:00 | アフィリエイターサポートコンテンツ案をClaude生成してLINE通知 |
 | `monthly_competitor_analysis` | 毎月1日 10:00 | 競合比較チェックリストをClaude生成してLINE通知 |
+| `weekly_content_suggestions` | 毎週水曜 10:00 | 最新AIニュースを分析してコンテンツ更新提案をLINE通知 |
 
 ### Orchestrator 通知フロー
 
@@ -344,6 +345,7 @@ MacBook Desktop (cursor/)
 - [x] 特殊期限リマインダー（東北大学研究コラボ2026/08/31の90/30/7/3/1日前にLINE通知）
 - [x] 週次ボトルネック分析（weekly_stats実行時にClaudeがactionable-tasks.mdを分析して最大課題を通知）
 - [x] monthly_competitor_analysisスケジューラ（毎月1日10:00に競合チェックリストをClaude生成）
+- [x] weekly_content_suggestionsスケジューラ（毎週水曜10:00にai_news.log分析→コンテンツ更新提案）
 
 ---
 

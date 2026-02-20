@@ -47,6 +47,7 @@ class TaskScheduler:
             "render_health_check": self._run_render_health_check,
             "weekly_affiliate_ideas": self._run_weekly_affiliate_ideas,
             "monthly_competitor_analysis": self._run_monthly_competitor_analysis,
+            "weekly_content_suggestions": self._run_weekly_content_suggestions,
         }
 
     def setup(self):
@@ -799,6 +800,64 @@ class TaskScheduler:
             logger.info("Monthly competitor analysis sent")
         except Exception as e:
             logger.error(f"Monthly competitor analysis failed: {e}")
+
+    async def _run_weekly_content_suggestions(self):
+        """毎週水曜10:00: 最新AIニュースを分析してスキルプラスのコンテンツ更新提案をLINE通知"""
+        from .notifier import send_line_notify
+        from datetime import date
+        import anthropic as _anthropic
+
+        today_str = date.today().strftime("%Y/%m/%d")
+
+        # ai_news.log から最新ニュースを取得（直近50行）
+        news_log = os.path.expanduser("~/agents/System/ai_news.log")
+        news_content = ""
+        if os.path.exists(news_log):
+            try:
+                with open(news_log, encoding="utf-8", errors="replace") as f:
+                    lines = f.readlines()
+                # 直近50行（最新ニュース）
+                news_content = "".join(lines[-50:])[:2000]
+            except Exception:
+                pass
+
+        if not news_content:
+            logger.debug("weekly_content_suggestions: ai_news.log not found or empty")
+            return
+
+        try:
+            client = _anthropic.Anthropic()
+            response = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=500,
+                system="あなたはスキルプラス（AI副業教育コース）のコンテンツディレクターです。",
+                messages=[{"role": "user", "content": f"""以下の最新AIニュースを踏まえて、スキルプラスのカリキュラム・教材の更新提案をしてください。
+
+【最新AIニュース（直近）】
+{news_content}
+
+【出力形式】（400文字以内・LINEで読みやすい形式）
+📚 コンテンツ更新提案 ({today_str})
+
+更新優先度が高いもの（2〜3件）:
+1. [セクション/教材名]: [追加・修正内容を1行で]
+   → 理由: [そのニュースとの関連を1行で]
+
+受講生にとって今すぐ価値がある内容にしてください。"""}]
+            )
+            suggestions = response.content[0].text.strip()
+            message = (
+                f"\n{suggestions}\n"
+                f"━━━━━━━━━━━━\n"
+                f"💡 詳細はCursorで展開できます"
+            )
+            task_id = self.memory.log_task_start("weekly_content_suggestions")
+            ok = send_line_notify(message)
+            self.memory.log_task_end(task_id, "success" if ok else "error",
+                                     result_summary=suggestions[:100])
+            logger.info("Weekly content suggestions sent")
+        except Exception as e:
+            logger.error(f"Weekly content suggestions failed: {e}")
 
     async def _check_follow_up_suggestions(self, send_line_notify):
         """長期未接触の人をpeople-profiles.jsonとcontact_state.jsonで検出しLINE通知"""
