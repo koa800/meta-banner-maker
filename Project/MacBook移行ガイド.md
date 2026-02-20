@@ -134,6 +134,25 @@ scutil --get LocalHostName
 
 ---
 
+## Google Calendar OAuth セットアップ（Mac Mini）
+
+カレンダー機能（朝の予定通知）を使うためには、Mac Miniで一度だけOAuth認証が必要。
+
+```bash
+# MacBookで実行（ブラウザが開く）
+cd ~/Desktop/cursor/System
+python3 calendar_manager.py --account personal list
+
+# 認証完了後、token_calendar_personal.json が生成される
+# Mac Mini にコピー
+scp System/token_calendar_personal.json koa800@mac-mini-agent.local:~/agents/System/
+```
+
+> 注意: `client_secret_personal.json` が `client_secret.json` と別になっている場合は
+> `calendar_manager.py` の `CLIENT_SECRET_PATH` を変更するか、`client_secret_personal.json` を `client_secret.json` にコピー。
+
+---
+
 ## 移行後の最終確認
 
 - [ ] `git push` が正常に動作する
@@ -141,6 +160,7 @@ scutil --get LocalHostName
 - [ ] Claude Code が正常に起動する（`claude` コマンド）
 - [ ] Mac Mini の Orchestrator ログに問題がない
 - [ ] LINE秘書への通知が届く
+- [ ] Google Calendar OAuth セットアップ（`token_calendar_personal.json` を Mac Mini にコピー）
 
 ---
 

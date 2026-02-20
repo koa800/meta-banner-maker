@@ -664,6 +664,52 @@ def call_claude_api(instruction: str, task: dict):
             result_text = f"📝 LPドラフト: {product}\n━━━━━━━━━━━━\n{draft}\n━━━━━━━━━━━━\n💡 フル版はCursorで展開できます"
             return True, result_text
 
+        # ===== 動画スクリプト自動生成タスク =====
+        if function_name == "generate_video_script":
+            product = arguments.get("product", "スキルプラス")
+            video_type = arguments.get("video_type", "TikTok広告15秒")
+            target_audience = arguments.get("target_audience", "副業・起業希望者")
+            hook = arguments.get("hook", "")
+
+            # ブランドコンテキスト
+            brand_context = ""
+            try:
+                profile_path = _PROJECT_ROOT / "Master" / "self_clone" / "projects" / "kohara" / "1_Core" / "SELF_PROFILE.md"
+                if profile_path.exists():
+                    brand_context = profile_path.read_text(encoding="utf-8")[:500]
+            except Exception:
+                pass
+
+            script_prompt = f"""あなたは高転換率の動画広告クリエイターです。
+以下の条件で日本語の動画台本を作成してください。
+
+【商品・サービス】{product}
+【動画タイプ】{video_type}
+【ターゲット】{target_audience}
+【フック・訴求】{hook or '最も効果的な冒頭フックを選んでください'}
+
+【ブランド背景】
+{brand_context or '（なし）'}
+
+【出力形式】（LINEで読めるよう500文字以内）
+- 冒頭フック（0〜3秒）:
+- 問題提起（3〜8秒）:
+- 解決策提示（8〜12秒）:
+- CTA（12〜15秒）:
+- ナレーション例（自然な口語体で）
+
+TikTok/Instagram向けの引きの強い台本を作成してください。"""
+
+            response = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=700,
+                system="あなたは短尺動画広告の台本クリエイターです。視聴者が思わず止まるフックと行動喚起を作成してください。",
+                messages=[{"role": "user", "content": script_prompt}]
+            )
+            script = response.content[0].text.strip()
+            result_text = f"🎬 動画台本: {product} ({video_type})\n━━━━━━━━━━━━\n{script}\n━━━━━━━━━━━━\n💡 Cursorで拡張版を作成できます"
+            return True, result_text
+
         # ===== コンテキスト分析タスク（「次に何すべき？」等） =====
         if function_name == "context_query":
             question = arguments.get("question", instruction)
