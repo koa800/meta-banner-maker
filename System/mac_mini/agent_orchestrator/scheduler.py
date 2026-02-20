@@ -45,6 +45,7 @@ class TaskScheduler:
             "daily_addness_digest": self._run_daily_addness_digest,
             "oauth_health_check": self._run_oauth_health_check,
             "render_health_check": self._run_render_health_check,
+            "weekly_affiliate_ideas": self._run_weekly_affiliate_ideas,
         }
 
     def setup(self):
@@ -349,6 +350,9 @@ class TaskScheduler:
 
         # 今日のカレンダーを別メッセージで通知（独立して動作）
         await self._notify_today_calendar(send_line_notify)
+
+        # 特殊な締め切り・リマインダーチェック（90/30/7日前に通知）
+        await self._check_special_reminders(send_line_notify)
 
     async def _notify_today_calendar(self, send_line_notify):
         """今日のカレンダー予定をLINE通知（予定がなければスキップ）"""
@@ -747,6 +751,94 @@ class TaskScheduler:
 
         ok = send_line_notify("\n".join(parts))
         logger.info(f"Follow-up suggestions sent: {len(suggestions[:5])} people")
+
+    async def _check_special_reminders(self, send_line_notify):
+        """ハードコードされた重要期限のリマインダー（90/30/7日前に通知）"""
+        from datetime import date
+        today = date.today()
+
+        # 重要な特殊期限リスト: (日付, ラベル, 詳細)
+        SPECIAL_DEADLINES = [
+            (date(2026, 8, 31), "東北大学研究コラボ", "研究プロジェクト期限。進捗確認・論文準備が必要です。"),
+        ]
+
+        for deadline, label, detail in SPECIAL_DEADLINES:
+            delta = (deadline - today).days
+            if delta < 0:
+                continue  # 超過済みはスキップ
+            if delta not in (90, 30, 7, 3, 1):
+                continue  # 通知対象日のみ
+
+            urgency = "🔴" if delta <= 7 else "🟠" if delta <= 30 else "🟡"
+            ok = send_line_notify(
+                f"\n{urgency} リマインダー: {label}\n"
+                f"━━━━━━━━━━━━\n"
+                f"期限: {deadline.strftime('%Y/%m/%d')} (残{delta}日)\n"
+                f"{detail}\n"
+                f"━━━━━━━━━━━━"
+            )
+            if ok:
+                logger.info(f"Special reminder sent: {label} in {delta} days")
+
+    async def _run_weekly_affiliate_ideas(self):
+        """毎週金曜10:00: アフィリエイター向けサポートコンテンツ案をClaudeで生成してLINE通知"""
+        from .notifier import send_line_notify
+        from datetime import date
+        import anthropic as _anthropic
+
+        # actionable-tasks.md からアフィリエイト関連のコンテキストを取得
+        master_dir = self.config.get("paths", {}).get("master_dir", "~/agents/Master")
+        actionable_path = os.path.expanduser(os.path.join(master_dir, "actionable-tasks.md"))
+        context = ""
+        if os.path.exists(actionable_path):
+            try:
+                with open(actionable_path, encoding="utf-8") as f:
+                    content = f.read()
+                # アフィリエイト関連行だけ抽出
+                lines = [l for l in content.splitlines() if "アフィリエイト" in l or "affiliate" in l.lower()]
+                context = "\n".join(lines[:20])
+            except Exception:
+                pass
+
+        today_str = date.today().strftime("%Y/%m/%d")
+        prompt = f"""あなたはスキルプラス（AI副業コース）のアフィリエイトマーケティング担当です。
+今日の日付: {today_str}
+
+【現在のアフィリエイト関連タスク】
+{context or 'アフィリエイトプログラムの登録・拡大が目標（2026/02/28期限）'}
+
+以下を生成してください（LINEで読める形式・500文字以内）:
+
+1. 今週アフィリエイターに送るべきサポートコンテンツ案（2〜3件）
+   - 種類: LP改善ヒント/説明動画/バナー素材/メール文章例 など
+   - 優先度と理由を1行で
+
+2. 成約率を上げるための即効アクション（1件）
+
+具体的で実行しやすいものを提案してください。"""
+
+        try:
+            client = _anthropic.Anthropic()
+            response = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=600,
+                system="あなたはアフィリエイトマーケティングの専門家です。成約率向上のための実践的なアドバイスをしてください。",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            ideas = response.content[0].text.strip()
+            message = (
+                f"\n🤝 週次アフィリエイト提案 ({today_str})\n"
+                f"━━━━━━━━━━━━\n"
+                f"{ideas}\n"
+                f"━━━━━━━━━━━━"
+            )
+            task_id = self.memory.log_task_start("weekly_affiliate_ideas")
+            ok = send_line_notify(message)
+            self.memory.log_task_end(task_id, "success" if ok else "error",
+                                     result_summary=ideas[:100])
+            logger.info("Weekly affiliate ideas sent")
+        except Exception as e:
+            logger.error(f"Weekly affiliate ideas failed: {e}")
 
     async def _run_repair_check(self):
         if _repair_agent_ref is None:

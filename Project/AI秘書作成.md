@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月21日（P2バナー構成案生成・スケジュール表修正） |
+| 最終更新 | 2026年2月21日（P2/P3: バナー生成・アフィリエイト提案・東北大リマインダー） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -250,6 +250,7 @@ bash System/line_bot_local/sync_data.sh
 | `render_health_check` | 30分ごと | Renderサーバー死活監視・ダウン時LINE通知 |
 | `health_check` | 5分ごと | API使用量・Q&Aモニター・local_agent停止を検知してLINE警告 |
 | `repair_check` | 30分ごと | ログエラー検知・自動修復提案 |
+| `weekly_affiliate_ideas` | 毎週金曜 10:00 | アフィリエイターサポートコンテンツ案をClaude生成してLINE通知 |
 
 ### Orchestrator 通知フロー
 
@@ -338,6 +339,8 @@ MacBook Desktop (cursor/)
 - [x] generate_video_scriptコマンド（「スクリプト作成: 商品名」でTikTok/YouTube広告台本自動生成）
 - [x] calendar_list トークン未存在時のハング防止（token file存在チェックで即時フェイル）
 - [x] generate_banner_conceptsコマンド（「バナー作成: 商品名」でバナー広告コンセプト5案自動生成）
+- [x] weekly_affiliate_ideasスケジューラ（毎週金曜10:00にアフィリエイターサポートコンテンツ案をClaude生成）
+- [x] 特殊期限リマインダー（東北大学研究コラボ2026/08/31の90/30/7/3/1日前にLINE通知）
 
 ---
 
