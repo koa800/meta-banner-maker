@@ -240,8 +240,10 @@ bash System/line_bot_local/sync_data.sh
 | `daily_addness_digest` | 毎朝 8:30 | 期限超過・直近期限ゴールをLINE通知 |
 | `oauth_health_check` | 毎朝 9:00 | Google OAuth有効性チェック・失敗時通知 |
 | `weekly_idea_proposal` | 毎週月曜 9:00 | agent_ideas.mdのP0/P1タスクをLINE提案 |
+| `weekly_stats` | 毎週月曜 9:30 | 週次サマリー（成功率・Q&A件数・Addness鮮度）をLINE通知 |
 | `daily_report` | 毎夜 21:00 | 日次タスク集計をLINE通知 |
-| `health_check` | 5分ごと | API使用量チェック・90%超でLINE警告 |
+| `render_health_check` | 30分ごと | Renderサーバー死活監視・ダウン時LINE通知 |
+| `health_check` | 5分ごと | API使用量・Q&Aモニター・local_agent停止を検知してLINE警告 |
 | `repair_check` | 30分ごと | ログエラー検知・自動修復提案 |
 
 ### Orchestrator 通知フロー
