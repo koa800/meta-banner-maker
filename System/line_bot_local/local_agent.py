@@ -778,6 +778,43 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
             except Exception as e:
                 return False, f"who_to_ask 実行エラー: {str(e)}"
 
+        # ===== Q&A状況確認タスク =====
+        if function_name == "qa_status":
+            qa_state_path = _AGENT_DIR / "qa_monitor_state.json"
+            if not qa_state_path.exists():
+                return False, "qa_monitor_state.jsonが見つかりません\n（qa_monitorがまだ実行されていないか無効です）"
+            try:
+                state = json.loads(qa_state_path.read_text(encoding="utf-8"))
+                last_check = state.get("last_check", "不明")
+                sent_ids = state.get("sent_ids", [])
+                pending = state.get("pending_approvals", {})
+                # last_check を読みやすく
+                try:
+                    from datetime import datetime as _dt
+                    lc = _dt.fromisoformat(last_check.replace("Z", "+00:00"))
+                    last_check_str = lc.strftime("%m/%d %H:%M")
+                    age_min = int((_dt.now().astimezone() - lc).total_seconds() / 60)
+                    last_check_str += f" ({age_min}分前)"
+                except Exception:
+                    last_check_str = last_check[:16]
+
+                parts = [
+                    f"📊 Q&A状況",
+                    f"━━━━━━━━━━━━",
+                    f"通知済み: {len(sent_ids)}件累計",
+                    f"保留中回答: {len(pending)}件",
+                    f"最終チェック: {last_check_str}",
+                    f"━━━━━━━━━━━━",
+                ]
+                if pending:
+                    parts.append("【保留中】")
+                    for qid, qdata in list(pending.items())[:3]:
+                        q = qdata.get("question", "")[:30]
+                        parts.append(f"  {qid}: {q}...")
+                return True, "\n".join(parts)
+            except Exception as e:
+                return False, f"Q&A状況取得エラー: {str(e)}"
+
         # ===== Orchestrator状態確認タスク =====
         if function_name == "orchestrator_status":
             orch_base = "http://localhost:8500"

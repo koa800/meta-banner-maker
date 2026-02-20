@@ -369,6 +369,7 @@ MacBook Desktop (cursor/)
 - [x] addness_syncコマンド（「Addness更新」でaddness_to_context.py即時実行→件数サマリー返答）
 - [x] mail_checkコマンド（「メール確認」でmail_manager.py run即時実行→処理結果返答）
 - [x] ヘルプコマンド（「ヘルプ」「コマンド一覧」で全機能一覧を表示・Claude API呼び出しなし）
+- [x] qa_statusコマンド（「QA状況」でqa_monitor_state.json読み込み→検知件数・保留数・最終チェック返答）
 
 ---
 
