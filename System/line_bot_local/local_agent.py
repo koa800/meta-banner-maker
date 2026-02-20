@@ -21,6 +21,7 @@ _PROJECT_ROOT = _AGENT_DIR.parent.parent
 PEOPLE_PROFILES_JSON = _PROJECT_ROOT / "Master" / "people-profiles.json"
 PEOPLE_IDENTITIES_JSON = _PROJECT_ROOT / "Master" / "people-identities.json"
 SELF_IDENTITY_MD = _PROJECT_ROOT / "Master" / "self_clone" / "projects" / "kohara" / "1_Core" / "IDENTITY.md"
+SELF_PROFILE_MD = _PROJECT_ROOT / "Master" / "self_clone" / "projects" / "kohara" / "1_Core" / "SELF_PROFILE.md"
 FEEDBACK_FILE = _PROJECT_ROOT / "Master" / "reply_feedback.json"  # フィードバック学習データ
 
 
@@ -29,6 +30,19 @@ def _load_self_identity() -> str:
     try:
         if SELF_IDENTITY_MD.exists():
             return SELF_IDENTITY_MD.read_text(encoding="utf-8")
+    except Exception:
+        pass
+    return ""
+
+
+def _load_self_profile() -> str:
+    """甲原海人のコアプロファイル（価値観・判断軸・哲学）を読み込む"""
+    try:
+        if SELF_PROFILE_MD.exists():
+            content = SELF_PROFILE_MD.read_text(encoding="utf-8")
+            if "↓ ここに記入 ↓" in content and content.count("-\n") > 5:
+                return ""
+            return content
     except Exception:
         pass
     return ""
@@ -406,6 +420,45 @@ def call_claude_api(instruction: str, task: dict):
             or ""
         )
 
+        # ===== 人物メモ保存タスク =====
+        if function_name == "save_person_memo":
+            person_name = arguments.get("person_name", "")
+            memo = arguments.get("memo", "")
+            if person_name and memo:
+                profiles = _load_json_safe(PEOPLE_PROFILES_JSON)
+                identities = _load_json_safe(PEOPLE_IDENTITIES_JSON)
+                matched_key = None
+                for key, info in identities.items():
+                    if person_name in (info.get("line_display_name", ""), info.get("line_my_name", ""),
+                                       key, info.get("real_name", "")):
+                        matched_key = key
+                        break
+                if not matched_key:
+                    for key in profiles:
+                        if person_name in key or key in person_name:
+                            matched_key = key
+                            break
+                if matched_key and matched_key in profiles:
+                    entry = profiles[matched_key]
+                    profile_data = entry.get("latest", entry)
+                    if "comm_profile" not in profile_data:
+                        profile_data["comm_profile"] = {"context_notes": []}
+                    if "context_notes" not in profile_data["comm_profile"]:
+                        profile_data["comm_profile"]["context_notes"] = []
+                    note_entry = {"content": memo, "added_at": datetime.now().isoformat()}
+                    profile_data["comm_profile"]["context_notes"].append(note_entry)
+                    profile_data["comm_profile"]["context_notes"] = profile_data["comm_profile"]["context_notes"][-20:]
+                    if "latest" in entry:
+                        entry["latest"] = profile_data
+                    else:
+                        profiles[matched_key] = profile_data
+                    PEOPLE_PROFILES_JSON.write_text(json.dumps(profiles, ensure_ascii=False, indent=2), encoding="utf-8")
+                    print(f"   📌 メモ保存: {matched_key} → 「{memo[:40]}」")
+                    return True, f"📌 {matched_key}さんのメモを保存しました"
+                else:
+                    return False, f"⚠️  「{person_name}」さんのプロファイルが見つかりません"
+            return True, "メモ保存完了"
+
         # ===== フィードバック保存タスク =====
         if function_name == "capture_feedback":
             fb_type = arguments.get("type", "note")
@@ -473,20 +526,39 @@ def call_claude_api(instruction: str, task: dict):
                     "- OK: 「了解です！」「分かりました！」「どうでしょうか？」"
                 )
 
-            # フィードバック学習データを読み込む（口調改善のコア）
+            # ── 全情報を収集してプロンプトを構築 ──
+            self_profile = _load_self_profile()
             sender_cat = profile.get("category", "") if profile else ""
+            comm_profile = profile.get("comm_profile", {}) if profile else {}
+            comm_style_note = comm_profile.get("style_note", "")
+            comm_greeting = comm_profile.get("greeting", "")
+            active_goals = (profile.get("active_goals", []) if profile else [])[:3]
+            goals_context = ""
+            if active_goals:
+                goals_list = "\n".join([f"  ・{g['title'][:40]}" for g in active_goals])
+                goals_context = f"\n現在取り組み中:\n{goals_list}"
+            context_notes = comm_profile.get("context_notes", []) if comm_profile else []
+            notes_text = ""
+            if context_notes:
+                recent_notes = context_notes[-5:]
+                notes_text = "\nメモ:\n" + "\n".join([f"  ・{n.get('content', n) if isinstance(n, dict) else n}" for n in recent_notes])
             feedback_section = build_feedback_prompt_section(sender_name, sender_cat)
+            self_profile_section = ""
+            if self_profile:
+                self_profile_section = f"\n【甲原海人のコアプロファイル（価値観・判断軸）】\n{self_profile[:600]}\n"
 
             prompt = f"""あなたは甲原海人本人として返信を書きます。
-以下の【言語スタイル定義】に厳密に従い、甲原海人が実際に送るようなメッセージを生成してください。
+以下の全情報を統合し、甲原海人が実際に送るようなメッセージを生成してください。
 
 【言語スタイル定義】
 {identity_style}
-{feedback_section}
+{self_profile_section}{feedback_section}
 ---
 
-【送信者情報】
-{sender_name}{category_line}
+【送信者: {sender_name}】{category_line}
+返信スタイル: {comm_style_note or tone_guide or '関係性に応じたトーンで'}
+推奨挨拶: {comm_greeting or 'お疲れ様！'}
+{goals_context}{notes_text}
 {profile_info}
 
 【受信メッセージ】
@@ -496,8 +568,8 @@ def call_claude_api(instruction: str, task: dict):
 【出力ルール】
 - 甲原海人が実際に送る文章のみ出力（説明・前置き不要）
 - 50文字以内を目安に簡潔に
-- 相手との関係性（{tone_guide or '関係性に応じたトーン'}）を反映
-- スタイル定義の口調・語尾の癖をそのまま再現する
+- 相手固有のスタイルノートと口調の癖をそのまま再現する
+- メモ・現在の取り組みがあれば文脈として活用する
 
 返信文:"""
 

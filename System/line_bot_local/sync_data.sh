@@ -14,6 +14,7 @@ mkdir -p "$LIB_DATA"
 cp "$PROJECT_ROOT/Master/people-profiles.json" "$LIB_DATA/people-profiles.json" 2>/dev/null && echo "✅ people-profiles.json"
 cp "$PROJECT_ROOT/Master/people-identities.json" "$LIB_DATA/people-identities.json" 2>/dev/null && echo "✅ people-identities.json"
 cp "$PROJECT_ROOT/Master/self_clone/projects/kohara/1_Core/IDENTITY.md" "$LIB_DATA/IDENTITY.md" 2>/dev/null && echo "✅ IDENTITY.md"
+cp "$PROJECT_ROOT/Master/self_clone/projects/kohara/1_Core/SELF_PROFILE.md" "$LIB_DATA/SELF_PROFILE.md" 2>/dev/null && echo "✅ SELF_PROFILE.md"
 
 # フィードバック学習データを双方向同期（Library ↔ Desktop/Master）
 # Library側が新しければDesktopにコピー（ローカルエージェントがフィードバックを受け取った場合）
