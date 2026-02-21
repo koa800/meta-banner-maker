@@ -525,7 +525,15 @@ def send_reply(service, original_msg, reply_text, from_email):
 
 def run_once(account=None, openai_api_key=None):
     """1回分の取得・分類・不要削除・ブロック処理"""
-    logger.info("run_once 開始", extra={"account": account or DEFAULT_ACCOUNT})
+    global DATA_DIR, STATE_FILE, PENDING_FILE, DELETE_REVIEW_FILE
+    effective = account or DEFAULT_ACCOUNT
+    DATA_DIR = BASE_DIR / "mail_inbox_data" / effective
+    STATE_FILE = DATA_DIR / "state.json"
+    PENDING_FILE = DATA_DIR / "pending.json"
+    DELETE_REVIEW_FILE = DATA_DIR / "delete_review.json"
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    logger.info("run_once 開始", extra={"account": effective})
     if not openai_api_key:
         openai_api_key = load_config().get("openai_api_key")
     service = get_gmail_service(account)
