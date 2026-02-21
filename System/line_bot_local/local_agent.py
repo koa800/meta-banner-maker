@@ -25,6 +25,15 @@ if not (_SYSTEM_DIR / "mail_manager.py").exists():
     _SYSTEM_DIR = _SYSTEM_DIR / "System"
 PEOPLE_PROFILES_JSON = _PROJECT_ROOT / "Master" / "people-profiles.json"
 PEOPLE_IDENTITIES_JSON = _PROJECT_ROOT / "Master" / "people-identities.json"
+
+# Addness KPIデータソース（全体数値出力 / 月別目標進捗）
+ADDNESS_KPI_SHEET_ID = "1DBkIFcTmkenSvIWzin8B33Kq7vJipQF2z_-WoTZ5S4g"
+ADDNESS_KPI_SHEET_NAME = "月別目標進捗"
+_ADDNESS_KEYWORDS = frozenset({
+    "集客", "売上", "広告", "ROAS", "CPA", "CPO", "粗利", "予約", "KPI",
+    "数値", "実績", "着金", "LTV", "広告費", "目標", "コスト", "リスト",
+    "件数", "CVR", "転換", "成約", "歩留", "ファネル", "媒体",
+})
 SELF_IDENTITY_MD = _PROJECT_ROOT / "Master" / "self_clone" / "projects" / "kohara" / "1_Core" / "IDENTITY.md"
 SELF_PROFILE_MD = _PROJECT_ROOT / "Master" / "self_clone" / "projects" / "kohara" / "1_Core" / "SELF_PROFILE.md"
 FEEDBACK_FILE = _PROJECT_ROOT / "Master" / "reply_feedback.json"  # フィードバック学習データ
@@ -498,6 +507,122 @@ def fetch_sheet_context(related_sheets: list) -> str:
     return "\n\n".join(parts)
 
 
+def is_addness_related(profile: dict, message: str, group_name: str = "") -> bool:
+    """アドネス関連の会話かどうかを判定。KPIデータ注入の要否を決定する。"""
+    # メッセージにビジネスKPIキーワードが含まれるか
+    has_kpi_keyword = any(kw in message for kw in _ADDNESS_KEYWORDS)
+
+    # 送信者がアドネス社内メンバーかどうか
+    if profile:
+        cat = profile.get("category", "")
+        if cat in ("上司", "横（並列）", "直下メンバー", "メンバー"):
+            if has_kpi_keyword:
+                return True
+        # 外部パートナーでも広告・数値系の話ならTrue
+        if any(kw in message for kw in ("広告", "ROAS", "CPA", "売上", "集客", "KPI", "数値")):
+            return True
+
+    # グループ名にアドネス関連ワード
+    if group_name and any(kw in group_name for kw in ("アドネス", "広告", "スキルプラス", "マーケ", "事業")):
+        if has_kpi_keyword:
+            return True
+
+    return False
+
+
+def fetch_addness_kpi() -> str:
+    """全体数値出力/月別目標進捗シートからAddness KPIデータを取得。
+    直近3ヶ月の月別実績＋目標値を構造化テキストで返す。"""
+    sheets_manager_path = _SYSTEM_DIR / "sheets_manager.py"
+    if not sheets_manager_path.exists():
+        return ""
+
+    try:
+        # JSONモードで取得（ヘッダーがクリーンなので成功するはず）
+        cmd = [sys.executable, str(sheets_manager_path), "json",
+               ADDNESS_KPI_SHEET_ID, ADDNESS_KPI_SHEET_NAME]
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=30, encoding="utf-8"
+        )
+
+        if result.returncode == 0 and result.stdout.strip():
+            try:
+                rows = json.loads(result.stdout.strip())
+                if not rows:
+                    return ""
+
+                # 直近3ヶ月を取得
+                recent = rows[-3:] if len(rows) > 3 else rows
+
+                # 構造化テキストに変換
+                parts = ["📊 Addness 月別KPI実績"]
+                for row in reversed(recent):  # 最新月が先頭
+                    ym = row.get("年月", "不明")
+                    # 数値をフォーマット
+                    def fmt(v):
+                        try:
+                            n = int(str(v).replace(",", ""))
+                            return f"{n:,}"
+                        except (ValueError, TypeError):
+                            return str(v)
+
+                    line = (
+                        f"━━ {ym} ━━\n"
+                        f"集客数: {fmt(row.get('集客数', '-'))} / "
+                        f"個別予約数: {fmt(row.get('個別予約数', '-'))}\n"
+                        f"広告費: ¥{fmt(row.get('広告費', '-'))} / "
+                        f"売上: ¥{fmt(row.get('売上', '-'))}\n"
+                        f"CPA: ¥{fmt(row.get('CPA', '-'))} / "
+                        f"CPO: ¥{fmt(row.get('CPO', '-'))}\n"
+                        f"ROAS: {row.get('ROAS', '-')} / "
+                        f"LTV: ¥{fmt(row.get('LTV', '-'))} / "
+                        f"粗利: ¥{fmt(row.get('粗利', '-'))}"
+                    )
+                    # 目標値があれば追加
+                    target_sales = row.get("目標着金売上", "")
+                    target_cust = row.get("目標集客数", "")
+                    target_roas = row.get("目標ROAS", "")
+                    if target_sales or target_cust:
+                        line += (
+                            f"\n[目標] 集客: {fmt(target_cust) if target_cust else '-'} / "
+                            f"売上: ¥{fmt(target_sales) if target_sales else '-'} / "
+                            f"ROAS: {target_roas or '-'}"
+                        )
+                    parts.append(line)
+
+                return "\n".join(parts)
+
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # JSONモード失敗時 → readモードでフォールバック
+        cmd_read = [sys.executable, str(sheets_manager_path), "read",
+                    ADDNESS_KPI_SHEET_ID, ADDNESS_KPI_SHEET_NAME]
+        result_read = subprocess.run(
+            cmd_read, capture_output=True, text=True, timeout=30, encoding="utf-8"
+        )
+        if result_read.returncode == 0 and result_read.stdout.strip():
+            raw_lines = result_read.stdout.strip().split("\n")
+            # ヘッダー行と最新3ヶ月分を抽出
+            header = ""
+            data_lines = []
+            for line in raw_lines:
+                if "行1:" in line:
+                    header = line
+                elif "行" in line and ("年" in line and "月" in line):
+                    data_lines.append(line)
+            if header and data_lines:
+                recent = data_lines[-3:]
+                return f"📊 Addness KPI\n{header}\n" + "\n".join(recent)
+
+    except subprocess.TimeoutExpired:
+        print("   ⚠️ Addness KPIデータ取得タイムアウト")
+    except Exception as e:
+        print(f"   ⚠️ Addness KPIデータ取得エラー: {e}")
+
+    return ""
+
+
 # ===== Claude API直接呼び出し =====
 
 def call_claude_api(instruction: str, task: dict):
@@ -675,6 +800,14 @@ def call_claude_api(instruction: str, task: dict):
                     if sheet_data:
                         sheet_section = f"\n【関連データ】\n{sheet_data}\n"
                         print(f"   📊 シートデータ取得完了: {len(sheet_data)}文字")
+
+            # Addness KPIデータを取得（アドネス関連の会話の場合）
+            if is_addness_related(profile or {}, original_message, group_name):
+                kpi_data = fetch_addness_kpi()
+                if kpi_data:
+                    kpi_section = f"\n【Addness事業KPI（月別実績）】\n{kpi_data}\n"
+                    sheet_section = (sheet_section + "\n" + kpi_section) if sheet_section else kpi_section
+                    print(f"   📊 Addness KPIデータ取得完了: {len(kpi_data)}文字")
 
             # Chatworkの場合のプラットフォーム注記
             platform_note = ""

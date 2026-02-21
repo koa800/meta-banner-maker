@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月21日（Chatwork連携・スプレッドシート文脈参照を追加） |
+| 最終更新 | 2026年2月21日（Chatwork連携・スプレッドシート文脈参照・Addness KPI自動参照を追加） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -35,6 +35,8 @@
                                │  - フィードバック学習          │
                                │  - people-profiles.json参照   │
                                │  - スプレッドシート文脈参照     │
+                               │  - Addness KPI自動参照         │
+                               │    (全体数値出力/月別目標進捗)   │
                                └──────────────────────────────┘
                                               │
                                launchd常駐    │ データ参照
@@ -91,6 +93,7 @@
 21. **`[CW]`/`[LINE]` バッジ**: 秘書グループの通知・未返信一覧にプラットフォームバッジを表示
 22. **Chatwork account_id逆引き**: `people-identities.json` の `chatwork_account_id` フィールドでプロファイル検索可能
 23. **スプレッドシート文脈参照**: プロファイルの `related_sheets` にシートIDを登録すると、返信案生成時に自動でデータを取得してプロンプトに注入。数字に基づいた回答が可能
+24. **Addness KPI自動参照**: アドネス関連の会話（メンバー × ビジネスキーワード）を自動検知し、`全体数値出力/月別目標進捗`シートから直近3ヶ月のKPI（集客数・個別予約数・広告費・売上・CPA・CPO・ROAS・LTV・粗利・目標値）を自動注入。Looker Studioダッシュボードと同等のデータで数値ベースの返答が可能
 
 ---
 
@@ -245,6 +248,7 @@ bash System/line_bot_local/sync_data.sh
 | Chatwork account_id | `curl -H "x-chatworktoken: TOKEN" https://api.chatwork.com/v2/me` で取得 |
 | Chatwork送信者紐付け | `people-identities.json` の `chatwork_account_id` フィールドに相手のaccount_idを設定してプロファイル逆引き可能に |
 | スプレッドシート文脈 | `people-profiles.json` の `related_sheets` にシートID・シート名・説明を設定。返信案生成時に `sheets_manager.py json` で自動取得 |
+| Addness KPIシート | `全体数値出力`（ID: `1DBkIFcTmkenSvIWzin8B33Kq7vJipQF2z_-WoTZ5S4g`）の `月別目標進捗` シートを参照。kohara アカウントで読み取り |
 | タスク失敗通知 | Orchestratorのタスクが失敗するとLINE通知（2時間レート制限）。health_check/oauth_health_checkは除外 |
 
 ---
@@ -395,6 +399,7 @@ MacBook Desktop (cursor/)
 - [x] スプレッドシート文脈参照（people-profiles.jsonのrelated_sheetsからシートデータを自動取得→プロンプト注入）
 - [x] people-identities.jsonにchatwork_account_id/chatwork_display_nameフィールド追加（全81エントリ）
 - [x] 未返信一覧に[CW]/[LINE]プラットフォームバッジ表示
+- [x] Addness KPI自動参照（アドネス関連会話で月別目標進捗シートを自動読み込み・直近3ヶ月KPI注入）
 
 ---
 
