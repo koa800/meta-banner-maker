@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月22日（メール確認スケジュール同期：personal/koharaを同時刻に変更） |
+| 最終更新 | 2026年2月22日（agent.db削除バグ修正・旧sync_from_macbook無効化・Slack Webhook外部化） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -271,7 +271,8 @@ bash System/line_bot_local/sync_data.sh
 | macOS TCC | launchd から Desktop は直接アクセス不可。Library 版でキャッシュ経由でアクセス |
 | LINE webhook重複 | 同一 message_id のタスクは1件のみキューイング済み |
 | Mac Mini TCC制限 | LaunchAgent から `~/Desktop/` は直接アクセス不可。`~/agents/` を作業ディレクトリに使用 |
-| MacBook↔Mac Mini同期 | GitHub push/pull方式。post-commitで自動push→Mac Mini Orchestratorが5分ごとにgit pull→ローカルrsyncでデプロイ。外出先からも同期可能 |
+| MacBook↔Mac Mini同期 | GitHub push/pull方式。post-commitで自動push→Mac Mini Orchestratorが5分ごとにgit pull→ローカルrsyncでデプロイ。外出先からも同期可能。旧rsync over SSH方式（sync_from_macbook.sh）は2026-02-22に無効化済み |
+| git_pull_sync rsync除外 | `*.db`（SQLiteランタイムDB）を除外リストに追加。rsync `--delete`でagent.dbが毎回削除されるバグを修正済み（2026-02-22） |
 | Orchestrator SYSTEM_DIR | tools.py の SYSTEM_DIR は __file__ ベースで動的解決（Desktop/Mac Mini両対応）。ハードコードしないこと |
 | local_agent.py _SYSTEM_DIR | スクリプト呼び出しパスも __file__ ベースで動的解決済み。`mail_manager.py` の存在チェックでDesktop/Mac Miniを自動判別（`_AGENT_DIR.parent` → なければ `parent/System/`）|
 | LINE Notify廃止 | LINE Notify は2025年3月終了。Render `/notify` エンドポイント + LINE Messaging API push_message で代替 |
@@ -359,7 +360,7 @@ MacBook (どこからでも)
 ```
 
 **同期対象ディレクトリ:** `System/`, `line_bot_local/`, `Master/`, `Project/`, `Skills/`
-**除外:** `addness_chrome_profile/`, `addness_data/`, `qa_sync/`, `mail_review_web/`, `*.log`, `addness_session.json`, `config.json`, `contact_state.json`
+**除外:** `addness_chrome_profile/`, `addness_data/`, `qa_sync/`, `mail_review_web/`, `*.log`, `*.db`, `addness_session.json`, `config.json`, `contact_state.json`
 
 ### 関連ファイル（Mac Mini）
 
@@ -441,6 +442,9 @@ MacBook (どこからでも)
 - [x] Addness KPI自動参照（アドネス関連会話で月別目標進捗シートを自動読み込み・直近3ヶ月KPI注入）
 - [x] MacBook↔Mac Mini同期をGitHub経由に移行（rsync over SSH廃止→git push/pull。外出先からも同期可能）
 - [x] Mac Mini旧cronジョブ整理（addness/ai_news/mail/sync_agent全5件削除→Orchestrator一元管理）
+- [x] agent.db削除バグ修正（git_pull_syncのrsync --deleteがランタイムDBを毎回削除→*.db除外追加）
+- [x] 旧sync_from_macbook.sh無効化（LaunchAgent unload + .disabled化。GitHub同期に完全移行済み）
+- [x] Slack Webhook URL外部化（addness_config.json/run_addness_pipeline.shから環境変数に移動。GitHub Push Protection対応）
 
 ---
 
