@@ -23,7 +23,7 @@ schedule:
     cron: "0 */3 * * *"       # 3時間ごと
     enabled: true
   mail_inbox_kohara:
-    cron: "30 */3 * * *"      # 3時間ごと（30分ずらし）
+    cron: "0 */3 * * *"       # 3時間ごと（personalと同時刻）
     enabled: true
   addness_goal_check:
     cron: "0 9 * * *"         # 毎日 朝9:00

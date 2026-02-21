@@ -69,12 +69,16 @@ class MemoryStore:
         except sqlite3.OperationalError as e:
             conn.rollback()
             if "no such table" in str(e):
-                # テーブルが消えていた場合は再作成してから再スロー
+                # テーブルが消えていた場合は再作成（次回呼び出しで成功する）
                 conn.close()
                 self._init_db()
+                raise  # 今回は失敗するが、テーブルは復旧済み
             raise
         finally:
-            conn.close()
+            try:
+                conn.close()
+            except Exception:
+                pass  # 既にcloseされている場合を無視
 
     def log_task_start(self, task_name: str, metadata: dict = None) -> int:
         with self._conn() as conn:

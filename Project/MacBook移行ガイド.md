@@ -1,10 +1,26 @@
 # MacBook移行ガイド
 
-最終更新: 2026-02-21
+最終更新: 2026-02-21（GitHub同期移行に伴い簡素化）
 
 ## 概要
 
 MacBookを新しい機種に交換する際の手順。**Mac Miniは影響なし**（全データ・サービスはMac Miniで独立稼働）。
+
+---
+
+## 実際に必要なもの（最小セット）
+
+| 種別 | 必要なもの | 理由 |
+|------|------------|------|
+| **必須** | `cursor` リポジトリの最新 push | 新MacBookでは `git clone` のみで復元可能 |
+| **必須** | post-commit フック 1ファイル | `.git/hooks/` はリポジトリに含まれないため手動復元（内容は `git push origin main` のみ） |
+| **推奨** | SSH鍵（旧の移行 or 新規生成） | Mac Mini へのデバッグ接続用。同期自体はGitHub経由なので不要 |
+| **推奨** | `~/.claude/` のバックアップ | Claude Code の設定・MEMORY。無くても新規セットアップ可 |
+| **条件付き** | `token_calendar_personal.json` | 朝の予定通知を使う場合のみ。初回は MacBook で OAuth 後に Mac Mini へ scp |
+
+**不要なもの（移行しなくてよい）**
+
+- Q&Aデータ・LINE秘書学習データ・Addnessゴール・agent.db・token.json → すべて Mac Mini / Render / GitHub 側にある
 
 ---
 
@@ -59,11 +75,16 @@ git submodule update --init
 
 ### ステップ3: post-commit フックの設置
 ```bash
-# バックアップから復元
-cp ~/Desktop/post-commit-backup ~/Desktop/cursor/.git/hooks/post-commit
+# post-commit フックを作成（git push するだけのシンプルなフック）
+cat > ~/Desktop/cursor/.git/hooks/post-commit << 'HOOK'
+#!/bin/bash
+LOG_FILE="$HOME/Desktop/cursor-sync.log"
+(
+  git push origin main 2>> "$LOG_FILE" &
+) &
+HOOK
 chmod +x ~/Desktop/cursor/.git/hooks/post-commit
 ```
-または [.git/hooks/post-commit の内容](../.git/hooks/post-commit) を参照して手動作成。
 
 ### ステップ4: Claude Code の設定復元
 ```bash
@@ -71,6 +92,21 @@ chmod +x ~/Desktop/cursor/.git/hooks/post-commit
 cp -r ~/Desktop/claude_backup ~/.claude
 ```
 または新規セットアップ（`~/.claude/settings.json` で bypassPermissions を設定）。
+
+#### Claude Code の認証（Max プランで使う）
+
+Claude Code は **Max プラン（月額定額）** で認証して使う。API 従量課金にしないこと。
+
+```bash
+claude
+# → 「1. Claude account with subscription」を選択してブラウザで Max アカウントにログイン
+```
+
+**重要: `.zshrc` に `ANTHROPIC_API_KEY` を export しないこと。**
+設定されていると Claude Code が API 従量課金に切り替わる。
+他スクリプト（line_bot_local 等）は Secret Manager から自動取得する仕組みがあるため影響なし。
+
+詳細: `.cursor/rules/claude-code-max-cursor-terminal.mdc`
 
 ### ステップ5: SSH鍵の設定
 
@@ -94,13 +130,13 @@ ssh-copy-id koa800@mac-mini-agent.local
 
 ### ステップ6: 動作確認
 ```bash
-# Mac Mini に接続できるか確認
-ssh koa800@mac-mini-agent.local "echo 接続OK"
-
 # post-commit フックのテスト（空コミット）
 cd ~/Desktop/cursor
 git commit --allow-empty -m "post-commit フックテスト"
-# → cursor-sync.log に同期ログが記録されることを確認
+# → git log origin/main で push されていることを確認
+
+# （任意）Mac Mini に接続できるか確認
+ssh koa800@mac-mini-agent.local "echo 接続OK"
 ```
 
 ---
@@ -113,24 +149,10 @@ Mac Miniのサービスはすべて自律稼働しており、**MacBook交換時
 |---------|------|
 | Orchestrator (port 8500) | 継続稼働 |
 | local_agent (LINE秘書) | 継続稼働 |
-| 5分ごとの自動同期 | 新MacBookが応答するまでSKIP |
+| git_pull_sync (5分ごと) | GitHubからpull→デプロイ。MacBook無関係で動作 |
 | Google OAuth token.json | ~/agents/token.json で管理済み |
 
-新MacBookのhostnameが変わる場合は、Mac Mini の `sync_from_macbook.sh` の `MACBOOK=` 変数を更新が必要：
-```bash
-# Mac Mini で実行
-# MacBook-Pro-9.local → 新しいホスト名に変更
-ssh koa800@mac-mini-agent.local "
-  sed -i '' 's/MacBook-Pro-9.local/新ホスト名.local/' ~/agents/sync_from_macbook.sh
-"
-```
-
-新MacBookのmDNSホスト名確認:
-```bash
-# 新MacBookで実行
-scutil --get LocalHostName
-# → この値.local が mDNS ホスト名
-```
+同期はGitHub経由のため、**新MacBookのホスト名やSSH設定はMac Mini側に影響しない**。
 
 ---
 
@@ -158,9 +180,32 @@ scp System/token_calendar_personal.json koa800@mac-mini-agent.local:~/agents/Sys
 - [ ] `git push` が正常に動作する
 - [ ] post-commit フック実行後、Mac Mini のログに同期完了が記録される
 - [ ] Claude Code が正常に起動する（`claude` コマンド）
+- [ ] Claude Code が「Opus · Claude Max」と表示される（API Usage Billing でないこと）
+- [ ] `.zshrc` に `ANTHROPIC_API_KEY` が **含まれていない**ことを確認
 - [ ] Mac Mini の Orchestrator ログに問題がない
 - [ ] LINE秘書への通知が届く
 - [ ] Google Calendar OAuth セットアップ（`token_calendar_personal.json` を Mac Mini にコピー）
+
+---
+
+## 自動化されているもの（移行で止まらない）
+
+いずれも **Mac Mini または Render 上で動いており、MacBook交換時は何もしなくてよい**。新MacBookでSSH・post-commitが復活すれば、5分同期とコミット時同期が再開する。
+
+| 種別 | 実行間隔 | 内容 |
+|------|----------|------|
+| **Orchestrator** | 5分ごと | `git_pull_sync`（GitHubからpull→ローカルデプロイ→サービス再起動） |
+| **Orchestrator** | 5分ごと | `health_check`（API使用量・Q&A・local_agent停止を検知してLINE警告） |
+| **Orchestrator** | 30分ごと | `repair_check`（ログエラー検知・修復提案）, `render_health_check`（Render死活） |
+| **Orchestrator** | 毎時 :00 / :30 | `mail_inbox_personal` / `mail_inbox_kohara`（メール取得・分類・返信待ちLINE通知） |
+| **Orchestrator** | 毎朝 8:00 | `ai_news`（AIニュース要約・通知）, `addness_fetch`（3日ごと: ゴールツリー取得） |
+| **Orchestrator** | 毎朝 8:30 / 9:00 | `daily_addness_digest`（期限超過通知）, `addness_goal_check`（actionable再生成）, `oauth_health_check` |
+| **Orchestrator** | 毎週月 9:00 / 9:30 | `weekly_idea_proposal`, `weekly_stats`（週次サマリーLINE） |
+| **Orchestrator** | 毎週水 10:00 | `weekly_content_suggestions`（AIニュース分析・コンテンツ提案） |
+| **Orchestrator** | 毎夜 21:00 | `daily_report`（日次タスク集計LINE） |
+| **MacBook側** | コミット時 | post-commit フック → `git push origin main`（Mac Miniは5分以内にpullして反映） |
+| **LINE秘書** | 常駐 | local_agent がRenderをポーリング・返信案生成・Claude API呼び出し |
+| **その他** | — | Q&A自動回答（検知→回答案→承認→L-step送信）, OAuth refresh_token 自動更新 |
 
 ---
 

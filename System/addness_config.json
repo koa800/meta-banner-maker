@@ -1,0 +1,28 @@
+{
+  "start_url": "https://www.addness.com/todo/execution",
+  "output_dir": "/Users/koa800/Desktop/cursor/System/addness_data",
+  "headless": true,
+  "timeout_ms": 30000,
+  "wait_after_load_ms": 3000,
+  "slack_webhook_url": "${SLACK_WEBHOOK_URL}",
+  "slack_channel": "定常業務",
+  "excluded_people": [
+    "下間優大", "加藤稜人", "宮原皇陽", "川村竜輝", "本田優音(新)", "眞崎倫都", "kaede",
+    "三谷咲陽", "玉城大輔", "中嶋明優", "齋藤恵太郎", "原田栞那", "奈良瑛晃",
+    "みかじん", "寺澤蒼馬", "New 三田晃央", "豊住賢斗", "服部 リュウキ",
+    "入江武義_マーケ部", "平瀬瑛彦", "田中あずさ", "小山惇(あつし)", "new白井瞳",
+    "オオタニ", "鈴木結実花", "須鎌友理", "原田絵莉佳", "茅森ショウ", "松山惺七",
+    "いけもとまい", "石川　愛莉", "似鳥めぐみ", "鍋島沙衣", "Yui Sato",
+    "中野宏一", "高山裕貴"
+  ],
+  "manual_people": [
+    {
+      "_comment": "Addnessにいない人を追加する場合はここに記入。nameだけ必須。",
+      "_example": {
+        "name": "田中太郎",
+        "relationship": "LINE経由で関わる横の人",
+        "notes": "法人チーム田中さん。提案系の相談を受けることが多い。"
+      }
+    }
+  ]
+}

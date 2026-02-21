@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月21日（Chatwork連携・スプレッドシート文脈参照・Addness KPI自動参照を追加） |
+| 最終更新 | 2026年2月22日（メール確認スケジュール同期：personal/koharaを同時刻に変更） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -36,7 +36,7 @@
                                │  - people-profiles.json参照   │
                                │  - スプレッドシート文脈参照     │
                                │  - Addness KPI自動参照         │
-                               │    (全体数値出力/月別目標進捗)   │
+                               │    (数値管理シート 日別/月別)    │
                                └──────────────────────────────┘
                                               │
                                launchd常駐    │ データ参照
@@ -51,6 +51,36 @@
                                │  - reply_feedback.json (学習)  │
                                └──────────────────────────────┘
 ```
+
+---
+
+## 知識ベース運用思想
+
+> 詳細ルール: `.cursor/rules/ai-secretary-knowledge.mdc`
+
+知識ベースは「今日の真実」を映す鏡。歴史の記録ではない。
+
+### 定常サイクル（毎日）
+
+```
+朝: 全アクションは最新の知識ベースを参照して回答
+  ↓
+夜: ログを確認 → 古い情報を削除 → 最新に書き換え → 本質だけ残す
+  ↓
+翌朝: 更新された知識で全アクションが動く
+```
+
+**対象ファイル**: `people-profiles.json` / `USER.md` / `SELF_PROFILE.md` / `IDENTITY.md` / `reply_feedback.json`
+
+### 非定常（フィードバック駆動）
+
+抜けている情報やズレている認識を検知したら即修正。
+
+| 検知 | 対処 |
+|------|------|
+| 返信がズレている | `fb` / `2` コマンドでスタイルノート・修正例を更新 |
+| 人物情報が古い | `メモ` コマンドでプロファイル更新 |
+| USER.md/SELF_PROFILE.mdがズレている | ユーザー指摘で即書き換え |
 
 ---
 
@@ -93,7 +123,8 @@
 21. **`[CW]`/`[LINE]` バッジ**: 秘書グループの通知・未返信一覧にプラットフォームバッジを表示
 22. **Chatwork account_id逆引き**: `people-identities.json` の `chatwork_account_id` フィールドでプロファイル検索可能
 23. **スプレッドシート文脈参照**: プロファイルの `related_sheets` にシートIDを登録すると、返信案生成時に自動でデータを取得してプロンプトに注入。数字に基づいた回答が可能
-24. **Addness KPI自動参照**: アドネス関連の会話（メンバー × ビジネスキーワード）を自動検知し、`全体数値出力/月別目標進捗`シートから直近3ヶ月のKPI（集客数・個別予約数・広告費・売上・CPA・CPO・ROAS・LTV・粗利・目標値）を自動注入。Looker Studioダッシュボードと同等のデータで数値ベースの返答が可能
+24. **Addness KPI自動参照**: アドネス関連の会話（メンバー × ビジネスキーワード）を自動検知し、`【アドネス全体】数値管理シート`の日別・月別タブからKPI（集客数・個別予約数・実施数・売上・広告費・CPA・CPO・ROAS・LTV・粗利）を自動注入
+25. **KPI日次パイプライン**: Cursor（ブラウザ操作）がLooker StudioからCSVダウンロード→元データシートのステータスを「完了」に更新→`kpi_processor.py process`が検知して日別/月別タブに自動投入。毎日12:00にOrchestratorが完了チェック→未完了ならLINEリマインド
 
 ---
 
@@ -162,6 +193,8 @@
 | `~/Library/LaunchAgents/com.linebot.localagent.plist` | launchd設定（Mac Mini） |
 | `System/line_bot_local/local_agent.py` | Desktop版（開発・編集用） |
 | `System/line_bot_local/sync_data.sh` | Desktop ↔ Library 双方向同期 |
+| `System/kpi_processor.py` | KPI投入エンジン（import/process/check_today/refresh） |
+| `System/looker_csv_downloader.py` | Looker Studio CSVダウンローダー（Cursor連携） |
 
 ### 知識ベース（Master/）
 | パス | 説明 |
@@ -238,7 +271,7 @@ bash System/line_bot_local/sync_data.sh
 | macOS TCC | launchd から Desktop は直接アクセス不可。Library 版でキャッシュ経由でアクセス |
 | LINE webhook重複 | 同一 message_id のタスクは1件のみキューイング済み |
 | Mac Mini TCC制限 | LaunchAgent から `~/Desktop/` は直接アクセス不可。`~/agents/` を作業ディレクトリに使用 |
-| Mac Mini rsync | TCC制限でcron rsyncが失敗するため、Desktop MacのGit post-commitフックから rsync を実行（line_bot_local/も同期対象） |
+| MacBook↔Mac Mini同期 | GitHub push/pull方式。post-commitで自動push→Mac Mini Orchestratorが5分ごとにgit pull→ローカルrsyncでデプロイ。外出先からも同期可能 |
 | Orchestrator SYSTEM_DIR | tools.py の SYSTEM_DIR は __file__ ベースで動的解決（Desktop/Mac Mini両対応）。ハードコードしないこと |
 | local_agent.py _SYSTEM_DIR | スクリプト呼び出しパスも __file__ ベースで動的解決済み。`mail_manager.py` の存在チェックでDesktop/Mac Miniを自動判別（`_AGENT_DIR.parent` → なければ `parent/System/`）|
 | LINE Notify廃止 | LINE Notify は2025年3月終了。Render `/notify` エンドポイント + LINE Messaging API push_message で代替 |
@@ -248,7 +281,7 @@ bash System/line_bot_local/sync_data.sh
 | Chatwork account_id | `curl -H "x-chatworktoken: TOKEN" https://api.chatwork.com/v2/me` で取得 |
 | Chatwork送信者紐付け | `people-identities.json` の `chatwork_account_id` フィールドに相手のaccount_idを設定してプロファイル逆引き可能に |
 | スプレッドシート文脈 | `people-profiles.json` の `related_sheets` にシートID・シート名・説明を設定。返信案生成時に `sheets_manager.py json` で自動取得 |
-| Addness KPIシート | `全体数値出力`（ID: `1DBkIFcTmkenSvIWzin8B33Kq7vJipQF2z_-WoTZ5S4g`）の `月別目標進捗` シートを参照。kohara アカウントで読み取り |
+| Addness KPIシート | `【アドネス全体】数値管理シート`（ID: `1FOh_XGZWaEisfFEngiN848kSm2E6HotAZiMDTmO7BNA`）。タブ: 元データ（実行ログ）/ スキルプラス（日別）/ スキルプラス（月別）。Looker StudioからCSVエクスポート→ `kpi_processor.py import` で投入。kohara アカウントで読み書き |
 | タスク失敗通知 | Orchestratorのタスクが失敗するとLINE通知（2時間レート制限）。health_check/oauth_health_checkは除外 |
 
 ---
@@ -260,16 +293,15 @@ bash System/line_bot_local/sync_data.sh
 | LaunchAgent | 役割 | ポート |
 |------------|------|--------|
 | `com.linebot.localagent` | LINE Bot ポーリング・返信案生成 | — |
-| `com.addness.agent-orchestrator` | タスクスケジューラ・修復エージェント | 8500 |
-| `com.addness.sync-from-macbook` | MacBook→Mac Mini 5分自動同期 | — |
+| `com.addness.agent-orchestrator` | タスクスケジューラ・修復エージェント・git同期 | 8500 |
 | `com.prevent.sleep` | Macスリープ防止（caffeinate） | — |
 
 ### Orchestratorスケジュール
 
 | タスク | スケジュール | 内容 |
 |--------|------------|------|
-| `mail_inbox_personal` | 毎時 :00 | personalメール処理・返信待ちLINE通知 |
-| `mail_inbox_kohara` | 毎時 :30 | koharaメール処理・返信待ちLINE通知 |
+| `mail_inbox_personal` | 3時間ごと :00 | personalメール処理・返信待ちLINE通知 |
+| `mail_inbox_kohara` | 3時間ごと :00 | koharaメール処理・返信待ちLINE通知（personalと同時刻） |
 | `ai_news` | 毎朝 8:00 | AIニュース収集・要約・通知 |
 | `addness_fetch` | 3日ごと 8:00 | Addnessゴールツリー取得 |
 | `daily_addness_digest` | 毎朝 8:30 | 期限超過・直近期限ゴールをLINE通知 |
@@ -282,6 +314,8 @@ bash System/line_bot_local/sync_data.sh
 | `health_check` | 5分ごと | API使用量・Q&Aモニター・local_agent停止を検知してLINE警告 |
 | `repair_check` | 30分ごと | ログエラー検知・自動修復提案 |
 | `weekly_content_suggestions` | 毎週水曜 10:00 | 最新AIニュースを分析してコンテンツ更新提案をLINE通知 |
+| `kpi_daily_import` | 毎日 12:00 | 2日前のKPIデータ完了チェック→投入 or 未完了リマインド |
+| `git_pull_sync` | 5分ごと | GitHubからpull→ローカルrsyncでデプロイ→変更ファイルに応じてサービス再起動 |
 
 ### Orchestrator API エンドポイント（port 8500）
 
@@ -309,18 +343,23 @@ Mac Mini Orchestrator
 ### コード同期アーキテクチャ
 
 ```
-MacBook Desktop (cursor/)
+MacBook (どこからでも)
   │
-  ├── コミット → post-commit フック → rsync → Mac Mini (~/agents/)  [即時]
-  │                                  └── mac_mini/agent_orchestrator/ 変更時は自動再起動
+  ├── コミット → post-commit フック → git push origin main  [自動]
   │
-  └── Mac Mini LaunchAgent (com.addness.sync-from-macbook)  [5分ごと fallback]
-       └── sync_from_macbook.sh → SSH → MacBook → rsync
-           └── 失敗時: LINE通知
+  ▼ GitHub (koa800/meta-banner-maker)
+  │
+  └── Mac Mini Orchestrator (git_pull_sync, 5分ごと)
+       ├── git fetch → 差分なければ即終了（軽量）
+       ├── git reset --hard origin/main
+       ├── ローカル rsync → ~/agents/ にデプロイ
+       └── 変更ファイルに応じてサービス再起動
+           ├── line_bot_local/ 変更 → local_agent 再起動
+           └── agent_orchestrator/ 変更 → Orchestrator 再起動
 ```
 
 **同期対象ディレクトリ:** `System/`, `line_bot_local/`, `Master/`, `Project/`, `Skills/`
-**除外:** `addness_chrome_profile/`, `addness_data/`, `qa_sync/`, `mail_review_web/`, `*.log`, `addness_session.json`
+**除外:** `addness_chrome_profile/`, `addness_data/`, `qa_sync/`, `mail_review_web/`, `*.log`, `addness_session.json`, `config.json`, `contact_state.json`
 
 ### 関連ファイル（Mac Mini）
 
@@ -329,8 +368,8 @@ MacBook Desktop (cursor/)
 | `System/mac_mini/agent_orchestrator/` | Orchestratorパッケージ |
 | `System/mac_mini/agent_orchestrator/notifier.py` | LINE通知ディスパッチャ（Render経由） |
 | `System/mac_mini/agent_orchestrator/config.yaml` | エージェント設定（パス・スケジュール等） |
-| `~/agents/sync_from_macbook.sh` | Mac Mini側同期スクリプト（失敗時LINE通知付き） |
-| `.git/hooks/post-commit` | コミット時にDesktopからMac MiniへrsyncするGitフック |
+| `System/mac_mini/git_pull_sync.sh` | GitHub pull→ローカルデプロイスクリプト |
+| `.git/hooks/post-commit` | コミット時に自動 `git push origin main` |
 | `Project/MacBook移行ガイド.md` | MacBook機種変更時の移行手順書 |
 
 ---
@@ -358,7 +397,7 @@ MacBook Desktop (cursor/)
 - [x] show_notification LaunchAgentハング修正（threading.Thread化でメインスレッドブロッキング解消）
 - [x] Mac Mini Agent Orchestratorデプロイ（FastAPI + APScheduler, port 8500）
 - [x] LINE Notify廃止対応（Render /notify エンドポイント + LINE Messaging API push_message）
-- [x] Mac Mini rsync TCC制限対応（Git post-commitフックでDesktop→Mac MiniへrsyncをDesktop側から実行）
+- [x] Mac Mini rsync TCC制限対応（Git post-commitフックでDesktop→Mac MiniへrsyncをDesktop側から実行）→ GitHub同期に移行済み
 - [x] SYSTEM_DIR Critical Bug修正（tools.py を __file__ ベースの動的パスに変更・Mac Mini/Desktop両対応）
 - [x] メール処理後LINE通知（返信待ちがある場合に秘書グループへ自動通知）
 - [x] qa_monitor 本番有効化（config.json `qa_monitor_enabled: true`）
@@ -366,7 +405,7 @@ MacBook Desktop (cursor/)
 - [x] 個人DM対応（メンバーからのDMを秘書グループに通知→承認→返信・学習フロー）
 - [x] Addness Goal Tree Watch（タスク自動抽出パイプライン実装完了）
 - [x] 個人DM対応（メンバーからのDMを秘書グループに通知→承認→返信・comm_profile活用）
-- [x] Mac Mini双方向自動同期（post-commitフック + 5分ごとLaunchAgent）
+- [x] Mac Mini双方向自動同期（post-commitフック + 5分ごとLaunchAgent）→ GitHub push/pull方式に移行済み
 - [x] Orchestrator日次LINEレポート（毎夜9時に成功率・エラー集計を通知）
 - [x] タスク失敗LINE通知（失敗時にLINE通知・2時間レート制限で重複防止）
 - [x] Google OAuth監視（毎朝9時にtoken.json + API認証テスト・失敗時LINE通知）
@@ -400,6 +439,8 @@ MacBook Desktop (cursor/)
 - [x] people-identities.jsonにchatwork_account_id/chatwork_display_nameフィールド追加（全81エントリ）
 - [x] 未返信一覧に[CW]/[LINE]プラットフォームバッジ表示
 - [x] Addness KPI自動参照（アドネス関連会話で月別目標進捗シートを自動読み込み・直近3ヶ月KPI注入）
+- [x] MacBook↔Mac Mini同期をGitHub経由に移行（rsync over SSH廃止→git push/pull。外出先からも同期可能）
+- [x] Mac Mini旧cronジョブ整理（addness/ai_news/mail/sync_agent全5件削除→Orchestrator一元管理）
 
 ---
 

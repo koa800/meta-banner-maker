@@ -26,9 +26,10 @@ if not (_SYSTEM_DIR / "mail_manager.py").exists():
 PEOPLE_PROFILES_JSON = _PROJECT_ROOT / "Master" / "people-profiles.json"
 PEOPLE_IDENTITIES_JSON = _PROJECT_ROOT / "Master" / "people-identities.json"
 
-# Addness KPIデータソース（全体数値出力 / 月別目標進捗）
-ADDNESS_KPI_SHEET_ID = "1DBkIFcTmkenSvIWzin8B33Kq7vJipQF2z_-WoTZ5S4g"
-ADDNESS_KPI_SHEET_NAME = "月別目標進捗"
+# Addness KPIデータソース（【アドネス全体】数値管理シート）
+ADDNESS_KPI_SHEET_ID = "1FOh_XGZWaEisfFEngiN848kSm2E6HotAZiMDTmO7BNA"
+ADDNESS_KPI_DAILY_TAB = "スキルプラス（日別）"
+ADDNESS_KPI_MONTHLY_TAB = "スキルプラス（月別）"
 _ADDNESS_KEYWORDS = frozenset({
     "集客", "売上", "広告", "ROAS", "CPA", "CPO", "粗利", "予約", "KPI",
     "数値", "実績", "着金", "LTV", "広告費", "目標", "コスト", "リスト",
@@ -531,89 +532,99 @@ def is_addness_related(profile: dict, message: str, group_name: str = "") -> boo
 
 
 def fetch_addness_kpi() -> str:
-    """全体数値出力/月別目標進捗シートからAddness KPIデータを取得。
-    直近3ヶ月の月別実績＋目標値を構造化テキストで返す。"""
+    """【アドネス全体】数値管理シートからKPIデータを取得。
+    月別サマリ + 直近7日の日別データを構造化テキストで返す。"""
     sheets_manager_path = _SYSTEM_DIR / "sheets_manager.py"
     if not sheets_manager_path.exists():
         return ""
 
-    try:
-        # JSONモードで取得（ヘッダーがクリーンなので成功するはず）
-        cmd = [sys.executable, str(sheets_manager_path), "json",
-               ADDNESS_KPI_SHEET_ID, ADDNESS_KPI_SHEET_NAME]
+    def _read_tab(tab_name):
+        cmd = [sys.executable, str(sheets_manager_path), "read",
+               ADDNESS_KPI_SHEET_ID, tab_name]
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=30, encoding="utf-8"
         )
-
-        if result.returncode == 0 and result.stdout.strip():
+        if result.returncode != 0 or not result.stdout.strip():
+            return []
+        # "  行N: ['col1', 'col2', ...]" 形式をパース
+        rows = []
+        for line in result.stdout.strip().split("\n"):
+            if "行" not in line or "[" not in line:
+                continue
             try:
-                rows = json.loads(result.stdout.strip())
-                if not rows:
-                    return ""
+                list_str = line[line.index("["):]
+                row = json.loads(list_str.replace("'", '"'))
+                rows.append(row)
+            except (json.JSONDecodeError, ValueError):
+                continue
+        return rows
 
-                # 直近3ヶ月を取得
-                recent = rows[-3:] if len(rows) > 3 else rows
+    def fmt(v):
+        try:
+            n = int(str(v).replace(",", ""))
+            return f"{n:,}"
+        except (ValueError, TypeError):
+            return str(v)
 
-                # 構造化テキストに変換
-                parts = ["📊 Addness 月別KPI実績"]
-                for row in reversed(recent):  # 最新月が先頭
-                    ym = row.get("年月", "不明")
-                    # 数値をフォーマット
-                    def fmt(v):
+    try:
+        parts = ["📊 スキルプラス KPI"]
+
+        # 月別データ
+        monthly_rows = _read_tab(ADDNESS_KPI_MONTHLY_TAB)
+        # ヘッダー行（"月"で始まる）以降のデータ行を取得
+        header_found = False
+        for row in monthly_rows:
+            if row and row[0] == "月":
+                header_found = True
+                continue
+            if header_found and row and row[0]:
+                # row: [月, 集客数, 個別予約数, 実施数, 売上, 広告費, CPA, CPO, ROAS, LTV, 粗利]
+                parts.append(
+                    f"━━ {row[0]} ━━\n"
+                    f"集客数: {fmt(row[1])} / 個別予約数: {fmt(row[2])} / 実施数: {fmt(row[3])}\n"
+                    f"売上: ¥{fmt(row[4])} / 広告費: ¥{fmt(row[5])}\n"
+                    f"CPA: ¥{fmt(row[6])} / CPO: ¥{fmt(row[7])} / ROAS: {row[8]}%\n"
+                    f"LTV: ¥{fmt(row[9])} / 粗利: ¥{fmt(row[10])}"
+                )
+
+        # 日別データ（媒体×ファネル別の全行から日別合計を算出）
+        daily_rows = _read_tab(ADDNESS_KPI_DAILY_TAB)
+        header_found = False
+        col_map = {}
+        daily_totals = {}  # {日付: {集客数, 売上, ...}}
+        for row in daily_rows:
+            if row and row[0] == "日付":
+                header_found = True
+                col_map = {h: i for i, h in enumerate(row)}
+                continue
+            if header_found and row and row[0]:
+                dt = row[0]
+                if dt not in daily_totals:
+                    daily_totals[dt] = {"集客数": 0, "個別予約数": 0, "売上": 0, "広告費": 0}
+                d = daily_totals[dt]
+                for key in d:
+                    idx = col_map.get(key)
+                    if idx and idx < len(row):
                         try:
-                            n = int(str(v).replace(",", ""))
-                            return f"{n:,}"
-                        except (ValueError, TypeError):
-                            return str(v)
+                            d[key] += float(str(row[idx]).replace(",", "") or "0")
+                        except ValueError:
+                            pass
 
-                    line = (
-                        f"━━ {ym} ━━\n"
-                        f"集客数: {fmt(row.get('集客数', '-'))} / "
-                        f"個別予約数: {fmt(row.get('個別予約数', '-'))}\n"
-                        f"広告費: ¥{fmt(row.get('広告費', '-'))} / "
-                        f"売上: ¥{fmt(row.get('売上', '-'))}\n"
-                        f"CPA: ¥{fmt(row.get('CPA', '-'))} / "
-                        f"CPO: ¥{fmt(row.get('CPO', '-'))}\n"
-                        f"ROAS: {row.get('ROAS', '-')} / "
-                        f"LTV: ¥{fmt(row.get('LTV', '-'))} / "
-                        f"粗利: ¥{fmt(row.get('粗利', '-'))}"
-                    )
-                    # 目標値があれば追加
-                    target_sales = row.get("目標着金売上", "")
-                    target_cust = row.get("目標集客数", "")
-                    target_roas = row.get("目標ROAS", "")
-                    if target_sales or target_cust:
-                        line += (
-                            f"\n[目標] 集客: {fmt(target_cust) if target_cust else '-'} / "
-                            f"売上: ¥{fmt(target_sales) if target_sales else '-'} / "
-                            f"ROAS: {target_roas or '-'}"
-                        )
-                    parts.append(line)
+        # 直近7日を降順で表示
+        sorted_dates = sorted(daily_totals.keys(), reverse=True)[:7]
+        if sorted_dates:
+            parts.append("━━ 直近日別合計 ━━")
+            for dt in sorted_dates:
+                d = daily_totals[dt]
+                ad = d["広告費"]
+                cust = d["集客数"]
+                roas = round(d["売上"] / ad * 100, 1) if ad > 0 else 0
+                parts.append(
+                    f"  {dt}: 集客{fmt(int(cust))} / 予約{fmt(int(d['個別予約数']))} / "
+                    f"売上¥{fmt(int(d['売上']))} / 広告費¥{fmt(int(ad))} / ROAS {roas}%"
+                )
 
-                return "\n".join(parts)
-
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-        # JSONモード失敗時 → readモードでフォールバック
-        cmd_read = [sys.executable, str(sheets_manager_path), "read",
-                    ADDNESS_KPI_SHEET_ID, ADDNESS_KPI_SHEET_NAME]
-        result_read = subprocess.run(
-            cmd_read, capture_output=True, text=True, timeout=30, encoding="utf-8"
-        )
-        if result_read.returncode == 0 and result_read.stdout.strip():
-            raw_lines = result_read.stdout.strip().split("\n")
-            # ヘッダー行と最新3ヶ月分を抽出
-            header = ""
-            data_lines = []
-            for line in raw_lines:
-                if "行1:" in line:
-                    header = line
-                elif "行" in line and ("年" in line and "月" in line):
-                    data_lines.append(line)
-            if header and data_lines:
-                recent = data_lines[-3:]
-                return f"📊 Addness KPI\n{header}\n" + "\n".join(recent)
+        return "\n".join(parts) if len(parts) > 1 else ""
 
     except subprocess.TimeoutExpired:
         print("   ⚠️ Addness KPIデータ取得タイムアウト")
