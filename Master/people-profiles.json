@@ -483,10 +483,10 @@
   "NOBUTERU CHIBA": {
     "latest": {
       "name": "NOBUTERU CHIBA",
-      "snapshot_date": "2026/02/20",
+      "snapshot_date": "2026/02/21",
       "category": "直下メンバー",
       "relationship": "直下メンバー",
-      "notes": "",
+      "notes": "データドリブンで全てのタスクや意思決定を行い、てるさんの人間理解×クリエイティブ力と連携しながら自分（甲原）の能力を高めていく関係を目指す。",
       "line_display_name": "てる",
       "line_my_name": "てるさん（00/1/23）",
       "email": "chiba.nobuteru@team.addness.co.jp",
@@ -500,7 +500,8 @@
       "inferred_domains": [
         "広告・クリエイティブ",
         "マーケティング・導線設計",
-        "AI・自動化"
+        "AI・自動化",
+        "人間理解・インサイト"
       ],
       "capability_summary": "NOBUTERU CHIBA さんは、TikTok、Meta、YouTubeなどの複数の広告プラットフォームにおいて、高度な運用最適化と自動化システムの構築を実現できるデジタルマーケティング専門家です。単なる広告運用にとどまらず、ROASやCPAなどの指標を厳密に管理しながら、月単位で数千万円規模の粗利を生み出すパフォーマンスマーケティングの実務を遂行できる能力を持っています。特に、複数の導線（SNS、AI、スキルプラスなど）を組み合わせた統合的なマーケティング戦略設計と、それを支える自動化システム開発によって、スケーラブルな事業構築が可能な人物です。",
       "active_goals": [],
@@ -591,8 +592,16 @@
           "マーケティング・導線設計",
           "AI・自動化"
         ],
-        "extra_notes": [],
-        "context_notes": [],
+        "extra_notes": [
+          "データ×クリエイティブの掛け算で成果を出すパートナーとして関わる",
+          "一方的な指示ではなく、互いの視点を交換し合う対話型の関係を重視"
+        ],
+        "context_notes": [
+          "てるさんはクリエイティブ×人間理解が強み。甲原はデータドリブン側を担い、互いの強みを掛け合わせる関係",
+          "意思決定やタスク依頼は必ずデータ・根拠を添えて行う",
+          "てるさんのクリエイティブな洞察・人間理解を引き出す問いかけを意識する",
+          "連携を通じて甲原自身のクリエイティブ力・人間理解力を高めることが目的"
+        ],
         "generated_at": "2026-02-20T10:41:29.050003",
         "auto_generated": true
       }
@@ -6300,5 +6309,78 @@
       ]
     },
     "history": []
+  },
+  "小林真之": {
+    "latest": {
+      "name": "小林真之",
+      "snapshot_date": "2026/02/21",
+      "category": "外部パートナー",
+      "relationship": "顧問（Web広告・アフィリエイト）",
+      "notes": "ShowDownGroup株式会社 代表。アフィリエイトが得意な会社で、特にWeb広告に強み。スキルプラスのアフィリエイト広告の顧問として、アフィリエイターの採用・連携を担当。また直下メンバーへのWeb広告周りの質問対応もしてくれている。",
+      "line_display_name": "",
+      "line_my_name": "小林さん",
+      "email": "",
+      "birthday": "",
+      "identity_notes": "ShowDownGroup株式会社 代表取締役",
+      "workload": {
+        "active": 0,
+        "exploring": 0,
+        "completed": 0
+      },
+      "inferred_domains": [
+        "Web広告",
+        "アフィリエイト",
+        "広告運用",
+        "メディア運営"
+      ],
+      "capability_summary": "アフィリエイト領域に強みを持つShowDownGroup株式会社の代表。アフィリエイターの採用・管理・連携が得意で、スキルプラスのアフィリエイト広告施策の顧問を務める。Web広告全般の知見があり、直下メンバーへの質問対応もしてくれる頼れる外部パートナー。",
+      "active_goals": [
+        {
+          "title": "スキルプラスのアフィリエイト広告の成果地点・報酬設計",
+          "description": "面談予約をCV地点にした場合の報酬単価設計を検討中",
+          "due_date": null
+        }
+      ],
+      "completed_goals": [],
+      "related_sheets": [
+        {
+          "id": "1CIt-o-fWKM8R0Fd3JkqQR3fZHLCGMxvNc47qAPpy9qk",
+          "sheet_name": "スキルプラスセミナー導線",
+          "description": "アフィリエイト広告 月次実績データ"
+        }
+      ],
+      "comm_profile": {
+        "formality": "mid",
+        "greeting": "小林さんお疲れ様です！",
+        "style_note": "外部パートナーだがフランクめ。数字・具体性で話す。提案型で理由を添える。ビジネスライクだが温度感を忘れない。",
+        "tone_keywords": [
+          "フランク寄り",
+          "数字で語る",
+          "提案型",
+          "具体的"
+        ],
+        "avoid": [
+          "過度に丁寧な言葉",
+          "曖昧な回答",
+          "冷たい事務的な返し"
+        ],
+        "current_focus": [
+          "スキルプラスのアフィリエイト成果地点の設計"
+        ],
+        "domains": [
+          "Web広告",
+          "アフィリエイト"
+        ],
+        "extra_notes": [
+          "Chatworkでのやり取りが主",
+          "直下メンバーのWeb広告の質問にも答えてくれる"
+        ],
+        "context_notes": [
+          "面談予約をCV地点にした報酬設計を議論中（2026/02時点）"
+        ],
+        "generated_at": "2026-02-21T15:50:00.000000",
+        "auto_generated": false
+      }
+    }
   }
 }

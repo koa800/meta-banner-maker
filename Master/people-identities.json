@@ -6,7 +6,9 @@
     "birthday": "1998/4/21",
     "notes": "",
     "real_name": "石黒 研太",
-    "katakana": "イシグロケンタ"
+    "katakana": "イシグロケンタ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "MAYANK JAIN": {
     "line_display_name": "Mayank JAIN",
@@ -15,7 +17,9 @@
     "birthday": "1997/7/8",
     "notes": "",
     "real_name": "ジェインマヤンク",
-    "katakana": "ジェインマヤンク"
+    "katakana": "ジェインマヤンク",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "Maeda Nobumi": {
     "line_display_name": "前田 のぶみ",
@@ -24,7 +28,9 @@
     "birthday": "",
     "notes": "",
     "real_name": "前田 将臣",
-    "katakana": "マエダノブミ"
+    "katakana": "マエダノブミ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "NAMI NKAMEME": {
     "line_display_name": "☆Nami☆",
@@ -33,7 +39,9 @@
     "birthday": "",
     "notes": "",
     "real_name": "ンカメメ奈美",
-    "katakana": "ンカメメナミ"
+    "katakana": "ンカメメナミ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "NAOKI": {
     "line_display_name": "Nah+",
@@ -42,7 +50,9 @@
     "birthday": "1972/6/22",
     "notes": "",
     "real_name": "大槻 修基",
-    "katakana": "オオツキナオキ"
+    "katakana": "オオツキナオキ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "NOBUTERU CHIBA": {
     "line_display_name": "てる",
@@ -51,35 +61,45 @@
     "birthday": "2000/1/23",
     "notes": "",
     "real_name": "千葉 信輝",
-    "katakana": "チバノブテル"
+    "katakana": "チバノブテル",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "New 三田晃央": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "Yui Sato": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "new白井瞳": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "いけもとまい": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "しおり": {
     "line_display_name": "しおり",
@@ -88,21 +108,27 @@
     "birthday": "1995/7/13",
     "notes": "",
     "real_name": "永井 詩織",
-    "katakana": "ナガイシオリ"
+    "katakana": "ナガイシオリ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "みかじん": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "オオタニ": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "ジェイン　可菜": {
     "line_display_name": "可菜",
@@ -111,7 +137,9 @@
     "birthday": "",
     "notes": "",
     "real_name": "ジェイン 可菜",
-    "katakana": "ジェインカナ"
+    "katakana": "ジェインカナ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "三上 功太": {
     "line_display_name": "みかみ",
@@ -120,7 +148,9 @@
     "birthday": "1998/10/15",
     "notes": "",
     "real_name": "三上 功太",
-    "katakana": "ミカミコウタ"
+    "katakana": "ミカミコウタ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "三上大慈": {
     "line_display_name": "三上大慈",
@@ -129,7 +159,9 @@
     "birthday": "2026/10/8",
     "notes": "",
     "real_name": "三上大慈",
-    "katakana": "ミカミダイジ"
+    "katakana": "ミカミダイジ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "三井瑛登": {
     "line_display_name": "三井 瑛登（みつい えいと）",
@@ -138,7 +170,9 @@
     "birthday": "2007/10/25",
     "notes": "",
     "real_name": "三井 瑛登",
-    "katakana": "ミツイエイト"
+    "katakana": "ミツイエイト",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "三浦拓実": {
     "line_display_name": "三浦拓実",
@@ -147,21 +181,27 @@
     "birthday": "1999/9/26",
     "notes": "",
     "real_name": "三浦 拓実",
-    "katakana": "ミウラタクミ"
+    "katakana": "ミウラタクミ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "三谷咲陽": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "中嶋明優": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "中里真美": {
     "line_display_name": "なかざと まみ",
@@ -170,7 +210,9 @@
     "birthday": "1993/5/14",
     "notes": "",
     "real_name": "中里 真美",
-    "katakana": "ナカザトマミ"
+    "katakana": "ナカザトマミ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "五月女隆真": {
     "line_display_name": "Saotome",
@@ -179,7 +221,9 @@
     "birthday": "1996/12/28",
     "notes": "",
     "real_name": "五月女 隆真",
-    "katakana": "サオトメリュウマ"
+    "katakana": "サオトメリュウマ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "伊藤開己": {
     "line_display_name": "haruki",
@@ -188,7 +232,9 @@
     "birthday": "",
     "notes": "",
     "real_name": "伊藤 開己",
-    "katakana": "イトウハルキ"
+    "katakana": "イトウハルキ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "伴亮太": {
     "line_display_name": "伴 亮太",
@@ -197,21 +243,27 @@
     "birthday": "",
     "notes": "",
     "real_name": "伴 亮太",
-    "katakana": "バンリョウタ"
+    "katakana": "バンリョウタ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "似鳥めぐみ": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "入江武義_マーケ部": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "内田裕樹": {
     "line_display_name": "内田 裕樹",
@@ -220,7 +272,9 @@
     "birthday": "",
     "notes": "",
     "real_name": "内田 裕樹",
-    "katakana": "ウチダユウキ"
+    "katakana": "ウチダユウキ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "創太": {
     "line_display_name": "創太",
@@ -229,21 +283,27 @@
     "birthday": "",
     "notes": "",
     "real_name": "白井 創太",
-    "katakana": "シライソウタ"
+    "katakana": "シライソウタ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "原田栞那": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "原田絵莉佳": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "園部優士【本物】": {
     "line_display_name": "園部優士",
@@ -252,7 +312,9 @@
     "birthday": "1999/11/12",
     "notes": "",
     "real_name": "園部 優士",
-    "katakana": "ソノベユウジ"
+    "katakana": "ソノベユウジ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "坂井柾駿": {
     "line_display_name": "坂井まさとし",
@@ -261,7 +323,9 @@
     "birthday": "1999/10/18",
     "notes": "",
     "real_name": "坂井 柾駿",
-    "katakana": "サカイマサトシ"
+    "katakana": "サカイマサトシ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "大塚蔵人": {
     "line_display_name": "大塚蔵人",
@@ -270,14 +334,18 @@
     "birthday": "",
     "notes": "",
     "real_name": "大塚 蔵人",
-    "katakana": "オオツカクロウド"
+    "katakana": "オオツカクロウド",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "奈良瑛晃": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "宮代優成": {
     "line_display_name": "宮代優成(新)",
@@ -286,7 +354,9 @@
     "birthday": "",
     "notes": "",
     "real_name": "宮代 優成",
-    "katakana": "ミヤシロユウセイ"
+    "katakana": "ミヤシロユウセイ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "宮本 楓": {
     "line_display_name": "kaede",
@@ -295,7 +365,9 @@
     "birthday": "",
     "notes": "",
     "real_name": "宮本 楓",
-    "katakana": "ミヤモトカエデ"
+    "katakana": "ミヤモトカエデ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "宮本寧々": {
     "line_display_name": "宮本寧々（11/9）",
@@ -304,7 +376,9 @@
     "birthday": "",
     "notes": "",
     "real_name": "宮本 寧々",
-    "katakana": "ミヤモトネネ"
+    "katakana": "ミヤモトネネ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "富田悠斗": {
     "line_display_name": "富田 悠斗",
@@ -313,21 +387,27 @@
     "birthday": "",
     "notes": "",
     "real_name": "富田 悠斗",
-    "katakana": "トミタユウト"
+    "katakana": "トミタユウト",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "寺澤蒼馬": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "小山惇(あつし)": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "小川幸一（おがわこういち）": {
     "line_display_name": "60分返信無かったら電話して@小川幸一",
@@ -336,7 +416,9 @@
     "birthday": "",
     "notes": "",
     "real_name": "小川 幸一",
-    "katakana": "オガワコウイチ"
+    "katakana": "オガワコウイチ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "小澤 和樹": {
     "line_display_name": "Kazuki Ozawa",
@@ -345,7 +427,9 @@
     "birthday": "",
     "notes": "",
     "real_name": "小澤 和樹",
-    "katakana": "オザワカズキ"
+    "katakana": "オザワカズキ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "小笠原龍一(たつひと)": {
     "line_display_name": "小笠原たつひと",
@@ -354,7 +438,9 @@
     "birthday": "",
     "notes": "",
     "real_name": "小笠原 龍一",
-    "katakana": "オガサワラタツヒト"
+    "katakana": "オガサワラタツヒト",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "山内悠人": {
     "line_display_name": "山内悠人",
@@ -363,7 +449,9 @@
     "birthday": "",
     "notes": "",
     "real_name": "山内 悠人",
-    "katakana": "ヤマウチユウト"
+    "katakana": "ヤマウチユウト",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "山口 桜介（やまぐち おうすけ）": {
     "line_display_name": "山口 桜介（やまぐち おうすけ）",
@@ -372,7 +460,9 @@
     "birthday": "",
     "notes": "",
     "real_name": "山口  桜介",
-    "katakana": "ヤマグチオウスケ"
+    "katakana": "ヤマグチオウスケ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "山田優斗": {
     "line_display_name": "ユウト",
@@ -381,7 +471,9 @@
     "birthday": "",
     "notes": "",
     "real_name": "山田 優斗",
-    "katakana": "ヤマダユウト"
+    "katakana": "ヤマダユウト",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "崎原大地": {
     "line_display_name": "さきはら だいち",
@@ -390,7 +482,9 @@
     "birthday": "1991/11/20",
     "notes": "",
     "real_name": "崎原 大地",
-    "katakana": "サキハラダイチ"
+    "katakana": "サキハラダイチ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "川口健輔": {
     "line_display_name": "川口健輔",
@@ -399,14 +493,18 @@
     "birthday": "",
     "notes": "",
     "real_name": "川口健輔",
-    "katakana": "カワグチケンスケ"
+    "katakana": "カワグチケンスケ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "平瀬瑛彦": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "新井 知之": {
     "line_display_name": "新井知之",
@@ -415,21 +513,27 @@
     "birthday": "1985/6/16",
     "notes": "",
     "real_name": "新井 知之",
-    "katakana": "アライトモユキ"
+    "katakana": "アライトモユキ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "服部 リュウキ": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "松山惺七": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "森本雄紀": {
     "line_display_name": "Yuki Morimoto",
@@ -438,7 +542,9 @@
     "birthday": "1993/2/23",
     "notes": "",
     "real_name": "森本 雄紀",
-    "katakana": "モリモトユウキ"
+    "katakana": "モリモトユウキ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "楢木野萌": {
     "line_display_name": "ならきのめぐみ",
@@ -447,7 +553,9 @@
     "birthday": "",
     "notes": "",
     "real_name": "楢木 野萌",
-    "katakana": "ナラキノメグミ"
+    "katakana": "ナラキノメグミ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "横江菜月": {
     "line_display_name": "なつき",
@@ -456,7 +564,9 @@
     "birthday": "1997/11/11",
     "notes": "",
     "real_name": "横江 菜月",
-    "katakana": "ヨコエナツキ"
+    "katakana": "ヨコエナツキ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "橋本陸": {
     "line_display_name": "橋本 陸",
@@ -465,7 +575,9 @@
     "birthday": "",
     "notes": "",
     "real_name": "橋本 陸",
-    "katakana": "ハシモトリク"
+    "katakana": "ハシモトリク",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "浅田 輝哉": {
     "line_display_name": "teruya",
@@ -474,21 +586,27 @@
     "birthday": "2/6",
     "notes": "",
     "real_name": "浅田 輝哉",
-    "katakana": "アサダテルヤ"
+    "katakana": "アサダテルヤ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "玉城大輔": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "田中あずさ": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "田邊雄大": {
     "line_display_name": "田邊　雄大",
@@ -497,14 +615,18 @@
     "birthday": "1995/12/6",
     "notes": "",
     "real_name": "田邊 雄大",
-    "katakana": "タナベユウダイ"
+    "katakana": "タナベユウダイ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "石川　愛莉": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "竹内翼": {
     "line_display_name": "竹内 翼",
@@ -513,14 +635,18 @@
     "birthday": "",
     "notes": "",
     "real_name": "竹内 翼",
-    "katakana": "タケウチツバサ"
+    "katakana": "タケウチツバサ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "茅森ショウ": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "荻野豪太": {
     "line_display_name": "荻野豪太",
@@ -529,7 +655,9 @@
     "birthday": "",
     "notes": "",
     "real_name": "荻野 豪太",
-    "katakana": "オギノゴウタ"
+    "katakana": "オギノゴウタ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "落合真琴": {
     "line_display_name": "まこ",
@@ -538,7 +666,9 @@
     "birthday": "",
     "notes": "",
     "real_name": "落合 真琴",
-    "katakana": "オチアイマコト"
+    "katakana": "オチアイマコト",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "西村優月": {
     "line_display_name": "西村優月",
@@ -547,7 +677,9 @@
     "birthday": "1999/11/29",
     "notes": "",
     "real_name": "西村 優月",
-    "katakana": "ニシムラユヅキ"
+    "katakana": "ニシムラユヅキ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "西畑宏哉": {
     "line_display_name": "西畑 宏哉 Koya Nishihata",
@@ -556,14 +688,18 @@
     "birthday": "2001/6/9",
     "notes": "",
     "real_name": "西畑宏哉",
-    "katakana": "ニシハタコウヤ"
+    "katakana": "ニシハタコウヤ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "豊住賢斗": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "野口颯斗": {
     "line_display_name": "颯斗",
@@ -572,7 +708,9 @@
     "birthday": "",
     "notes": "",
     "real_name": "野口 颯斗",
-    "katakana": "ノグチハヤト"
+    "katakana": "ノグチハヤト",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "金谷美依": {
     "line_display_name": "美依",
@@ -581,14 +719,18 @@
     "birthday": "",
     "notes": "",
     "real_name": "金谷 美依",
-    "katakana": "カネヤミイ"
+    "katakana": "カネヤミイ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "鈴木結実花": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "鈴木織大": {
     "line_display_name": "おり",
@@ -597,14 +739,18 @@
     "birthday": "2002/3/18",
     "notes": "",
     "real_name": "鈴木 織大",
-    "katakana": "スズキオリヒロ"
+    "katakana": "スズキオリヒロ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "鍋島沙衣": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "鎌田由布子": {
     "line_display_name": "ゆう",
@@ -613,7 +759,9 @@
     "birthday": "",
     "notes": "",
     "real_name": "鎌田 由布子",
-    "katakana": "カマタユウコ"
+    "katakana": "カマタユウコ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "長屋友美": {
     "line_display_name": "長屋友美(ゆみ)",
@@ -622,7 +770,9 @@
     "birthday": "",
     "notes": "",
     "real_name": "長屋 友美",
-    "katakana": "ナガヤユミ"
+    "katakana": "ナガヤユミ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "鞘野 緑": {
     "line_display_name": "Midori",
@@ -631,14 +781,18 @@
     "birthday": "",
     "notes": "",
     "real_name": "鞘野 緑",
-    "katakana": "サヤノミドリ"
+    "katakana": "サヤノミドリ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "須鎌友理": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "駒井志帆": {
     "line_display_name": "駒井 志帆",
@@ -647,7 +801,9 @@
     "birthday": "1998/10/2",
     "notes": "",
     "real_name": "駒井志帆",
-    "katakana": "コマイシホ"
+    "katakana": "コマイシホ",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "髙橋海斗": {
     "line_display_name": "高橋 海斗",
@@ -656,20 +812,26 @@
     "birthday": "",
     "notes": "",
     "real_name": "髙橋 海斗",
-    "katakana": "タカハシカイト"
+    "katakana": "タカハシカイト",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "齋藤恵太郎": {
     "line_display_name": "",
     "line_my_name": "",
     "email": "",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "",
+    "chatwork_display_name": ""
   },
   "甲原海人": {
     "line_display_name": "",
     "line_my_name": "",
-    "email": "",
+    "email": "koa800sea.nifs@gmail.com",
     "birthday": "",
-    "notes": ""
+    "notes": "",
+    "chatwork_account_id": "8313511",
+    "chatwork_display_name": "甲原海人"
   }
 }

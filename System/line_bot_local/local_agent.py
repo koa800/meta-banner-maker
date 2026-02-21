@@ -334,23 +334,33 @@ def _load_json_safe(path: Path) -> dict:
     return {}
 
 
-def lookup_sender_profile(sender_name: str):
-    """LINE送信者名からプロファイルを逆引き。Noneなら未登録。"""
-    if not sender_name:
+def lookup_sender_profile(sender_name: str, chatwork_account_id: str = ""):
+    """送信者名またはChatwork account_idからプロファイルを逆引き。Noneなら未登録。"""
+    if not sender_name and not chatwork_account_id:
         return None
 
     identities = _load_json_safe(PEOPLE_IDENTITIES_JSON)
     profiles = _load_json_safe(PEOPLE_PROFILES_JSON)
 
-    # identities で line_display_name / line_my_name → Addness名 を逆引き
     matched_key = None
-    for addness_name, info in identities.items():
-        if sender_name in (info.get("line_display_name", ""), info.get("line_my_name", "")):
-            matched_key = addness_name
-            break
+
+    # chatwork_account_id で逆引き（Chatworkメンションの場合）
+    if chatwork_account_id:
+        for addness_name, info in identities.items():
+            if str(info.get("chatwork_account_id", "")) == str(chatwork_account_id):
+                matched_key = addness_name
+                break
+
+    # identities で line_display_name / line_my_name → Addness名 を逆引き
+    if not matched_key and sender_name:
+        for addness_name, info in identities.items():
+            if sender_name in (info.get("line_display_name", ""), info.get("line_my_name", ""),
+                               info.get("chatwork_display_name", "")):
+                matched_key = addness_name
+                break
 
     # identitiesで見つからなければAddness名と直接比較
-    if not matched_key and sender_name in profiles:
+    if not matched_key and sender_name and sender_name in profiles:
         matched_key = sender_name
 
     if matched_key and matched_key in profiles:
@@ -394,6 +404,61 @@ def build_sender_context(sender_name: str) -> str:
 
     lines.append("---")
     return "\n".join(lines)
+
+
+def fetch_sheet_context(related_sheets: list) -> str:
+    """related_sheetsのスプレッドシートからデータを取得し、文脈テキストを生成"""
+    if not related_sheets:
+        return ""
+
+    sheets_manager_path = _SYSTEM_DIR / "sheets_manager.py"
+    if not sheets_manager_path.exists():
+        print(f"   ⚠️ sheets_manager.py が見つかりません: {sheets_manager_path}")
+        return ""
+
+    parts = []
+    for sheet_info in related_sheets[:2]:  # 最大2シートまで
+        sheet_id = sheet_info.get("id", "")
+        sheet_name = sheet_info.get("sheet_name", "")
+        description = sheet_info.get("description", "")
+        if not sheet_id:
+            continue
+
+        try:
+            cmd = [sys.executable, str(sheets_manager_path), "json", sheet_id]
+            if sheet_name:
+                cmd.append(sheet_name)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=30, encoding="utf-8"
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                raw = result.stdout.strip()
+                # JSONパースして直近データを抽出
+                try:
+                    rows = json.loads(raw)
+                    # 直近3行のデータを取得（月次データの場合は最新月が末尾）
+                    recent = rows[-3:] if len(rows) > 3 else rows
+                    sheet_text = json.dumps(recent, ensure_ascii=False, indent=1)
+                except (json.JSONDecodeError, TypeError):
+                    sheet_text = raw
+
+                # トークン節約のため1500文字以内にトランケート
+                if len(sheet_text) > 1500:
+                    sheet_text = sheet_text[:1500] + "\n...(truncated)"
+
+                header = f"📊 {description or sheet_name or sheet_id}"
+                parts.append(f"{header}\n{sheet_text}")
+            else:
+                err = result.stderr.strip()[:100] if result.stderr else ""
+                print(f"   ⚠️ シートデータ取得失敗: {sheet_id} / {err}")
+        except subprocess.TimeoutExpired:
+            print(f"   ⚠️ シートデータ取得タイムアウト: {sheet_id}")
+        except Exception as e:
+            print(f"   ⚠️ シートデータ取得エラー: {sheet_id} / {e}")
+
+    if not parts:
+        return ""
+    return "\n\n".join(parts)
 
 
 # ===== Claude API直接呼び出し =====
@@ -490,9 +555,11 @@ def call_claude_api(instruction: str, task: dict):
             message_id = arguments.get("message_id", "")
             group_name = arguments.get("group_name", "")
             msg_id_short = message_id[:4] if message_id else "----"
+            platform = arguments.get("platform", "line")
+            cw_account_id = arguments.get("chatwork_account_id", "")
 
-            # プロファイルから送信者情報を取得
-            profile = lookup_sender_profile(sender_name)
+            # プロファイルから送信者情報を取得（Chatwork account_idでも検索）
+            profile = lookup_sender_profile(sender_name, chatwork_account_id=cw_account_id)
             profile_info = ""
             category_line = ""
             if profile:
@@ -562,6 +629,21 @@ def call_claude_api(instruction: str, task: dict):
                 ctx_text = "\n".join(context_messages)
                 context_section = f"\n【メンション直前の会話文脈（参考）】\n{ctx_text}\n"
 
+            # スプレッドシートデータを取得（related_sheetsがあるプロファイルの場合）
+            sheet_section = ""
+            if profile:
+                related_sheets = profile.get("related_sheets", [])
+                if related_sheets:
+                    sheet_data = fetch_sheet_context(related_sheets)
+                    if sheet_data:
+                        sheet_section = f"\n【関連データ】\n{sheet_data}\n"
+                        print(f"   📊 シートデータ取得完了: {len(sheet_data)}文字")
+
+            # Chatworkの場合のプラットフォーム注記
+            platform_note = ""
+            if platform == "chatwork":
+                platform_note = "- 返信先はChatwork（LINEではない）。Chatworkの文体・フォーマットに合わせる\n"
+
             prompt = f"""あなたは甲原海人本人として返信を書きます。
 以下の全情報を統合し、甲原海人が実際に送るようなメッセージを生成してください。
 
@@ -575,17 +657,20 @@ def call_claude_api(instruction: str, task: dict):
 推奨挨拶: {comm_greeting or 'お疲れ様！'}
 {goals_context}{notes_text}
 {profile_info}
-{context_section}{quoted_section}
+{context_section}{quoted_section}{sheet_section}
 【受信メッセージ】
 グループ: {group_name}
 内容: {original_message}
 
 【出力ルール】
 - 甲原海人が実際に送る文章のみ出力（説明・前置き不要）
-- 50文字以内を目安に簡潔に
+- 50文字以内を目安に簡潔に（ただし関連データに基づく数字を含める場合は長くてOK）
 - 相手固有のスタイルノートと口調の癖をそのまま再現する
 - メモ・現在の取り組みがあれば文脈として活用する
-{('- 会話文脈を踏まえた流れのある返信にすること' if context_messages else '')}{('- 引用元の内容を踏まえた返信にすること' if quoted_text else '')}
+- 関連データがある場合は具体的な数字を引用して根拠のある返信にする
+- 絶対に使わない表現: 「そっかー」「そっかぁ」「そうなんだー」「〜だよね」「〜だよー」「わかるー」「たしかにー」等の長音カジュアル表現
+- 絶対に使わない絵文字: 😊 😄 😆 🥰 ☺️ 🤗（ニコニコ系は全て禁止。使えるのは😭🙇‍♂️🔥のみ）
+{platform_note}{('- 会話文脈を踏まえた流れのある返信にすること' if context_messages else '')}{('- 引用元の内容を踏まえた返信にすること' if quoted_text else '')}
 返信文:"""
 
             response = client.messages.create(
@@ -601,18 +686,20 @@ def call_claude_api(instruction: str, task: dict):
             task.setdefault("arguments", {})["_raw_reply"] = reply_suggestion
 
             # 秘書グループ向けの整形済みメッセージを生成
+            platform_tag = "[CW] " if platform == "chatwork" else ""
             profile_badge = f"👤 {sender_name}{category_line}" if profile else f"👤 {sender_name}"
             quoted_line = ""
             if quoted_text:
                 q_preview = quoted_text[:50] + "..." if len(quoted_text) > 50 else quoted_text
                 quoted_line = f"📌 引用元: 「{q_preview}」\n"
+            sheet_note = "📊 シートデータ参照済み\n" if sheet_section else ""
             result = (
-                f"{'💬 引用返信案' if quoted_text else '💡 返信案'}\n"
+                f"{'💬 引用返信案' if quoted_text else '💡 返信案'} {platform_tag}\n"
                 f"{profile_badge}\n"
                 f"\n"
                 f"グループ: {group_name}\n"
                 f"「{original_message[:80]}{'...' if len(original_message) > 80 else ''}」\n"
-                f"{quoted_line}"
+                f"{quoted_line}{sheet_note}"
                 f"\n"
                 f"返信案:\n{reply_suggestion}\n"
                 f"\n"

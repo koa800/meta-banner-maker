@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月21日（日報入力: LINEからCursor案内メッセージに変更） |
+| 最終更新 | 2026年2月21日（Chatwork連携・スプレッドシート文脈参照を追加） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -20,7 +20,10 @@
 │  テストグループ│   Push API   │  - タスクキュー管理              │
 └─────────────┘               │  - 会話文脈バッファリング        │
                                │  - sent_group_messages 追跡    │
-                               └──────────────────────────────┘
+┌─────────────┐   Webhook      │  - Chatwork Webhook受信        │
+│  Chatwork   │ ─────────────> │    /chatwork/callback          │
+│  各ルーム    │ <──────────── │  - Chatwork API送信             │
+└─────────────┘  Chatwork API  └──────────────────────────────┘
                                               │
                                    ポーリング │ (10秒間隔)
                                               ▼
@@ -31,6 +34,7 @@
                                │  - Claude Sonnet で返信案生成  │
                                │  - フィードバック学習          │
                                │  - people-profiles.json参照   │
+                               │  - スプレッドシート文脈参照     │
                                └──────────────────────────────┘
                                               │
                                launchd常駐    │ データ参照
@@ -38,6 +42,8 @@
                                ┌──────────────────────────────┐
                                │  Master/ (知識ベース)          │
                                │  - people-profiles.json (54名) │
+                               │  - people-identities.json     │
+                               │    (chatwork_account_id対応)   │
                                │  - IDENTITY.md (言語スタイル)   │
                                │  - SELF_PROFILE.md (自己像)    │
                                │  - reply_feedback.json (学習)  │
@@ -77,6 +83,14 @@
 15. **引用返信（リプライ）検知**: ボットが送信したメッセージへのLINE引用返信を自動検知し、新しい返信案を生成
 16. **会話文脈取り込み**: メンション直前の発言（最大10件）をバッファリングし、Claude プロンプトに「直前の文脈」として注入
 17. **重複タスク防止**: 同一 `message_id` の `generate_reply_suggestion` タスクは1件のみキューイング
+
+### Phase 6: Chatwork連携・スプレッドシート文脈参照（完了）
+18. **Chatwork Webhook受信**: `/chatwork/callback` で `mention_to_me` イベントを受信、HMAC-SHA256署名検証
+19. **Chatwork返信送信**: 承認後 `send_chatwork_message()` でChatworkルームに返信（`[rp]` タグ付き）
+20. **プラットフォーム分岐**: `pending_messages` に `platform` フィールドを追加。承認時にLINE/Chatworkを自動判別して送信先を切り替え
+21. **`[CW]`/`[LINE]` バッジ**: 秘書グループの通知・未返信一覧にプラットフォームバッジを表示
+22. **Chatwork account_id逆引き**: `people-identities.json` の `chatwork_account_id` フィールドでプロファイル検索可能
+23. **スプレッドシート文脈参照**: プロファイルの `related_sheets` にシートIDを登録すると、返信案生成時に自動でデータを取得してプロンプトに注入。数字に基づいた回答が可能
 
 ---
 
@@ -180,7 +194,8 @@ bash System/line_bot_local/sync_data.sh
 | 項目 | 値 |
 |------|------|
 | Render URL | https://line-mention-bot-mmzu.onrender.com |
-| Webhook URL | https://line-mention-bot-mmzu.onrender.com/callback |
+| LINE Webhook URL | https://line-mention-bot-mmzu.onrender.com/callback |
+| Chatwork Webhook URL | https://line-mention-bot-mmzu.onrender.com/chatwork/callback |
 | タスクAPI | https://line-mention-bot-mmzu.onrender.com/tasks |
 | GitHub リポジトリ | koa800/line-mention-bot |
 | LINE公式アカウント | @718azmbx |
@@ -203,6 +218,9 @@ bash System/line_bot_local/sync_data.sh
 | `PINECONE_API_KEY` | Pinecone API認証（Q&A） |
 | `LSTEP_API_TOKEN` | L-step API認証 |
 | `LSTEP_ENDPOINT_URL` | L-step エンドポイントURL |
+| `CHATWORK_API_TOKEN` | Chatwork APIトークン |
+| `CHATWORK_WEBHOOK_TOKEN` | Chatwork Webhook署名検証トークン（Base64） |
+| `CHATWORK_ACCOUNT_ID` | 自分のChatwork account_id |
 | `DATA_DIR` | データ保存ディレクトリ（`/data` = Render永続ディスク） |
 
 ---
@@ -223,6 +241,10 @@ bash System/line_bot_local/sync_data.sh
 | LINE Notify廃止 | LINE Notify は2025年3月終了。Render `/notify` エンドポイント + LINE Messaging API push_message で代替 |
 | Google OAuth token.json | `~/agents/token.json` に保存。access tokenは1時間で失効するがrefresh_tokenで自動更新。oauth_health_checkが毎朝9時に監視 |
 | MacBook機種変更 | `Project/MacBook移行ガイド.md` 参照。Mac Mini側は完全自律稼働のため影響なし。SSHキーとpost-commitフックの再設定のみ必要 |
+| Chatwork Webhook設定 | Chatwork管理画面 → Webhook設定 → イベント `mention_to_me` → URL: Chatwork Webhook URL |
+| Chatwork account_id | `curl -H "x-chatworktoken: TOKEN" https://api.chatwork.com/v2/me` で取得 |
+| Chatwork送信者紐付け | `people-identities.json` の `chatwork_account_id` フィールドに相手のaccount_idを設定してプロファイル逆引き可能に |
+| スプレッドシート文脈 | `people-profiles.json` の `related_sheets` にシートID・シート名・説明を設定。返信案生成時に `sheets_manager.py json` で自動取得 |
 | タスク失敗通知 | Orchestratorのタスクが失敗するとLINE通知（2時間レート制限）。health_check/oauth_health_checkは除外 |
 
 ---
@@ -369,6 +391,10 @@ MacBook Desktop (cursor/)
 - [x] qa_statusコマンド（「QA状況」でqa_monitor_state.json読み込み→検知件数・保留数・最終チェック返答）
 - [x] local_agent.py _SYSTEM_DIR パスバグ修正（who_to_ask/addness_sync/mail_check/context_queryがMac Miniで正常動作）
 - [x] 日報入力のLINE対応見直し（AppleScriptエラー→Cursor案内メッセージに変更。Looker Studio・b-dashブラウザ操作必須のためCursor直接実行が正解）
+- [x] Chatwork連携（Webhook受信→返信案生成→承認→Chatwork APIで返信。プラットフォーム分岐でLINE/CW自動判別）
+- [x] スプレッドシート文脈参照（people-profiles.jsonのrelated_sheetsからシートデータを自動取得→プロンプト注入）
+- [x] people-identities.jsonにchatwork_account_id/chatwork_display_nameフィールド追加（全81エントリ）
+- [x] 未返信一覧に[CW]/[LINE]プラットフォームバッジ表示
 
 ---
 
