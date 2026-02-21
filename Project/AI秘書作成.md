@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月21日（ヘルプコマンド・手動トリガー系コマンド群完成） |
+| 最終更新 | 2026年2月21日（不要機能削除・_SYSTEM_DIR パスバグ修正） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -219,6 +219,7 @@ bash System/line_bot_local/sync_data.sh
 | Mac Mini TCC制限 | LaunchAgent から `~/Desktop/` は直接アクセス不可。`~/agents/` を作業ディレクトリに使用 |
 | Mac Mini rsync | TCC制限でcron rsyncが失敗するため、Desktop MacのGit post-commitフックから rsync を実行（line_bot_local/も同期対象） |
 | Orchestrator SYSTEM_DIR | tools.py の SYSTEM_DIR は __file__ ベースで動的解決（Desktop/Mac Mini両対応）。ハードコードしないこと |
+| local_agent.py _SYSTEM_DIR | スクリプト呼び出しパスも __file__ ベースで動的解決済み。`mail_manager.py` の存在チェックでDesktop/Mac Miniを自動判別（`_AGENT_DIR.parent` → なければ `parent/System/`）|
 | LINE Notify廃止 | LINE Notify は2025年3月終了。Render `/notify` エンドポイント + LINE Messaging API push_message で代替 |
 | Google OAuth token.json | `~/agents/token.json` に保存。access tokenは1時間で失効するがrefresh_tokenで自動更新。oauth_health_checkが毎朝9時に監視 |
 | MacBook機種変更 | `Project/MacBook移行ガイド.md` 参照。Mac Mini側は完全自律稼働のため影響なし。SSHキーとpost-commitフックの再設定のみ必要 |
@@ -254,8 +255,6 @@ bash System/line_bot_local/sync_data.sh
 | `render_health_check` | 30分ごと | Renderサーバー死活監視・ダウン時LINE通知 |
 | `health_check` | 5分ごと | API使用量・Q&Aモニター・local_agent停止を検知してLINE警告 |
 | `repair_check` | 30分ごと | ログエラー検知・自動修復提案 |
-| `weekly_affiliate_ideas` | 毎週金曜 10:00 | アフィリエイターサポートコンテンツ案をClaude生成してLINE通知 |
-| `monthly_competitor_analysis` | 毎月1日 10:00 | 競合比較チェックリストをClaude生成してLINE通知 |
 | `weekly_content_suggestions` | 毎週水曜 10:00 | 最新AIニュースを分析してコンテンツ更新提案をLINE通知 |
 
 ### Orchestrator API エンドポイント（port 8500）
@@ -358,10 +357,8 @@ MacBook Desktop (cursor/)
 - [x] generate_video_scriptコマンド（「スクリプト作成: 商品名」でTikTok/YouTube広告台本自動生成）
 - [x] calendar_list トークン未存在時のハング防止（token file存在チェックで即時フェイル）
 - [x] generate_banner_conceptsコマンド（「バナー作成: 商品名」でバナー広告コンセプト5案自動生成）
-- [x] weekly_affiliate_ideasスケジューラ（毎週金曜10:00にアフィリエイターサポートコンテンツ案をClaude生成）
 - [x] 特殊期限リマインダー（東北大学研究コラボ2026/08/31の90/30/7/3/1日前にLINE通知）
 - [x] 週次ボトルネック分析（weekly_stats実行時にClaudeがactionable-tasks.mdを分析して最大課題を通知）
-- [x] monthly_competitor_analysisスケジューラ（毎月1日10:00に競合チェックリストをClaude生成）
 - [x] weekly_content_suggestionsスケジューラ（毎週水曜10:00にai_news.log分析→コンテンツ更新提案）
 - [x] who_to_askコマンド（「誰に頼む？」でpeople-profiles.jsonからタスク担当候補をClaude推薦）
 - [x] POST /schedule/run/{task_name}（Orchestratorスケジュールタスクの手動トリガーAPI）
@@ -370,6 +367,7 @@ MacBook Desktop (cursor/)
 - [x] mail_checkコマンド（「メール確認」でmail_manager.py run即時実行→処理結果返答）
 - [x] ヘルプコマンド（「ヘルプ」「コマンド一覧」で全機能一覧を表示・Claude API呼び出しなし）
 - [x] qa_statusコマンド（「QA状況」でqa_monitor_state.json読み込み→検知件数・保留数・最終チェック返答）
+- [x] local_agent.py _SYSTEM_DIR パスバグ修正（who_to_ask/addness_sync/mail_check/context_queryがMac Miniで正常動作）
 
 ---
 
