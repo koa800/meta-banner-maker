@@ -45,8 +45,6 @@ class TaskScheduler:
             "daily_addness_digest": self._run_daily_addness_digest,
             "oauth_health_check": self._run_oauth_health_check,
             "render_health_check": self._run_render_health_check,
-            "weekly_affiliate_ideas": self._run_weekly_affiliate_ideas,
-            "monthly_competitor_analysis": self._run_monthly_competitor_analysis,
             "weekly_content_suggestions": self._run_weekly_content_suggestions,
         }
 
@@ -738,69 +736,6 @@ class TaskScheduler:
         except Exception as e:
             logger.debug(f"Weekly bottleneck analysis error: {e}")
 
-    async def _run_monthly_competitor_analysis(self):
-        """毎月1日10:00: 競合比較チェックリストをClaudeで生成してLINE通知"""
-        from .notifier import send_line_notify
-        from datetime import date
-        import anthropic as _anthropic
-
-        today_str = date.today().strftime("%Y/%m")
-
-        # actionable-tasks.md から事業コンテキスト取得
-        master_dir = self.config.get("paths", {}).get("master_dir", "~/agents/Master")
-        actionable_path = os.path.expanduser(os.path.join(master_dir, "actionable-tasks.md"))
-        context = ""
-        if os.path.exists(actionable_path):
-            try:
-                with open(actionable_path, encoding="utf-8") as f:
-                    content = f.read()
-                # KPI関連行を抽出
-                lines = [l for l in content.splitlines() if any(k in l for k in ["ROAS", "CVR", "CPA", "KPI", "期限"])]
-                context = "\n".join(lines[:10])
-            except Exception:
-                pass
-
-        try:
-            client = _anthropic.Anthropic()
-            response = client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=500,
-                system="あなたはAI副業教育市場のマーケティング専門家です。",
-                messages=[{"role": "user", "content": f"""スキルプラス（AI副業・広告コース）の月次競合比較フレームワークを生成してください。
-今月: {today_str}
-
-【今月の事業KPI参考】
-{context or 'ROAS≥100%, CVR≥15%, CPA≤2500円が目標'}
-
-【出力形式】（400文字以内・LINEで読める形式）
-📊 {today_str} 競合チェック項目:
-
-確認すべき競合（3社）:
-・[競合A名] — チェックポイント
-・[競合B名] — チェックポイント
-・[競合C名] — チェックポイント
-
-今月注目すべき訴求ポイント（自社優位性）:
-・1〜2件
-
-スキルプラスに即した現実的な内容にしてください。"""}]
-            )
-            analysis = response.content[0].text.strip()
-            message = (
-                f"\n📊 月次競合チェック ({today_str})\n"
-                f"━━━━━━━━━━━━\n"
-                f"{analysis}\n"
-                f"━━━━━━━━━━━━\n"
-                f"💡 実際のデータは各媒体で確認してください"
-            )
-            task_id = self.memory.log_task_start("monthly_competitor_analysis")
-            ok = send_line_notify(message)
-            self.memory.log_task_end(task_id, "success" if ok else "error",
-                                     result_summary=analysis[:100])
-            logger.info("Monthly competitor analysis sent")
-        except Exception as e:
-            logger.error(f"Monthly competitor analysis failed: {e}")
-
     async def _run_weekly_content_suggestions(self):
         """毎週水曜10:00: 最新AIニュースを分析してスキルプラスのコンテンツ更新提案をLINE通知"""
         from .notifier import send_line_notify
@@ -950,66 +885,6 @@ class TaskScheduler:
             )
             if ok:
                 logger.info(f"Special reminder sent: {label} in {delta} days")
-
-    async def _run_weekly_affiliate_ideas(self):
-        """毎週金曜10:00: アフィリエイター向けサポートコンテンツ案をClaudeで生成してLINE通知"""
-        from .notifier import send_line_notify
-        from datetime import date
-        import anthropic as _anthropic
-
-        # actionable-tasks.md からアフィリエイト関連のコンテキストを取得
-        master_dir = self.config.get("paths", {}).get("master_dir", "~/agents/Master")
-        actionable_path = os.path.expanduser(os.path.join(master_dir, "actionable-tasks.md"))
-        context = ""
-        if os.path.exists(actionable_path):
-            try:
-                with open(actionable_path, encoding="utf-8") as f:
-                    content = f.read()
-                # アフィリエイト関連行だけ抽出
-                lines = [l for l in content.splitlines() if "アフィリエイト" in l or "affiliate" in l.lower()]
-                context = "\n".join(lines[:20])
-            except Exception:
-                pass
-
-        today_str = date.today().strftime("%Y/%m/%d")
-        prompt = f"""あなたはスキルプラス（AI副業コース）のアフィリエイトマーケティング担当です。
-今日の日付: {today_str}
-
-【現在のアフィリエイト関連タスク】
-{context or 'アフィリエイトプログラムの登録・拡大が目標（2026/02/28期限）'}
-
-以下を生成してください（LINEで読める形式・500文字以内）:
-
-1. 今週アフィリエイターに送るべきサポートコンテンツ案（2〜3件）
-   - 種類: LP改善ヒント/説明動画/バナー素材/メール文章例 など
-   - 優先度と理由を1行で
-
-2. 成約率を上げるための即効アクション（1件）
-
-具体的で実行しやすいものを提案してください。"""
-
-        try:
-            client = _anthropic.Anthropic()
-            response = client.messages.create(
-                model="claude-sonnet-4-6",
-                max_tokens=600,
-                system="あなたはアフィリエイトマーケティングの専門家です。成約率向上のための実践的なアドバイスをしてください。",
-                messages=[{"role": "user", "content": prompt}]
-            )
-            ideas = response.content[0].text.strip()
-            message = (
-                f"\n🤝 週次アフィリエイト提案 ({today_str})\n"
-                f"━━━━━━━━━━━━\n"
-                f"{ideas}\n"
-                f"━━━━━━━━━━━━"
-            )
-            task_id = self.memory.log_task_start("weekly_affiliate_ideas")
-            ok = send_line_notify(message)
-            self.memory.log_task_end(task_id, "success" if ok else "error",
-                                     result_summary=ideas[:100])
-            logger.info("Weekly affiliate ideas sent")
-        except Exception as e:
-            logger.error(f"Weekly affiliate ideas failed: {e}")
 
     async def _run_repair_check(self):
         if _repair_agent_ref is None:

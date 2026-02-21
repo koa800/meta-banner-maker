@@ -52,12 +52,6 @@ schedule:
   render_health_check:
     interval_minutes: 30         # 30分ごと（Renderコールドスタート前提）
     enabled: true
-  weekly_affiliate_ideas:
-    cron: "0 10 * * 5"           # 毎週金曜 朝10:00
-    enabled: true
-  monthly_competitor_analysis:
-    cron: "0 10 1 * *"           # 毎月1日 朝10:00
-    enabled: true
   weekly_content_suggestions:
     cron: "0 10 * * 3"           # 毎週水曜 朝10:00
     enabled: true
