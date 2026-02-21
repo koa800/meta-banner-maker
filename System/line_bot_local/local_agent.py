@@ -1221,7 +1221,7 @@ def run_agent():
     else:
         print("🚀 Cursorモード: タスクを受信したら自動でCursorに送信します")
     
-    print("📋 日報入力タスク: 常にCursorで処理")
+    print("📋 日報入力タスク: Cursor専用（LINEからはガイドメッセージを返す）")
     
     print()
     print("Ctrl+C で終了")
@@ -1263,10 +1263,16 @@ def run_agent():
                     
                     # 処理開始を報告
                     start_task(task_id)
-                    
-                    # 日報入力などCursorが必要なタスク、またはClaude APIが使えない場合はCursorで処理
-                    cursor_required_tasks = ["input_daily_report"]
-                    use_cursor = (auto_mode == "cursor") or (function_name in cursor_required_tasks) or (not claude_api_available)
+
+                    # 日報入力: Looker Studio・b-dash のブラウザ操作が必要なためCursor専用
+                    if function_name == "input_daily_report":
+                        complete_task(task_id, True,
+                                      "📊 日報入力はLooker Studio・b-dashのブラウザ操作が必要なため、LINEからは実行できません。\nCursorを開いて「日報報告して」と入力してください。")
+                        print(f"   ℹ️ 日報入力はCursor専用 → 案内メッセージをLINEに送信")
+                        continue
+
+                    # Claude APIが使えない場合はCursorで処理
+                    use_cursor = (auto_mode == "cursor") or (not claude_api_available)
                     
                     if not use_cursor:
                         # ===== Claude APIで自動処理 =====
