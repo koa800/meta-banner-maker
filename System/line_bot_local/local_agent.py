@@ -407,7 +407,8 @@ def build_sender_context(sender_name: str) -> str:
 
 
 def fetch_sheet_context(related_sheets: list) -> str:
-    """related_sheetsのスプレッドシートからデータを取得し、文脈テキストを生成"""
+    """related_sheetsのスプレッドシートからデータを取得し、文脈テキストを生成。
+    月次サマリー行・備考欄の設計情報・カラムヘッダーを抽出して構造化する。"""
     if not related_sheets:
         return ""
 
@@ -424,7 +425,9 @@ def fetch_sheet_context(related_sheets: list) -> str:
         if not sheet_id:
             continue
 
+        sheet_text = ""
         try:
+            # まずJSONモードで取得
             cmd = [sys.executable, str(sheets_manager_path), "json", sheet_id]
             if sheet_name:
                 cmd.append(sheet_name)
@@ -433,24 +436,58 @@ def fetch_sheet_context(related_sheets: list) -> str:
             )
             if result.returncode == 0 and result.stdout.strip():
                 raw = result.stdout.strip()
-                # JSONパースして直近データを抽出
                 try:
                     rows = json.loads(raw)
-                    # 直近3行のデータを取得（月次データの場合は最新月が末尾）
                     recent = rows[-3:] if len(rows) > 3 else rows
                     sheet_text = json.dumps(recent, ensure_ascii=False, indent=1)
                 except (json.JSONDecodeError, TypeError):
                     sheet_text = raw
 
-                # トークン節約のため1500文字以内にトランケート
-                if len(sheet_text) > 1500:
-                    sheet_text = sheet_text[:1500] + "\n...(truncated)"
+            # JSONモード失敗時 → readモードでraw取得し構造化抽出
+            if not sheet_text:
+                cmd_read = [sys.executable, str(sheets_manager_path), "read", sheet_id]
+                if sheet_name:
+                    cmd_read.append(sheet_name)
+                result_read = subprocess.run(
+                    cmd_read, capture_output=True, text=True, timeout=30, encoding="utf-8"
+                )
+                if result_read.returncode == 0 and result_read.stdout.strip():
+                    raw_lines = result_read.stdout.strip().split("\n")
+                    # ヘッダー行、月次サマリー行、備考を抽出
+                    header_row = ""
+                    monthly_summaries = []
+                    notes_info = ""
+                    for line in raw_lines:
+                        # 「行N: [...]」形式をパース
+                        if "行2:" in line and "項目" in line:
+                            header_row = line
+                        # 月次サマリー行（「20XX年XX月」で始まるセル）
+                        elif ("年" in line and "月" in line and
+                              any(y in line for y in ["2025", "2026", "2027"])):
+                            if "行" in line and "返金" not in line:
+                                monthly_summaries.append(line)
+                        # 備考欄（報酬設計情報などの長いテキスト）
+                        if "報酬" in line or "ROAS" in line or "CPO" in line:
+                            if len(line) > 100 and not notes_info:
+                                notes_info = line
 
+                    extracted_parts = []
+                    if header_row:
+                        extracted_parts.append(f"■ カラム定義\n{header_row}")
+                    if monthly_summaries:
+                        extracted_parts.append("■ 月次サマリー\n" + "\n".join(monthly_summaries))
+                    if notes_info:
+                        extracted_parts.append(f"■ 報酬設計・基本情報\n{notes_info}")
+                    sheet_text = "\n\n".join(extracted_parts)
+
+            if sheet_text:
+                # 3000文字以内にトランケート（計算に必要な情報を残すため多めに確保）
+                if len(sheet_text) > 3000:
+                    sheet_text = sheet_text[:3000] + "\n...(truncated)"
                 header = f"📊 {description or sheet_name or sheet_id}"
                 parts.append(f"{header}\n{sheet_text}")
             else:
-                err = result.stderr.strip()[:100] if result.stderr else ""
-                print(f"   ⚠️ シートデータ取得失敗: {sheet_id} / {err}")
+                print(f"   ⚠️ シートデータ取得失敗（json/read両方）: {sheet_id}")
         except subprocess.TimeoutExpired:
             print(f"   ⚠️ シートデータ取得タイムアウト: {sheet_id}")
         except Exception as e:
@@ -664,19 +701,24 @@ def call_claude_api(instruction: str, task: dict):
 
 【出力ルール】
 - 甲原海人が実際に送る文章のみ出力（説明・前置き不要）
-- 50文字以内を目安に簡潔に（ただし関連データに基づく数字を含める場合は長くてOK）
+{f'- 関連データがあるので、数字を使って計算し根拠を示すクリティカルな返信にすること' if sheet_section else '- 50文字以内を目安に簡潔に'}
+{f'- データから計算式・前提条件・結論を明確に構造化して提示する' if sheet_section else ''}
+{f'- 相手の質問の意図を正確に捉え、求められている数字や判断を具体的に回答する' if sheet_section else ''}
 - 相手固有のスタイルノートと口調の癖をそのまま再現する
 - メモ・現在の取り組みがあれば文脈として活用する
-- 関連データがある場合は具体的な数字を引用して根拠のある返信にする
 - 絶対に使わない表現: 「そっかー」「そっかぁ」「そうなんだー」「〜だよね」「〜だよー」「わかるー」「たしかにー」等の長音カジュアル表現
 - 絶対に使わない絵文字: 😊 😄 😆 🥰 ☺️ 🤗（ニコニコ系は全て禁止。使えるのは😭🙇‍♂️🔥のみ）
 {platform_note}{('- 会話文脈を踏まえた流れのある返信にすること' if context_messages else '')}{('- 引用元の内容を踏まえた返信にすること' if quoted_text else '')}
 返信文:"""
 
+            # シートデータありの場合はmax_tokensを拡大（計算・根拠提示に十分な量）
+            max_tokens = 600 if sheet_section else 200
             response = client.messages.create(
                 model="claude-sonnet-4-6",  # 口調再現は精度重視でSonnet
-                max_tokens=200,
-                system="あなたは甲原海人です。定義されたスタイルで返信文のみを出力してください。",
+                max_tokens=max_tokens,
+                system="あなたは甲原海人です。定義されたスタイルで返信文のみを出力してください。" + (
+                    "関連データがある場合は必ず数字を計算して根拠を示し、相手の質問にクリティカルに答えてください。" if sheet_section else ""
+                ),
                 messages=[{"role": "user", "content": prompt}]
             )
 
