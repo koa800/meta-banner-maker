@@ -551,7 +551,7 @@ def call_claude_api(instruction: str, task: dict):
             feedback_section = build_feedback_prompt_section(sender_name, sender_cat)
             self_profile_section = ""
             if self_profile:
-                self_profile_section = f"\n【甲原海人のコアプロファイル（価値観・判断軸）】\n{self_profile[:600]}\n"
+                self_profile_section = f"\n【甲原海人のコアプロファイル（価値観・判断軸・哲学）】\n{self_profile}\n"
 
             quoted_section = ""
             if quoted_text:
