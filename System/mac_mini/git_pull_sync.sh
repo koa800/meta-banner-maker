@@ -9,9 +9,28 @@ REPO_DIR="$HOME/agents/_repo"
 DEPLOY_DIR="$HOME/agents"
 REPO_URL="https://github.com/koa800/meta-banner-maker.git"
 LOG_FILE="$DEPLOY_DIR/System/mac_mini/agent_orchestrator/logs/git_sync.log"
+STATUS_FILE="$DEPLOY_DIR/System/mac_mini/agent_orchestrator/sync_status.json"
 
 log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+write_status() {
+  local status="$1"
+  local commit="$2"
+  local msg="$3"
+  local changed="${4:-0}"
+  cat > "$STATUS_FILE" <<EOJSON
+{
+  "status": "$status",
+  "commit": "$commit",
+  "commit_short": "$(echo "$commit" | cut -c1-7)",
+  "message": "$msg",
+  "changed_files": $changed,
+  "checked_at": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
+  "checked_at_jst": "$(date '+%Y-%m-%d %H:%M:%S')"
+}
+EOJSON
 }
 
 # ログローテーション（500行に圧縮）
@@ -35,7 +54,7 @@ LOCAL_HEAD=$(git rev-parse HEAD)
 REMOTE_HEAD=$(git rev-parse origin/main)
 
 if [ "$LOCAL_HEAD" = "$REMOTE_HEAD" ]; then
-  # 変更なし — 即終了（軽量）
+  write_status "synced" "$LOCAL_HEAD" "変更なし" 0
   exit 0
 fi
 
@@ -114,4 +133,6 @@ if echo "$CHANGED" | grep -q "mac_mini/agent_orchestrator/"; then
   ) &
 fi
 
-log "同期完了: $(echo "$CHANGED" | wc -l | tr -d ' ')ファイル更新"
+CHANGED_COUNT=$(echo "$CHANGED" | wc -l | tr -d ' ')
+log "同期完了: ${CHANGED_COUNT}ファイル更新"
+write_status "synced" "$REMOTE_HEAD" "同期完了" "$CHANGED_COUNT"

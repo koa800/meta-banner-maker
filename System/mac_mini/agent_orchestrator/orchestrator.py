@@ -57,6 +57,33 @@ class AgentOrchestrator:
                 "today": summary,
             }
 
+        @app.get("/sync-status")
+        async def sync_status():
+            import json
+            import subprocess
+            status_path = os.path.expanduser(
+                "~/agents/System/mac_mini/agent_orchestrator/sync_status.json"
+            )
+            repo_dir = os.path.expanduser("~/agents/_repo")
+            result = {"mac_mini": None, "repo_head": None}
+            if os.path.exists(status_path):
+                with open(status_path) as f:
+                    result["mac_mini"] = json.load(f)
+            try:
+                head = subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"], cwd=repo_dir, text=True
+                ).strip()
+                msg = subprocess.check_output(
+                    ["git", "log", "-1", "--format=%s", "HEAD"], cwd=repo_dir, text=True
+                ).strip()
+                ts = subprocess.check_output(
+                    ["git", "log", "-1", "--format=%ci", "HEAD"], cwd=repo_dir, text=True
+                ).strip()
+                result["repo_head"] = {"commit": head, "message": msg, "date": ts}
+            except Exception:
+                pass
+            return result
+
         @app.get("/tasks")
         async def tasks():
             return self.memory.get_recent_tasks(limit=50)
