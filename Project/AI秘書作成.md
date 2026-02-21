@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月21日（不要機能削除・_SYSTEM_DIR パスバグ修正） |
+| 最終更新 | 2026年2月21日（日報入力: LINEからCursor案内メッセージに変更） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -56,7 +56,7 @@
 
 ### Phase 2: 自然言語タスク実行（完了）
 5. **Googleカレンダー連携**: 「明日14時に会議入れて」で予定追加
-6. **PC委譲タスク**: 日報入力などの複雑タスクをCursorに転送
+6. **PC委譲タスク**: 複雑タスクをCursorに転送（日報入力はLINE非対応・Cursor直接実行）
 
 ### Phase 3: Mac Mini 常駐エージェント（完了）
 7. **launchd常駐**: Mac Mini `~/agents/line_bot_local/local_agent.py` をlaunchdで自動起動
@@ -116,7 +116,7 @@
 |--------|------|
 | 「明日14時に会議入れて」 | Googleカレンダーに予定追加 |
 | 「今日の予定を教えて」 | カレンダー予定を表示 |
-| 「日報入れて」 | 日報入力をCursorに委譲 |
+| 「日報入れて」 | 「Cursorで実行してください」と案内を返す（Looker Studio・b-dashのブラウザ操作が必要なためLINEから実行不可） |
 | 「次何？」「次にやることは？」 | Addness+メール状況をClaudeが分析→優先行動リスト返答（context_query） |
 | 「LP作成: 商品名 ターゲット」 | LP構成案+キャッチコピー3案+CTA自動生成（generate_lp_draft） |
 | 「スクリプト作成: 商品名 [タイプ]」 | 広告動画台本自動生成・フック+問題提起+CTA構成（generate_video_script） |
@@ -368,6 +368,7 @@ MacBook Desktop (cursor/)
 - [x] ヘルプコマンド（「ヘルプ」「コマンド一覧」で全機能一覧を表示・Claude API呼び出しなし）
 - [x] qa_statusコマンド（「QA状況」でqa_monitor_state.json読み込み→検知件数・保留数・最終チェック返答）
 - [x] local_agent.py _SYSTEM_DIR パスバグ修正（who_to_ask/addness_sync/mail_check/context_queryがMac Miniで正常動作）
+- [x] 日報入力のLINE対応見直し（AppleScriptエラー→Cursor案内メッセージに変更。Looker Studio・b-dashブラウザ操作必須のためCursor直接実行が正解）
 
 ---
 
