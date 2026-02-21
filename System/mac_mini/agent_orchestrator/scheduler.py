@@ -46,6 +46,8 @@ class TaskScheduler:
             "oauth_health_check": self._run_oauth_health_check,
             "render_health_check": self._run_render_health_check,
             "weekly_content_suggestions": self._run_weekly_content_suggestions,
+            "kpi_daily_import": self._run_kpi_daily_import,
+            "git_pull_sync": self._run_git_pull_sync,
         }
 
     def setup(self):
@@ -79,7 +81,7 @@ class TaskScheduler:
         logger.info("Scheduler shut down")
 
     # タスク失敗通知を送らないタスク（自前でエラーハンドリングするもの）
-    _NO_FAILURE_NOTIFY = {"health_check", "oauth_health_check", "render_health_check"}
+    _NO_FAILURE_NOTIFY = {"health_check", "oauth_health_check", "render_health_check", "git_pull_sync"}
 
     async def _execute_tool(self, task_name: str, tool_fn, **kwargs) -> tools.ToolResult:
         task_id = self.memory.log_task_start(task_name, metadata=kwargs)
@@ -885,6 +887,45 @@ class TaskScheduler:
             )
             if ok:
                 logger.info(f"Special reminder sent: {label} in {delta} days")
+
+    async def _run_kpi_daily_import(self):
+        """毎日12:00: 元データの完了チェック → 投入 or リマインド"""
+        from .notifier import send_line_notify
+        from datetime import date, timedelta
+
+        target_date = (date.today() - timedelta(days=2)).isoformat()
+
+        # まず完了チェック
+        check = await self._execute_tool("kpi_check_today", tools.kpi_check_today)
+        if check.success and check.output.startswith("ok:"):
+            # 完了 → 日別/月別に投入
+            result = await self._execute_tool("kpi_process", tools.kpi_process)
+            if result.success and "投入完了" in result.output:
+                send_line_notify(
+                    f"\n📊 KPIデータ更新完了\n"
+                    f"━━━━━━━━━━━━\n"
+                    f"{result.output[:200]}\n"
+                    f"━━━━━━━━━━━━"
+                )
+            elif result.success and "投入対象なし" in result.output:
+                logger.info(f"KPI process: already up to date for {target_date}")
+            else:
+                logger.warning(f"KPI process result: {result.output[:200]}")
+        else:
+            # 未完了 → リマインド送信
+            status = check.output if check.success else "チェック失敗"
+            send_line_notify(
+                f"\n⏰ KPIデータ未投入リマインド\n"
+                f"━━━━━━━━━━━━\n"
+                f"対象日: {target_date}\n"
+                f"ステータス: {status}\n"
+                f"\nLooker StudioからCSVエクスポートをお願いします\n"
+                f"━━━━━━━━━━━━"
+            )
+            logger.warning(f"KPI data not ready for {target_date}: {status}")
+
+    async def _run_git_pull_sync(self):
+        await self._execute_tool("git_pull_sync", tools.git_pull_sync)
 
     async def _run_repair_check(self):
         if _repair_agent_ref is None:

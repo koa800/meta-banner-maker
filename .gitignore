@@ -11,6 +11,7 @@ ai_news_config.json
 System/line_bot_local/config.json
 System/line_bot_local/logs/
 System/line_bot_local/qa_monitor_state.json
+System/line_bot_local/contact_state.json
 GWS/
 cpa_*.py
 thankyou-page.html

@@ -189,6 +189,23 @@ def who_to_ask(task_description: str) -> ToolResult:
     )
 
 
+# --------------- KPI ---------------
+
+def kpi_refresh() -> ToolResult:
+    """日別タブの既存データから月別タブを再計算"""
+    return _run_script(os.path.join(SYSTEM_DIR, "kpi_processor.py"), ["refresh"])
+
+
+def kpi_process() -> ToolResult:
+    """元データの完了エントリを検知 → CSVから日別/月別に投入"""
+    return _run_script(os.path.join(SYSTEM_DIR, "kpi_processor.py"), ["process"])
+
+
+def kpi_check_today() -> ToolResult:
+    """2日前の日付が元データで完了になっているかチェック"""
+    return _run_script(os.path.join(SYSTEM_DIR, "kpi_processor.py"), ["check_today"])
+
+
 # --------------- Utility ---------------
 
 def shell_command(cmd: str, timeout: int = 60) -> ToolResult:
@@ -225,6 +242,14 @@ def shell_command(cmd: str, timeout: int = 60) -> ToolResult:
         return ToolResult(success=False, output="", error=str(e), return_code=-1)
 
 
+# --------------- Git Sync ---------------
+
+def git_pull_sync() -> ToolResult:
+    """GitHubからpull → ローカルデプロイ"""
+    sync_script = os.path.join(SYSTEM_DIR, "mac_mini", "git_pull_sync.sh")
+    return shell_command(f"bash {sync_script}", timeout=120)
+
+
 TOOL_REGISTRY = {
     "mail_run": {"fn": mail_run, "description": "受信メールの処理・自動返信下書き作成"},
     "mail_status": {"fn": mail_status, "description": "メール処理のステータス確認"},
@@ -238,4 +263,8 @@ TOOL_REGISTRY = {
     "qa_answer": {"fn": qa_answer, "description": "質問に対してAI回答を生成"},
     "qa_stats": {"fn": qa_stats, "description": "Q&Aナレッジベースの統計情報"},
     "who_to_ask": {"fn": who_to_ask, "description": "タスクに最適な担当者を推薦"},
+    "kpi_refresh": {"fn": kpi_refresh, "description": "KPI月別タブを日別データから再計算"},
+    "kpi_process": {"fn": kpi_process, "description": "元データ完了分をCSVから日別/月別に投入"},
+    "kpi_check_today": {"fn": kpi_check_today, "description": "2日前のKPIデータ完了チェック"},
+    "git_pull_sync": {"fn": git_pull_sync, "description": "GitHubからpull→ローカルデプロイ"},
 }

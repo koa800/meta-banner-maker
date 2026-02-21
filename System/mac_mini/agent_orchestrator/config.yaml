@@ -20,10 +20,10 @@ schedule:
     cron: "0 8 * * *"         # 毎日 朝8:00
     enabled: true
   mail_inbox_personal:
-    cron: "0 * * * *"         # 毎時
+    cron: "0 */3 * * *"       # 3時間ごと
     enabled: true
   mail_inbox_kohara:
-    cron: "30 * * * *"        # 毎時30分
+    cron: "30 */3 * * *"      # 3時間ごと（30分ずらし）
     enabled: true
   addness_goal_check:
     cron: "0 9 * * *"         # 毎日 朝9:00
@@ -54,6 +54,12 @@ schedule:
     enabled: true
   weekly_content_suggestions:
     cron: "0 10 * * 3"           # 毎週水曜 朝10:00
+    enabled: true
+  kpi_daily_import:
+    cron: "0 12 * * *"           # 毎日 昼12:00（2日前のデータを投入）
+    enabled: true
+  git_pull_sync:
+    interval_minutes: 5          # 5分ごとにGitHubからpull
     enabled: true
 
 webhook:
