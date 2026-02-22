@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月22日（agent.db削除バグ修正・旧sync_from_macbook無効化・Slack Webhook外部化） |
+| 最終更新 | 2026年2月22日（kpi_queryツール追加・context_queryへKPIサマリ注入） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -36,7 +36,9 @@
                                │  - people-profiles.json参照   │
                                │  - スプレッドシート文脈参照     │
                                │  - Addness KPI自動参照         │
-                               │    (数値管理シート 日別/月別)    │
+                               │    (kpi_summary.json優先      │
+                               │     → Sheets APIフォールバック)  │
+                               │    ※外部パートナーには非開示    │
                                └──────────────────────────────┘
                                               │
                                launchd常駐    │ データ参照
@@ -123,7 +125,7 @@
 21. **`[CW]`/`[LINE]` バッジ**: 秘書グループの通知・未返信一覧にプラットフォームバッジを表示
 22. **Chatwork account_id逆引き**: `people-identities.json` の `chatwork_account_id` フィールドでプロファイル検索可能
 23. **スプレッドシート文脈参照**: プロファイルの `related_sheets` にシートIDを登録すると、返信案生成時に自動でデータを取得してプロンプトに注入。数字に基づいた回答が可能
-24. **Addness KPI自動参照**: アドネス関連の会話（メンバー × ビジネスキーワード）を自動検知し、`【アドネス全体】数値管理シート`の日別・月別タブからKPI（集客数・個別予約数・実施数・売上・広告費・CPA・CPO・ROAS・LTV・粗利）を自動注入
+24. **Addness KPI自動参照**: アドネス関連の会話（メンバー × ビジネスキーワード）を自動検知し、KPIキャッシュ（`kpi_summary.json`）→ Sheets APIフォールバックのハイブリッド方式でKPIを自動注入。**外部パートナー・未登録者にはKPIデータを開示しない**（ホワイトリスト制御: 本人/上司/直下メンバー/横のみ許可）
 25. **KPI日次パイプライン**: Cursor（ブラウザ操作）がLooker StudioからCSVダウンロード→元データシートのステータスを「完了」に更新→`kpi_processor.py process`が検知して日別/月別タブに自動投入。毎日12:00にOrchestratorが完了チェック→未完了ならLINEリマインド
 
 ---
@@ -165,7 +167,8 @@
 | 「明日14時に会議入れて」 | Googleカレンダーに予定追加 |
 | 「今日の予定を教えて」 | カレンダー予定を表示 |
 | 「日報入れて」 | 「Cursorで実行してください」と案内を返す（Looker Studio・b-dashのブラウザ操作が必要なためLINEから実行不可） |
-| 「次何？」「次にやることは？」 | Addness+メール状況をClaudeが分析→優先行動リスト返答（context_query） |
+| 「広告数値の評価をして」「ROAS教えて」 | KPIデータ自動取得→Claudeが分析・トレンド評価・改善提案を返答（kpi_query） |
+| 「次何？」「次にやることは？」 | Addness+メール+KPIサマリをClaudeが分析→優先行動リスト返答（context_query） |
 | 「LP作成: 商品名 ターゲット」 | LP構成案+キャッチコピー3案+CTA自動生成（generate_lp_draft） |
 | 「スクリプト作成: 商品名 [タイプ]」 | 広告動画台本自動生成・フック+問題提起+CTA構成（generate_video_script） |
 | 「バナー作成: 商品名 [プラットフォーム]」 | バナー広告コンセプト5案生成・ヘッドライン+ビジュアル+CTA（generate_banner_concepts） |
@@ -194,16 +197,18 @@
 | `System/line_bot_local/local_agent.py` | Desktop版（開発・編集用） |
 | `System/line_bot_local/sync_data.sh` | Desktop ↔ Library 双方向同期 |
 | `System/kpi_processor.py` | KPI投入エンジン（import/process/check_today/refresh） |
+| `System/csv_sheet_sync.py` | CSV同期・日別月別構築・KPIキャッシュ生成（LaunchAgent連携） |
+| `System/kpi_summary.json` | KPIキャッシュ（`fetch_addness_kpi()`が参照、自動生成） |
 | `System/looker_csv_downloader.py` | Looker Studio CSVダウンローダー（Cursor連携） |
 
 ### 知識ベース（Master/）
 | パス | 説明 |
 |------|------|
-| `Master/people-profiles.json` | 54名のプロファイル（comm_profile含む） |
-| `Master/people-identities.json` | 人物識別データ |
-| `Master/reply_feedback.json` | フィードバック学習データ（修正例・スタイルノート） |
-| `Master/self_clone/projects/kohara/1_Core/IDENTITY.md` | 甲原海人の言語スタイル定義 |
-| `Master/self_clone/projects/kohara/1_Core/SELF_PROFILE.md` | 甲原海人のコアプロファイル |
+| `Master/people/profiles.json` | 54名のプロファイル（comm_profile含む） |
+| `Master/people/identities.json` | 人物識別データ |
+| `Master/learning/reply_feedback.json` | フィードバック学習データ（修正例・スタイルノート） |
+| `Master/self_clone/kohara/IDENTITY.md` | 甲原海人の言語スタイル定義 |
+| `Master/self_clone/kohara/SELF_PROFILE.md` | 甲原海人のコアプロファイル |
 
 ---
 
@@ -282,7 +287,8 @@ bash System/line_bot_local/sync_data.sh
 | Chatwork account_id | `curl -H "x-chatworktoken: TOKEN" https://api.chatwork.com/v2/me` で取得 |
 | Chatwork送信者紐付け | `people-identities.json` の `chatwork_account_id` フィールドに相手のaccount_idを設定してプロファイル逆引き可能に |
 | スプレッドシート文脈 | `people-profiles.json` の `related_sheets` にシートID・シート名・説明を設定。返信案生成時に `sheets_manager.py json` で自動取得 |
-| Addness KPIシート | `【アドネス全体】数値管理シート`（ID: `1FOh_XGZWaEisfFEngiN848kSm2E6HotAZiMDTmO7BNA`）。タブ: 元データ（実行ログ）/ スキルプラス（日別）/ スキルプラス（月別）。Looker StudioからCSVエクスポート→ `kpi_processor.py import` で投入。kohara アカウントで読み書き |
+| Addness KPIシート | `【アドネス全体】数値管理シート`（ID: `1FOh_XGZWaEisfFEngiN848kSm2E6HotAZiMDTmO7BNA`）。タブ: 元データ / スキルプラス（日別）/ スキルプラス（月別）。`csv_sheet_sync.py` がCSV同期→日別月別構築→KPIキャッシュ生成を連鎖実行。詳細は `Project/数値管理自動化.md` を参照。kohara アカウントで読み書き |
+| KPIデータ開示制御 | 事業KPI（売上・広告費・ROAS等）は内部メンバーのみ開示。外部パートナー・未登録者には `fetch_addness_kpi()` のデータ注入をスキップ。ただしプロファイルの `related_sheets` に登録されたシートデータは外部にも開示可 |
 | タスク失敗通知 | Orchestratorのタスクが失敗するとLINE通知（2時間レート制限）。health_check/oauth_health_checkは除外 |
 
 ---
@@ -316,6 +322,7 @@ bash System/line_bot_local/sync_data.sh
 | `repair_check` | 30分ごと | ログエラー検知・自動修復提案 |
 | `weekly_content_suggestions` | 毎週水曜 10:00 | 最新AIニュースを分析してコンテンツ更新提案をLINE通知 |
 | `kpi_daily_import` | 毎日 12:00 | 2日前のKPIデータ完了チェック→投入 or 未完了リマインド |
+| `sheets_sync` | 毎朝 6:30 | Master/sheets/ の管理シートCSVキャッシュを最新化（README.md同期ステータス更新） |
 | `git_pull_sync` | 5分ごと | GitHubからpull→ローカルrsyncでデプロイ→変更ファイルに応じてサービス再起動 |
 
 ### Orchestrator API エンドポイント（port 8500）
@@ -418,7 +425,8 @@ MacBook (どこからでも)
 - [x] 日次ダイジェスト+カレンダー統合（毎朝8:30の通知に今日の予定を追加）
 - [x] ミーティング準備ブリーフィング（カレンダー参加者をpeople-profiles.jsonでルックアップ・カテゴリ付きで表示）
 - [x] calendar_manager.py 参加者表示機能追加（list_eventsで参加者displayName出力）
-- [x] context_queryコマンド（「次何？」でAddness+メール+Claude分析→優先行動リスト返答）
+- [x] context_queryコマンド（「次何？」でAddness+メール+KPIサマリ+Claude分析→優先行動リスト返答）
+- [x] kpi_queryコマンド（「広告数値」「ROAS」等でKPIデータ自動取得→Claude分析・トレンド評価・改善提案返答）
 - [x] generate_lp_draftコマンド（「LP作成: 商品名」でLP構成案+キャッチコピー自動生成）
 - [x] generate_video_scriptコマンド（「スクリプト作成: 商品名」でTikTok/YouTube広告台本自動生成）
 - [x] calendar_list トークン未存在時のハング防止（token file存在チェックで即時フェイル）
@@ -439,12 +447,13 @@ MacBook (どこからでも)
 - [x] スプレッドシート文脈参照（people-profiles.jsonのrelated_sheetsからシートデータを自動取得→プロンプト注入）
 - [x] people-identities.jsonにchatwork_account_id/chatwork_display_nameフィールド追加（全81エントリ）
 - [x] 未返信一覧に[CW]/[LINE]プラットフォームバッジ表示
-- [x] Addness KPI自動参照（アドネス関連会話で月別目標進捗シートを自動読み込み・直近3ヶ月KPI注入）
+- [x] Addness KPI自動参照（kpi_summary.jsonキャッシュ優先 → Sheets APIフォールバック → staleキャッシュ最終手段。媒体別内訳対応。外部パートナー・未登録者にはKPI非開示）
 - [x] MacBook↔Mac Mini同期をGitHub経由に移行（rsync over SSH廃止→git push/pull。外出先からも同期可能）
 - [x] Mac Mini旧cronジョブ整理（addness/ai_news/mail/sync_agent全5件削除→Orchestrator一元管理）
 - [x] agent.db削除バグ修正（git_pull_syncのrsync --deleteがランタイムDBを毎回削除→*.db除外追加）
 - [x] 旧sync_from_macbook.sh無効化（LaunchAgent unload + .disabled化。GitHub同期に完全移行済み）
 - [x] Slack Webhook URL外部化（addness_config.json/run_addness_pipeline.shから環境変数に移動。GitHub Push Protection対応）
+- [x] 管理シート自動同期（`sheets_sync.py`。Master/sheets/README.md登録シートのCSVキャッシュを毎朝6:30に自動更新。Orchestrator統合済み）
 
 ---
 
@@ -473,7 +482,7 @@ Addnessはビジョン・ゴール定義・タスク分解の場。Cursor/Claude
                                                 │  addness_to_context.py        │
                                                 │  - GoalNode構造化              │
                                                 │  - .cursor/rules/addness-goals.mdc │
-                                                │  - Master/addness-goal-tree.md │
+                                                │  - Master/addness/goal-tree.md │
                                                 └──────────────────────────────┘
                                                                │
                                                      latest.json│
@@ -483,7 +492,7 @@ Addnessはビジョン・ゴール定義・タスク分解の場。Cursor/Claude
                                                 │  - 実行可能タスク抽出          │
                                                 │  - 優先度スコアリング          │
                                                 │  - 委任先超過タスク検知         │
-                                                │  → Master/actionable-tasks.md │
+                                                │  → Master/addness/actionable-tasks.md │
                                                 │  → .cursor/rules/addness-actionable.mdc │
                                                 └──────────────────────────────┘
                                                                │
@@ -521,9 +530,9 @@ python3 System/addness_fetcher.py && python3 System/addness_to_context.py && pyt
 |------|------|
 | `addness_data/latest.json` | 生データ（APIレスポンス全量） |
 | `.cursor/rules/addness-goals.mdc` | 全体Goal Tree（Cursor自動注入） |
-| `Master/addness-goal-tree.md` | 全体Goal Tree（フル版） |
+| `Master/addness/goal-tree.md` | 全体Goal Tree（フル版） |
 | `.cursor/rules/addness-actionable.mdc` | 実行可能タスクTOP15（Cursor自動注入） |
-| `Master/actionable-tasks.md` | 実行可能タスク全量（詳細版） |
+| `Master/addness/actionable-tasks.md` | 実行可能タスク全量（詳細版） |
 
 ### タスク抽出ロジック
 

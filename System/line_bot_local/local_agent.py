@@ -23,8 +23,8 @@ _PROJECT_ROOT = _AGENT_DIR.parent.parent
 _SYSTEM_DIR = _AGENT_DIR.parent
 if not (_SYSTEM_DIR / "mail_manager.py").exists():
     _SYSTEM_DIR = _SYSTEM_DIR / "System"
-PEOPLE_PROFILES_JSON = _PROJECT_ROOT / "Master" / "people-profiles.json"
-PEOPLE_IDENTITIES_JSON = _PROJECT_ROOT / "Master" / "people-identities.json"
+PEOPLE_PROFILES_JSON = _PROJECT_ROOT / "Master" / "people" / "profiles.json"
+PEOPLE_IDENTITIES_JSON = _PROJECT_ROOT / "Master" / "people" / "identities.json"
 
 # Addness KPIデータソース（【アドネス全体】数値管理シート）
 ADDNESS_KPI_SHEET_ID = "1FOh_XGZWaEisfFEngiN848kSm2E6HotAZiMDTmO7BNA"
@@ -35,9 +35,9 @@ _ADDNESS_KEYWORDS = frozenset({
     "数値", "実績", "着金", "LTV", "広告費", "目標", "コスト", "リスト",
     "件数", "CVR", "転換", "成約", "歩留", "ファネル", "媒体",
 })
-SELF_IDENTITY_MD = _PROJECT_ROOT / "Master" / "self_clone" / "projects" / "kohara" / "1_Core" / "IDENTITY.md"
-SELF_PROFILE_MD = _PROJECT_ROOT / "Master" / "self_clone" / "projects" / "kohara" / "1_Core" / "SELF_PROFILE.md"
-FEEDBACK_FILE = _PROJECT_ROOT / "Master" / "reply_feedback.json"  # フィードバック学習データ
+SELF_IDENTITY_MD = _PROJECT_ROOT / "Master" / "self_clone" / "kohara" / "IDENTITY.md"
+SELF_PROFILE_MD = _PROJECT_ROOT / "Master" / "self_clone" / "kohara" / "SELF_PROFILE.md"
+FEEDBACK_FILE = _PROJECT_ROOT / "Master" / "learning" / "reply_feedback.json"
 
 
 def _load_self_identity() -> str:
@@ -533,52 +533,108 @@ def is_addness_related(profile: dict, message: str, group_name: str = "") -> boo
 
 def fetch_addness_kpi() -> str:
     """【アドネス全体】数値管理シートからKPIデータを取得。
-    月別サマリ + 直近7日の日別データを構造化テキストで返す。"""
-    sheets_manager_path = _SYSTEM_DIR / "sheets_manager.py"
-    if not sheets_manager_path.exists():
-        return ""
-
-    def _read_tab(tab_name):
-        cmd = [sys.executable, str(sheets_manager_path), "read",
-               ADDNESS_KPI_SHEET_ID, tab_name]
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=30, encoding="utf-8"
-        )
-        if result.returncode != 0 or not result.stdout.strip():
-            return []
-        # "  行N: ['col1', 'col2', ...]" 形式をパース
-        rows = []
-        for line in result.stdout.strip().split("\n"):
-            if "行" not in line or "[" not in line:
-                continue
-            try:
-                list_str = line[line.index("["):]
-                row = json.loads(list_str.replace("'", '"'))
-                rows.append(row)
-            except (json.JSONDecodeError, ValueError):
-                continue
-        return rows
+    ハイブリッド方式: キャッシュ優先 → Sheets APIフォールバック → staleキャッシュ最終手段。"""
+    KPI_CACHE_PATH = _SYSTEM_DIR / "kpi_summary.json"
+    CACHE_MAX_AGE_HOURS = 24
 
     def fmt(v):
         try:
-            n = int(str(v).replace(",", ""))
+            n = int(float(str(v).replace(",", "")))
             return f"{n:,}"
         except (ValueError, TypeError):
             return str(v)
 
-    try:
+    def _format_from_cache(cache: dict) -> str:
+        """キャッシュJSONからフォーマット済みテキストを生成"""
         parts = ["📊 スキルプラス KPI"]
 
-        # 月別データ
+        # 月別サマリ
+        for m in cache.get("monthly", []):
+            parts.append(
+                f"━━ {m['month']} ━━\n"
+                f"集客数: {fmt(m['集客数'])} / 個別予約数: {fmt(m['個別予約数'])} / 実施数: {fmt(m['実施数'])}\n"
+                f"売上: ¥{fmt(m['売上'])} / 広告費: ¥{fmt(m['広告費'])}\n"
+                f"CPA: ¥{fmt(m['CPA'])} / CPO: ¥{fmt(m['CPO'])} / ROAS: {m['ROAS']}%\n"
+                f"LTV: ¥{fmt(m['LTV'])} / 粗利: ¥{fmt(m['粗利'])}"
+            )
+
+        # 月別×媒体 内訳（直近3ヶ月分）
+        mbm = cache.get("monthly_by_media", {})
+        recent_months = sorted(mbm.keys(), reverse=True)[:3]
+        if recent_months:
+            parts.append("━━ 媒体別内訳（直近3ヶ月） ━━")
+            for mk in sorted(recent_months):
+                parts.append(f"【{mk}】")
+                for media, vals in sorted(mbm[mk].items(), key=lambda x: -x[1].get("広告費", 0)):
+                    if vals.get("広告費", 0) == 0 and vals.get("集客数", 0) == 0:
+                        continue
+                    roas = vals.get("ROAS", 0)
+                    parts.append(
+                        f"  {media}: 集客{fmt(vals['集客数'])} / "
+                        f"売上¥{fmt(vals['売上'])} / 広告費¥{fmt(vals['広告費'])} / ROAS {roas}%"
+                    )
+
+        # 直近日別合計
+        recent = cache.get("recent_daily", [])[:7]
+        if recent:
+            parts.append("━━ 直近日別合計 ━━")
+            for d in recent:
+                parts.append(
+                    f"  {d['date']}: 集客{fmt(d['集客数'])} / 予約{fmt(d['個別予約数'])} / "
+                    f"売上¥{fmt(d['売上'])} / 広告費¥{fmt(d['広告費'])} / ROAS {d['ROAS']}%"
+                )
+
+        updated = cache.get("updated_at", "不明")
+        parts.append(f"（データ更新: {updated}）")
+        return "\n".join(parts) if len(parts) > 2 else ""
+
+    def _read_cache():
+        """キャッシュ読み込み。(cache_dict, is_fresh) を返す"""
+        if not KPI_CACHE_PATH.exists():
+            return None, False
+        try:
+            cache = json.loads(KPI_CACHE_PATH.read_text(encoding="utf-8"))
+            updated = datetime.fromisoformat(cache.get("updated_at", "2000-01-01"))
+            age_hours = (datetime.now() - updated).total_seconds() / 3600
+            return cache, age_hours < CACHE_MAX_AGE_HOURS
+        except Exception:
+            return None, False
+
+    def _fetch_from_api() -> str:
+        """従来のSheets API経由で取得（フォールバック用）"""
+        sheets_manager_path = _SYSTEM_DIR / "sheets_manager.py"
+        if not sheets_manager_path.exists():
+            return ""
+
+        def _read_tab(tab_name):
+            cmd = [sys.executable, str(sheets_manager_path), "read",
+                   ADDNESS_KPI_SHEET_ID, tab_name]
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=30, encoding="utf-8"
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return []
+            rows = []
+            for line in result.stdout.strip().split("\n"):
+                if "行" not in line or "[" not in line:
+                    continue
+                try:
+                    list_str = line[line.index("["):]
+                    row = json.loads(list_str.replace("'", '"'))
+                    rows.append(row)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+            return rows
+
+        parts = ["📊 スキルプラス KPI"]
+
         monthly_rows = _read_tab(ADDNESS_KPI_MONTHLY_TAB)
-        # ヘッダー行（"月"で始まる）以降のデータ行を取得
         header_found = False
         for row in monthly_rows:
             if row and row[0] == "月":
                 header_found = True
                 continue
             if header_found and row and row[0]:
-                # row: [月, 集客数, 個別予約数, 実施数, 売上, 広告費, CPA, CPO, ROAS, LTV, 粗利]
                 parts.append(
                     f"━━ {row[0]} ━━\n"
                     f"集客数: {fmt(row[1])} / 個別予約数: {fmt(row[2])} / 実施数: {fmt(row[3])}\n"
@@ -587,11 +643,10 @@ def fetch_addness_kpi() -> str:
                     f"LTV: ¥{fmt(row[9])} / 粗利: ¥{fmt(row[10])}"
                 )
 
-        # 日別データ（媒体×ファネル別の全行から日別合計を算出）
         daily_rows = _read_tab(ADDNESS_KPI_DAILY_TAB)
         header_found = False
         col_map = {}
-        daily_totals = {}  # {日付: {集客数, 売上, ...}}
+        daily_totals = {}
         for row in daily_rows:
             if row and row[0] == "日付":
                 header_found = True
@@ -610,7 +665,6 @@ def fetch_addness_kpi() -> str:
                         except ValueError:
                             pass
 
-        # 直近7日を降順で表示
         sorted_dates = sorted(daily_totals.keys(), reverse=True)[:7]
         if sorted_dates:
             parts.append("━━ 直近日別合計 ━━")
@@ -626,10 +680,39 @@ def fetch_addness_kpi() -> str:
 
         return "\n".join(parts) if len(parts) > 1 else ""
 
-    except subprocess.TimeoutExpired:
-        print("   ⚠️ Addness KPIデータ取得タイムアウト")
+    # ── ハイブリッド取得ロジック ──
+    try:
+        # 1. キャッシュ確認
+        cache, is_fresh = _read_cache()
+        if cache and is_fresh:
+            result = _format_from_cache(cache)
+            if result:
+                print("   📊 KPIキャッシュから取得（fresh）")
+                return result
+
+        # 2. キャッシュなし or stale → Sheets API フォールバック
+        print("   📊 KPIキャッシュなし/期限切れ → Sheets API取得中...")
+        api_result = _fetch_from_api()
+        if api_result:
+            print("   📊 Sheets APIから取得成功")
+            return api_result
+
+        # 3. API失敗 → staleキャッシュを最終手段として使用
+        if cache:
+            result = _format_from_cache(cache)
+            if result:
+                print("   📊 staleキャッシュから取得（APIフォールバック）")
+                return result
+
     except Exception as e:
         print(f"   ⚠️ Addness KPIデータ取得エラー: {e}")
+        # 最終手段: エラー時もstaleキャッシュを試行
+        try:
+            cache, _ = _read_cache()
+            if cache:
+                return _format_from_cache(cache)
+        except Exception:
+            pass
 
     return ""
 
@@ -812,8 +895,14 @@ def call_claude_api(instruction: str, task: dict):
                         sheet_section = f"\n【関連データ】\n{sheet_data}\n"
                         print(f"   📊 シートデータ取得完了: {len(sheet_data)}文字")
 
-            # Addness KPIデータを取得（アドネス関連の会話の場合）
-            if is_addness_related(profile or {}, original_message, group_name):
+            # Addness KPIデータを取得（アドネス関連の会話 & 内部メンバーのみ）
+            # ルール: 外部パートナー・プロファイル未登録者には事業KPIを開示しない
+            _sender_category = (profile or {}).get("category", "")
+            _KPI_ALLOWED_CATEGORIES = {"本人", "上司", "直下メンバー", "横（並列）"}
+            _kpi_allowed = _sender_category in _KPI_ALLOWED_CATEGORIES
+            if not _kpi_allowed and is_addness_related(profile or {}, original_message, group_name):
+                print(f"   🔒 KPIデータ非開示（category={_sender_category or '未登録'}, sender={sender_name}）")
+            elif _kpi_allowed and is_addness_related(profile or {}, original_message, group_name):
                 kpi_data = fetch_addness_kpi()
                 if kpi_data:
                     kpi_section = f"\n【Addness事業KPI（月別実績）】\n{kpi_data}\n"
@@ -918,7 +1007,7 @@ def call_claude_api(instruction: str, task: dict):
             # ブランドコンテキストを読み込む（SELF_PROFILE.md）
             brand_context = ""
             try:
-                profile_path = _PROJECT_ROOT / "Master" / "self_clone" / "projects" / "kohara" / "1_Core" / "SELF_PROFILE.md"
+                profile_path = _PROJECT_ROOT / "Master" / "self_clone" / "kohara" / "SELF_PROFILE.md"
                 if profile_path.exists():
                     brand_context = profile_path.read_text(encoding="utf-8")[:800]
             except Exception:
@@ -963,7 +1052,7 @@ def call_claude_api(instruction: str, task: dict):
             # ブランドコンテキスト
             brand_context = ""
             try:
-                profile_path = _PROJECT_ROOT / "Master" / "self_clone" / "projects" / "kohara" / "1_Core" / "SELF_PROFILE.md"
+                profile_path = _PROJECT_ROOT / "Master" / "self_clone" / "kohara" / "SELF_PROFILE.md"
                 if profile_path.exists():
                     brand_context = profile_path.read_text(encoding="utf-8")[:500]
             except Exception:
@@ -1148,7 +1237,7 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
                 if r.returncode != 0:
                     return False, f"Addness同期エラー: {r.stderr.strip()[:300]}"
                 # actionable-tasks.md の先頭要約を返す
-                actionable_path = _PROJECT_ROOT / "Master" / "actionable-tasks.md"
+                actionable_path = _PROJECT_ROOT / "Master" / "addness" / "actionable-tasks.md"
                 summary = ""
                 if actionable_path.exists():
                     lines = actionable_path.read_text(encoding="utf-8").splitlines()
@@ -1186,12 +1275,42 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
             except Exception as e:
                 return False, f"メール確認実行エラー: {str(e)}"
 
+        # ===== KPI分析タスク（「広告数値の評価」「ROAS教えて」等） =====
+        if function_name == "kpi_query":
+            question = arguments.get("question", instruction)
+            kpi_data = fetch_addness_kpi()
+            if not kpi_data:
+                return True, "📊 KPIデータを取得できませんでした。キャッシュの更新待ち、またはSheets APIへの接続に問題がある可能性があります。"
+
+            today_str = datetime.now().strftime("%Y/%m/%d (%A)")
+            kpi_prompt = f"""あなたは甲原海人のAI秘書で、スキルプラス事業の広告運用データに精通しています。
+今日の日付: {today_str}
+
+以下のKPIデータをもとに、「{question}」に答えてください。
+
+{kpi_data}
+
+【回答ルール】
+- データに基づく具体的な数値を必ず引用する
+- 前月比・トレンド（改善/悪化）を指摘する
+- 問題がある指標には改善の方向性を示す
+- 600文字以内、LINEで読みやすい形式
+- 媒体別の比較がある場合はそれにも言及する
+"""
+            response = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=800,
+                system="あなたは広告運用の専門家としてKPIデータを分析し、簡潔で実用的な回答をするAI秘書です。",
+                messages=[{"role": "user", "content": kpi_prompt}]
+            )
+            return True, response.content[0].text.strip()
+
         # ===== コンテキスト分析タスク（「次に何すべき？」等） =====
         if function_name == "context_query":
             question = arguments.get("question", instruction)
 
             # actionable-tasks.md を読み込む
-            actionable_path = _PROJECT_ROOT / "Master" / "actionable-tasks.md"
+            actionable_path = _PROJECT_ROOT / "Master" / "addness" / "actionable-tasks.md"
             actionable_content = ""
             if actionable_path.exists():
                 try:
@@ -1214,6 +1333,16 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
             except Exception:
                 pass
 
+            # KPIサマリ（数値系の質問にも対応できるよう軽量に含める）
+            kpi_summary_text = ""
+            try:
+                kpi_data = fetch_addness_kpi()
+                if kpi_data:
+                    kpi_lines = kpi_data.split("\n")[:15]
+                    kpi_summary_text = f"\n【広告KPIサマリ】\n" + "\n".join(kpi_lines)
+            except Exception:
+                pass
+
             # 日時
             today_str = datetime.now().strftime("%Y/%m/%d (%A)")
 
@@ -1225,6 +1354,7 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
 【Addnessゴール・タスク状況】
 {actionable_content or '（データなし）'}
 {mail_status_text}
+{kpi_summary_text}
 
 【回答ルール】
 - 今すぐやるべきことを優先度順に3〜5件リスト
