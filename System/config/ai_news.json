@@ -1,0 +1,27 @@
+{
+  "_comment": "AI News Notifier 設定ファイル（Google News RSS版）",
+  
+  "openai_api_key": "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",
+  "openai_model": "gpt-4o",
+  
+  "slack_webhook_url": "https://hooks.slack.com/services/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",
+  "slack_channel": "#ai関連記事まとめ",
+  
+  "search_keywords": [
+    "OpenAI",
+    "Anthropic Claude",
+    "Google Gemini",
+    "ChatGPT",
+    "AI artificial intelligence",
+    "Sam Altman",
+    "Elon Musk AI",
+    "Dario Amodei",
+    "Sundar Pichai AI",
+    "AI Twitter announcement",
+    "AI X post"
+  ],
+  
+  "max_articles": 20,
+  
+  "notify_on_error": true
+}

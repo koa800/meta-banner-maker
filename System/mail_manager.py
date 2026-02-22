@@ -39,16 +39,17 @@ from googleapiclient.discovery import build
 logger = logging.getLogger("mail_manager")
 
 BASE_DIR = Path(__file__).resolve().parent
+CREDENTIALS_DIR = BASE_DIR / "credentials"
 
 ACCOUNTS = {
-    "personal": BASE_DIR / "token_gmail_personal.json",
-    "kohara": BASE_DIR / "token_gmail.json",
-    "gwsadmin": BASE_DIR / "token_gmail_gwsadmin.json",
+    "personal": CREDENTIALS_DIR / "token_gmail_personal.json",
+    "kohara": CREDENTIALS_DIR / "token_gmail.json",
+    "gwsadmin": CREDENTIALS_DIR / "token_gmail_gwsadmin.json",
 }
 CLIENT_SECRETS = {
-    "personal": BASE_DIR / "client_secret_personal.json",
-    "kohara": BASE_DIR / "client_secret.json",
-    "gwsadmin": BASE_DIR / "client_secret.json",
+    "personal": CREDENTIALS_DIR / "client_secret_personal.json",
+    "kohara": CREDENTIALS_DIR / "client_secret.json",
+    "gwsadmin": CREDENTIALS_DIR / "client_secret.json",
 }
 DEFAULT_ACCOUNT = "personal"
 

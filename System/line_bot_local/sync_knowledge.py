@@ -41,7 +41,7 @@ def get_docs_service():
         from google.oauth2.credentials import Credentials
         from googleapiclient.discovery import build
         
-        token_file = Path(__file__).parent.parent / "token.json"
+        token_file = Path(__file__).parent.parent / "credentials" / "token.json"
         if not token_file.exists():
             print("⚠️ token.json が見つかりません")
             return None

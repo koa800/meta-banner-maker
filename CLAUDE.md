@@ -34,14 +34,29 @@
 
 ```
 cursor/
-├── Project/          # プロジェクトドキュメント（常に最新を維持）
-├── Master/           # 知識ベース（people/, addness/, self_clone/, learning/, sheets/）
-├── System/           # 実装ファイル
-│   ├── line_bot/     # Render (Flask) サーバー（サブモジュール）
-│   ├── line_bot_local/ # PC常駐エージェント
-│   └── mac_mini/     # Mac Mini Orchestrator（スケジューラ・ツール群）
-└── Skills/           # ナレッジ・スキル定義
+├── Project/              # プロジェクトドキュメント（常に最新を維持）
+├── Master/               # 知識ベース（people/, addness/, self_clone/, learning/, sheets/）
+├── System/               # 実装ファイル
+│   ├── credentials/      # OAuth トークン・クライアントシークレット（.gitignore）
+│   ├── config/           # アプリ固有設定 JSON（.gitignore 対象あり）
+│   ├── data/             # ランタイムデータ・キャッシュ（.gitignore）
+│   ├── line_bot/         # Render (Flask) サーバー（git サブモジュール）
+│   ├── line_bot_local/   # PC常駐エージェント
+│   ├── addness_mcp_server/ # Addness MCP サーバー（git サブモジュール）
+│   └── mac_mini/         # Mac Mini Orchestrator（スケジューラ・ツール群）
+│       └── monitoring/   # 外部死活監視（MacBook → Mac Mini）
+└── Skills/               # ナレッジ・スキル定義
 ```
+
+### System/ 内のパス規約
+
+| ディレクトリ | 内容 | Git 管理 |
+|---|---|---|
+| `credentials/` | `client_secret*.json`, `token*.json` | **除外** |
+| `config/` | `addness.json`, `sns_analyzer.json`, `ai_news.json` | **一部除外** |
+| `data/` | `kpi_summary.json`, `addness_session.json` | **除外** |
+
+Python スクリプトからのパス解決は `Path(__file__).resolve().parent` を起点にする。
 
 ## コミットルール
 

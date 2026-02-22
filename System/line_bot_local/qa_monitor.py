@@ -122,7 +122,7 @@ def get_sheets_service():
     if not GOOGLE_API_AVAILABLE:
         return None
     
-    token_file = Path(__file__).parent.parent / "token.json"
+    token_file = Path(__file__).parent.parent / "credentials" / "token.json"
     
     if not token_file.exists():
         return None

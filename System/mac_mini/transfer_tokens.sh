@@ -33,15 +33,15 @@ echo "転送先: $MAC_MINI:~/$DST_DIR"
 echo ""
 
 FILES_TO_TRANSFER=(
-    "client_secret_personal.json"
-    "addness_config.json"
-    "addness_session.json"
+    "credentials/client_secret_personal.json"
+    "config/addness.json"
+    "data/addness_session.json"
     "line_bot_local/config.json"
 )
 
-# token*.json と *_config.json を動的に収集
-for f in "$SRC_DIR"/token*.json; do
-    [ -f "$f" ] && FILES_TO_TRANSFER+=("$(basename "$f")")
+# credentials/token*.json を動的に収集
+for f in "$SRC_DIR"/credentials/token*.json; do
+    [ -f "$f" ] && FILES_TO_TRANSFER+=("credentials/$(basename "$f")")
 done
 
 echo "転送するファイル:"
@@ -119,5 +119,6 @@ echo "========================================"
 echo ""
 echo "Mac Mini側で確認:"
 echo "  ssh $MAC_MINI"
-echo "  ls -la ~/$DST_DIR/token*.json"
-echo "  ls -la ~/$DST_DIR/addness_config.json"
+echo "  ls -la ~/$DST_DIR/credentials/"
+echo "  ls -la ~/$DST_DIR/config/"
+echo "  ls -la ~/$DST_DIR/data/"

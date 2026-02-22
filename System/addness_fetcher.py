@@ -21,8 +21,8 @@ logger = logging.getLogger("addness_fetcher")
 
 # ---- パス設定 ----
 SCRIPT_DIR = Path(__file__).parent
-CONFIG_PATH = SCRIPT_DIR / "addness_config.json"
-SESSION_PATH = SCRIPT_DIR / "addness_session.json"
+CONFIG_PATH = SCRIPT_DIR / "config" / "addness.json"
+SESSION_PATH = SCRIPT_DIR / "data" / "addness_session.json"
 
 # ---- デフォルト設定 ----
 DEFAULT_CONFIG = {

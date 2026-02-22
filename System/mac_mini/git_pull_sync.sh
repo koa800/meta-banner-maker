@@ -184,7 +184,8 @@ rsync -a --delete \
   --exclude "line_bot_local/" \
   --exclude "*.log" \
   --exclude "*.db" \
-  --exclude "addness_session.json" \
+  --exclude "data/" \
+  --exclude "credentials/" \
   "$REPO_DIR/System/" "$DEPLOY_DIR/System/" \
   && log "System/ OK" || log "ERROR: System/ rsync 失敗"
 

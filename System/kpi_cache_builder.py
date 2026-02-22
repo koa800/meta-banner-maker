@@ -32,7 +32,7 @@ DAILY_CSV = SHEETS_DIR / KPI_SHEET_ID / "スキルプラス（日別）.csv"
 MONTHLY_CSV = SHEETS_DIR / KPI_SHEET_ID / "スキルプラス（月別）.csv"
 REPORT_CSV = SHEETS_DIR / REPORT_SHEET_ID / "日報.csv"
 
-DEFAULT_OUTPUT = SCRIPT_DIR / "kpi_summary.json"
+DEFAULT_OUTPUT = SCRIPT_DIR / "data" / "kpi_summary.json"
 
 
 def _parse_num(val: str) -> float:

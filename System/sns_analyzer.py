@@ -34,7 +34,7 @@ import requests
 # Paths & logging
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = Path(__file__).parent
-CONFIG_FILE = SCRIPT_DIR / "sns_analyzer_config.json"
+CONFIG_FILE = SCRIPT_DIR / "config" / "sns_analyzer.json"
 CACHE_DIR = SCRIPT_DIR / "sns_analyzer_cache"
 
 logging.basicConfig(

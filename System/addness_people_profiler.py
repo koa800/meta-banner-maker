@@ -6,7 +6,7 @@ Addness 人物プロファイル生成スクリプト
   1. 甲原海人のゴールサブツリー以下の全担当者（深さ無制限）
   2. 甲原海人と同じ親ゴールを持つ並列担当者（横の人たち）
   3. 上司（ルートゴール保持者: 三上功太）
-  4. addness_config.json の manual_people に手動登録した人
+  4. config/addness.json の manual_people に手動登録した人
 
 出力:
   Master/people/profiles.json  → 構造化データ（スナップショット蓄積）
@@ -31,7 +31,7 @@ import anthropic
 SCRIPT_DIR = Path(__file__).parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 DATA_PATH = SCRIPT_DIR / "addness_data" / "latest.json"
-CONFIG_PATH = SCRIPT_DIR / "addness_config.json"
+CONFIG_PATH = SCRIPT_DIR / "config" / "addness.json"
 PROFILES_JSON = PROJECT_ROOT / "Master" / "people" / "profiles.json"
 PROFILES_MD = PROJECT_ROOT / "Master" / "people" / "profiles.md"
 IDENTITIES_JSON = PROJECT_ROOT / "Master" / "people" / "identities.json"

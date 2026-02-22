@@ -26,7 +26,7 @@ import requests
 # ---- パス設定 ----
 SCRIPT_DIR = Path(__file__).parent
 PROJECT_ROOT = SCRIPT_DIR.parent
-CONFIG_PATH = SCRIPT_DIR / "addness_config.json"
+CONFIG_PATH = SCRIPT_DIR / "config" / "addness.json"
 DATA_PATH = SCRIPT_DIR / "addness_data" / "latest.json"
 CURSOR_RULES_DIR = PROJECT_ROOT / ".cursor" / "rules"
 MASTER_DIR = PROJECT_ROOT / "Master" / "addness"

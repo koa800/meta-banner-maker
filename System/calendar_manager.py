@@ -32,12 +32,13 @@ from datetime import datetime, timedelta
 logger = logging.getLogger("calendar_manager")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CLIENT_SECRET_PATH = os.path.join(BASE_DIR, "client_secret.json")
+CREDENTIALS_DIR = os.path.join(BASE_DIR, "credentials")
+CLIENT_SECRET_PATH = os.path.join(CREDENTIALS_DIR, "client_secret.json")
 
 ACCOUNTS = {
-    "kohara": os.path.join(BASE_DIR, "token_calendar.json"),
-    "gwsadmin": os.path.join(BASE_DIR, "token_calendar_gwsadmin.json"),
-    "personal": os.path.join(BASE_DIR, "token_calendar_personal.json"),
+    "kohara": os.path.join(CREDENTIALS_DIR, "token_calendar.json"),
+    "gwsadmin": os.path.join(CREDENTIALS_DIR, "token_calendar_gwsadmin.json"),
+    "personal": os.path.join(CREDENTIALS_DIR, "token_calendar_personal.json"),
 }
 DEFAULT_ACCOUNT = "personal"
 

@@ -3,12 +3,11 @@ __pycache__/
 .DS_Store
 *.png
 .cursor/
-client_secret.json
-client_secret_personal.json
-token.json
-token_*.json
+System/credentials/
 vidu_config.json
 ai_news_config.json
+System/config/addness.json
+System/config/sns_analyzer.json
 System/line_bot_local/config.json
 System/line_bot_local/logs/
 System/line_bot_local/qa_monitor_state.json
@@ -25,12 +24,16 @@ System/mail_inbox_data/
 System/csv_sheet_sync_notified.json
 System/addness_data/
 System/addness_chrome_profile/
-System/addness_session.json
+System/data/
 System/addness_mcp_server/.venv/
 System/looker_browser_profile/
 System/looker_debug/
 System/qa_sync/
 System/mac_mini/agent_orchestrator/logs/
 System/mac_mini/agent_orchestrator/*.db
-System/sns_analyzer_config.json
+System/mac_mini/monitoring/watchdog_state.json
+System/mac_mini/monitoring/*.log
 System/sns_analyzer_cache/
+
+# 再生成可能なキャッシュデータ
+Master/sheets/

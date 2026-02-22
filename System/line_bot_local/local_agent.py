@@ -18,8 +18,11 @@ from pathlib import Path
 
 # ---- プロファイルパス ----
 _AGENT_DIR = Path(__file__).parent
+# Desktop: System/line_bot_local/ → parent.parent = cursor/
+# Mac Mini: line_bot_local/ → parent = agents/  (line_bot_local は agents/ 直下にデプロイ)
 _PROJECT_ROOT = _AGENT_DIR.parent.parent
-# System/ ディレクトリを動的に解決（Desktop: parent.parent, Mac Mini: parent.parent/System/）
+if not (_PROJECT_ROOT / "Master").is_dir():
+    _PROJECT_ROOT = _AGENT_DIR.parent
 _SYSTEM_DIR = _AGENT_DIR.parent
 if not (_SYSTEM_DIR / "mail_manager.py").exists():
     _SYSTEM_DIR = _SYSTEM_DIR / "System"
@@ -78,6 +81,7 @@ def save_feedback_example(fb: dict):
     examples = load_feedback_examples()
     examples.append(fb)
     examples = examples[-50:]
+    FEEDBACK_FILE.parent.mkdir(parents=True, exist_ok=True)
     FEEDBACK_FILE.write_text(
         json.dumps(examples, ensure_ascii=False, indent=2),
         encoding="utf-8"
@@ -534,7 +538,7 @@ def is_addness_related(profile: dict, message: str, group_name: str = "") -> boo
 def fetch_addness_kpi() -> str:
     """【アドネス全体】数値管理シートからKPIデータを取得。
     ハイブリッド方式: キャッシュ優先 → Sheets APIフォールバック → staleキャッシュ最終手段。"""
-    KPI_CACHE_PATH = _SYSTEM_DIR / "kpi_summary.json"
+    KPI_CACHE_PATH = _SYSTEM_DIR / "data" / "kpi_summary.json"
     CACHE_MAX_AGE_HOURS = 24
 
     def fmt(v):

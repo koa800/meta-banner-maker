@@ -44,7 +44,7 @@ DAILY_SHEET_NAME = "スキルプラス（日別）"
 MONTHLY_SHEET_NAME = "スキルプラス（月別）"
 
 # KPIサマリーキャッシュ
-KPI_CACHE_PATH = os.path.join(BASE_DIR, "kpi_summary.json")
+KPI_CACHE_PATH = os.path.join(BASE_DIR, "data", "kpi_summary.json")
 ACCOUNT = "kohara"
 BASE_CSV_NAME = "アドネス全体数値_媒体・ファネル別データ_表"
 

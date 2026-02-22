@@ -24,12 +24,13 @@ logger = logging.getLogger("sheets_manager")
 
 # 認証ファイルパス
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CLIENT_SECRET_PATH = os.path.join(BASE_DIR, "client_secret.json")
+CREDENTIALS_DIR = os.path.join(BASE_DIR, "credentials")
+CLIENT_SECRET_PATH = os.path.join(CREDENTIALS_DIR, "client_secret.json")
 
 # アカウント別トークンファイル
 ACCOUNTS = {
-    "kohara": os.path.join(BASE_DIR, "token.json"),
-    "gwsadmin": os.path.join(BASE_DIR, "token_gwsadmin.json"),
+    "kohara": os.path.join(CREDENTIALS_DIR, "token.json"),
+    "gwsadmin": os.path.join(CREDENTIALS_DIR, "token_gwsadmin.json"),
 }
 DEFAULT_ACCOUNT = "kohara"
 

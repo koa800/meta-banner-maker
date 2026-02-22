@@ -1,0 +1,7 @@
+[submodule "System/line_bot"]
+	path = System/line_bot
+	url = https://github.com/koa800/line-mention-bot.git
+
+[submodule "System/addness_mcp_server"]
+	path = System/addness_mcp_server
+	url = https://github.com/koa800/addness-mcp-server.git
