@@ -67,6 +67,9 @@ schedule:
   daily_group_digest:
     cron: "0 21 * * *"           # 毎日 夜9:00（グループLINEダイジェスト）
     enabled: true
+  weekly_profile_learning:
+    cron: "0 10 * * 0"           # 毎週日曜 朝10:00（グループログ→プロファイル学習）
+    enabled: true
 
 webhook:
   host: "0.0.0.0"

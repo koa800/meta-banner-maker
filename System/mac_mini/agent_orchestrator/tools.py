@@ -294,6 +294,56 @@ def fetch_group_log(date: str = None) -> ToolResult:
         return ToolResult(success=False, output="", error=str(e))
 
 
+# --------------- People Profiles ---------------
+
+def update_people_profiles(person_name: str, group_insights: dict) -> ToolResult:
+    """profiles.json の指定人物に group_insights を書き込む（既存フィールドには一切触れない）"""
+    import json as _json
+    import tempfile
+
+    master_dir = os.path.expanduser(
+        os.environ.get("MASTER_DIR", "~/agents/Master")
+    )
+    profiles_path = os.path.join(master_dir, "people", "profiles.json")
+
+    if not os.path.exists(profiles_path):
+        return ToolResult(success=False, output="", error=f"profiles.json not found: {profiles_path}")
+
+    try:
+        with open(profiles_path, "r", encoding="utf-8") as f:
+            profiles = _json.load(f)
+    except Exception as e:
+        return ToolResult(success=False, output="", error=f"Failed to read profiles.json: {e}")
+
+    if person_name not in profiles:
+        return ToolResult(success=False, output="", error=f"Person not found: {person_name}")
+
+    # latest.group_insights を上書き
+    entry = profiles[person_name]
+    if "latest" in entry:
+        entry["latest"]["group_insights"] = group_insights
+    else:
+        entry["group_insights"] = group_insights
+
+    # アトミック書き込み
+    try:
+        dir_name = os.path.dirname(profiles_path)
+        fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                _json.dump(profiles, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, profiles_path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+        return ToolResult(success=True, output=f"Updated group_insights for {person_name}")
+    except Exception as e:
+        return ToolResult(success=False, output="", error=f"Failed to write profiles.json: {e}")
+
+
 TOOL_REGISTRY = {
     "mail_run": {"fn": mail_run, "description": "受信メールの処理・自動返信下書き作成"},
     "mail_status": {"fn": mail_status, "description": "メール処理のステータス確認"},
@@ -313,4 +363,5 @@ TOOL_REGISTRY = {
     "kpi_check_today": {"fn": kpi_check_today, "description": "2日前のKPIデータ完了チェック"},
     "git_pull_sync": {"fn": git_pull_sync, "description": "GitHubからpull→ローカルデプロイ"},
     "fetch_group_log": {"fn": fetch_group_log, "description": "Renderサーバーから日次グループログを取得"},
+    "update_people_profiles": {"fn": update_people_profiles, "description": "人物プロファイルにグループインサイトを書き込み"},
 }

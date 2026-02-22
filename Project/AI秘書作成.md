@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月23日（グループLINE監視+日次ダイジェスト機能追加） |
+| 最終更新 | 2026年2月23日（グループログアーカイブ+週次プロファイル学習追加） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -208,11 +208,26 @@
 ### 知識ベース（Master/）
 | パス | 説明 |
 |------|------|
-| `Master/people/profiles.json` | 54名のプロファイル（comm_profile含む） |
+| `Master/people/profiles.json` | 54名のプロファイル（comm_profile + group_insights含む） |
 | `Master/people/identities.json` | 人物識別データ |
 | `Master/learning/reply_feedback.json` | フィードバック学習データ（修正例・スタイルノート） |
 | `Master/self_clone/kohara/IDENTITY.md` | 甲原海人の言語スタイル定義 |
 | `Master/self_clone/kohara/SELF_PROFILE.md` | 甲原海人のコアプロファイル |
+
+#### `group_insights` スキーマ（profiles.json内）
+
+週次プロファイル学習（`weekly_profile_learning`）により、各人物の `latest.group_insights` に以下が書き込まれる:
+
+| フィールド | 型 | 説明 |
+|-----------|-----|------|
+| `updated_at` | string | 最終更新日（YYYY-MM-DD） |
+| `message_count_7d` | int | 過去7日間のメッセージ数 |
+| `active_groups` | string[] | 発言のあったグループ名（最大5件） |
+| `communication_style` | string | コミュニケーションスタイル（1文） |
+| `recent_topics` | string[] | 最近の関心トピック（3〜5個） |
+| `collaboration_patterns` | string | 誰とどんなやり取りが多いか（1文） |
+| `personality_notes` | string | 性格・行動特性（1文） |
+| `activity_level` | string | `high` / `medium` / `low` |
 
 ---
 
@@ -329,6 +344,7 @@ bash System/line_bot_local/sync_data.sh
 | `sheets_sync` | 毎朝 6:30 | Master/sheets/ の管理シートCSVキャッシュを最新化（README.md同期ステータス更新） |
 | `git_pull_sync` | 5分ごと | GitHubからpull→ローカルrsyncでデプロイ→変更ファイルに応じてサービス再起動→LINE通知 |
 | `daily_group_digest` | 毎夜 21:00 | Renderからグループログ取得→Claude Haiku分析→秘書グループにダイジェスト通知 |
+| `weekly_profile_learning` | 毎週日曜 10:00 | 過去7日間のグループログから各メンバーの会話を分析→profiles.jsonに`group_insights`として書き込み |
 
 ### Orchestrator API エンドポイント（port 8500）
 
@@ -476,6 +492,7 @@ MacBook (どこからでも)
 - [x] Slack Webhook URL外部化（addness_config.json/run_addness_pipeline.shから環境変数に移動。GitHub Push Protection対応）
 - [x] 管理シート自動同期（`sheets_sync.py`。Master/sheets/README.md登録シートのCSVキャッシュを毎朝6:30に自動更新。Orchestrator統合済み）
 - [x] グループLINE監視+日次ダイジェスト（全グループメッセージを永続ログに蓄積→毎夜21:00にClaude Haiku分析→グループ別要約・活動度・アクション事項を秘書グループに通知。`/api/group-log` APIでログ取得可能）
+- [x] グループログ30日アーカイブ＋週次プロファイル学習（日次ログを`{DATA_DIR}/group_logs/{YYYY-MM-DD}.json`に自動アーカイブ（30日保持）。毎週日曜10:00にClaude Haikuが過去7日間の会話を人物ごとに分析→`profiles.json`の`group_insights`フィールドに書き込み）
 
 ---
 

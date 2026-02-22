@@ -50,6 +50,7 @@ class TaskScheduler:
             "sheets_sync": self._run_sheets_sync,
             "git_pull_sync": self._run_git_pull_sync,
             "daily_group_digest": self._run_daily_group_digest,
+            "weekly_profile_learning": self._run_weekly_profile_learning,
         }
 
     def setup(self):
@@ -1055,6 +1056,184 @@ class TaskScheduler:
             logger.info(f"daily_group_digest sent: {total_messages} messages across {len(groups)} groups")
         else:
             logger.warning("daily_group_digest: LINE notification failed")
+
+    async def _run_weekly_profile_learning(self):
+        """毎週日曜10:00: 過去7日間のグループログからメンバーの会話を分析→profiles.jsonに書き込み"""
+        import json as _json
+        import anthropic as _anthropic
+        from .notifier import send_line_notify
+        from datetime import date, timedelta
+
+        task_id = self.memory.log_task_start("weekly_profile_learning")
+        today = date.today()
+
+        # 1. 過去7日間のログを日別取得
+        all_messages_by_person = {}  # {person_name: [{"group": ..., "text": ..., "ts": ...}, ...]}
+        groups_seen = set()
+        for i in range(7):
+            target_date = (today - timedelta(days=i)).isoformat()
+            result = tools.fetch_group_log(date=target_date)
+            if not result.success or not result.output:
+                continue
+            try:
+                data = _json.loads(result.output)
+            except _json.JSONDecodeError:
+                continue
+            for gid, ginfo in data.get("groups", {}).items():
+                gname = ginfo.get("group_name") or gid[-8:]
+                groups_seen.add(gname)
+                for msg in ginfo.get("messages", []):
+                    uname = msg.get("user_name", "")
+                    if not uname:
+                        continue
+                    all_messages_by_person.setdefault(uname, []).append({
+                        "group": gname,
+                        "text": msg.get("text", ""),
+                        "ts": msg.get("timestamp", ""),
+                    })
+
+        if not all_messages_by_person:
+            self.memory.log_task_end(task_id, "success", result_summary="No group messages in past 7 days")
+            logger.info("weekly_profile_learning: no messages found")
+            return
+
+        # 2. profiles.json を読み込み（LINE表示名→キー名マッチング用）
+        master_dir = os.path.expanduser(
+            self.config.get("paths", {}).get("master_dir", "~/agents/Master")
+        )
+        profiles_path = os.path.join(master_dir, "people", "profiles.json")
+        profiles = {}
+        display_name_map = {}  # line_display_name → profile_key
+        try:
+            if os.path.exists(profiles_path):
+                with open(profiles_path, encoding="utf-8") as pf:
+                    profiles = _json.load(pf)
+                for key, val in profiles.items():
+                    entry = val.get("latest", val)
+                    ldn = entry.get("line_display_name", "")
+                    name = entry.get("name", key)
+                    if ldn:
+                        display_name_map[ldn] = key
+                    display_name_map[name] = key
+                    # 姓のみ・名のみもマッチング候補に
+                    for part in name.split():
+                        if len(part) >= 2:
+                            display_name_map.setdefault(part, key)
+        except Exception as e:
+            logger.warning(f"weekly_profile_learning: failed to load profiles: {e}")
+
+        # 3. LINE表示名→profileキーのマッチング + 人物ごとにClaude分析
+        updated_count = 0
+        skipped_count = 0
+        try:
+            client = _anthropic.Anthropic()
+        except Exception as e:
+            self.memory.log_task_end(task_id, "error", error_message=f"Anthropic init failed: {e}")
+            logger.error(f"weekly_profile_learning: Anthropic client init failed: {e}")
+            return
+
+        for display_name, messages in all_messages_by_person.items():
+            # 3件未満はスキップ
+            if len(messages) < 3:
+                skipped_count += 1
+                continue
+
+            # profileキーを解決
+            profile_key = display_name_map.get(display_name)
+            if not profile_key:
+                # 部分一致で検索
+                for map_name, map_key in display_name_map.items():
+                    if display_name in map_name or map_name in display_name:
+                        profile_key = map_key
+                        break
+            if not profile_key:
+                skipped_count += 1
+                logger.debug(f"weekly_profile_learning: no profile match for '{display_name}'")
+                continue
+
+            # メッセージをテキスト化
+            active_groups = list(set(m["group"] for m in messages))
+            msg_text = "\n".join(
+                f"[{m['ts'][-11:-3] if len(m['ts']) > 11 else ''}] ({m['group']}) {m['text'][:150]}"
+                for m in messages[:100]  # 最大100メッセージ
+            )
+            if len(msg_text) > 3000:
+                msg_text = msg_text[:3000] + "\n...(以下省略)"
+
+            entry = profiles.get(profile_key, {})
+            person_entry = entry.get("latest", entry)
+            person_name = person_entry.get("name", profile_key)
+            category = person_entry.get("category", "")
+
+            try:
+                response = client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=400,
+                    system="あなたは組織のコミュニケーション分析の専門家です。LINEグループのメッセージから人物の特徴を簡潔に分析してください。",
+                    messages=[{"role": "user", "content": f"""以下は{person_name}（{category}）の過去7日間のLINEグループメッセージです。
+
+{msg_text}
+
+以下のJSON形式で分析結果を出力してください（各フィールドは日本語で簡潔に）:
+{{
+  "communication_style": "コミュニケーションスタイルを1文で（例: 短文中心。カジュアル。絵文字多用。）",
+  "recent_topics": ["最近の関心トピック（3〜5個）"],
+  "collaboration_patterns": "誰とどんなやり取りが多いか1文で",
+  "personality_notes": "性格・行動特性を1文で",
+  "activity_level": "high/medium/low のいずれか"
+}}
+
+JSON以外の文字は出力しないでください。"""}],
+                )
+                raw_text = response.content[0].text.strip()
+                # JSON部分を抽出（前後にテキストがある場合に対応）
+                json_start = raw_text.find("{")
+                json_end = raw_text.rfind("}") + 1
+                if json_start >= 0 and json_end > json_start:
+                    analysis = _json.loads(raw_text[json_start:json_end])
+                else:
+                    logger.warning(f"weekly_profile_learning: non-JSON response for {person_name}")
+                    continue
+
+                # group_insightsを構築
+                group_insights = {
+                    "updated_at": today.isoformat(),
+                    "message_count_7d": len(messages),
+                    "active_groups": active_groups[:5],
+                    "communication_style": analysis.get("communication_style", ""),
+                    "recent_topics": analysis.get("recent_topics", []),
+                    "collaboration_patterns": analysis.get("collaboration_patterns", ""),
+                    "personality_notes": analysis.get("personality_notes", ""),
+                    "activity_level": analysis.get("activity_level", "medium"),
+                }
+
+                # profiles.jsonに書き込み
+                write_result = tools.update_people_profiles(profile_key, group_insights)
+                if write_result.success:
+                    updated_count += 1
+                    logger.info(f"weekly_profile_learning: updated {person_name} ({len(messages)} msgs)")
+                else:
+                    logger.warning(f"weekly_profile_learning: write failed for {person_name}: {write_result.error}")
+
+            except Exception as e:
+                logger.warning(f"weekly_profile_learning: analysis failed for {person_name}: {e}")
+                continue
+
+        # 4. 結果をLINE通知
+        message = (
+            f"\n🧠 週次プロファイル学習完了\n"
+            f"━━━━━━━━━━━━\n"
+            f"更新: {updated_count}名\n"
+            f"スキップ: {skipped_count}名（3件未満 or プロファイル未登録）\n"
+            f"分析対象: {len(all_messages_by_person)}名 / {sum(len(m) for m in all_messages_by_person.values())}メッセージ\n"
+            f"━━━━━━━━━━━━"
+        )
+        send_line_notify(message)
+        self.memory.log_task_end(
+            task_id, "success",
+            result_summary=f"Updated {updated_count} profiles, skipped {skipped_count}"
+        )
+        logger.info(f"weekly_profile_learning completed: {updated_count} updated, {skipped_count} skipped")
 
     async def _run_repair_check(self):
         if _repair_agent_ref is None:
