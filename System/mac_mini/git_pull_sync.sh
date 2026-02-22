@@ -15,6 +15,21 @@ log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
 }
 
+notify_line() {
+  local message="$1"
+  local config_file="$DEPLOY_DIR/line_bot_local/config.json"
+  [ -f "$config_file" ] || return 0
+  local server_url token escaped_msg
+  server_url=$(python3 -c "import json; print(json.load(open('$config_file')).get('server_url',''))" 2>/dev/null || echo "")
+  token=$(python3 -c "import json; print(json.load(open('$config_file')).get('agent_token',''))" 2>/dev/null || echo "")
+  [ -n "$server_url" ] || return 0
+  escaped_msg=$(printf '%s' "$message" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))" 2>/dev/null) || return 0
+  curl -s -X POST "$server_url/notify" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $token" \
+    -d "{\"message\": $escaped_msg}" >/dev/null 2>&1 &
+}
+
 write_status() {
   local status="$1"
   local commit="$2"
@@ -115,16 +130,36 @@ rsync -a --delete \
 
 # --- 変更ファイルに応じてサービス再起動 ---
 
-if echo "$CHANGED" | grep -qE "line_bot_local/(local_agent\.py|config\.json)"; then
-  log "local_agent 再起動"
-  launchctl unload ~/Library/LaunchAgents/com.linebot.localagent.plist 2>/dev/null || true
+PLIST=~/Library/LaunchAgents/com.linebot.localagent.plist
+
+if echo "$CHANGED" | grep -qE "line_bot_local/.*\.py"; then
+  CHANGED_PY=$(echo "$CHANGED" | grep "line_bot_local/.*\.py" | sed 's|.*/||' | head -3 | tr '\n' ' ')
+  log "local_agent 再起動（変更: ${CHANGED_PY}）"
+  launchctl unload "$PLIST" 2>/dev/null || true
   sleep 2
-  launchctl load ~/Library/LaunchAgents/com.linebot.localagent.plist 2>/dev/null || true
+  launchctl load "$PLIST" 2>/dev/null || true
+  COMMIT_SHORT=$(echo "$REMOTE_HEAD" | cut -c1-7)
+  notify_line "🔄 ローカルエージェント自動再起動
+━━━━━━━━━━━━
+変更: ${CHANGED_PY}
+コミット: ${COMMIT_SHORT}
+時刻: $(date '+%H:%M')"
+fi
+
+# 遠隔再起動シグナルファイル（local_agentが作成 → ここで検知）
+RESTART_SIGNAL="$DEPLOY_DIR/.restart_local_agent"
+if [ -f "$RESTART_SIGNAL" ]; then
+  log "遠隔再起動リクエスト検知"
+  rm -f "$RESTART_SIGNAL"
+  launchctl unload "$PLIST" 2>/dev/null || true
+  sleep 2
+  launchctl load "$PLIST" 2>/dev/null || true
+  notify_line "🔄 ローカルエージェント遠隔再起動完了
+時刻: $(date '+%H:%M')"
 fi
 
 if echo "$CHANGED" | grep -q "mac_mini/agent_orchestrator/"; then
   log "Orchestrator 再起動（5秒後バックグラウンド）"
-  # 自分自身が呼び出し元なので、バックグラウンドで遅延再起動
   (
     sleep 5
     launchctl stop com.addness.agent-orchestrator 2>/dev/null || true

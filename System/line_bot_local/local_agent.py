@@ -1305,6 +1305,17 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
             )
             return True, response.content[0].text.strip()
 
+        # ===== エージェント遠隔再起動 =====
+        if function_name == "restart_agent":
+            import subprocess as _sp
+            plist = os.path.expanduser("~/Library/LaunchAgents/com.linebot.localagent.plist")
+            _sp.Popen(
+                ["bash", "-c",
+                 f"sleep 3 && launchctl unload '{plist}' 2>/dev/null; sleep 2; launchctl load '{plist}' 2>/dev/null"],
+                start_new_session=True
+            )
+            return True, "🔄 ローカルエージェントを再起動します。3秒後に再起動が実行されます。"
+
         # ===== コンテキスト分析タスク（「次に何すべき？」等） =====
         if function_name == "context_query":
             question = arguments.get("question", instruction)
