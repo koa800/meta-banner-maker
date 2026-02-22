@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月22日（plistパス自動修正・Library版廃止・デプロイパス統一） |
+| 最終更新 | 2026年2月23日（グループLINE監視+日次ダイジェスト機能追加） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -276,7 +276,7 @@ bash System/line_bot_local/sync_data.sh
 |------|------|
 | Render プラン | Starter（$7/月）。Zero Downtime デプロイ・スリープなし |
 | Macスリープ対策 | launchd plist に `caffeinate -s` を追加。エージェント起動中はMacスリープ防止 |
-| データ永続化 | Render永続ディスク `/data` を使用。`DATA_DIR=/data` 環境変数で設定済み。デプロイ後も状態が消えない |
+| データ永続化 | Render永続ディスク `/data` を使用。`DATA_DIR=/data` 環境変数で設定済み。デプロイ後も状態が消えない。`line_bot_group_log.json`（グループメッセージ日次ログ）も同ディレクトリに保存・日付ローテーション |
 | macOS TCC | launchd から Desktop は直接アクセス不可。`~/agents/` をデプロイ先に使用（Library版は廃止済み） |
 | LINE webhook重複 | 同一 message_id のタスクは1件のみキューイング済み |
 | Mac Mini TCC制限 | LaunchAgent から `~/Desktop/` は直接アクセス不可。`~/agents/` を作業ディレクトリに使用。plistが古いパス（`~/Library/LineBot/`等）を参照していた場合、`git_pull_sync.sh`の`ensure_plist_path`が自動修正 |
@@ -328,6 +328,7 @@ bash System/line_bot_local/sync_data.sh
 | `kpi_daily_import` | 毎日 12:00 | 2日前のKPIデータ完了チェック→投入 or 未完了リマインド |
 | `sheets_sync` | 毎朝 6:30 | Master/sheets/ の管理シートCSVキャッシュを最新化（README.md同期ステータス更新） |
 | `git_pull_sync` | 5分ごと | GitHubからpull→ローカルrsyncでデプロイ→変更ファイルに応じてサービス再起動→LINE通知 |
+| `daily_group_digest` | 毎夜 21:00 | Renderからグループログ取得→Claude Haiku分析→秘書グループにダイジェスト通知 |
 
 ### Orchestrator API エンドポイント（port 8500）
 
@@ -351,6 +352,15 @@ Mac Mini Orchestrator
       → LINE Messaging API push_message
         → SECRETARY_GROUP_ID（秘書グループ）
 ```
+
+### Render API（AGENT_TOKEN認証）
+
+| エンドポイント | メソッド | 説明 |
+|-------------|---------|------|
+| `/notify` | POST | 秘書グループにメッセージ送信 |
+| `/api/group-log` | GET | グループメッセージ日次ログ取得（`?date=YYYY-MM-DD`、省略時は当日） |
+| `/tasks` | GET | 未処理タスクキュー取得 |
+| `/qa/new` | POST | 新着Q&A受け取り・AI回答生成 |
 
 ### コード同期アーキテクチャ
 
@@ -465,6 +475,7 @@ MacBook (どこからでも)
 - [x] 旧sync_from_macbook.sh無効化（LaunchAgent unload + .disabled化。GitHub同期に完全移行済み）
 - [x] Slack Webhook URL外部化（addness_config.json/run_addness_pipeline.shから環境変数に移動。GitHub Push Protection対応）
 - [x] 管理シート自動同期（`sheets_sync.py`。Master/sheets/README.md登録シートのCSVキャッシュを毎朝6:30に自動更新。Orchestrator統合済み）
+- [x] グループLINE監視+日次ダイジェスト（全グループメッセージを永続ログに蓄積→毎夜21:00にClaude Haiku分析→グループ別要約・活動度・アクション事項を秘書グループに通知。`/api/group-log` APIでログ取得可能）
 
 ---
 

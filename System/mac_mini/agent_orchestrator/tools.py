@@ -263,6 +263,37 @@ def git_pull_sync() -> ToolResult:
     return shell_command(f"bash {sync_script}", timeout=120)
 
 
+# --------------- Group Log ---------------
+
+def fetch_group_log(date: str = None) -> ToolResult:
+    """Renderサーバーから日次グループログを取得"""
+    import json as _json
+    import requests as _requests
+
+    server_url = os.environ.get("LINE_BOT_SERVER_URL", "https://line-mention-bot-mmzu.onrender.com")
+    agent_token = os.environ.get("AGENT_TOKEN", "")
+    if not agent_token:
+        return ToolResult(success=False, output="", error="AGENT_TOKEN not set")
+
+    params = {}
+    if date:
+        params["date"] = date
+    try:
+        resp = _requests.get(
+            f"{server_url}/api/group-log",
+            headers={"Authorization": f"Bearer {agent_token}"},
+            params=params,
+            timeout=45,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            return ToolResult(success=True, output=_json.dumps(data, ensure_ascii=False))
+        else:
+            return ToolResult(success=False, output="", error=f"HTTP {resp.status_code}: {resp.text[:200]}")
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
 TOOL_REGISTRY = {
     "mail_run": {"fn": mail_run, "description": "受信メールの処理・自動返信下書き作成"},
     "mail_status": {"fn": mail_status, "description": "メール処理のステータス確認"},
@@ -281,4 +312,5 @@ TOOL_REGISTRY = {
     "kpi_process": {"fn": kpi_process, "description": "元データ完了分をCSVから日別/月別に投入"},
     "kpi_check_today": {"fn": kpi_check_today, "description": "2日前のKPIデータ完了チェック"},
     "git_pull_sync": {"fn": git_pull_sync, "description": "GitHubからpull→ローカルデプロイ"},
+    "fetch_group_log": {"fn": fetch_group_log, "description": "Renderサーバーから日次グループログを取得"},
 }

@@ -49,6 +49,7 @@ class TaskScheduler:
             "kpi_daily_import": self._run_kpi_daily_import,
             "sheets_sync": self._run_sheets_sync,
             "git_pull_sync": self._run_git_pull_sync,
+            "daily_group_digest": self._run_daily_group_digest,
         }
 
     def setup(self):
@@ -938,6 +939,122 @@ class TaskScheduler:
 
     async def _run_git_pull_sync(self):
         await self._execute_tool("git_pull_sync", tools.git_pull_sync)
+
+    async def _run_daily_group_digest(self):
+        """毎日21:00: グループLINEの1日分のメッセージをClaude分析→秘書グループに報告"""
+        import json as _json
+        import anthropic as _anthropic
+        from .notifier import send_line_notify
+        from datetime import date
+
+        today_str = date.today().isoformat()
+        result = await self._execute_tool("fetch_group_log", tools.fetch_group_log, date=today_str)
+        if not result.success or not result.output:
+            logger.warning(f"daily_group_digest: failed to fetch group log: {result.error}")
+            return
+
+        try:
+            data = _json.loads(result.output)
+        except _json.JSONDecodeError:
+            logger.error("daily_group_digest: invalid JSON from group log")
+            return
+
+        groups = data.get("groups", {})
+        if not groups:
+            logger.info("daily_group_digest: no group messages today")
+            return
+
+        # people-profiles.json でユーザー名→プロファイル照合
+        master_dir = os.path.expanduser(
+            self.config.get("paths", {}).get("master_dir", "~/agents/Master")
+        )
+        profiles_path = os.path.join(master_dir, "people", "profiles.json")
+        profiles = {}
+        try:
+            if os.path.exists(profiles_path):
+                with open(profiles_path, encoding="utf-8") as pf:
+                    raw = _json.load(pf)
+                for key, val in raw.items():
+                    entry = val.get("latest", val)
+                    name = entry.get("name", key)
+                    category = entry.get("category", "")
+                    profiles[name] = category
+        except Exception:
+            pass
+
+        # グループログをテキスト化（Claude入力用）
+        log_lines = []
+        total_messages = 0
+        for gid, ginfo in groups.items():
+            gname = ginfo.get("group_name") or gid[-8:]
+            msgs = ginfo.get("messages", [])
+            total_messages += len(msgs)
+            if not msgs:
+                continue
+            log_lines.append(f"\n【{gname}】({len(msgs)}件)")
+            for m in msgs:
+                uname = m.get("user_name", "不明")
+                cat = profiles.get(uname, "")
+                cat_label = f"({cat})" if cat else ""
+                time_part = m.get("timestamp", "")[-8:-3]  # HH:MM
+                log_lines.append(f"  [{time_part}] {uname}{cat_label}: {m.get('text', '')[:100]}")
+
+        if total_messages == 0:
+            logger.info("daily_group_digest: 0 messages across all groups")
+            return
+
+        log_text = "\n".join(log_lines)
+        # 入力が長すぎる場合は切り詰め
+        if len(log_text) > 4000:
+            log_text = log_text[:4000] + "\n...(以下省略)"
+
+        try:
+            client = _anthropic.Anthropic()
+            response = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=600,
+                system=(
+                    "あなたはスキルプラス事業のAI秘書です。"
+                    "甲原海人（代表・マーケティング責任者）向けに、"
+                    "LINEグループの1日の会話を簡潔に報告してください。"
+                ),
+                messages=[{"role": "user", "content": f"""以下は今日のLINEグループのメッセージログです。
+甲原さんが把握すべき内容を簡潔にまとめてください。
+
+{log_text}
+
+【出力形式】（500文字以内・LINEメッセージで読みやすい形式）
+グループごとに:
+・要約（誰が何について話したか）
+・メンバーの活動度やテンション（気になる点があれば）
+・甲原さんがアクションすべき事項（あれば）
+
+特に報告すべき内容がないグループは省略してOKです。"""}],
+            )
+            analysis = response.content[0].text.strip()
+        except Exception as e:
+            logger.error(f"daily_group_digest: Claude analysis failed: {e}")
+            # Claude失敗時は簡易サマリーで代替
+            parts = [f"📋 グループ会話ログ ({today_str})"]
+            for gid, ginfo in groups.items():
+                gname = ginfo.get("group_name") or gid[-8:]
+                count = len(ginfo.get("messages", []))
+                if count > 0:
+                    parts.append(f"  {gname}: {count}件")
+            analysis = "\n".join(parts)
+
+        message = (
+            f"\n📋 グループLINEダイジェスト ({date.today().strftime('%m/%d')})\n"
+            f"━━━━━━━━━━━━\n"
+            f"{analysis}\n"
+            f"━━━━━━━━━━━━\n"
+            f"計{total_messages}件のメッセージ"
+        )
+        ok = send_line_notify(message)
+        if ok:
+            logger.info(f"daily_group_digest sent: {total_messages} messages across {len(groups)} groups")
+        else:
+            logger.warning("daily_group_digest: LINE notification failed")
 
     async def _run_repair_check(self):
         if _repair_agent_ref is None:

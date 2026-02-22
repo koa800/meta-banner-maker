@@ -64,6 +64,9 @@ schedule:
   git_pull_sync:
     interval_minutes: 5          # 5分ごとにGitHubからpull
     enabled: true
+  daily_group_digest:
+    cron: "0 21 * * *"           # 毎日 夜9:00（グループLINEダイジェスト）
+    enabled: true
 
 webhook:
   host: "0.0.0.0"
