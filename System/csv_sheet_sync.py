@@ -28,7 +28,7 @@ import csv
 import json
 import logging
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # sheets_manager と同じディレクトリ
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -140,43 +140,62 @@ def scan_csv_folder():
     return dated_files, unnamed_files
 
 
-def check_unnamed_files(unnamed_files: list, dry_run: bool = False):
-    """日付不明のCSVファイルを検出してLINEで通知する"""
+def auto_rename_unnamed_files(unnamed_files: list, dated_files: dict, dry_run: bool = False) -> list:
+    """日付不明のCSVファイルを自動リネームする。
+
+    既存の日付付きCSVから最新日付を取得し、翌日以降を割り当てる。
+    Returns: リネームしたファイル名のリスト
+    """
     if not unnamed_files:
-        return
+        return []
 
-    # 通知済みリストを読み込み、未通知のファイルだけ抽出
-    notified = load_notified()
-    new_unnamed = [f for f in unnamed_files if f not in notified]
+    # 既存の日付付きCSVから最新日付を特定
+    if dated_files:
+        latest_date = max(datetime.strptime(d, "%Y-%m-%d") for d in dated_files)
+    else:
+        # 日付付きCSVがない場合は昨日を基準にする
+        latest_date = datetime.now() - timedelta(days=1)
 
-    if not new_unnamed:
-        return
+    # ファイル更新日時順にソート（古い順）
+    unnamed_with_mtime = []
+    for f in unnamed_files:
+        path = os.path.join(CSV_DIR, f)
+        mtime = os.path.getmtime(path)
+        unnamed_with_mtime.append((f, mtime))
+    unnamed_with_mtime.sort(key=lambda x: x[1])
 
-    logger.info(f"日付不明のCSVファイル: {len(new_unnamed)} 件")
-    for f in new_unnamed:
-        logger.info(f"  - {f}")
+    renamed = []
+    next_date = latest_date + timedelta(days=1)
 
-    if dry_run:
-        logger.info("(dry-run: LINE通知スキップ)")
-        return
+    for fname, _ in unnamed_with_mtime:
+        date_str = next_date.strftime("%Y-%m-%d")
+        new_name = f"{date_str}_{fname}"
+        old_path = os.path.join(CSV_DIR, fname)
+        new_path = os.path.join(CSV_DIR, new_name)
+
+        if dry_run:
+            logger.info(f"(dry-run) リネーム予定: {fname} → {new_name}")
+        else:
+            os.rename(old_path, new_path)
+            logger.info(f"自動リネーム: {fname} → {new_name}")
+            renamed.append(new_name)
+
+        next_date += timedelta(days=1)
 
     # LINE通知
-    file_list = "\n".join(f"・{f}" for f in new_unnamed[:10])
-    if len(new_unnamed) > 10:
-        file_list += f"\n... 他 {len(new_unnamed) - 10} 件"
+    if renamed and not dry_run:
+        dates = [DATE_PATTERN.match(f).group(1) for f in renamed]
+        if len(dates) == 1:
+            date_info = dates[0]
+        else:
+            date_info = f"{dates[0]} 〜 {dates[-1]}"
+        message = (
+            f"📊 CSV自動リネーム: {len(renamed)} 件\n"
+            f"{date_info} として処理します"
+        )
+        send_line_notify(message)
 
-    message = (
-        f"📊 Looker Studio CSV: 日付不明のファイルが {len(new_unnamed)} 件あります\n\n"
-        f"{file_list}\n\n"
-        f"ファイル名の先頭に日付を付けてください。\n"
-        f"例: 2026-02-20_{BASE_CSV_NAME}.csv\n\n"
-        f"日付を付けると自動でシートに反映されます。"
-    )
-    send_line_notify(message)
-
-    # 通知済みに追加
-    notified.update(new_unnamed)
-    save_notified(notified)
+    return renamed
 
 
 # ─── シート同期 ────────────────────────────────────────────────
@@ -186,8 +205,12 @@ def sync_to_sheet(dry_run=False):
     # 1. フォルダスキャン
     csv_files, unnamed_files = scan_csv_folder()
 
-    # 日付不明ファイルのチェック
-    check_unnamed_files(unnamed_files, dry_run=dry_run)
+    # 日付不明ファイルを自動リネーム
+    renamed = auto_rename_unnamed_files(unnamed_files, csv_files, dry_run=dry_run)
+
+    # リネームがあった場合は再スキャン
+    if renamed:
+        csv_files, unnamed_files = scan_csv_folder()
 
     if not csv_files:
         logger.info("日付付きCSVファイルがありません")
