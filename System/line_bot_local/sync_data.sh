@@ -11,41 +11,41 @@ echo "🔄 LINE Bot データ同期中..."
 mkdir -p "$LIB_DATA"
 
 # --- people-profiles.json は双方向同期（LINEメモが含まれるため） ---
-PROFILES_SRC="$PROJECT_ROOT/Master/people-profiles.json"
+PROFILES_SRC="$PROJECT_ROOT/Master/people/profiles.json"
 PROFILES_DST="$LIB_DATA/people-profiles.json"
 if [ -f "$PROFILES_DST" ]; then
     LIB_TIME=$(stat -f "%m" "$PROFILES_DST" 2>/dev/null || echo 0)
     DST_TIME=$(stat -f "%m" "$PROFILES_SRC" 2>/dev/null || echo 0)
     if [ "$LIB_TIME" -gt "$DST_TIME" ]; then
-        cp "$PROFILES_DST" "$PROFILES_SRC" && echo "✅ people-profiles.json (Library→Desktop: メモ保持)"
+        cp "$PROFILES_DST" "$PROFILES_SRC" && echo "✅ profiles.json (Library→Desktop: メモ保持)"
     else
-        cp "$PROFILES_SRC" "$PROFILES_DST" && echo "✅ people-profiles.json (Desktop→Library)"
+        cp "$PROFILES_SRC" "$PROFILES_DST" && echo "✅ profiles.json (Desktop→Library)"
     fi
 else
-    cp "$PROFILES_SRC" "$PROFILES_DST" 2>/dev/null && echo "✅ people-profiles.json (初回)"
+    cp "$PROFILES_SRC" "$PROFILES_DST" 2>/dev/null && echo "✅ profiles.json (初回)"
 fi
 
-cp "$PROJECT_ROOT/Master/people-identities.json" "$LIB_DATA/people-identities.json" 2>/dev/null && echo "✅ people-identities.json"
-cp "$PROJECT_ROOT/Master/self_clone/projects/kohara/1_Core/IDENTITY.md" "$LIB_DATA/IDENTITY.md" 2>/dev/null && echo "✅ IDENTITY.md"
-cp "$PROJECT_ROOT/Master/self_clone/projects/kohara/1_Core/SELF_PROFILE.md" "$LIB_DATA/SELF_PROFILE.md" 2>/dev/null && echo "✅ SELF_PROFILE.md"
+cp "$PROJECT_ROOT/Master/people/identities.json" "$LIB_DATA/people-identities.json" 2>/dev/null && echo "✅ identities.json"
+cp "$PROJECT_ROOT/Master/self_clone/kohara/IDENTITY.md" "$LIB_DATA/IDENTITY.md" 2>/dev/null && echo "✅ IDENTITY.md"
+cp "$PROJECT_ROOT/Master/self_clone/kohara/SELF_PROFILE.md" "$LIB_DATA/SELF_PROFILE.md" 2>/dev/null && echo "✅ SELF_PROFILE.md"
 
 # フィードバック学習データを双方向同期（Library ↔ Desktop/Master）
-# Library側が新しければDesktopにコピー（ローカルエージェントがフィードバックを受け取った場合）
 if [ -f "$LIB_DATA/reply_feedback.json" ]; then
     LIB_TIME=$(stat -f "%m" "$LIB_DATA/reply_feedback.json" 2>/dev/null || echo 0)
-    DST_FILE="$PROJECT_ROOT/Master/reply_feedback.json"
+    DST_FILE="$PROJECT_ROOT/Master/learning/reply_feedback.json"
     DST_TIME=$(stat -f "%m" "$DST_FILE" 2>/dev/null || echo 0)
     if [ "$LIB_TIME" -gt "$DST_TIME" ]; then
         cp "$LIB_DATA/reply_feedback.json" "$DST_FILE" && echo "✅ reply_feedback.json (Library→Desktop)"
     else
         cp "$DST_FILE" "$LIB_DATA/reply_feedback.json" 2>/dev/null && echo "✅ reply_feedback.json (Desktop→Library)"
     fi
-elif [ -f "$PROJECT_ROOT/Master/reply_feedback.json" ]; then
-    cp "$PROJECT_ROOT/Master/reply_feedback.json" "$LIB_DATA/reply_feedback.json" && echo "✅ reply_feedback.json (Desktop→Library)"
+elif [ -f "$PROJECT_ROOT/Master/learning/reply_feedback.json" ]; then
+    cp "$PROJECT_ROOT/Master/learning/reply_feedback.json" "$LIB_DATA/reply_feedback.json" && echo "✅ reply_feedback.json (Desktop→Library)"
 fi
 
-# local_agent.py は Library版を維持（パス設定が異なるため上書きしない）
+# NOTE: local_agent.py の実行は ~/agents/line_bot_local/ から行う（git_pull_sync.sh が plist を自動修正済み）
+# Library版は廃止。git同期版が正式な実行パス。
 echo ""
 echo "✅ 同期完了！"
 echo "   データ: $LIB_DATA"
-echo "   ※ local_agent.py はLibrary専用版を維持（上書きしません）"
+echo "   ※ local_agent.py は ~/agents/line_bot_local/ で git 同期管理されます"

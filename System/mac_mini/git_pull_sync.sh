@@ -62,6 +62,94 @@ fi
 
 cd "$REPO_DIR"
 
+# --- plist パス整合性チェック（毎回実行） ---
+# Mac Mini の launchctl plist が正しいデプロイ先を指しているか確認し、
+# Library版など古いパスを参照していれば自動修正する
+ensure_plist_path() {
+  local PLIST=~/Library/LaunchAgents/com.linebot.localagent.plist
+  local CORRECT_AGENT="$DEPLOY_DIR/line_bot_local/local_agent.py"
+  local CORRECT_LOGS="$DEPLOY_DIR/line_bot_local/logs"
+
+  [ -f "$PLIST" ] || return 0
+
+  if grep -q "$CORRECT_AGENT" "$PLIST" 2>/dev/null; then
+    return 0
+  fi
+
+  log "plist パス不整合を検出 → 修正します"
+
+  mkdir -p "$CORRECT_LOGS"
+
+  # config.json が新パスに無ければ旧パス（Library版）からコピー
+  local OLD_CONFIG="$HOME/Library/LineBot/config.json"
+  local NEW_CONFIG="$DEPLOY_DIR/line_bot_local/config.json"
+  if [ ! -f "$NEW_CONFIG" ] && [ -f "$OLD_CONFIG" ]; then
+    cp "$OLD_CONFIG" "$NEW_CONFIG"
+    log "config.json を Library版からコピー"
+  fi
+
+  launchctl unload "$PLIST" 2>/dev/null || true
+  sleep 1
+
+  cat > "$PLIST" <<EOPLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.linebot.localagent</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/caffeinate</string>
+        <string>-s</string>
+        <string>/usr/bin/python3</string>
+        <string>-u</string>
+        <string>${CORRECT_AGENT}</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>15</integer>
+
+    <key>StandardOutPath</key>
+    <string>${CORRECT_LOGS}/agent.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>${CORRECT_LOGS}/agent_error.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+        <key>HOME</key>
+        <string>$HOME</string>
+    </dict>
+</dict>
+</plist>
+EOPLIST
+
+  sleep 1
+  launchctl load "$PLIST" 2>/dev/null || true
+  log "plist パス修正完了 → エージェント再起動"
+  notify_line "🔧 plistパス自動修正＆エージェント再起動
+━━━━━━━━━━━━
+旧パス → $DEPLOY_DIR/line_bot_local/
+時刻: $(date '+%H:%M')"
+}
+
+ensure_plist_path
+
 # --- fetch して差分チェック ---
 git fetch origin main 2>> "$LOG_FILE"
 
