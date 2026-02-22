@@ -10,6 +10,7 @@ import os
 import sys
 import json
 import time
+import re
 import subprocess
 import threading
 import requests
@@ -533,6 +534,17 @@ def is_addness_related(profile: dict, message: str, group_name: str = "") -> boo
             return True
 
     return False
+
+
+def _strip_markdown_for_line(text: str) -> str:
+    """LINE送信前にマークダウン記法を除去（安全弁）"""
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)   # **太字** → 太字
+    text = re.sub(r'__(.+?)__', r'\1', text)        # __太字__ → 太字
+    text = re.sub(r'(?<!\w)\*(.+?)\*(?!\w)', r'\1', text)  # *斜体* → 斜体
+    text = re.sub(r'(?<!\w)_(.+?)_(?!\w)', r'\1', text)    # _斜体_ → 斜体
+    text = re.sub(r'`(.+?)`', r'\1', text)           # `コード` → コード
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)  # # 見出し → 見出し
+    return text
 
 
 def fetch_addness_kpi() -> str:
@@ -1074,10 +1086,10 @@ def call_claude_api(instruction: str, task: dict):
             response = client.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=700,
-                system="あなたはROAS・CVR改善実績のあるLPコピーライターです。具体的で変換率の高いコピーを作成してください。",
+                system="あなたはROAS・CVR改善実績のあるLPコピーライターです。具体的で変換率の高いコピーを作成してください。マークダウン記法（**太字**等）は使わず、プレーンテキストで出力すること。",
                 messages=[{"role": "user", "content": lp_prompt}]
             )
-            draft = response.content[0].text.strip()
+            draft = _strip_markdown_for_line(response.content[0].text.strip())
             result_text = f"📝 LPドラフト: {product}\n━━━━━━━━━━━━\n{draft}\n━━━━━━━━━━━━\n💡 フル版はCursorで展開できます"
             return True, result_text
 
@@ -1120,10 +1132,10 @@ TikTok/Instagram向けの引きの強い台本を作成してください。"""
             response = client.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=700,
-                system="あなたは短尺動画広告の台本クリエイターです。視聴者が思わず止まるフックと行動喚起を作成してください。",
+                system="あなたは短尺動画広告の台本クリエイターです。視聴者が思わず止まるフックと行動喚起を作成してください。マークダウン記法（**太字**等）は使わず、プレーンテキストで出力すること。",
                 messages=[{"role": "user", "content": script_prompt}]
             )
-            script = response.content[0].text.strip()
+            script = _strip_markdown_for_line(response.content[0].text.strip())
             result_text = f"🎬 動画台本: {product} ({video_type})\n━━━━━━━━━━━━\n{script}\n━━━━━━━━━━━━\n💡 Cursorで拡張版を作成できます"
             return True, result_text
 
@@ -1155,10 +1167,10 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
             response = client.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=800,
-                system="あなたはROAS・CTR改善実績のある広告クリエイティブディレクターです。具体的で成果の出るバナー案を作成してください。",
+                system="あなたはROAS・CTR改善実績のある広告クリエイティブディレクターです。具体的で成果の出るバナー案を作成してください。マークダウン記法（**太字**等）は使わず、プレーンテキストで出力すること。",
                 messages=[{"role": "user", "content": banner_prompt}]
             )
-            concepts = response.content[0].text.strip()
+            concepts = _strip_markdown_for_line(response.content[0].text.strip())
             result_text = f"🎨 バナー構成案: {product} ({platform})\n━━━━━━━━━━━━\n{concepts}\n━━━━━━━━━━━━\n💡 採用案はCursorで画像生成プロンプトに展開できます"
             return True, result_text
 
@@ -1325,24 +1337,26 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
             kpi_prompt = f"""あなたは甲原海人のAI秘書で、スキルプラス事業の広告運用データに精通しています。
 今日の日付: {today_str}
 
-以下のKPIデータをもとに、「{question}」に答えてください。
+以下は社内システムから取得した実際のKPIデータです。このデータを使って「{question}」に答えてください。
 
 {kpi_data}
 
 【回答ルール】
-- データに基づく具体的な数値を必ず引用する
+- 上記のデータに基づく具体的な数値を必ず引用して回答する
+- 「データがない」「アクセスできない」とは絶対に言わない（上にデータがある）
 - 前月比・トレンド（改善/悪化）を指摘する
 - 問題がある指標には改善の方向性を示す
 - 600文字以内、LINEで読みやすい形式
 - 媒体別の比較がある場合はそれにも言及する
+- マークダウン記法（**太字**等）は使わない。強調は【】や★で
 """
             response = client.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=800,
-                system="あなたは広告運用の専門家としてKPIデータを分析し、簡潔で実用的な回答をするAI秘書です。",
+                system="あなたは広告運用の専門家としてKPIデータを分析し、簡潔で実用的な回答をするAI秘書です。与えられたデータは社内システムから取得した実データです。必ずデータを引用して回答してください。マークダウン記法（**太字**等）は使わず、プレーンテキストで回答すること。",
                 messages=[{"role": "user", "content": kpi_prompt}]
             )
-            return True, response.content[0].text.strip()
+            return True, _strip_markdown_for_line(response.content[0].text.strip())
 
         # ===== エージェント遠隔再起動 =====
         if function_name == "restart_agent":
@@ -1410,14 +1424,15 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
 - 今すぐやるべきことを優先度順に3〜5件リスト
 - 各項目に理由or期限を添える
 - 500文字以内、LINEで読みやすい形式
+- マークダウン記法（**太字**等）は使わない。強調は【】や★で
 """
             response = client.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=600,
-                system="あなたは甲原海人のAI秘書です。質問に対してコンパクトで実用的な回答をしてください。",
+                system="あなたは甲原海人のAI秘書です。質問に対してコンパクトで実用的な回答をしてください。マークダウン記法（**太字**等）は使わず、プレーンテキストで回答すること。",
                 messages=[{"role": "user", "content": context_prompt}]
             )
-            return True, response.content[0].text.strip()
+            return True, _strip_markdown_for_line(response.content[0].text.strip())
 
         # ===== その他タスクの汎用処理 =====
         sender_context = build_sender_context(sender_name)
@@ -1429,6 +1444,8 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
 - 長すぎる回答は避ける（500文字以内推奨）
 - 絵文字は控えめに
 - 箇条書きを活用して読みやすく
+- マークダウン記法（**太字**、_斜体_、`コード`、# 見出し等）は絶対に使わない
+- 強調には【】や★を使い、区切りには━を使う
 """
         if sender_context:
             system_prompt += sender_context
@@ -1449,7 +1466,7 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
             ]
         )
 
-        result_text = response.content[0].text
+        result_text = _strip_markdown_for_line(response.content[0].text)
         return True, result_text
         
     except anthropic.AuthenticationError:
