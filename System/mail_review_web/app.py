@@ -7,6 +7,7 @@
 
 import os
 import sys
+from urllib.parse import quote
 from pathlib import Path
 from flask import Flask, render_template_string, redirect, request, jsonify
 
@@ -359,7 +360,7 @@ document.getElementById("filterModal").addEventListener("click", function(e) {
 
 
 def base_redirect(account, flash):
-    return redirect(f"/?account={account}&flash={flash}")
+    return redirect(f"/?account={account}&flash={quote(str(flash), safe='')}")
 
 
 @app.route("/")
@@ -470,27 +471,39 @@ def bulk_clear_pending(account):
     auto_del  = set(state.get("auto_delete_senders", []))
     try:
         service = mail_manager.get_gmail_service(account)
-        newly_blocked = []
-        for item in pending:
-            mail_manager.trash_message(service, item["message_id"])
-            sender = item["from"]
-            auto_del.add(sender)
-            count_map[sender] = count_map.get(sender, 0) + 1
+    except Exception as e:
+        return base_redirect(account, f"エラー: Gmail認証に失敗しました - {e}")
+    newly_blocked = []
+    remaining = []
+    for item in pending:
+        msg_id = item.get("message_id")
+        sender = item.get("from", "")
+        if not msg_id:
+            remaining.append(item)
+            continue
+        if not mail_manager.trash_message(service, msg_id):
+            remaining.append(item)
+            continue
+        auto_del.add(sender)
+        count_map[sender] = count_map.get(sender, 0) + 1
+        try:
             if count_map[sender] >= mail_manager.NOT_NEEDED_THRESHOLD and sender not in blocked:
                 if mail_manager.create_block_filter(service, sender):
                     blocked.add(sender)
                     newly_blocked.append(sender)
-        state["auto_delete_senders"] = list(auto_del)
-        state["not_needed_count"]    = count_map
-        state["blocked_senders"]     = list(blocked)
-        mail_manager.save_state(state)
-        mail_manager.save_pending([])
-        flash = f"✅ {len(pending)} 件を削除して学習しました"
-        if newly_blocked:
-            flash += f"（{len(newly_blocked)} 件ブロック）"
-        return base_redirect(account, flash)
-    except Exception as e:
-        return base_redirect(account, f"エラー: {e}")
+        except Exception:
+            pass
+    state["auto_delete_senders"] = list(auto_del)
+    state["not_needed_count"]    = count_map
+    state["blocked_senders"]     = list(blocked)
+    mail_manager.save_state(state)
+    mail_manager.save_pending(remaining)
+    flash = f"✅ {len(pending) - len(remaining)} 件を削除して学習しました"
+    if newly_blocked:
+        flash += f"（{len(newly_blocked)} 件ブロック）"
+    if remaining:
+        flash += f"。{len(remaining)} 件はスキップ（既に削除済み等）"
+    return base_redirect(account, flash)
 
 
 # ───────── 削除確認（1件） ─────────
@@ -544,29 +557,41 @@ def bulk_delete(account):
     auto_del  = set(state.get("auto_delete_senders", []))
     try:
         service = mail_manager.get_gmail_service(account)
-        deleted = 0
-        newly_blocked = []
-        for item in reviews:
-            mail_manager.trash_message(service, item["message_id"])
-            sender = item["from"]
-            auto_del.add(sender)
-            count_map[sender] = count_map.get(sender, 0) + 1
+    except Exception as e:
+        return base_redirect(account, f"エラー: Gmail認証に失敗しました - {e}")
+    deleted = 0
+    newly_blocked = []
+    remaining = []
+    for item in reviews:
+        msg_id = item.get("message_id")
+        sender = item.get("from", "")
+        if not msg_id:
+            remaining.append(item)
+            continue
+        if not mail_manager.trash_message(service, msg_id):
+            remaining.append(item)
+            continue
+        deleted += 1
+        auto_del.add(sender)
+        count_map[sender] = count_map.get(sender, 0) + 1
+        try:
             if count_map[sender] >= mail_manager.NOT_NEEDED_THRESHOLD and sender not in blocked:
                 if mail_manager.create_block_filter(service, sender):
                     blocked.add(sender)
                     newly_blocked.append(sender)
-            deleted += 1
-        state["auto_delete_senders"] = list(auto_del)
-        state["not_needed_count"]    = count_map
-        state["blocked_senders"]     = list(blocked)
-        mail_manager.save_state(state)
-        mail_manager.save_delete_review([])
-        flash = f"✅ {deleted} 件を一括削除しました"
-        if newly_blocked:
-            flash += f"（{len(newly_blocked)} 件ブロック）"
-        return base_redirect(account, flash)
-    except Exception as e:
-        return base_redirect(account, f"エラー: {e}")
+        except Exception:
+            pass
+    state["auto_delete_senders"] = list(auto_del)
+    state["not_needed_count"]    = count_map
+    state["blocked_senders"]     = list(blocked)
+    mail_manager.save_state(state)
+    mail_manager.save_delete_review(remaining)
+    flash = f"✅ {deleted} 件を一括削除しました"
+    if newly_blocked:
+        flash += f"（{len(newly_blocked)} 件ブロック）"
+    if remaining:
+        flash += f"。{len(remaining)} 件はスキップ（既に削除済み等）"
+    return base_redirect(account, flash)
 
 
 # ───────── 保留（削除確認から除外＋今後非表示） ─────────

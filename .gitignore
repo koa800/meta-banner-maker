@@ -7,6 +7,7 @@ System/credentials/
 vidu_config.json
 ai_news_config.json
 System/config/addness.json
+System/config/ai_news.json
 System/config/sns_analyzer.json
 System/line_bot_local/config.json
 System/line_bot_local/logs/
