@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月22日（kpi_queryツール追加・context_queryへKPIサマリ注入） |
+| 最終更新 | 2026年2月22日（plistパス自動修正・Library版廃止・デプロイパス統一） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -127,6 +127,9 @@
 23. **スプレッドシート文脈参照**: プロファイルの `related_sheets` にシートIDを登録すると、返信案生成時に自動でデータを取得してプロンプトに注入。数字に基づいた回答が可能
 24. **Addness KPI自動参照**: アドネス関連の会話（メンバー × ビジネスキーワード）を自動検知し、KPIキャッシュ（`kpi_summary.json`）→ Sheets APIフォールバックのハイブリッド方式でKPIを自動注入。**外部パートナー・未登録者にはKPIデータを開示しない**（ホワイトリスト制御: 本人/上司/直下メンバー/横のみ許可）
 25. **KPI日次パイプライン**: Cursor（ブラウザ操作）がLooker StudioからCSVダウンロード→元データシートのステータスを「完了」に更新→`kpi_processor.py process`が検知して日別/月別タブに自動投入。毎日12:00にOrchestratorが完了チェック→未完了ならLINEリマインド
+26. **遠隔エージェント再起動**: LINEから「再起動」と送信するとMac Mini上の`local_agent.py`が`launchctl unload/load`で自動再起動。コード更新後の反映やエラー回復に使用
+27. **自動再起動改善**: `git_pull_sync.sh`が`line_bot_local/`配下の`.py`ファイル変更を検知すると自動で`local_agent`を再起動し、LINEに通知（変更ファイル名・コミットハッシュ・時刻を含む）
+28. **plistパス自動修正**: `git_pull_sync.sh`が毎回実行時にlaunchctl plistのパス整合性をチェック。Library版（`~/Library/LineBot/`）など古いパスを参照していた場合、正しいデプロイ先（`~/agents/line_bot_local/`）に自動修正＆再起動。config.jsonも旧パスから自動マイグレーション
 
 ---
 
@@ -176,6 +179,7 @@
 | 「状態確認」「エージェント状態」 | Orchestratorの稼働状況・本日タスク数・次回スケジュールを返答（orchestrator_status） |
 | 「Addness更新」「タスク更新」 | addness_to_context.pyを即時実行→actionable-tasks.md再生成→件数サマリー返答（addness_sync） |
 | 「メール確認」「メールチェック」 | mail_manager.py runを即時実行→返信待ち件数と概要を返答（mail_check） |
+| 「再起動」「リスタート」「エージェント再起動」 | Mac Mini上のローカルエージェントを遠隔再起動（restart_agent） |
 
 ---
 
@@ -191,11 +195,11 @@
 ### ローカル側（Mac Mini 常駐エージェント）
 | パス | 説明 |
 |------|------|
-| `~/agents/line_bot_local/local_agent.py` | **実行ファイル**（Mac Mini launchdから起動） |
-| `~/agents/line_bot_local/agent.log` | 実行ログ（LaunchAgent StandardOutPath） |
-| `~/Library/LaunchAgents/com.linebot.localagent.plist` | launchd設定（Mac Mini） |
-| `System/line_bot_local/local_agent.py` | Desktop版（開発・編集用） |
-| `System/line_bot_local/sync_data.sh` | Desktop ↔ Library 双方向同期 |
+| `~/agents/line_bot_local/local_agent.py` | **実行ファイル**（Mac Mini launchdから起動。git_pull_syncで自動デプロイ） |
+| `~/agents/line_bot_local/logs/agent.log` | 実行ログ（LaunchAgent StandardOutPath） |
+| `~/Library/LaunchAgents/com.linebot.localagent.plist` | launchd設定（git_pull_syncが毎回パス整合性チェック＆自動修正） |
+| `System/line_bot_local/local_agent.py` | Desktop版（開発・編集用。git push→Mac Miniに自動同期） |
+| `System/line_bot_local/sync_data.sh` | データファイル同期（Master/配下等。local_agent.pyはgit管理に統一済み） |
 | `System/kpi_processor.py` | KPI投入エンジン（import/process/check_today/refresh） |
 | `System/csv_sheet_sync.py` | CSV同期・日別月別構築・KPIキャッシュ生成（LaunchAgent連携） |
 | `System/kpi_summary.json` | KPIキャッシュ（`fetch_addness_kpi()`が参照、自動生成） |
@@ -273,9 +277,9 @@ bash System/line_bot_local/sync_data.sh
 | Render プラン | Starter（$7/月）。Zero Downtime デプロイ・スリープなし |
 | Macスリープ対策 | launchd plist に `caffeinate -s` を追加。エージェント起動中はMacスリープ防止 |
 | データ永続化 | Render永続ディスク `/data` を使用。`DATA_DIR=/data` 環境変数で設定済み。デプロイ後も状態が消えない |
-| macOS TCC | launchd から Desktop は直接アクセス不可。Library 版でキャッシュ経由でアクセス |
+| macOS TCC | launchd から Desktop は直接アクセス不可。`~/agents/` をデプロイ先に使用（Library版は廃止済み） |
 | LINE webhook重複 | 同一 message_id のタスクは1件のみキューイング済み |
-| Mac Mini TCC制限 | LaunchAgent から `~/Desktop/` は直接アクセス不可。`~/agents/` を作業ディレクトリに使用 |
+| Mac Mini TCC制限 | LaunchAgent から `~/Desktop/` は直接アクセス不可。`~/agents/` を作業ディレクトリに使用。plistが古いパス（`~/Library/LineBot/`等）を参照していた場合、`git_pull_sync.sh`の`ensure_plist_path`が自動修正 |
 | MacBook↔Mac Mini同期 | GitHub push/pull方式。post-commitで自動push→Mac Mini Orchestratorが5分ごとにgit pull→ローカルrsyncでデプロイ。外出先からも同期可能。旧rsync over SSH方式（sync_from_macbook.sh）は2026-02-22に無効化済み |
 | git_pull_sync rsync除外 | `*.db`（SQLiteランタイムDB）を除外リストに追加。rsync `--delete`でagent.dbが毎回削除されるバグを修正済み（2026-02-22） |
 | Orchestrator SYSTEM_DIR | tools.py の SYSTEM_DIR は __file__ ベースで動的解決（Desktop/Mac Mini両対応）。ハードコードしないこと |
@@ -323,7 +327,7 @@ bash System/line_bot_local/sync_data.sh
 | `weekly_content_suggestions` | 毎週水曜 10:00 | 最新AIニュースを分析してコンテンツ更新提案をLINE通知 |
 | `kpi_daily_import` | 毎日 12:00 | 2日前のKPIデータ完了チェック→投入 or 未完了リマインド |
 | `sheets_sync` | 毎朝 6:30 | Master/sheets/ の管理シートCSVキャッシュを最新化（README.md同期ステータス更新） |
-| `git_pull_sync` | 5分ごと | GitHubからpull→ローカルrsyncでデプロイ→変更ファイルに応じてサービス再起動 |
+| `git_pull_sync` | 5分ごと | GitHubからpull→ローカルrsyncでデプロイ→変更ファイルに応じてサービス再起動→LINE通知 |
 
 ### Orchestrator API エンドポイント（port 8500）
 
@@ -358,12 +362,15 @@ MacBook (どこからでも)
   ▼ GitHub (koa800/meta-banner-maker)
   │
   └── Mac Mini Orchestrator (git_pull_sync, 5分ごと)
+       ├── [毎回] plistパス整合性チェック（ensure_plist_path）
+       │    └── ~/agents/ 以外のパスを参照 → plist再生成＆再起動→LINE通知
        ├── git fetch → 差分なければ即終了（軽量）
        ├── git reset --hard origin/main
        ├── ローカル rsync → ~/agents/ にデプロイ
-       └── 変更ファイルに応じてサービス再起動
-           ├── line_bot_local/ 変更 → local_agent 再起動
-           └── agent_orchestrator/ 変更 → Orchestrator 再起動
+       └── 変更ファイルに応じてサービス再起動 + LINE通知
+           ├── line_bot_local/*.py 変更 → local_agent 再起動→LINE通知
+           ├── agent_orchestrator/ 変更 → Orchestrator 再起動
+           └── .restart_local_agent シグナルファイル検知 → 遠隔再起動→LINE通知
 ```
 
 **同期対象ディレクトリ:** `System/`, `line_bot_local/`, `Master/`, `Project/`, `Skills/`
@@ -427,6 +434,8 @@ MacBook (どこからでも)
 - [x] calendar_manager.py 参加者表示機能追加（list_eventsで参加者displayName出力）
 - [x] context_queryコマンド（「次何？」でAddness+メール+KPIサマリ+Claude分析→優先行動リスト返答）
 - [x] kpi_queryコマンド（「広告数値」「ROAS」等でKPIデータ自動取得→Claude分析・トレンド評価・改善提案返答）
+- [x] restart_agentコマンド（LINEから「再起動」でMac Miniローカルエージェントを遠隔再起動）
+- [x] git_pull_sync改善（line_bot_local/*.py変更で自動再起動・LINE通知・遠隔再起動シグナル検知）
 - [x] generate_lp_draftコマンド（「LP作成: 商品名」でLP構成案+キャッチコピー自動生成）
 - [x] generate_video_scriptコマンド（「スクリプト作成: 商品名」でTikTok/YouTube広告台本自動生成）
 - [x] calendar_list トークン未存在時のハング防止（token file存在チェックで即時フェイル）
@@ -451,6 +460,8 @@ MacBook (どこからでも)
 - [x] MacBook↔Mac Mini同期をGitHub経由に移行（rsync over SSH廃止→git push/pull。外出先からも同期可能）
 - [x] Mac Mini旧cronジョブ整理（addness/ai_news/mail/sync_agent全5件削除→Orchestrator一元管理）
 - [x] agent.db削除バグ修正（git_pull_syncのrsync --deleteがランタイムDBを毎回削除→*.db除外追加）
+- [x] plistパス自動修正（git_pull_syncがlaunchctl plistのパス整合性を毎回チェック。Library版など古いパスを検知→正しいデプロイ先に自動修正＆再起動＆LINE通知）
+- [x] Library版local_agent.py廃止（sync_data.shの「Library版維持」コメント削除。git同期版が正式な実行パスに統一）
 - [x] 旧sync_from_macbook.sh無効化（LaunchAgent unload + .disabled化。GitHub同期に完全移行済み）
 - [x] Slack Webhook URL外部化（addness_config.json/run_addness_pipeline.shから環境変数に移動。GitHub Push Protection対応）
 - [x] 管理シート自動同期（`sheets_sync.py`。Master/sheets/README.md登録シートのCSVキャッシュを毎朝6:30に自動更新。Orchestrator統合済み）

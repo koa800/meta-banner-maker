@@ -11,7 +11,7 @@ Goal Tree から「今すぐ実行できるタスク」を抽出する。
   4. 期日・緊急度でソート
 
 出力:
-  - Master/actionable-tasks.md     : ツール非依存の実行可能タスク一覧
+  - Master/addness/actionable-tasks.md : ツール非依存の実行可能タスク一覧
   - .cursor/rules/addness-actionable.mdc : Cursor自動注入用
 """
 
@@ -24,7 +24,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 DATA_PATH = SCRIPT_DIR / "addness_data" / "latest.json"
-MASTER_DIR = PROJECT_ROOT / "Master"
+MASTER_DIR = PROJECT_ROOT / "Master" / "addness"
 CURSOR_RULES_DIR = PROJECT_ROOT / ".cursor" / "rules"
 
 USER_KEYWORDS = ["甲原"]
@@ -433,7 +433,7 @@ def render_cursor_mdc(actionable: list[Task], watching: list[Task]) -> str:
 
     lines.append(f"合計: 実行可能{len(actionable)}件 / ウォッチ{len(watching)}件")
     lines.append("")
-    lines.append("詳細: `Master/actionable-tasks.md`")
+    lines.append("詳細: `Master/addness/actionable-tasks.md`")
     lines.append("")
     lines.append("---")
     lines.append("*自動生成。手動編集不可。*")

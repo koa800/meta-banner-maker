@@ -22,6 +22,7 @@ System/mail_inbox_data/
 
 # ランタイムデータ（ログ・キャッシュ・セッション・ブラウザプロファイル）
 *.log
+System/csv_sheet_sync_notified.json
 System/addness_data/
 System/addness_chrome_profile/
 System/addness_session.json
@@ -31,3 +32,5 @@ System/looker_debug/
 System/qa_sync/
 System/mac_mini/agent_orchestrator/logs/
 System/mac_mini/agent_orchestrator/*.db
+System/sns_analyzer_config.json
+System/sns_analyzer_cache/

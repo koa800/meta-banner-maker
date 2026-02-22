@@ -58,6 +58,9 @@ schedule:
   kpi_daily_import:
     cron: "0 12 * * *"           # 毎日 昼12:00（2日前のデータを投入）
     enabled: true
+  sheets_sync:
+    cron: "30 6 * * *"           # 毎日 朝6:30（他の定常タスク前に同期）
+    enabled: true
   git_pull_sync:
     interval_minutes: 5          # 5分ごとにGitHubからpull
     enabled: true

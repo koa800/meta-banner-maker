@@ -1,0 +1,26 @@
+{
+  "id": "1FOh_XGZWaEisfFEngiN848kSm2E6HotAZiMDTmO7BNA",
+  "title": "【アドネス全体】数値管理シート",
+  "synced": true,
+  "synced_at": "2026-02-22T08:33:36.580025",
+  "tabs": [
+    {
+      "title": "元データ",
+      "rows": 997,
+      "cols": 26,
+      "cached_rows": 235
+    },
+    {
+      "title": "スキルプラス（日別）",
+      "rows": 6036,
+      "cols": 13,
+      "cached_rows": 5935
+    },
+    {
+      "title": "スキルプラス（月別）",
+      "rows": 100,
+      "cols": 12,
+      "cached_rows": 12
+    }
+  ]
+}

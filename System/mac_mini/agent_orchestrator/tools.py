@@ -138,6 +138,14 @@ def sheets_read(url_or_id: str, sheet_name: str = None, range_str: str = None) -
     return _run_script(os.path.join(SYSTEM_DIR, "sheets_manager.py"), args)
 
 
+def sheets_sync(sheet_id: str = None) -> ToolResult:
+    """Master/sheets/ の管理シートを同期（CSV キャッシュ更新）"""
+    args = []
+    if sheet_id:
+        args.extend(["--id", sheet_id])
+    return _run_script(os.path.join(SYSTEM_DIR, "sheets_sync.py"), args, timeout=600)
+
+
 # --------------- Docs ---------------
 
 def docs_read(url_or_id: str) -> ToolResult:
@@ -206,6 +214,11 @@ def kpi_check_today() -> ToolResult:
     return _run_script(os.path.join(SYSTEM_DIR, "kpi_processor.py"), ["check_today"])
 
 
+def kpi_cache_build() -> ToolResult:
+    """ローカルCSVキャッシュからkpi_summary.jsonを再構築"""
+    return _run_script(os.path.join(SYSTEM_DIR, "kpi_cache_builder.py"), [])
+
+
 # --------------- Utility ---------------
 
 def shell_command(cmd: str, timeout: int = 60) -> ToolResult:
@@ -255,6 +268,7 @@ TOOL_REGISTRY = {
     "mail_status": {"fn": mail_status, "description": "メール処理のステータス確認"},
     "calendar_list": {"fn": calendar_list, "description": "今後の予定一覧を取得"},
     "sheets_read": {"fn": sheets_read, "description": "Googleスプレッドシートのデータを読み取り"},
+    "sheets_sync": {"fn": sheets_sync, "description": "管理シートのCSVキャッシュを同期"},
     "docs_read": {"fn": docs_read, "description": "Googleドキュメントの内容を読み取り"},
     "ai_news_notify": {"fn": ai_news_notify, "description": "最新AIニュースの収集・要約・通知"},
     "addness_fetch": {"fn": addness_fetch, "description": "Addnessからゴールツリーデータをスクレイピング"},

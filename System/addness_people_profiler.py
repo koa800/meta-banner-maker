@@ -9,8 +9,8 @@ Addness 人物プロファイル生成スクリプト
   4. addness_config.json の manual_people に手動登録した人
 
 出力:
-  Master/people-profiles.json  → 構造化データ（スナップショット蓄積）
-  Master/people-profiles.md    → 人が読めるプロファイル集（Cursor参照用）
+  Master/people/profiles.json  → 構造化データ（スナップショット蓄積）
+  Master/people/profiles.md    → 人が読めるプロファイル集（Cursor参照用）
 """
 
 import json
@@ -32,9 +32,9 @@ SCRIPT_DIR = Path(__file__).parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 DATA_PATH = SCRIPT_DIR / "addness_data" / "latest.json"
 CONFIG_PATH = SCRIPT_DIR / "addness_config.json"
-PROFILES_JSON = PROJECT_ROOT / "Master" / "people-profiles.json"
-PROFILES_MD = PROJECT_ROOT / "Master" / "people-profiles.md"
-IDENTITIES_JSON = PROJECT_ROOT / "Master" / "people-identities.json"
+PROFILES_JSON = PROJECT_ROOT / "Master" / "people" / "profiles.json"
+PROFILES_MD = PROJECT_ROOT / "Master" / "people" / "profiles.md"
+IDENTITIES_JSON = PROJECT_ROOT / "Master" / "people" / "identities.json"
 
 # 甲原海人のゴールID（固定）
 KOHARA_ID = "69bbece5-9ff7-4f96-b7f8-0227d0560f9c"
@@ -614,7 +614,7 @@ def main():
     sync_identities(new_profiles)
 
     # 保存
-    (PROJECT_ROOT / "Master").mkdir(parents=True, exist_ok=True)
+    (PROJECT_ROOT / "Master" / "people").mkdir(parents=True, exist_ok=True)
 
     with open(PROFILES_JSON, "w", encoding="utf-8") as f:
         json.dump(accumulated, f, ensure_ascii=False, indent=2, default=str)

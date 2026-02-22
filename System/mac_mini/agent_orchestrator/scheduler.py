@@ -47,6 +47,7 @@ class TaskScheduler:
             "render_health_check": self._run_render_health_check,
             "weekly_content_suggestions": self._run_weekly_content_suggestions,
             "kpi_daily_import": self._run_kpi_daily_import,
+            "sheets_sync": self._run_sheets_sync,
             "git_pull_sync": self._run_git_pull_sync,
         }
 
@@ -339,8 +340,8 @@ class TaskScheduler:
         from datetime import date
 
         master_dir = self.config.get("paths", {}).get("master_dir", "~/agents/Master")
-        actionable_path = os.path.expanduser(os.path.join(master_dir, "actionable-tasks.md"))
-        goal_tree_path = os.path.expanduser(os.path.join(master_dir, "addness-goal-tree.md"))
+        actionable_path = os.path.expanduser(os.path.join(master_dir, "addness", "actionable-tasks.md"))
+        goal_tree_path = os.path.expanduser(os.path.join(master_dir, "addness", "goal-tree.md"))
 
         # actionable-tasks.md を優先使用、なければ旧方式 goal-tree にフォールバック
         if os.path.exists(actionable_path):
@@ -370,7 +371,7 @@ class TaskScheduler:
             master_dir = os.path.expanduser(
                 self.config.get("paths", {}).get("master_dir", "~/agents/Master")
             )
-            profiles_path = os.path.join(master_dir, "people-profiles.json")
+            profiles_path = os.path.join(master_dir, "people", "profiles.json")
             profiles = {}
             try:
                 if os.path.exists(profiles_path):
@@ -663,7 +664,7 @@ class TaskScheduler:
         # Addnessデータ鮮度
         actionable_path = os.path.expanduser(
             os.path.join(self.config.get("paths", {}).get("master_dir", "~/agents/Master"),
-                         "actionable-tasks.md")
+                         "addness", "actionable-tasks.md")
         )
         data_age_note = ""
         if os.path.exists(actionable_path):
@@ -699,7 +700,7 @@ class TaskScheduler:
         from datetime import date
 
         master_dir = self.config.get("paths", {}).get("master_dir", "~/agents/Master")
-        actionable_path = os.path.expanduser(os.path.join(master_dir, "actionable-tasks.md"))
+        actionable_path = os.path.expanduser(os.path.join(master_dir, "addness", "actionable-tasks.md"))
         if not os.path.exists(actionable_path):
             return
 
@@ -804,10 +805,10 @@ class TaskScheduler:
         contact_state_path = os.path.expanduser("~/agents/line_bot_local/contact_state.json")
         profiles_path = os.path.expanduser(
             os.path.join(self.config.get("paths", {}).get("master_dir", "~/agents/Master"),
-                         "people-profiles.json")
+                         "people", "profiles.json")
         )
         if not os.path.exists(contact_state_path) or not os.path.exists(profiles_path):
-            logger.debug("Follow-up check: missing contact_state.json or people-profiles.json")
+            logger.debug("Follow-up check: missing contact_state.json or people/profiles.json")
             return
 
         try:
@@ -923,6 +924,17 @@ class TaskScheduler:
                 f"━━━━━━━━━━━━"
             )
             logger.warning(f"KPI data not ready for {target_date}: {status}")
+
+    async def _run_sheets_sync(self):
+        """毎日6:30: 管理シートのCSVキャッシュを更新 → KPIキャッシュも再構築"""
+        result = await self._execute_tool("sheets_sync", tools.sheets_sync)
+        if result.success:
+            logger.info(f"Sheets sync completed: {result.output[:200]}")
+            cache_result = await self._execute_tool("kpi_cache_build", tools.kpi_cache_build)
+            if cache_result.success:
+                logger.info(f"KPI cache rebuilt: {cache_result.output[:200]}")
+            else:
+                logger.warning(f"KPI cache build failed: {cache_result.error[:200] if cache_result.error else 'unknown'}")
 
     async def _run_git_pull_sync(self):
         await self._execute_tool("git_pull_sync", tools.git_pull_sync)

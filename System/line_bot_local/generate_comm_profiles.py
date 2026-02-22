@@ -17,7 +17,7 @@ from pathlib import Path
 from datetime import datetime
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
-PROFILES_JSON = PROJECT_ROOT / "Master" / "people-profiles.json"
+PROFILES_JSON = PROJECT_ROOT / "Master" / "people" / "profiles.json"
 
 # カテゴリ別の返信スタイル定義
 STYLE_BY_CATEGORY = {

@@ -548,6 +548,18 @@ def fetch_addness_kpi() -> str:
         """キャッシュJSONからフォーマット済みテキストを生成"""
         parts = ["📊 スキルプラス KPI"]
 
+        # 広告チーム日報サマリー（当月目標 vs 実績）
+        rs = cache.get("report_summary", {})
+        if rs:
+            parts.append("━━ 当月サマリー（広告チーム日報） ━━")
+            for key in ("着金売上", "広告費", "集客数", "個別予約数"):
+                info = rs.get(key, {})
+                if info:
+                    line = f"  {key}: 目標{info.get('月間目標','-')} / 実績{info.get('月間実績','-')}"
+                    if info.get("直近日"):
+                        line += f"（直近{info['直近日']}: {info['直近値']}）"
+                    parts.append(line)
+
         # 月別サマリ
         for m in cache.get("monthly", []):
             parts.append(
@@ -680,6 +692,23 @@ def fetch_addness_kpi() -> str:
 
         return "\n".join(parts) if len(parts) > 1 else ""
 
+    def _rebuild_cache_from_csv() -> str:
+        """ローカルCSVからキャッシュを再構築して返す"""
+        builder_path = _SYSTEM_DIR / "kpi_cache_builder.py"
+        if not builder_path.exists():
+            return ""
+        try:
+            result = subprocess.run(
+                [sys.executable, str(builder_path)],
+                capture_output=True, text=True, timeout=30, encoding="utf-8"
+            )
+            if result.returncode == 0 and KPI_CACHE_PATH.exists():
+                new_cache = json.loads(KPI_CACHE_PATH.read_text(encoding="utf-8"))
+                return _format_from_cache(new_cache)
+        except Exception as e:
+            print(f"   ⚠️ CSV再構築エラー: {e}")
+        return ""
+
     # ── ハイブリッド取得ロジック ──
     try:
         # 1. キャッシュ確認
@@ -690,23 +719,29 @@ def fetch_addness_kpi() -> str:
                 print("   📊 KPIキャッシュから取得（fresh）")
                 return result
 
-        # 2. キャッシュなし or stale → Sheets API フォールバック
-        print("   📊 KPIキャッシュなし/期限切れ → Sheets API取得中...")
+        # 2. キャッシュなし or stale → CSVから再構築
+        print("   📊 KPIキャッシュなし/期限切れ → CSVから再構築中...")
+        csv_result = _rebuild_cache_from_csv()
+        if csv_result:
+            print("   📊 CSV再構築から取得成功")
+            return csv_result
+
+        # 3. CSV再構築失敗 → Sheets API フォールバック
+        print("   📊 CSV再構築失敗 → Sheets API取得中...")
         api_result = _fetch_from_api()
         if api_result:
             print("   📊 Sheets APIから取得成功")
             return api_result
 
-        # 3. API失敗 → staleキャッシュを最終手段として使用
+        # 4. API失敗 → staleキャッシュを最終手段として使用
         if cache:
             result = _format_from_cache(cache)
             if result:
-                print("   📊 staleキャッシュから取得（APIフォールバック）")
+                print("   📊 staleキャッシュから取得（最終手段）")
                 return result
 
     except Exception as e:
         print(f"   ⚠️ Addness KPIデータ取得エラー: {e}")
-        # 最終手段: エラー時もstaleキャッシュを試行
         try:
             cache, _ = _read_cache()
             if cache:

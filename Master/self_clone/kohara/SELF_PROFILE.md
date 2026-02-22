@@ -150,4 +150,4 @@
 
 *最終更新: 2026-02-20*
 *使用箇所: AI秘書の返信案生成プロンプト*
-*参照元: Master/self_clone/projects/kohara/1_Core/SOUL.md, USER.md*
+*参照元: Master/self_clone/kohara/SOUL.md, USER.md*

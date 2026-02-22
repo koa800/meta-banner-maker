@@ -1,0 +1,44 @@
+{
+  "id": "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk",
+  "title": "【広告チーム】報告シート",
+  "synced": true,
+  "synced_at": "2026-02-22T08:33:38.463644",
+  "tabs": [
+    {
+      "title": "目的・ルール",
+      "rows": 1000,
+      "cols": 26,
+      "cached_rows": 1
+    },
+    {
+      "title": "日報",
+      "rows": 1047,
+      "cols": 261,
+      "cached_rows": 87
+    },
+    {
+      "title": "週報",
+      "rows": 1000,
+      "cols": 26,
+      "cached_rows": 1
+    },
+    {
+      "title": "月報",
+      "rows": 1000,
+      "cols": 26,
+      "cached_rows": 1
+    },
+    {
+      "title": "年報",
+      "rows": 1000,
+      "cols": 26,
+      "cached_rows": 1
+    },
+    {
+      "title": "表・グラフ",
+      "rows": 998,
+      "cols": 28,
+      "cached_rows": 5
+    }
+  ]
+}

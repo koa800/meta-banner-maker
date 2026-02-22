@@ -2,7 +2,7 @@
 
 > **目的**: クローン対象者の情報を記録する
 > **更新頻度**: 高（週1回程度）
-> **原本参照**: Master/addness-goal-tree.md
+> **原本参照**: Master/addness/goal-tree.md
 
 ---
 

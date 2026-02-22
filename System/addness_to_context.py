@@ -29,7 +29,7 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 CONFIG_PATH = SCRIPT_DIR / "addness_config.json"
 DATA_PATH = SCRIPT_DIR / "addness_data" / "latest.json"
 CURSOR_RULES_DIR = PROJECT_ROOT / ".cursor" / "rules"
-MASTER_DIR = PROJECT_ROOT / "Master"
+MASTER_DIR = PROJECT_ROOT / "Master" / "addness"
 
 # Addness のツリーエンドポイント
 TREE_ENDPOINT = "/api/v1/team/daily_focus_objectives/tree"
@@ -621,7 +621,7 @@ def build_notification(nodes: list, meta: dict, data_source: str) -> str:
 
     lines += [
         "",
-        "> `Master/addness-goal-tree.md` に保存済み",
+        "> `Master/addness/goal-tree.md` に保存済み",
     ]
     return "\n".join(lines)
 
@@ -673,9 +673,9 @@ def main():
     mdc_path.write_text(render_mdc(nodes, meta), encoding="utf-8")
     print(f"  → {mdc_path}")
 
-    # Master/addness-goal-tree.md
+    # Master/addness/goal-tree.md
     MASTER_DIR.mkdir(parents=True, exist_ok=True)
-    master_path = MASTER_DIR / "addness-goal-tree.md"
+    master_path = MASTER_DIR / "goal-tree.md"
     master_path.write_text(render_full_md(nodes, meta), encoding="utf-8")
     print(f"  → {master_path}")
 

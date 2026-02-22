@@ -11,6 +11,7 @@
 | `Project/AI秘書作成.md` | `System/line_bot/app.py` または `System/line_bot_local/local_agent.py` を変更したとき |
 | `Project/質問自動回答プロジェクト.md` | Q&A関連（`qa_handler.py`, `qa_monitor.py`, `qa_search.py`）を変更したとき |
 | `Project/メール自動管理.md` | メール関連（`mail_manager.py`, `mail_inbox_*.py`）を変更したとき |
+| `Project/数値管理自動化.md` | 数値管理関連（`csv_sheet_sync.py`, `sheets_manager.py`, `sheets_sync.py`）を変更したとき |
 
 ### 更新の原則
 
@@ -34,10 +35,11 @@
 ```
 cursor/
 ├── Project/          # プロジェクトドキュメント（常に最新を維持）
-├── Master/           # 知識ベース（people-profiles.json, IDENTITY.md 等）
+├── Master/           # 知識ベース（people/, addness/, self_clone/, learning/, sheets/）
 ├── System/           # 実装ファイル
 │   ├── line_bot/     # Render (Flask) サーバー（サブモジュール）
-│   └── line_bot_local/ # PC常駐エージェント
+│   ├── line_bot_local/ # PC常駐エージェント
+│   └── mac_mini/     # Mac Mini Orchestrator（スケジューラ・ツール群）
 └── Skills/           # ナレッジ・スキル定義
 ```
 

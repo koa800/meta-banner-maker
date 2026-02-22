@@ -24,7 +24,7 @@ logger = logging.getLogger("who_to_ask")
 # ---- パス設定 ----
 SCRIPT_DIR = Path(__file__).parent
 PROJECT_ROOT = SCRIPT_DIR.parent
-PROFILES_JSON = PROJECT_ROOT / "Master" / "people-profiles.json"
+PROFILES_JSON = PROJECT_ROOT / "Master" / "people" / "profiles.json"
 
 
 def get_api_key() -> str:
