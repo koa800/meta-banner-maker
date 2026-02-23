@@ -309,13 +309,15 @@ if [ -f "$RESTART_SIGNAL" ]; then
 時刻: $(date '+%H:%M')"
 fi
 
+ORCH_PLIST=~/Library/LaunchAgents/com.addness.agent-orchestrator.plist
 if echo "$CHANGED" | grep -q "mac_mini/agent_orchestrator/"; then
-  log "Orchestrator 再起動（5秒後バックグラウンド）"
+  log "Orchestrator 再起動（unload/load 方式）"
   (
-    sleep 5
-    launchctl stop com.addness.agent-orchestrator 2>/dev/null || true
+    sleep 3
+    launchctl unload "$ORCH_PLIST" 2>/dev/null || true
     sleep 2
-    launchctl start com.addness.agent-orchestrator 2>/dev/null || true
+    launchctl load "$ORCH_PLIST" 2>/dev/null || true
+    log "Orchestrator 再起動完了"
   ) &
 fi
 
