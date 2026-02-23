@@ -97,6 +97,16 @@ ensure_plist_path() {
   launchctl unload "$PLIST" 2>/dev/null || true
   sleep 1
 
+  # config.json から環境変数を読み取り（plistに埋め込む）
+  local ANTHROPIC_KEY=""
+  local AGENT_TOKEN_VAL=""
+  local LINE_BOT_URL=""
+  if [ -f "$NEW_CONFIG" ]; then
+    ANTHROPIC_KEY=$(python3 -c "import json; print(json.load(open('$NEW_CONFIG')).get('anthropic_api_key',''))" 2>/dev/null || echo "")
+    AGENT_TOKEN_VAL=$(python3 -c "import json; print(json.load(open('$NEW_CONFIG')).get('agent_token',''))" 2>/dev/null || echo "")
+    LINE_BOT_URL=$(python3 -c "import json; print(json.load(open('$NEW_CONFIG')).get('server_url',''))" 2>/dev/null || echo "")
+  fi
+
   cat > "$PLIST" <<EOPLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -140,6 +150,29 @@ ensure_plist_path() {
         <string>1</string>
         <key>HOME</key>
         <string>$HOME</string>
+EOPLIST
+
+  # 環境変数がある場合のみ追加（空のまま書き込まない）
+  if [ -n "$ANTHROPIC_KEY" ]; then
+    cat >> "$PLIST" <<EOENV
+        <key>ANTHROPIC_API_KEY</key>
+        <string>${ANTHROPIC_KEY}</string>
+EOENV
+  fi
+  if [ -n "$AGENT_TOKEN_VAL" ]; then
+    cat >> "$PLIST" <<EOENV
+        <key>AGENT_TOKEN</key>
+        <string>${AGENT_TOKEN_VAL}</string>
+EOENV
+  fi
+  if [ -n "$LINE_BOT_URL" ]; then
+    cat >> "$PLIST" <<EOENV
+        <key>LINE_BOT_SERVER_URL</key>
+        <string>${LINE_BOT_URL}</string>
+EOENV
+  fi
+
+  cat >> "$PLIST" <<EOPLIST
     </dict>
 </dict>
 </plist>

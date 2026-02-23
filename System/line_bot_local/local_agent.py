@@ -79,14 +79,17 @@ def load_feedback_examples() -> list:
 
 def save_feedback_example(fb: dict):
     """フィードバックを保存（最大50件、古いものを削除）"""
-    examples = load_feedback_examples()
-    examples.append(fb)
-    examples = examples[-50:]
-    FEEDBACK_FILE.parent.mkdir(parents=True, exist_ok=True)
-    FEEDBACK_FILE.write_text(
-        json.dumps(examples, ensure_ascii=False, indent=2),
-        encoding="utf-8"
-    )
+    try:
+        examples = load_feedback_examples()
+        examples.append(fb)
+        examples = examples[-50:]
+        FEEDBACK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        FEEDBACK_FILE.write_text(
+            json.dumps(examples, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+    except Exception as e:
+        print(f"⚠️ フィードバック保存エラー: {e} (path={FEEDBACK_FILE})")
 
 
 def build_feedback_prompt_section(sender_name: str = "", sender_category: str = "") -> str:
@@ -992,7 +995,7 @@ def call_claude_api(instruction: str, task: dict):
                     "- 「、、」（読点2つ）で溜め・気遣いを表現\n"
                     "- 上司: 丁寧だが堅くなく、提案型。「お疲れ様です！」で始める\n"
                     "- 同僚: フランク。「○○さんお疲れ様です！」で始める\n"
-                    "- 部下: かなりフランク。敬語なし or 最低限\n"
+                    "- 部下: タメ口。「です」「ます」は使わない。かなりフランク\n"
                     "- NG: 「かしこまりました」「承知いたしました」\n"
                     "- OK: 「了解です！」「分かりました！」「どうでしょうか？」"
                 )
@@ -1003,6 +1006,9 @@ def call_claude_api(instruction: str, task: dict):
             comm_profile = profile.get("comm_profile", {}) if profile else {}
             comm_style_note = comm_profile.get("style_note", "")
             comm_greeting = comm_profile.get("greeting", "")
+            comm_formality = comm_profile.get("formality", "")
+            comm_tone_keywords = comm_profile.get("tone_keywords", [])
+            comm_avoid = comm_profile.get("avoid", [])
             active_goals = (profile.get("active_goals", []) if profile else [])[:3]
             goals_context = ""
             if active_goals:
@@ -1085,7 +1091,10 @@ def call_claude_api(instruction: str, task: dict):
 
 【送信者: {sender_name}】{category_line}
 返信スタイル: {comm_style_note or tone_guide or '関係性に応じたトーンで'}
+{f'敬語レベル: タメ口（敬語禁止。「です」「ます」は使わない）' if comm_formality == 'low' else f'敬語レベル: 丁寧語（「です」「ます」を使う）' if comm_formality == 'high' else f'敬語レベル: 中間（フランクだが最低限の丁寧さ）' if comm_formality in ('medium', 'mid') else ''}
 推奨挨拶: {comm_greeting or 'お疲れ様！'}
+{f"口調キーワード: {', '.join(comm_tone_keywords)}" if comm_tone_keywords else ''}
+{f"避けるべき表現: {', '.join(comm_avoid)}" if comm_avoid else ''}
 {goals_context}{notes_text}{insights_text}
 {profile_info}
 {context_section}{quoted_section}{sheet_section}
@@ -1099,6 +1108,7 @@ def call_claude_api(instruction: str, task: dict):
 {f'- データから計算式・前提条件・結論を明確に構造化して提示する' if sheet_section else ''}
 {f'- 相手の質問の意図を正確に捉え、求められている数字や判断を具体的に回答する' if sheet_section else ''}
 - 相手固有のスタイルノートと口調の癖をそのまま再現する
+- 【最重要】敬語レベルを厳守すること。「タメ口（敬語禁止）」の相手には「です」「ます」「ございます」「いたします」を絶対に使わない。「了解！」「やっておくよ！」「いいね！」のようなタメ口で返す
 - メモ・現在の取り組みがあれば文脈として活用する
 - 絶対に使わない表現: 「そっかー」「そっかぁ」「そうなんだー」「〜だよね」「〜だよー」「わかるー」「たしかにー」等の長音カジュアル表現
 - 絶対に使わない絵文字: 😊 😄 😆 🥰 ☺️ 🤗（ニコニコ系は全て禁止。使えるのは😭🙇‍♂️🔥のみ）

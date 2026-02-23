@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月23日（学習ループ修正: group_insights返信注入・Q&Aナレッジ蓄積・承認フィードバック学習） |
+| 最終更新 | 2026年2月23日（notification_ids保存堅牢化・返信先フォールバック改善・フィードバック保存エラーハンドリング・plist環境変数自動設定） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -297,7 +297,7 @@ bash System/line_bot_local/sync_data.sh
 | データ永続化 | Render永続ディスク `/data` を使用。`DATA_DIR=/data` 環境変数で設定済み。デプロイ後も状態が消えない。`line_bot_group_log.json`（グループメッセージ日次ログ）も同ディレクトリに保存・日付ローテーション |
 | macOS TCC | launchd から Desktop は直接アクセス不可。`~/agents/` をデプロイ先に使用（Library版は廃止済み） |
 | LINE webhook重複 | 同一 message_id のタスクは1件のみキューイング済み |
-| Mac Mini TCC制限 | LaunchAgent から `~/Desktop/` は直接アクセス不可。`~/agents/` を作業ディレクトリに使用。plistが古いパス（`~/Library/LineBot/`等）を参照していた場合、`git_pull_sync.sh`の`ensure_plist_path`が自動修正 |
+| Mac Mini TCC制限 | LaunchAgent から `~/Desktop/` は直接アクセス不可。`~/agents/` を作業ディレクトリに使用。plistが古いパス（`~/Library/LineBot/`等）を参照していた場合、`git_pull_sync.sh`の`ensure_plist_path`が自動修正。plist再生成時は`config.json`から`ANTHROPIC_API_KEY`/`AGENT_TOKEN`/`LINE_BOT_SERVER_URL`も自動設定 |
 | MacBook↔Mac Mini同期 | GitHub push/pull方式。post-commitで自動push→Mac Mini Orchestratorが5分ごとにgit pull→ローカルrsyncでデプロイ。外出先からも同期可能。旧rsync over SSH方式（sync_from_macbook.sh）は2026-02-22に無効化済み |
 | git_pull_sync rsync除外 | `*.db`（SQLiteランタイムDB）を除外リストに追加。rsync `--delete`でagent.dbが毎回削除されるバグを修正済み（2026-02-22） |
 | Orchestrator SYSTEM_DIR | tools.py の SYSTEM_DIR は __file__ ベースで動的解決（Desktop/Mac Mini両対応）。ハードコードしないこと |
@@ -305,6 +305,7 @@ bash System/line_bot_local/sync_data.sh
 | LINE Notify廃止 | LINE Notify は2025年3月終了。Render `/notify` エンドポイント + LINE Messaging API push_message で代替 |
 | Google OAuth token.json | `~/agents/token.json` に保存。access tokenは1時間で失効するがrefresh_tokenで自動更新。oauth_health_checkが毎朝9時に監視 |
 | MacBook機種変更 | `Project/MacBook移行ガイド.md` 参照。Mac Mini側は完全自律稼働のため影響なし。SSHキーとpost-commitフックの再設定のみ必要 |
+| 手元PCのスリープ・閉じ蓋 | 定常タスク（Orchestrator・LINE local・メール・日報・Q&A等）は**Mac Mini**で稼働。手元のMacBookをスリープ/閉じ蓋しても**これらの仕組みは止まらない**。閉じ蓋でもスリープしないようにするには下記「クラムシェルモード」を参照 |
 | Chatwork Webhook設定 | Chatwork管理画面 → Webhook設定 → イベント `mention_to_me` → URL: Chatwork Webhook URL |
 | Chatwork account_id | `curl -H "x-chatworktoken: TOKEN" https://api.chatwork.com/v2/me` で取得 |
 | Chatwork送信者紐付け | `people-identities.json` の `chatwork_account_id` フィールドに相手のaccount_idを設定してプロファイル逆引き可能に |
@@ -312,6 +313,39 @@ bash System/line_bot_local/sync_data.sh
 | Addness KPIシート | `【アドネス全体】数値管理シート`（ID: `1FOh_XGZWaEisfFEngiN848kSm2E6HotAZiMDTmO7BNA`）。タブ: 元データ / スキルプラス（日別）/ スキルプラス（月別）。`csv_sheet_sync.py` がCSV同期→日別月別構築→KPIキャッシュ生成を連鎖実行。詳細は `Project/数値管理自動化.md` を参照。kohara アカウントで読み書き |
 | KPIデータ開示制御 | 事業KPI（売上・広告費・ROAS等）は内部メンバーのみ開示。外部パートナー・未登録者には `fetch_addness_kpi()` のデータ注入をスキップ。ただしプロファイルの `related_sheets` に登録されたシートデータは外部にも開示可 |
 | タスク失敗通知 | Orchestratorのタスクが失敗するとLINE通知（2時間レート制限）。health_check/oauth_health_checkは除外 |
+
+### MacBook を閉じてもスリープしない（クラムシェルモード）
+
+**MacBook 単体（ケーブル・外付けなし）では、蓋を閉じてもスリープしない設定は Apple の仕様で提供されていない。** 蓋を閉じてスリープしないようにできるのは、外付けディスプレイ＋キーボード・マウス＋電源を使う**クラムシェルモード**のみ。
+
+手元の MacBook で「蓋を閉じたまま電源オンで動かし続けたい」場合は、**クラムシェルモード**を使う。ソフトの設定は不要で、以下を接続してから蓋を閉じるだけ。
+
+#### 準備するもの
+
+| 必須 | 内容 |
+|------|------|
+| ✅ | 電源アダプタ（充電ケーブル） |
+| ✅ | 外部ディスプレイ（HDMI / USB-C / Thunderbolt のどれかで接続） |
+| ✅ | 外部キーボード（Bluetooth または USB） |
+| ✅ | 外部マウス または トラックパッド（Bluetooth または USB） |
+
+#### やること（手順）
+
+1. **MacBook の蓋は開けたまま**、以下をすべて接続する。
+   - 電源アダプタを接続する
+   - 外部ディスプレイのケーブルを接続する（画面が映ることを確認）
+   - 外部キーボードを接続（またはペアリング）する
+   - 外部マウス（またはトラックパッド）を接続（またはペアリング）する
+2. 外部ディスプレイにウィンドウが表示されていることを確認する。
+3. **そのまま蓋を閉じる。**
+4. 外部キーボードで操作するか、マウスを動かす → 外部ディスプレイに表示が出ていればクラムシェルモードになっている。
+
+※ 初回だけ「蓋を開けた状態で」上記を接続してから閉じると確実。2回目以降は、接続済みの状態で蓋を閉じるだけでよい。
+
+#### 注意
+
+- 蓋を閉じたまま長時間使うと通気が悪くなり発熱しやすい。MacBook の下にスタンドを置くなど、底面にすき間をあけて排熱するとよい。
+- 「ディスプレイがオフのときにMacを自動的にスリープさせない」だけでは、**蓋を閉じたときのスリープは防げない**（蓋閉じ＝ディスプレイオフとみなされるため）。クラムシェルは「電源＋外付けディスプレイ＋外付けキーボード・マウス」の3つが必須。
 
 ---
 
@@ -501,6 +535,11 @@ MacBook (どこからでも)
 - [x] 管理シート自動同期（`sheets_sync.py`。Master/sheets/README.md登録シートのCSVキャッシュを毎朝6:30に自動更新。Orchestrator統合済み）
 - [x] グループLINE監視+日次ダイジェスト（全グループメッセージを永続ログに蓄積→毎夜21:00にClaude Haiku分析→グループ別要約・活動度・アクション事項を秘書グループに通知。`/api/group-log` APIでログ取得可能）
 - [x] グループログ30日アーカイブ＋週次プロファイル学習（日次ログを`{DATA_DIR}/group_logs/{YYYY-MM-DD}.json`に自動アーカイブ（30日保持）。毎週日曜10:00にClaude Haikuが過去7日間の会話を人物ごとに分析→`profiles.json`の`group_insights`フィールドに書き込み）
+- [x] notification_ids保存堅牢化（`push_message_with_http_info`の`sent_messages`が空の場合に`raw_data`パースでフォールバック。全5箇所の通知ID保存を`_extract_sent_message_id()`に統一。失敗時に警告ログ出力）
+- [x] 返信先グループフォールバック改善（引用返信で`notification_ids`特定失敗時、`_find_pending_by_quote_context()`で準備完了のpending1件なら安全に使用。複数件は警告付きで最新選択）
+- [x] handle_approve_mention先頭4文字衝突修正（LINEメッセージIDが連番のため複数pendingで先頭4文字が衝突→生成中のメッセージを誤選択する問題を修正。reply_suggestion準備完了のものを優先選択するよう変更）
+- [x] フィードバック保存エラーハンドリング（`save_feedback_example`にtry/except追加。Mac Miniでパス不正時もタスクが「タスクエラー」にならない）
+- [x] plist環境変数自動設定（`ensure_plist_path`がplist再生成時に`config.json`から`ANTHROPIC_API_KEY`/`AGENT_TOKEN`/`LINE_BOT_SERVER_URL`を読み取って埋め込み）
 
 ---
 
