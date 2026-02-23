@@ -12,6 +12,7 @@
 | `Project/質問自動回答プロジェクト.md` | Q&A関連（`qa_handler.py`, `qa_monitor.py`, `qa_search.py`）を変更したとき |
 | `Project/メール自動管理.md` | メール関連（`mail_manager.py`, `mail_inbox_*.py`）を変更したとき |
 | `Project/数値管理自動化.md` | 数値管理関連（`csv_sheet_sync.py`, `sheets_manager.py`, `sheets_sync.py`）を変更したとき |
+| `Project/定常業務.md` | 日報入力手順・Looker Studio CSV取得手順・完了報告フォーマットを変更したとき |
 
 ### 更新の原則
 
