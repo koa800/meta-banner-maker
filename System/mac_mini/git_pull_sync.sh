@@ -248,6 +248,7 @@ rsync -a --delete \
   --exclude "*.db" \
   --exclude "data/" \
   --exclude "credentials/" \
+  --exclude "config/" \
   "$REPO_DIR/System/" "$DEPLOY_DIR/System/" \
   && log "System/ OK" || log "ERROR: System/ rsync 失敗"
 
