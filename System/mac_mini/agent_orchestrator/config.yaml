@@ -79,6 +79,9 @@ schedule:
   slack_ai_team_check:
     interval_minutes: 30         # 30分ごとにSlack #ai-team新着チェック→LINE転送
     enabled: true
+  hinata_activity_check:
+    cron: "0 21 * * *"           # 毎日 夜9:00（日向の今日の様子チェック）
+    enabled: true
 
 webhook:
   host: "0.0.0.0"

@@ -495,5 +495,5 @@ Phase 4: AI秘書が代理承認できるようになる
 - [ ] 日向のAddnessアカウント作成
 - [x] 日向のSlackアカウント作成（hinata.work@icloud.com で招待済み）
 - [ ] 各ツールへの日向アカウント追加（Meta/TikTok/L-step: 閲覧権限）
-- [ ] AI秘書のhealth_check対象に日向Mac Miniを追加
+- [x] AI秘書のhealth_check対象に日向Mac Miniを追加（日向の#ai-team発言を毎晩チェック。hinata_slack_user_id設定後に有効化）
 - [ ] 日向のOpenClawスケジュール設定（日次/週次サイクル）

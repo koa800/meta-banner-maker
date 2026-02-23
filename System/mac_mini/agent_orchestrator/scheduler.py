@@ -54,6 +54,7 @@ class TaskScheduler:
             "kpi_nightly_cache": self._run_kpi_nightly_cache,
             "log_rotate": self._run_log_rotate,
             "slack_ai_team_check": self._run_slack_ai_team_check,
+            "hinata_activity_check": self._run_hinata_activity_check,
         }
 
     def setup(self):
@@ -1465,3 +1466,56 @@ JSON以外の文字は出力しないでください。"""}],
             logger.info(f"Slack #ai-team: forwarded {len(human_msgs)} messages to LINE")
         else:
             logger.warning("Slack #ai-team: LINE forward failed")
+
+    async def _run_hinata_activity_check(self):
+        """日向の活動チェック（毎日夜）— 新人の様子を見る先輩の感覚"""
+        import time
+        from .slack_reader import fetch_channel_messages
+        from .notifier import send_line_notify
+
+        # 日向の Slack ユーザーID（参加後に設定）
+        hinata_user_id = self.memory.get_state("hinata_slack_user_id")
+        if not hinata_user_id:
+            logger.debug("hinata_activity_check: hinata_slack_user_id not set, skipping")
+            return
+
+        AI_TEAM_CHANNEL = "C0AGLRJ8N3G"
+
+        # 今日の0:00からのメッセージを取得
+        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        oldest_ts = str(today_start.timestamp())
+
+        messages = fetch_channel_messages(AI_TEAM_CHANNEL, oldest=oldest_ts, limit=100)
+        hinata_msgs = [m for m in messages if m.get("user_id") == hinata_user_id]
+
+        # 連続無発言日数を追跡
+        silent_key = "hinata_silent_days"
+        if hinata_msgs:
+            # 今日は発言あり → カウンタリセット
+            self.memory.set_state(silent_key, "0")
+            logger.debug(f"hinata_activity_check: {len(hinata_msgs)} messages today, all good")
+            return
+
+        silent_days = int(self.memory.get_state(silent_key) or "0") + 1
+        self.memory.set_state(silent_key, str(silent_days))
+
+        if silent_days == 1:
+            send_line_notify(
+                "\n📋 日向の様子\n"
+                "今日は #ai-team で日向からの発言がなかったよ。\n"
+                "まだ慣れてないだけかもだけど、一応共有。"
+            )
+        elif silent_days == 3:
+            send_line_notify(
+                "\n📋 日向の様子\n"
+                "3日間 #ai-team で日向の発言がないね。\n"
+                "ちょっと声かけたほうがいいかも。"
+            )
+        elif silent_days >= 7 and silent_days % 7 == 0:
+            send_line_notify(
+                f"\n📋 日向の様子\n"
+                f"{silent_days}日間 #ai-team で日向の発言なし。\n"
+                f"何か問題が起きてるかもしれない。確認してみて。"
+            )
+        else:
+            logger.info(f"hinata_activity_check: silent for {silent_days} days")
