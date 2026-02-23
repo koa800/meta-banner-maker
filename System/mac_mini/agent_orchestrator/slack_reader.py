@@ -1,8 +1,9 @@
 """
 Slack channel reader for the agent orchestrator.
 
-Reads messages from Slack channels using the Bot Token (Web API).
-Used to monitor #ai-team and other channels for AI Secretary awareness.
+Reads messages from Slack channels using User Token (甲原アカウント).
+User Token で読み取り → 甲原が参加している全チャンネルを読める。
+書き込みは Webhook（AI Secretary 名義）で行う。
 """
 
 import json
@@ -15,14 +16,23 @@ from .shared_logger import get_logger
 
 logger = get_logger("slack_reader")
 
+# User Token（甲原アカウント）— 読み取り用
+_SLACK_USER_TOKEN = os.environ.get("SLACK_USER_TOKEN", "")
+# Bot Token — フォールバック / ユーザー解決用
 _SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
 _SLACK_API_BASE = "https://slack.com/api"
 
 
-def _api_call(method: str, params: dict = None) -> Optional[dict]:
-    """Call Slack Web API method with Bot Token."""
-    if not _SLACK_BOT_TOKEN:
-        logger.warning("SLACK_BOT_TOKEN not set — cannot call Slack API")
+def _get_read_token() -> str:
+    """読み取り用トークンを返す（User Token 優先）。"""
+    return _SLACK_USER_TOKEN or _SLACK_BOT_TOKEN
+
+
+def _api_call(method: str, params: dict = None, token: str = None) -> Optional[dict]:
+    """Call Slack Web API method."""
+    tok = token or _get_read_token()
+    if not tok:
+        logger.warning("No Slack token set — cannot call Slack API")
         return None
 
     url = f"{_SLACK_API_BASE}/{method}"
@@ -33,7 +43,7 @@ def _api_call(method: str, params: dict = None) -> Optional[dict]:
     req = urllib.request.Request(
         url,
         headers={
-            "Authorization": f"Bearer {_SLACK_BOT_TOKEN}",
+            "Authorization": f"Bearer {tok}",
             "Content-Type": "application/x-www-form-urlencoded",
         },
     )
@@ -114,7 +124,7 @@ def fetch_channel_messages(
 
 
 def list_channels() -> list[dict]:
-    """List all channels the bot is a member of.
+    """List all channels the user is a member of.
 
     Returns:
         List of dicts: [{"id": "C...", "name": "...", "is_private": bool}]

@@ -9,7 +9,11 @@
 | コンセプト | 当たり前にそこにいて、チームを温かく照らす存在 |
 | 開始日 | 2026年2月24日 |
 | 最終更新 | 2026年2月24日 |
-| ステータス | 📝 設計中 |
+| Slackワークスペース | 甲原海人Team（個人用） |
+| Slackチャネル | #ai-team（プライベート）ID: `C0AGLRJ8N3G` |
+| Slack App | AI Secretary（App ID: `A0AGSPV2DB6`） |
+| Webhook URL | 設定済み（Mac Mini plist `SLACK_AI_TEAM_WEBHOOK_URL`） |
+| ステータス | 🚧 Phase 1 準備中 |
 
 ---
 
@@ -485,11 +489,11 @@ Phase 4: AI秘書が代理承認できるようになる
 
 - [ ] Mac Miniの調達
 - [ ] OpenClawのセットアップ（Node 22+、Claude Code Skill導入）
-- [ ] Slack #ai-team チャネル作成
-- [ ] **AI秘書のSlack連携実装（新規開発）**
+- [x] Slack #ai-team チャネル作成（甲原海人Team / プライベート / ID: C0AGLRJ8N3G）
+- [x] **AI秘書のSlack連携実装** — Webhook送信（notifier.py）+ 読み取り（slack_reader.py）
 - [ ] 日向のAddness Google Workspaceアカウント作成
 - [ ] 日向のAddnessアカウント作成
-- [ ] 日向のSlackアカウント作成
+- [x] 日向のSlackアカウント作成（hinata.work@icloud.com で招待済み）
 - [ ] 各ツールへの日向アカウント追加（Meta/TikTok/L-step: 閲覧権限）
 - [ ] AI秘書のhealth_check対象に日向Mac Miniを追加
 - [ ] 日向のOpenClawスケジュール設定（日次/週次サイクル）
