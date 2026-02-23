@@ -51,6 +51,8 @@ class TaskScheduler:
             "git_pull_sync": self._run_git_pull_sync,
             "daily_group_digest": self._run_daily_group_digest,
             "weekly_profile_learning": self._run_weekly_profile_learning,
+            "kpi_nightly_cache": self._run_kpi_nightly_cache,
+            "log_rotate": self._run_log_rotate,
         }
 
     def setup(self):
@@ -84,7 +86,8 @@ class TaskScheduler:
         logger.info("Scheduler shut down")
 
     # タスク失敗通知を送らないタスク（自前でエラーハンドリングするもの）
-    _NO_FAILURE_NOTIFY = {"health_check", "oauth_health_check", "render_health_check", "git_pull_sync"}
+    _NO_FAILURE_NOTIFY = {"health_check", "oauth_health_check", "render_health_check"}
+    # git_pull_syncは独自の頻度制限付き通知を実装（_run_git_pull_sync参照）
 
     async def _execute_tool(self, task_name: str, tool_fn, **kwargs) -> tools.ToolResult:
         task_id = self.memory.log_task_start(task_name, metadata=kwargs)
@@ -134,11 +137,20 @@ class TaskScheduler:
             self.memory.set_state(state_key, now.isoformat())
 
     async def _run_addness_fetch(self):
-        await self._execute_tool("addness_fetch", tools.addness_fetch)
-        await self._execute_tool("addness_to_context", tools.addness_to_context)
+        result = await self._execute_tool("addness_fetch", tools.addness_fetch)
+        if result.success:
+            ctx_result = await self._execute_tool("addness_to_context", tools.addness_to_context)
+            from .notifier import send_line_notify
+            send_line_notify(f"✅ Addnessゴール同期完了（コンテキスト{'更新済み' if ctx_result.success else '更新失敗'}）")
+        else:
+            await self._execute_tool("addness_to_context", tools.addness_to_context)
 
     async def _run_ai_news(self):
-        await self._execute_tool("ai_news", tools.ai_news_notify)
+        result = await self._execute_tool("ai_news", tools.ai_news_notify)
+        if result.success and result.output:
+            from .notifier import send_line_notify
+            # ai_news_notifyは自前でLINE通知するので、ここでは追加通知しない
+            logger.info(f"AI news completed: {result.output[:100]}")
 
     async def _run_mail_personal(self):
         result = await self._execute_tool("mail_inbox_personal", tools.mail_run, account="personal")
@@ -271,6 +283,75 @@ class TaskScheduler:
                         self.memory.set_state(state_key, datetime.now().isoformat())
             except Exception as e:
                 logger.debug(f"local_agent log check error: {e}")
+
+        # KPIキャッシュ鮮度チェック（48時間超で警告）
+        kpi_cache = os.path.expanduser("~/agents/System/data/kpi_summary.json")
+        if os.path.exists(kpi_cache):
+            try:
+                import time
+                cache_age_hours = (time.time() - os.path.getmtime(kpi_cache)) / 3600
+                if cache_age_hours > 48:
+                    state_key = "kpi_cache_stale_notified"
+                    last_n = self.memory.get_state(state_key)
+                    if not last_n or (datetime.now() - datetime.fromisoformat(last_n)).total_seconds() > 21600:  # 6時間に1回
+                        send_line_notify(
+                            f"⚠️ KPIキャッシュ未更新\n"
+                            f"最終更新: {cache_age_hours:.0f}時間前\n"
+                            f"AI秘書のKPIデータが古くなっています"
+                        )
+                        self.memory.set_state(state_key, datetime.now().isoformat())
+            except Exception as e:
+                logger.debug(f"KPI cache check error: {e}")
+
+        # ディスク使用率チェック（90%超で警告）
+        try:
+            import shutil
+            usage = shutil.disk_usage(os.path.expanduser("~"))
+            used_pct = usage.used / usage.total * 100
+            if used_pct > 90:
+                state_key = "disk_critical_notified"
+                last_n = self.memory.get_state(state_key)
+                if not last_n or (datetime.now() - datetime.fromisoformat(last_n)).total_seconds() > 21600:
+                    free_gb = usage.free / (1024**3)
+                    send_line_notify(
+                        f"⚠️ Mac Mini ディスク残量警告\n"
+                        f"使用率: {used_pct:.1f}% / 残り: {free_gb:.1f}GB\n"
+                        f"ログ・キャッシュの整理が必要です"
+                    )
+                    self.memory.set_state(state_key, datetime.now().isoformat())
+        except Exception as e:
+            logger.debug(f"Disk check error: {e}")
+
+        # Orchestratorクラッシュループ検知（起動から5分以内の再チェックが短時間に繰り返される）
+        try:
+            uptime_key = "orchestrator_boot_time"
+            boot_time = self.memory.get_state(uptime_key)
+            now = datetime.now()
+            if not boot_time:
+                self.memory.set_state(uptime_key, now.isoformat())
+            else:
+                boot_dt = datetime.fromisoformat(boot_time)
+                uptime_min = (now - boot_dt).total_seconds() / 60
+                # 起動5分以内にhealth_checkが走る＝再起動直後
+                if uptime_min < 5:
+                    crash_key = "orchestrator_recent_boots"
+                    recent = int(self.memory.get_state(crash_key) or "0") + 1
+                    self.memory.set_state(crash_key, str(recent))
+                    if recent >= 3:
+                        state_key = "crash_loop_notified"
+                        last_n = self.memory.get_state(state_key)
+                        if not last_n or (datetime.now() - datetime.fromisoformat(last_n)).total_seconds() > 3600:
+                            send_line_notify(
+                                f"🚨 Orchestratorクラッシュループ検知\n"
+                                f"短時間に{recent}回再起動しています\n"
+                                f"ログを確認してください"
+                            )
+                            self.memory.set_state(state_key, datetime.now().isoformat())
+                elif uptime_min > 10:
+                    # 安定稼働中 → カウンタリセット
+                    self.memory.set_state("orchestrator_recent_boots", "0")
+        except Exception as e:
+            logger.debug(f"Crash loop check error: {e}")
 
         running_jobs = len(self.scheduler.get_jobs())
         self.memory.set_state("health_status", "ok")
@@ -904,16 +985,32 @@ class TaskScheduler:
             # 完了 → 日別/月別に投入
             result = await self._execute_tool("kpi_process", tools.kpi_process)
             if result.success and "投入完了" in result.output:
+                # KPIキャッシュも再生成（AI秘書が最新データを参照できるように）
+                cache_result = await self._execute_tool("kpi_cache_build", tools.kpi_cache_build)
+                cache_status = ""
+                if cache_result.success:
+                    logger.info(f"KPI cache rebuilt after import: {cache_result.output[:200]}")
+                else:
+                    cache_status = "\n⚠️ KPIキャッシュ再生成に失敗（AI秘書のデータが古い可能性あり）"
+                    logger.warning(f"KPI cache build failed after import: {cache_result.error[:200] if cache_result.error else 'unknown'}")
                 send_line_notify(
                     f"\n📊 KPIデータ更新完了\n"
                     f"━━━━━━━━━━━━\n"
-                    f"{result.output[:200]}\n"
+                    f"{result.output[:200]}{cache_status}\n"
                     f"━━━━━━━━━━━━"
                 )
             elif result.success and "投入対象なし" in result.output:
                 logger.info(f"KPI process: already up to date for {target_date}")
             else:
+                # 投入失敗を通知
                 logger.warning(f"KPI process result: {result.output[:200]}")
+                send_line_notify(
+                    f"\n⚠️ KPIデータ投入エラー\n"
+                    f"━━━━━━━━━━━━\n"
+                    f"対象日: {target_date}\n"
+                    f"{(result.error or result.output or 'unknown')[:200]}\n"
+                    f"━━━━━━━━━━━━"
+                )
         else:
             # 未完了 → リマインド送信
             status = check.output if check.success else "チェック失敗"
@@ -935,11 +1032,56 @@ class TaskScheduler:
             cache_result = await self._execute_tool("kpi_cache_build", tools.kpi_cache_build)
             if cache_result.success:
                 logger.info(f"KPI cache rebuilt: {cache_result.output[:200]}")
+                from .notifier import send_line_notify
+                send_line_notify(f"✅ 管理シート同期+KPIキャッシュ更新完了")
             else:
                 logger.warning(f"KPI cache build failed: {cache_result.error[:200] if cache_result.error else 'unknown'}")
+                from .notifier import send_line_notify
+                send_line_notify(
+                    f"⚠️ KPIキャッシュ再生成失敗\n"
+                    f"Sheets同期は成功しましたが、キャッシュ生成に失敗しました。\n"
+                    f"AI秘書のKPIデータが古い可能性があります。"
+                )
+
+    async def _run_kpi_nightly_cache(self):
+        """毎晩22:00: KPIキャッシュを再生成（AI秘書が夜間も最新データを参照できるように）"""
+        result = await self._execute_tool("kpi_cache_build", tools.kpi_cache_build)
+        if result.success:
+            logger.info(f"Nightly KPI cache rebuilt: {result.output[:200]}")
+        else:
+            logger.warning(f"Nightly KPI cache build failed: {result.error[:200] if result.error else 'unknown'}")
+            from .notifier import send_line_notify
+            send_line_notify(
+                f"⚠️ 夜間KPIキャッシュ再生成失敗\n"
+                f"{(result.error or 'unknown')[:150]}"
+            )
+
+    async def _run_log_rotate(self):
+        """毎日3:00: ログローテーション"""
+        result = await self._execute_tool("log_rotate", tools.log_rotate)
+        if result.success:
+            logger.info(f"Log rotate completed: {result.output[:200]}")
+
+    _git_pull_consecutive_failures = 0
 
     async def _run_git_pull_sync(self):
-        await self._execute_tool("git_pull_sync", tools.git_pull_sync)
+        result = await self._execute_tool("git_pull_sync", tools.git_pull_sync)
+        if result.success:
+            if self._git_pull_consecutive_failures >= 6:
+                # 復旧通知
+                from .notifier import send_line_notify
+                send_line_notify(f"✅ Git同期復旧（{self._git_pull_consecutive_failures}回連続失敗後に復旧）")
+            self._git_pull_consecutive_failures = 0
+        else:
+            self._git_pull_consecutive_failures += 1
+            # 6回連続失敗（=30分）で初回通知、以降1時間ごと
+            if self._git_pull_consecutive_failures == 6 or (self._git_pull_consecutive_failures > 6 and self._git_pull_consecutive_failures % 12 == 0):
+                from .notifier import send_line_notify
+                send_line_notify(
+                    f"⚠️ Git同期 {self._git_pull_consecutive_failures}回連続失敗\n"
+                    f"Mac Miniがリポジトリと同期できていません。\n"
+                    f"エラー: {(result.error or 'unknown')[:150]}"
+                )
 
     async def _run_daily_group_digest(self):
         """毎日21:00: グループLINEの1日分のメッセージをClaude分析→秘書グループに報告"""

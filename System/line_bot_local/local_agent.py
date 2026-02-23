@@ -49,8 +49,8 @@ def _load_self_identity() -> str:
     try:
         if SELF_IDENTITY_MD.exists():
             return SELF_IDENTITY_MD.read_text(encoding="utf-8")
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"⚠️ IDENTITY.md読み込みエラー: {e}")
     return ""
 
 
@@ -62,8 +62,8 @@ def _load_self_profile() -> str:
             if "↓ ここに記入 ↓" in content and content.count("-\n") > 5:
                 return ""
             return content
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"⚠️ SELF_PROFILE.md読み込みエラー: {e}")
     return ""
 
 
@@ -72,8 +72,8 @@ def load_feedback_examples() -> list:
     try:
         if FEEDBACK_FILE.exists():
             return json.loads(FEEDBACK_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"⚠️ フィードバック読み込みエラー: {e}")
     return []
 
 
@@ -107,26 +107,47 @@ def build_feedback_prompt_section(sender_name: str = "", sender_category: str = 
         reverse=True
     )[:5]
 
-    parts = []
+    correction_parts = []
     for i, fb in enumerate(sorted_corrections, 1):
         orig = fb.get("original_message", "")[:50]
         ai_s = fb.get("ai_suggested", "")[:60]
         actual = fb.get("actual_sent", "")[:60]
         sname = fb.get("sender_name", "不明")
-        parts.append(
+        correction_parts.append(
             f"[修正例{i}] 送信者: {sname}\n"
             f"  受信: 「{orig}」\n"
             f"  AI案（不採用）: 「{ai_s}」\n"
             f"  実際に送った返信: 「{actual}」"
         )
 
+    # 承認例（AI案がそのまま採用された成功パターン）
+    approvals = [f for f in examples if f.get("type") == "approval"]
+    sorted_approvals = sorted(
+        approvals,
+        key=lambda f: (f.get("sender_name") == sender_name, f.get("timestamp", "")),
+        reverse=True
+    )[:3]
+
+    approval_parts = []
+    for i, fb in enumerate(sorted_approvals, 1):
+        orig = fb.get("original_message", "")[:50]
+        actual = fb.get("actual_sent", "")[:60]
+        sname = fb.get("sender_name", "不明")
+        approval_parts.append(
+            f"[成功例{i}] 送信者: {sname}\n"
+            f"  受信: 「{orig}」\n"
+            f"  採用された返信: 「{actual}」"
+        )
+
     section = ""
-    if note_parts or parts:
+    if note_parts or correction_parts or approval_parts:
         section = "\n【過去の学習データ（優先して参考にすること）】\n"
         if note_parts:
             section += "スタイルノート:\n" + "\n".join(note_parts) + "\n"
-        if parts:
-            section += "\n".join(parts) + "\n"
+        if correction_parts:
+            section += "\n".join(correction_parts) + "\n"
+        if approval_parts:
+            section += "\n".join(approval_parts) + "\n"
     return section
 
 # Anthropic SDK
@@ -264,8 +285,8 @@ def show_notification(title: str, message: str, sound: bool = True):
                 ["osascript", "-e", script],
                 capture_output=True, timeout=5
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"⚠️ デスクトップ通知失敗（{title}）: {e}")
     threading.Thread(target=_notify, daemon=True).start()
 
 
@@ -552,6 +573,7 @@ def fetch_addness_kpi() -> str:
     ハイブリッド方式: キャッシュ優先 → Sheets APIフォールバック → staleキャッシュ最終手段。"""
     KPI_CACHE_PATH = _SYSTEM_DIR / "data" / "kpi_summary.json"
     CACHE_MAX_AGE_HOURS = 24
+    CACHE_ABSOLUTE_MAX_HOURS = 7 * 24  # 7日超のキャッシュは使用不可
 
     def fmt(v):
         try:
@@ -560,9 +582,41 @@ def fetch_addness_kpi() -> str:
         except (ValueError, TypeError):
             return str(v)
 
-    def _format_from_cache(cache: dict) -> str:
+    def _detect_anomalies(cache: dict) -> list:
+        """KPIデータの異常値を検出"""
+        warnings = []
+        for m in cache.get("monthly", []):
+            month = m.get("month", "?")
+            roas = m.get("ROAS", 0)
+            if isinstance(roas, (int, float)):
+                if roas < 0:
+                    warnings.append(f"⚠️ {month}: ROAS {roas}% — 負の値（データ異常の可能性）")
+                elif roas > 1000:
+                    warnings.append(f"⚠️ {month}: ROAS {roas}% — 異常に高い（データ確認推奨）")
+            revenue = m.get("売上", 0)
+            ad_cost = m.get("広告費", 0)
+            if isinstance(revenue, (int, float)) and revenue < 0:
+                warnings.append(f"⚠️ {month}: 売上が負の値 ¥{fmt(revenue)}（データ異常の可能性）")
+            cpa = m.get("CPA", 0)
+            ltv = m.get("LTV", 0)
+            if isinstance(cpa, (int, float)) and isinstance(ltv, (int, float)) and ltv > 0:
+                if cpa > ltv:
+                    warnings.append(f"⚠️ {month}: CPA(¥{fmt(cpa)})がLTV(¥{fmt(ltv)})を超過 — 赤字獲得")
+        return warnings
+
+    def _format_from_cache(cache: dict, warn_stale: bool = False) -> str:
         """キャッシュJSONからフォーマット済みテキストを生成"""
         parts = ["📊 スキルプラス KPI"]
+
+        # staleデータ警告
+        if warn_stale:
+            try:
+                updated = datetime.fromisoformat(cache.get("updated_at", "2000-01-01"))
+                age_hours = (datetime.now() - updated).total_seconds() / 3600
+                if age_hours > CACHE_MAX_AGE_HOURS:
+                    parts.append(f"⚠️ 【注意】このデータは約{int(age_hours)}時間前のものです。最新でない可能性があります。")
+            except Exception:
+                parts.append("⚠️ 【注意】データの鮮度を確認できません。")
 
         # 広告チーム日報サマリー（当月目標 vs 実績）
         rs = cache.get("report_summary", {})
@@ -602,6 +656,25 @@ def fetch_addness_kpi() -> str:
                         f"売上¥{fmt(vals['売上'])} / 広告費¥{fmt(vals['広告費'])} / ROAS {roas}%"
                     )
 
+        # 月別×媒体×ファネル 内訳（直近3ヶ月分、広告出稿ありのみ）
+        mbf = cache.get("monthly_by_media_funnel", {})
+        recent_mf_months = sorted(mbf.keys(), reverse=True)[:3]
+        if recent_mf_months:
+            parts.append("━━ 媒体×ファネル別内訳（直近3ヶ月） ━━")
+            for mk in sorted(recent_mf_months):
+                entries = sorted(mbf[mk].values(), key=lambda x: -x.get("広告費", 0))
+                shown = [v for v in entries if v.get("広告費", 0) > 0]
+                if not shown:
+                    continue
+                parts.append(f"【{mk}】")
+                for v in shown:
+                    parts.append(
+                        f"  {v['集客媒体']}×{v['ファネル名']}: "
+                        f"集客{fmt(v['集客数'])} / 売上¥{fmt(v['売上'])} / "
+                        f"広告費¥{fmt(v['広告費'])} / ROAS {v.get('ROAS', 0)}% / "
+                        f"CPA ¥{fmt(v.get('CPA', 0))} / 粗利¥{fmt(v.get('粗利', 0))}"
+                    )
+
         # 直近日別合計
         recent = cache.get("recent_daily", [])[:7]
         if recent:
@@ -612,21 +685,30 @@ def fetch_addness_kpi() -> str:
                     f"売上¥{fmt(d['売上'])} / 広告費¥{fmt(d['広告費'])} / ROAS {d['ROAS']}%"
                 )
 
+        # 異常値検知
+        anomalies = _detect_anomalies(cache)
+        if anomalies:
+            parts.append("━━ データ品質警告 ━━")
+            parts.extend(anomalies)
+
         updated = cache.get("updated_at", "不明")
         parts.append(f"（データ更新: {updated}）")
         return "\n".join(parts) if len(parts) > 2 else ""
 
     def _read_cache():
-        """キャッシュ読み込み。(cache_dict, is_fresh) を返す"""
+        """キャッシュ読み込み。(cache_dict, is_fresh, is_expired) を返す。
+        is_expired=True は7日超で完全に使用不可を意味する。"""
         if not KPI_CACHE_PATH.exists():
-            return None, False
+            return None, False, True
         try:
             cache = json.loads(KPI_CACHE_PATH.read_text(encoding="utf-8"))
             updated = datetime.fromisoformat(cache.get("updated_at", "2000-01-01"))
             age_hours = (datetime.now() - updated).total_seconds() / 3600
-            return cache, age_hours < CACHE_MAX_AGE_HOURS
+            is_fresh = age_hours < CACHE_MAX_AGE_HOURS
+            is_expired = age_hours > CACHE_ABSOLUTE_MAX_HOURS
+            return cache, is_fresh, is_expired
         except Exception:
-            return None, False
+            return None, False, True
 
     def _fetch_from_api() -> str:
         """従来のSheets API経由で取得（フォールバック用）"""
@@ -723,12 +805,14 @@ def fetch_addness_kpi() -> str:
                 return _format_from_cache(new_cache)
         except Exception as e:
             print(f"   ⚠️ CSV再構築エラー: {e}")
+            import traceback
+            traceback.print_exc()
         return ""
 
     # ── ハイブリッド取得ロジック ──
     try:
         # 1. キャッシュ確認
-        cache, is_fresh = _read_cache()
+        cache, is_fresh, is_expired = _read_cache()
         if cache and is_fresh:
             result = _format_from_cache(cache)
             if result:
@@ -749,19 +833,26 @@ def fetch_addness_kpi() -> str:
             print("   📊 Sheets APIから取得成功")
             return api_result
 
-        # 4. API失敗 → staleキャッシュを最終手段として使用
-        if cache:
-            result = _format_from_cache(cache)
+        # 4. API失敗 → staleキャッシュを最終手段として使用（7日超は使用不可）
+        if cache and not is_expired:
+            result = _format_from_cache(cache, warn_stale=True)
             if result:
-                print("   📊 staleキャッシュから取得（最終手段）")
+                print("   📊 staleキャッシュから取得（最終手段・警告付き）")
                 return result
+
+        # 5. 7日超のキャッシュ → 完全拒否
+        if cache and is_expired:
+            print("   ❌ キャッシュが7日以上古いため使用不可")
+            return "📊 KPIデータを取得できませんでした。キャッシュが7日以上更新されていません。システム管理者に確認してください。"
 
     except Exception as e:
         print(f"   ⚠️ Addness KPIデータ取得エラー: {e}")
+        import traceback
+        traceback.print_exc()
         try:
-            cache, _ = _read_cache()
-            if cache:
-                return _format_from_cache(cache)
+            cache, _, is_expired = _read_cache()
+            if cache and not is_expired:
+                return _format_from_cache(cache, warn_stale=True)
         except Exception:
             pass
 
@@ -922,6 +1013,25 @@ def call_claude_api(instruction: str, task: dict):
             if context_notes:
                 recent_notes = context_notes[-5:]
                 notes_text = "\nメモ:\n" + "\n".join([f"  ・{n.get('content', n) if isinstance(n, dict) else n}" for n in recent_notes])
+            # group_insights（毎週のグループログ自動分析結果）をプロンプトに注入
+            group_insights = profile.get("group_insights", {}) if profile else {}
+            insights_text = ""
+            if group_insights:
+                parts = []
+                gi_style = group_insights.get("communication_style", "")
+                if gi_style:
+                    parts.append(f"会話スタイル: {gi_style}")
+                gi_topics = group_insights.get("recent_topics", [])
+                if gi_topics:
+                    parts.append(f"最近の関心: {', '.join(gi_topics[:5])}")
+                gi_collab = group_insights.get("collaboration_patterns", "")
+                if gi_collab:
+                    parts.append(f"協業: {gi_collab}")
+                gi_personality = group_insights.get("personality_notes", "")
+                if gi_personality:
+                    parts.append(f"特性: {gi_personality}")
+                if parts:
+                    insights_text = "\n自動分析:\n" + "\n".join([f"  ・{p}" for p in parts])
             feedback_section = build_feedback_prompt_section(sender_name, sender_cat)
             self_profile_section = ""
             if self_profile:
@@ -976,7 +1086,7 @@ def call_claude_api(instruction: str, task: dict):
 【送信者: {sender_name}】{category_line}
 返信スタイル: {comm_style_note or tone_guide or '関係性に応じたトーンで'}
 推奨挨拶: {comm_greeting or 'お疲れ様！'}
-{goals_context}{notes_text}
+{goals_context}{notes_text}{insights_text}
 {profile_info}
 {context_section}{quoted_section}{sheet_section}
 【受信メッセージ】
@@ -1043,8 +1153,8 @@ def call_claude_api(instruction: str, task: dict):
                         contact_state = json.loads(_contact_state_path.read_text(encoding="utf-8"))
                     contact_state[sender_name] = datetime.now().isoformat()
                     _contact_state_path.write_text(json.dumps(contact_state, ensure_ascii=False, indent=2), encoding="utf-8")
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"⚠️ contact_state記録エラー: {e}")
 
             return True, result
 
@@ -1333,18 +1443,54 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
             if not kpi_data:
                 return True, "📊 KPIデータを取得できませんでした。キャッシュの更新待ち、またはSheets APIへの接続に問題がある可能性があります。"
 
+            # Addnessゴールから甲原さんのKPI目標を動的に読み込み
+            kpi_targets_text = ""
+            try:
+                goal_tree_path = _PROJECT_ROOT / "Master" / "addness" / "goal-tree.md"
+                if goal_tree_path.exists():
+                    goal_content = goal_tree_path.read_text(encoding="utf-8")
+                    # 甲原海人の実行中ゴールからKPI目標を抽出
+                    import re as _re
+                    # "🔄 実行中" + 甲原海人担当のゴールブロックからKPI数値を抽出
+                    # ゴールツリーから甲原さんの上位ゴール（期限付き・実行中）を検索
+                    lines = goal_content.split("\n")
+                    target_lines = []
+                    capture = False
+                    for i, line in enumerate(lines):
+                        # 甲原海人の実行中ゴール（上位レベル: ###〜####）でKPI的な記述を含むもの
+                        if i + 1 < len(lines) and ("🔄 実行中" in line or "🔍 検討中" in line) and "甲原海人" in lines[i + 1]:
+                            if any(kw in line for kw in ("ROAS", "CPA", "CPO", "売上", "集客", "ユーザー")):
+                                target_lines.append(f"【ゴール】{line.lstrip('#').strip().replace('🔄 実行中 ', '').replace('🔍 検討中 ', '')}")
+                                capture = True
+                                continue
+                        if capture:
+                            if line.startswith("> "):
+                                target_lines.append(line[2:])
+                            elif line.startswith("**担当**"):
+                                # 期限情報を含む行
+                                if "期限" in line:
+                                    target_lines.append(line)
+                            else:
+                                capture = False
+                    if target_lines:
+                        kpi_targets_text = "【Addnessゴールから抽出したKPI目標】\n" + "\n".join(target_lines) + "\n\n"
+            except Exception as e:
+                print(f"⚠️ Addnessゴール読み込みエラー: {e}")
+
             today_str = datetime.now().strftime("%Y/%m/%d (%A)")
             kpi_prompt = f"""あなたは甲原海人のAI秘書で、スキルプラス事業の広告運用データに精通しています。
 今日の日付: {today_str}
 
 以下は社内システムから取得した実際のKPIデータです。このデータを使って「{question}」に答えてください。
 
-{kpi_data}
+{kpi_targets_text}{kpi_data}
 
 【回答ルール】
 - 上記のデータに基づく具体的な数値を必ず引用して回答する
 - 「データがない」「アクセスできない」とは絶対に言わない（上にデータがある）
-- 前月比・トレンド（改善/悪化）を指摘する
+- Addnessゴールの目標KPIがある場合、必ず目標対比（達成率・差分）を明記する
+- 目標未達の指標は★で強調し、原因仮説と改善方向を示す
+- 前月比・トレンド（改善/悪化）を指摘する。10%以上の変動があれば必ず言及する
 - 問題がある指標には改善の方向性を示す
 - 600文字以内、LINEで読みやすい形式
 - 媒体別の比較がある場合はそれにも言及する
@@ -1353,7 +1499,7 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
             response = client.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=800,
-                system="あなたは広告運用の専門家としてKPIデータを分析し、簡潔で実用的な回答をするAI秘書です。与えられたデータは社内システムから取得した実データです。必ずデータを引用して回答してください。マークダウン記法（**太字**等）は使わず、プレーンテキストで回答すること。",
+                system="あなたは広告運用の専門家としてKPIデータを分析し、簡潔で実用的な回答をするAI秘書です。与えられたデータは社内システムから取得した実データです。必ずデータを引用して回答してください。Addnessゴールの目標KPIが提示されている場合は必ず目標対比で評価すること。マークダウン記法（**太字**等）は使わず、プレーンテキストで回答すること。",
                 messages=[{"role": "user", "content": kpi_prompt}]
             )
             return True, _strip_markdown_for_line(response.content[0].text.strip())
@@ -1379,8 +1525,8 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
             if actionable_path.exists():
                 try:
                     actionable_content = actionable_path.read_text(encoding="utf-8")[:3000]
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"⚠️ actionable-tasks.md読み込みエラー: {e}")
 
             # mail_manager.py で返信待ち件数を取得
             mail_status_text = ""
@@ -1394,8 +1540,8 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
                     )
                     if r.returncode == 0 and r.stdout.strip():
                         mail_status_text = f"\n【メール状況（personal）】\n{r.stdout.strip()[:300]}"
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"⚠️ メール状態取得エラー: {e}")
 
             # KPIサマリ（数値系の質問にも対応できるよう軽量に含める）
             kpi_summary_text = ""
@@ -1404,8 +1550,8 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
                 if kpi_data:
                     kpi_lines = kpi_data.split("\n")[:15]
                     kpi_summary_text = f"\n【広告KPIサマリ】\n" + "\n".join(kpi_lines)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"⚠️ KPIサマリ取得エラー: {e}")
 
             # 日時
             today_str = datetime.now().strftime("%Y/%m/%d (%A)")
@@ -1423,6 +1569,9 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
 【回答ルール】
 - 今すぐやるべきことを優先度順に3〜5件リスト
 - 各項目に理由or期限を添える
+- KPIデータがある場合、前月比で10%以上の変動があれば必ず指摘する
+- 悪化トレンドの指標は★で強調し、想定される原因と対策を1行で添える
+- データに異常値警告がある場合はそれにも言及する
 - 500文字以内、LINEで読みやすい形式
 - マークダウン記法（**太字**等）は使わない。強調は【】や★で
 """
@@ -1511,7 +1660,8 @@ def save_pending_task(task: dict):
         try:
             with open(PENDING_TASKS_FILE, "r", encoding="utf-8") as f:
                 tasks = json.load(f)
-        except:
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"⚠️ 保留タスクJSON破損 → リセット: {e}")
             tasks = []
     
     tasks.append(task)
@@ -1526,7 +1676,8 @@ def get_pending_tasks() -> list:
         try:
             with open(PENDING_TASKS_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except:
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"⚠️ 保留タスクJSON読み込みエラー: {e}")
             return []
     return []
 

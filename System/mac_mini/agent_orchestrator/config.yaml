@@ -61,6 +61,12 @@ schedule:
   sheets_sync:
     cron: "30 6 * * *"           # 毎日 朝6:30（他の定常タスク前に同期）
     enabled: true
+  kpi_nightly_cache:
+    cron: "0 22 * * *"           # 毎晩 22:00（AI秘書用KPIキャッシュ再生成）
+    enabled: true
+  log_rotate:
+    cron: "0 3 * * *"            # 毎日 深夜3:00（ログローテーション）
+    enabled: true
   git_pull_sync:
     interval_minutes: 5          # 5分ごとにGitHubからpull
     enabled: true

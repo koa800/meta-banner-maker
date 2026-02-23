@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月23日（グループログアーカイブ+週次プロファイル学習追加） |
+| 最終更新 | 2026年2月23日（学習ループ修正: group_insights返信注入・Q&Aナレッジ蓄積・承認フィードバック学習） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -108,10 +108,12 @@
 11. **フィードバックループ**:
     - `fb [内容]` → スタイルノート（全返信に適用）
     - `2 [修正]` → 修正例として自動学習（AI案と異なる場合のみ）
-    - 学習データは `reply_feedback.json` に蓄積、次回返信案のプロンプトに注入
-12. **メモコマンド**: `メモ [人名]: [内容]` → その人のプロファイルに文脈メモを追記
-13. **IDENTITY.md**: 甲原海人の言語スタイル定義（口癖・トーン・関係性別ルール）
-14. **SELF_PROFILE.md**: 甲原海人のコアプロファイル（価値観・判断軸・哲学）記入済み
+    - `1`（承認） → 成功例として自動学習（AI案が正解だったパターンを蓄積）
+    - 学習データは `reply_feedback.json` に蓄積、次回返信案のプロンプトに注入（修正例 + 成功例の両面から学習）
+12. **group_insights → 返信プロンプト注入**: 週次プロファイル学習（`weekly_profile_learning`）が書き込んだ `group_insights`（会話スタイル・最近の関心・協業パターン・性格特性）を返信案生成のプロンプトに自動注入。相手の最新の行動パターンを踏まえた返信を生成
+13. **メモコマンド**: `メモ [人名]: [内容]` → その人のプロファイルに文脈メモを追記
+14. **IDENTITY.md**: 甲原海人の言語スタイル定義（口癖・トーン・関係性別ルール）
+15. **SELF_PROFILE.md**: 甲原海人のコアプロファイル（価値観・判断軸・哲学）記入済み
 
 ### Phase 5: 高度な返信文脈認識（完了）
 15. **引用返信（リプライ）検知**: ボットが送信したメッセージへのLINE引用返信を自動検知し、新しい返信案を生成
@@ -125,8 +127,8 @@
 21. **`[CW]`/`[LINE]` バッジ**: 秘書グループの通知・未返信一覧にプラットフォームバッジを表示
 22. **Chatwork account_id逆引き**: `people-identities.json` の `chatwork_account_id` フィールドでプロファイル検索可能
 23. **スプレッドシート文脈参照**: プロファイルの `related_sheets` にシートIDを登録すると、返信案生成時に自動でデータを取得してプロンプトに注入。数字に基づいた回答が可能
-24. **Addness KPI自動参照**: アドネス関連の会話（メンバー × ビジネスキーワード）を自動検知し、KPIキャッシュ（`kpi_summary.json`）→ Sheets APIフォールバックのハイブリッド方式でKPIを自動注入。**外部パートナー・未登録者にはKPIデータを開示しない**（ホワイトリスト制御: 本人/上司/直下メンバー/横のみ許可）
-25. **KPI日次パイプライン**: Cursor（ブラウザ操作）がLooker StudioからCSVダウンロード→元データシートのステータスを「完了」に更新→`kpi_processor.py process`が検知して日別/月別タブに自動投入。毎日12:00にOrchestratorが完了チェック→未完了ならLINEリマインド
+24. **Addness KPI自動参照**: アドネス関連の会話を自動検知し、KPIキャッシュ→CSV再構築→Sheets APIの4段階フォールバックで自動注入。**目標KPI対比**（`config/addness.json`の`kpi_targets`）・**異常値検知**（ROAS<0%等）・**stale警告**（24h超で警告・7日超で拒否）付き。外部パートナー・未登録者にはKPI非開示
+25. **KPI日次パイプライン**: Looker StudioからCSVダウンロード→元データシート→日別/月別自動投入。毎日12:00にOrchestratorが完了チェック→投入成功時はKPIキャッシュも再生成→未完了ならLINEリマインド。毎晩22:00にもキャッシュ再生成（1日3回更新）
 26. **遠隔エージェント再起動**: LINEから「再起動」と送信するとMac Mini上の`local_agent.py`が`launchctl unload/load`で自動再起動。コード更新後の反映やエラー回復に使用
 27. **自動再起動改善**: `git_pull_sync.sh`が`line_bot_local/`配下の`.py`ファイル変更を検知すると自動で`local_agent`を再起動し、LINEに通知（変更ファイル名・コミットハッシュ・時刻を含む）
 28. **plistパス自動修正**: `git_pull_sync.sh`が毎回実行時にlaunchctl plistのパス整合性をチェック。Library版（`~/Library/LineBot/`）など古いパスを参照していた場合、正しいデプロイ先（`~/agents/line_bot_local/`）に自動修正＆再起動。config.jsonも旧パスから自動マイグレーション
@@ -151,7 +153,8 @@
 | コマンド | 動作 | 適用範囲 |
 |----------|------|---------|
 | `fb [内容]` | スタイルノートとして保存 | **全員への返信**に適用 |
-| `2 [修正]` で承認 | 修正例として保存 | その人優先・他も参照（最大5件） |
+| `2 [修正]` で承認 | 修正例として保存（AI案と異なる場合） | その人優先・他も参照（最大5件） |
+| `1` で承認 | 成功例として保存（AI案が正解だったパターン） | その人優先・他も参照（最大3件） |
 | `メモ [人名]: [内容]` | プロファイルに文脈メモを追加 | その人への返信に適用 |
 
 ### Q&A操作
@@ -340,11 +343,13 @@ bash System/line_bot_local/sync_data.sh
 | `health_check` | 5分ごと | API使用量・Q&Aモニター・local_agent停止を検知してLINE警告 |
 | `repair_check` | 30分ごと | ログエラー検知・自動修復提案 |
 | `weekly_content_suggestions` | 毎週水曜 10:00 | 最新AIニュースを分析してコンテンツ更新提案をLINE通知 |
-| `kpi_daily_import` | 毎日 12:00 | 2日前のKPIデータ完了チェック→投入 or 未完了リマインド |
-| `sheets_sync` | 毎朝 6:30 | Master/sheets/ の管理シートCSVキャッシュを最新化（README.md同期ステータス更新） |
-| `git_pull_sync` | 5分ごと | GitHubからpull→ローカルrsyncでデプロイ→変更ファイルに応じてサービス再起動→LINE通知 |
+| `kpi_daily_import` | 毎日 12:00 | 2日前のKPIデータ完了チェック→投入→KPIキャッシュ再生成→LINE通知（失敗時は個別エラー通知） |
+| `kpi_nightly_cache` | 毎晩 22:00 | KPIキャッシュ再生成（AI秘書が夜間も最新データを参照できるように） |
+| `sheets_sync` | 毎朝 6:30 | Master/sheets/ CSVキャッシュ最新化→KPIキャッシュ再生成（失敗時はLINE通知） |
+| `git_pull_sync` | 5分ごと | GitHubからpull→rsyncデプロイ→サービス再起動→LINE通知（30分連続失敗で警告通知） |
 | `daily_group_digest` | 毎夜 21:00 | Renderからグループログ取得→Claude Haiku分析→秘書グループにダイジェスト通知 |
 | `weekly_profile_learning` | 毎週日曜 10:00 | 過去7日間のグループログから各メンバーの会話を分析→profiles.jsonに`group_insights`として書き込み |
+| `log_rotate` | 毎日 3:00 | ログローテーション（50MB超を圧縮、30日超の古いgzを自動削除） |
 
 ### Orchestrator API エンドポイント（port 8500）
 
@@ -482,13 +487,16 @@ MacBook (どこからでも)
 - [x] スプレッドシート文脈参照（people-profiles.jsonのrelated_sheetsからシートデータを自動取得→プロンプト注入）
 - [x] people-identities.jsonにchatwork_account_id/chatwork_display_nameフィールド追加（全81エントリ）
 - [x] 未返信一覧に[CW]/[LINE]プラットフォームバッジ表示
-- [x] Addness KPI自動参照（kpi_summary.jsonキャッシュ優先 → Sheets APIフォールバック → staleキャッシュ最終手段。媒体別内訳対応。外部パートナー・未登録者にはKPI非開示）
+- [x] Addness KPI自動参照（4段階フォールバック: freshキャッシュ→CSV再構築→Sheets API→staleキャッシュ（警告付き）。7日超は使用不可。媒体別・媒体×ファネル別内訳対応。異常値検知・目標KPI対比・stale警告付き。外部パートナー・未登録者にはKPI非開示）
 - [x] MacBook↔Mac Mini同期をGitHub経由に移行（rsync over SSH廃止→git push/pull。外出先からも同期可能）
 - [x] Mac Mini旧cronジョブ整理（addness/ai_news/mail/sync_agent全5件削除→Orchestrator一元管理）
 - [x] agent.db削除バグ修正（git_pull_syncのrsync --deleteがランタイムDBを毎回削除→*.db除外追加）
 - [x] plistパス自動修正（git_pull_syncがlaunchctl plistのパス整合性を毎回チェック。Library版など古いパスを検知→正しいデプロイ先に自動修正＆再起動＆LINE通知）
 - [x] Library版local_agent.py廃止（sync_data.shの「Library版維持」コメント削除。git同期版が正式な実行パスに統一）
 - [x] 旧sync_from_macbook.sh無効化（LaunchAgent unload + .disabled化。GitHub同期に完全移行済み）
+- [x] group_insights返信プロンプト注入（週次学習で蓄積された会話スタイル・関心・性格を返信案生成に自動反映。以前は書き込むだけで読み出されていなかった）
+- [x] 承認フィードバック学習（「1」承認時にAI案=正解として成功例を蓄積。以前は「2」修正時のみ学習→承認パターンを一切学習できていなかった）
+- [x] Q&A承認時Pineconeナレッジ蓄積（承認済み回答をベクトルDBに自動upsert。以前は承認→スプレッドシート書き込みのみでナレッジが蓄積されなかった）
 - [x] Slack Webhook URL外部化（addness_config.json/run_addness_pipeline.shから環境変数に移動。GitHub Push Protection対応）
 - [x] 管理シート自動同期（`sheets_sync.py`。Master/sheets/README.md登録シートのCSVキャッシュを毎朝6:30に自動更新。Orchestrator統合済み）
 - [x] グループLINE監視+日次ダイジェスト（全グループメッセージを永続ログに蓄積→毎夜21:00にClaude Haiku分析→グループ別要約・活動度・アクション事項を秘書グループに通知。`/api/group-log` APIでログ取得可能）

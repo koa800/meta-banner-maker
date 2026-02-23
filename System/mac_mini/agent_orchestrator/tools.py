@@ -255,6 +255,56 @@ def shell_command(cmd: str, timeout: int = 60) -> ToolResult:
         return ToolResult(success=False, output="", error=str(e), return_code=-1)
 
 
+# --------------- Log Rotate ---------------
+
+def log_rotate() -> ToolResult:
+    """ログファイルのローテーション（50MB超を圧縮、30日超のgzを削除）"""
+    import glob
+    import gzip
+    import shutil
+    from datetime import datetime as _dt
+
+    log_dir = os.path.join(_orch_dir, "logs")
+    if not os.path.isdir(log_dir):
+        return ToolResult(success=True, output="ログディレクトリなし（スキップ）")
+
+    max_size_mb = 50
+    keep_days = 30
+    rotated = []
+
+    for logfile in glob.glob(os.path.join(log_dir, "*.log")):
+        try:
+            size_mb = os.path.getsize(logfile) / (1024 * 1024)
+            if size_mb > max_size_mb:
+                ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+                archive = f"{logfile}.{ts}.gz"
+                with open(logfile, "rb") as f_in, gzip.open(archive, "wb") as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+                # 元ファイルをクリア
+                with open(logfile, "w") as f:
+                    pass
+                rotated.append(f"{os.path.basename(logfile)} ({size_mb:.0f}MB)")
+        except Exception as e:
+            logger.warning(f"Log rotate error for {logfile}: {e}")
+
+    # 古いgzファイルを削除
+    import time
+    cutoff = time.time() - keep_days * 86400
+    deleted = 0
+    for gz in glob.glob(os.path.join(log_dir, "*.gz")):
+        try:
+            if os.path.getmtime(gz) < cutoff:
+                os.unlink(gz)
+                deleted += 1
+        except Exception as e:
+            logger.warning(f"Old gz delete error for {gz}: {e}")
+
+    msg = f"ローテーション: {len(rotated)}ファイル / 削除: {deleted}ファイル"
+    if rotated:
+        msg += f"\n  対象: {', '.join(rotated)}"
+    return ToolResult(success=True, output=msg)
+
+
 # --------------- Git Sync ---------------
 
 def git_pull_sync() -> ToolResult:
@@ -364,4 +414,6 @@ TOOL_REGISTRY = {
     "git_pull_sync": {"fn": git_pull_sync, "description": "GitHubからpull→ローカルデプロイ"},
     "fetch_group_log": {"fn": fetch_group_log, "description": "Renderサーバーから日次グループログを取得"},
     "update_people_profiles": {"fn": update_people_profiles, "description": "人物プロファイルにグループインサイトを書き込み"},
+    "kpi_cache_build": {"fn": kpi_cache_build, "description": "ローカルCSVキャッシュからkpi_summary.jsonを再構築"},
+    "log_rotate": {"fn": log_rotate, "description": "ログファイルのローテーション（50MB超を圧縮、30日保持）"},
 }

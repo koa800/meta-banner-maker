@@ -27,6 +27,7 @@ import re
 import csv
 import json
 import logging
+import tempfile
 import requests
 from datetime import datetime, timedelta
 
@@ -289,7 +290,7 @@ def sync_to_sheet(dry_run=False):
     if last_row - first_row + 1 == len(updates):
         # 連続行 → 一括更新
         range_notation = f"B{first_row}:D{last_row}"
-        ws.update(range_notation, update_rows)
+        ws.update(values=update_rows, range_name=range_notation)
         logger.info(f"一括書き込み完了: {range_notation}")
     else:
         # 飛び飛び → 全行分のデータを作って一括更新
@@ -303,7 +304,7 @@ def sync_to_sheet(dry_run=False):
                                  row[2] if len(row) > 2 else "",
                                  row[3] if len(row) > 3 else ""])
         range_notation = f"B2:D{len(data)}"
-        ws.update(range_notation, all_rows)
+        ws.update(values=all_rows, range_name=range_notation)
         logger.info(f"一括書き込み完了: {range_notation}")
 
     # 5. 更新完了をLINE通知
@@ -395,31 +396,31 @@ def build_daily_sheet(dry_run=False):
     spreadsheet = client.open_by_key(SPREADSHEET_ID)
     ws = spreadsheet.worksheet(DAILY_SHEET_NAME)
 
-    # 3. シートをリサイズ（ヘッダー4行 + データ行 + 余裕100行）
-    needed_rows = 4 + len(all_rows) + 100
+    # 3. シートをリサイズ（ヘッダー3行 + データ行 + 余裕100行）
+    # レイアウト: 行1=最終更新, 行2=空, 行3=ヘッダー, 行4〜=データ
+    needed_rows = 3 + len(all_rows) + 100
     current_rows = ws.row_count
     if needed_rows > current_rows:
         ws.resize(rows=needed_rows)
         logger.info(f"シートリサイズ: {current_rows} → {needed_rows} 行")
 
-    # 4. 既存データをクリア（行5以降）
-    ws.batch_clear([f"A5:M{current_rows}"])
+    # 4. 既存データをクリア（行1以降すべて）
+    ws.batch_clear([f"A1:M{current_rows}"])
     logger.info("既存データクリア完了")
 
-    # 5. データ書き込み（行5〜）
-    # Google Sheets API は 1リクエストあたり上限あるため、1000行ずつ分割
+    # 5. データ書き込み（行4〜）
     BATCH_SIZE = 1000
     for i in range(0, len(all_rows), BATCH_SIZE):
         batch = all_rows[i:i + BATCH_SIZE]
-        start_row = 5 + i
+        start_row = 4 + i
         end_row = start_row + len(batch) - 1
         range_notation = f"A{start_row}:M{end_row}"
-        ws.update(range_notation, batch, value_input_option="USER_ENTERED")
+        ws.update(values=batch, range_name=range_notation, value_input_option="USER_ENTERED")
         logger.info(f"書き込み: {range_notation} ({len(batch)} 行)")
 
-    # 6. 最終更新日を更新（行2）
+    # 6. 最終更新日を更新（行1）
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    ws.update_acell("A2", f"最終更新: {now}")
+    ws.update_acell("A1", f"最終更新: {now}")
 
     logger.info(f"スキルプラス（日別）構築完了: {len(all_rows)} 行")
 
@@ -436,9 +437,58 @@ def build_daily_sheet(dry_run=False):
 
 # ─── スキルプラス（月別）構築 ──────────────────────────────────
 
+def _format_month(month_key):
+    """'2025-07' → '2025年7月'"""
+    y, m = month_key.split("-")
+    return f"{y}年{int(m)}月"
+
+
+def _calc_kpi_row(month, media, funnel, 集客数, 予約数, 実施数, 売上, 広告費):
+    """月別シートの1行データを計算して返す"""
+    cpa = round(広告費 / 集客数) if 集客数 > 0 else 0
+    cpo = round(広告費 / 予約数) if 予約数 > 0 else 0
+    roas = round(売上 / 広告費 * 100, 1) if 広告費 > 0 else 0
+    ltv = round(売上 / 集客数) if 集客数 > 0 else 0
+    粗利 = 売上 - 広告費
+    return [_format_month(month), media, funnel, 集客数, 予約数, 実施数, 売上, 広告費,
+            cpa, cpo, roas, ltv, 粗利]
+
+
 def build_monthly_sheet(dry_run=False):
-    """日別データを月単位で集計し、スキルプラス（月別）シートに書き込む"""
+    """日別データを月×集客媒体×ファネル別で集計し、スキルプラス（月別）シートに書き込む"""
     from collections import defaultdict
+
+    # ソート順定義
+    CATEGORY_ORDER = ["広告", "SNS", "SEO", "広報", "その他"]
+    MEDIA_ORDER = [
+        # 広告
+        "リスティング広告", "ディスプレイ広告", "YouTube広告",
+        "Yahoo!広告", "Yahoo!リスティング広告", "Yahoo!ディスプレイ広告",
+        "Meta広告", "TikTok広告", "X広告", "LINE広告",
+        "アフィリエイト広告", "オフライン広告",
+        # SNS
+        "YouTube", "X", "Instagram", "Threads", "Facebook", "TikTok",
+        # SEO
+        "ブランド検索", "一般検索",
+        # 広報
+        "HP", "広報",
+        # その他
+        "note", "その他",
+    ]
+    FUNNEL_ORDER = [
+        "ブランド認知", "センサーズ", "AI", "アドプロ",
+        "直個別", "みかみメイン", "スキルプラス",
+        "ライトプラン", "秘密の部屋", "不明",
+    ]
+
+    def _cat_idx(cat):
+        return CATEGORY_ORDER.index(cat) if cat in CATEGORY_ORDER else len(CATEGORY_ORDER)
+
+    def _media_idx(media):
+        return MEDIA_ORDER.index(media) if media in MEDIA_ORDER else len(MEDIA_ORDER)
+
+    def _fun_idx(fun):
+        return FUNNEL_ORDER.index(fun) if fun in FUNNEL_ORDER else len(FUNNEL_ORDER)
 
     # 1. 全CSV読み込み
     all_rows = read_all_csvs()
@@ -446,85 +496,377 @@ def build_monthly_sheet(dry_run=False):
         logger.error("CSVデータがありません")
         return 0
 
-    # 2. 月ごとに集計（集客数, 予約数, 実施数, 売上, 広告費）
-    monthly = defaultdict(lambda: {
+    # 2. (月, 集客媒体, ファネル名) ごとに集計 + 媒体→大カテゴリ対応表
+    detail = defaultdict(lambda: {
         "集客数": 0, "予約数": 0, "実施数": 0, "売上": 0, "広告費": 0
     })
+    media_to_category = {}
 
     for row in all_rows:
         # row: [日付, 大カテゴリ, 集客媒体, ファネル名, 集客数, 予約数, 実施数, 売上, 広告費, CPA, CPO, ROAS, LTV]
         month_key = row[0][:7]  # "2025-07-01" → "2025-07"
-        monthly[month_key]["集客数"] += row[4]
-        monthly[month_key]["予約数"] += row[5]
-        monthly[month_key]["実施数"] += row[6]
-        monthly[month_key]["売上"] += row[7]
-        monthly[month_key]["広告費"] += row[8]
+        category = row[1] or "その他"
+        media = row[2] or "(未分類)"
+        funnel = row[3] or "(未分類)"
+        key = (month_key, media, funnel)
+        detail[key]["集客数"] += row[4]
+        detail[key]["予約数"] += row[5]
+        detail[key]["実施数"] += row[6]
+        detail[key]["売上"] += row[7]
+        detail[key]["広告費"] += row[8]
+        media_to_category[media] = category
 
-    # 3. KPI計算 & 行データ作成
+    # 3. 月ごとにグループ化 → 詳細行 + 合計行
+    #    ソート: 大カテゴリ順 → 媒体名 → ファネル順
+    months = sorted(set(k[0] for k in detail.keys()))
     sheet_rows = []
-    for month in sorted(monthly.keys()):
-        m = monthly[month]
-        集客数 = m["集客数"]
-        予約数 = m["予約数"]
-        実施数 = m["実施数"]
-        売上 = m["売上"]
-        広告費 = m["広告費"]
+    month_ranges = []  # [(month_key, detail_start_idx, detail_end_idx)]
+    month_count = 0
 
-        cpa = round(広告費 / 集客数) if 集客数 > 0 else 0
-        cpo = round(広告費 / 予約数) if 予約数 > 0 else 0
-        roas = round(売上 / 広告費 * 100, 1) if 広告費 > 0 else 0
-        ltv = round(売上 / 集客数) if 集客数 > 0 else 0
-        粗利 = 売上 - 広告費
+    for month in months:
+        month_keys = sorted(
+            (k for k in detail.keys() if k[0] == month),
+            key=lambda k: (_cat_idx(media_to_category.get(k[1], "その他")),
+                           _media_idx(k[1]), k[1], _fun_idx(k[2]), k[2])
+        )
 
-        sheet_rows.append([
-            month, 集客数, 予約数, 実施数, 売上, 広告費,
-            cpa, cpo, roas, ltv, 粗利
-        ])
+        # 月合計の集計用
+        total = {"集客数": 0, "予約数": 0, "実施数": 0, "売上": 0, "広告費": 0}
+        detail_rows = []
 
-    logger.info(f"月別集計: {len(sheet_rows)} ヶ月")
+        # 詳細行
+        for key in month_keys:
+            m = detail[key]
+            detail_rows.append(_calc_kpi_row(
+                month, key[1], key[2],
+                m["集客数"], m["予約数"], m["実施数"], m["売上"], m["広告費"]
+            ))
+            for k in total:
+                total[k] += m[k]
+
+        # 合計行を先頭に、詳細行をその後に
+        sheet_rows.append(_calc_kpi_row(
+            month, "合計", "",
+            total["集客数"], total["予約数"], total["実施数"], total["売上"], total["広告費"]
+        ))
+        detail_start = len(sheet_rows)
+        sheet_rows.extend(detail_rows)
+        detail_end = len(sheet_rows)
+        month_ranges.append((month, detail_start, detail_end))
+        month_count += 1
+
+    logger.info(f"月別集計: {month_count} ヶ月, {len(sheet_rows)} 行（詳細+合計）")
     for r in sheet_rows:
-        logger.info(f"  {r[0]}: 集客{r[1]:,} 売上¥{r[4]:,} 広告費¥{r[5]:,} ROAS{r[8]}%")
+        if r[1] == "合計":
+            logger.info(f"  {r[0]}: [合計] 集客{r[3]:,} 売上¥{r[6]:,} 広告費¥{r[7]:,} ROAS{r[10]}%")
 
     if dry_run:
         logger.info("(dry-run: 書き込みスキップ)")
         return len(sheet_rows)
 
     # 4. シートに書き込み
+    # レイアウト: 行1=最終更新, 行2=空, 行3=ヘッダー, 行4〜=データ
     client = get_client(ACCOUNT)
     spreadsheet = client.open_by_key(SPREADSHEET_ID)
     ws = spreadsheet.worksheet(MONTHLY_SHEET_NAME)
 
-    # 既存データクリア（行5以降）
+    # シートリサイズ（必要に応じて）
+    needed_rows = 3 + len(sheet_rows) + 100
     current_rows = ws.row_count
-    ws.batch_clear([f"A5:K{current_rows}"])
+    if needed_rows > current_rows:
+        ws.resize(rows=needed_rows)
+        logger.info(f"シートリサイズ: {current_rows} → {needed_rows} 行")
 
-    # データ書き込み
-    last_row = 4 + len(sheet_rows)
-    ws.update(f"A5:K{last_row}", sheet_rows, value_input_option="USER_ENTERED")
+    # 既存データクリア（行1以降すべて）
+    ws.batch_clear([f"A1:M{max(current_rows, needed_rows)}"])
 
-    # フォーマット適用
-    formats = [
-        (f"B5:D{last_row}", {"type": "NUMBER", "pattern": "#,##0"}),
-        (f"E5:F{last_row}", {"type": "CURRENCY", "pattern": "¥#,##0"}),
-        (f"G5:H{last_row}", {"type": "CURRENCY", "pattern": "¥#,##0"}),
-        (f"I5:I{last_row}", {"type": "NUMBER", "pattern": "0.0\"%\""}),
-        (f"J5:J{last_row}", {"type": "CURRENCY", "pattern": "¥#,##0"}),
-        (f"K5:K{last_row}", {"type": "CURRENCY", "pattern": "¥#,##0"}),
+    # ヘッダー行3を書き込み
+    header = ["月", "集客媒体", "ファネル名", "集客数", "個別予約数", "実施数",
+              "売上", "広告費", "CPA", "CPO", "ROAS", "LTV", "粗利"]
+    ws.update(values=[header], range_name="A3:M3", value_input_option="USER_ENTERED")
+
+    # データ書き込み（1000行ずつ分割）
+    BATCH_SIZE = 1000
+    for i in range(0, len(sheet_rows), BATCH_SIZE):
+        batch = sheet_rows[i:i + BATCH_SIZE]
+        start_row = 4 + i
+        end_row = start_row + len(batch) - 1
+        ws.update(values=batch, range_name=f"A{start_row}:M{end_row}",
+                  value_input_option="RAW")
+        logger.info(f"書き込み: A{start_row}:M{end_row} ({len(batch)} 行)")
+
+    # ── 体裁フォーマット ──
+    last_row = 3 + len(sheet_rows)
+
+    # 数値フォーマット
+    num_formats = [
+        (f"D4:F{last_row}", {"type": "NUMBER", "pattern": "#,##0"}),
+        (f"G4:H{last_row}", {"type": "CURRENCY", "pattern": "¥#,##0"}),
+        (f"I4:J{last_row}", {"type": "CURRENCY", "pattern": "¥#,##0"}),
+        (f"K4:K{last_row}", {"type": "NUMBER", "pattern": "0.0\"%\""}),
+        (f"L4:L{last_row}", {"type": "CURRENCY", "pattern": "¥#,##0"}),
+        (f"M4:M{last_row}", {"type": "CURRENCY", "pattern": "¥#,##0"}),
     ]
-    for cell_range, num_fmt in formats:
+    for cell_range, num_fmt in num_formats:
         ws.format(cell_range, {"numberFormat": num_fmt})
+
+    # 最終更新行（行1）: グレー文字・10pt
+    ws.format("A1:M1", {
+        "textFormat": {"foregroundColorStyle": {
+            "rgbColor": {"red": 0.5, "green": 0.5, "blue": 0.5}
+        }, "fontSize": 10},
+    })
+
+    # ヘッダー行（行3）: 太字・背景色・白文字・中央揃え
+    ws.format("A3:M3", {
+        "textFormat": {"bold": True, "foregroundColorStyle": {
+            "rgbColor": {"red": 1, "green": 1, "blue": 1}
+        }},
+        "backgroundColor": {"red": 0.2, "green": 0.4, "blue": 0.65},
+        "horizontalAlignment": "CENTER",
+    })
+
+    # 合計行: 太字・薄い背景色
+    total_row_indices = [i for i, r in enumerate(sheet_rows) if r[1] == "合計"]
+    for idx in total_row_indices:
+        row_num = 4 + idx
+        ws.format(f"A{row_num}:M{row_num}", {
+            "textFormat": {"bold": True},
+            "backgroundColor": {"red": 0.9, "green": 0.93, "blue": 0.98},
+        })
+
+    # ── グループ化（過去月の詳細行を折りたたみ） ──
+    # 既存グループを削除
+    try:
+        meta = spreadsheet.fetch_sheet_metadata()
+        del_reqs = []
+        for s in meta.get("sheets", []):
+            if s["properties"]["sheetId"] == ws.id:
+                for g in s.get("rowGroups", []):
+                    del_reqs.append({"deleteDimensionGroup": {"range": g["range"]}})
+                break
+        if del_reqs:
+            spreadsheet.batch_update({"requests": del_reqs})
+            logger.info(f"既存グループ削除: {len(del_reqs)} 件")
+    except Exception as e:
+        logger.warning(f"既存グループ削除スキップ: {e}")
+
+    # フリーズ + グループコントロール位置（合計行の上に+/-ボタン） + グループ追加
+    current_month = datetime.now().strftime("%Y-%m")
+    requests = [{
+        "updateSheetProperties": {
+            "properties": {
+                "sheetId": ws.id,
+                "gridProperties": {
+                    "frozenRowCount": 3,
+                    "rowGroupControlAfter": False,
+                },
+            },
+            "fields": "gridProperties.frozenRowCount,gridProperties.rowGroupControlAfter",
+        }
+    }]
+
+    for month_key, detail_start, detail_end in month_ranges:
+        if detail_start >= detail_end:
+            continue
+        requests.append({
+            "addDimensionGroup": {
+                "range": {
+                    "sheetId": ws.id,
+                    "dimension": "ROWS",
+                    "startIndex": 3 + detail_start,
+                    "endIndex": 3 + detail_end,
+                }
+            }
+        })
+
+    spreadsheet.batch_update({"requests": requests})
+
+    # 過去月のグループを折りたたみ
+    collapse_reqs = []
+    for month_key, detail_start, detail_end in month_ranges:
+        if detail_start >= detail_end or month_key >= current_month:
+            continue
+        collapse_reqs.append({
+            "updateDimensionGroup": {
+                "dimensionGroup": {
+                    "range": {
+                        "sheetId": ws.id,
+                        "dimension": "ROWS",
+                        "startIndex": 3 + detail_start,
+                        "endIndex": 3 + detail_end,
+                    },
+                    "depth": 1,
+                    "collapsed": True,
+                },
+                "fields": "collapsed",
+            }
+        })
+
+    if collapse_reqs:
+        spreadsheet.batch_update({"requests": collapse_reqs})
+        logger.info(f"過去月グループ折りたたみ: {len(collapse_reqs)} ヶ月")
+
+    # ── チャート用サマリーテーブル ──
+    summary_start = last_row + 3  # 1-indexed
+    total_rows_data = []
+    for r in sheet_rows:
+        if r[1] == "合計":
+            # [月, 集客数, 予約数, 実施数, 売上, 広告費, ROAS, 粗利]
+            total_rows_data.append([r[0], r[3], r[4], r[5], r[6], r[7], r[10], r[12]])
+
+    summary_header = ["月", "集客数", "個別予約数", "実施数", "売上", "広告費", "ROAS(%)", "粗利"]
+    all_summary = [summary_header] + total_rows_data
+    summary_end = summary_start + len(all_summary) - 1
+
+    ws.update(
+        values=all_summary,
+        range_name=f"A{summary_start}:H{summary_end}",
+        value_input_option="RAW",
+    )
+    # サマリーテーブルのフォーマット
+    ws.format(f"A{summary_start}:H{summary_start}", {
+        "textFormat": {"bold": True},
+        "backgroundColor": {"red": 0.85, "green": 0.85, "blue": 0.85},
+    })
+    ws.format(f"E{summary_start + 1}:F{summary_end}", {
+        "numberFormat": {"type": "CURRENCY", "pattern": "¥#,##0"},
+    })
+    ws.format(f"H{summary_start + 1}:H{summary_end}", {
+        "numberFormat": {"type": "CURRENCY", "pattern": "¥#,##0"},
+    })
+    ws.format(f"B{summary_start + 1}:D{summary_end}", {
+        "numberFormat": {"type": "NUMBER", "pattern": "#,##0"},
+    })
+    ws.format(f"G{summary_start + 1}:G{summary_end}", {
+        "numberFormat": {"type": "NUMBER", "pattern": "0.0\"%\""},
+    })
+    logger.info(f"サマリーテーブル: A{summary_start}:H{summary_end}")
+
+    # ── チャート作成 ──
+    # 既存チャートを削除
+    try:
+        meta = spreadsheet.fetch_sheet_metadata()
+        chart_del = []
+        for s in meta.get("sheets", []):
+            if s["properties"]["sheetId"] == ws.id:
+                for chart in s.get("charts", []):
+                    chart_del.append({"deleteEmbeddedObject": {"objectId": chart["chartId"]}})
+                break
+        if chart_del:
+            spreadsheet.batch_update({"requests": chart_del})
+            logger.info(f"既存チャート削除: {len(chart_del)} 件")
+    except Exception as e:
+        logger.warning(f"既存チャート削除スキップ: {e}")
+
+    # チャート用ソース範囲ヘルパー（0-indexed）
+    sr0 = summary_start - 1  # 0-indexed header row
+    sr1 = summary_end        # 0-indexed exclusive
+
+    def _src(col_start, col_end):
+        return {"sourceRange": {"sources": [{
+            "sheetId": ws.id,
+            "startRowIndex": sr0, "endRowIndex": sr1,
+            "startColumnIndex": col_start, "endColumnIndex": col_end,
+        }]}}
+
+    chart_row = summary_end + 1  # 0-indexed anchor row for charts
+
+    chart_reqs = [
+        # Chart 1: 売上・広告費・粗利（棒グラフ）
+        {"addChart": {"chart": {
+            "spec": {
+                "title": "売上・広告費・粗利",
+                "basicChart": {
+                    "chartType": "COLUMN",
+                    "legendPosition": "BOTTOM_LEGEND",
+                    "axis": [
+                        {"position": "BOTTOM_AXIS"},
+                        {"position": "LEFT_AXIS", "title": "金額"},
+                    ],
+                    "domains": [{"domain": _src(0, 1)}],
+                    "series": [
+                        {"series": _src(4, 5), "targetAxis": "LEFT_AXIS",
+                         "color": {"red": 0.27, "green": 0.45, "blue": 0.77}},
+                        {"series": _src(5, 6), "targetAxis": "LEFT_AXIS",
+                         "color": {"red": 0.75, "green": 0.31, "blue": 0.30}},
+                        {"series": _src(7, 8), "targetAxis": "LEFT_AXIS",
+                         "color": {"red": 0.44, "green": 0.68, "blue": 0.28}},
+                    ],
+                    "headerCount": 1,
+                },
+            },
+            "position": {"overlayPosition": {
+                "anchorCell": {"sheetId": ws.id, "rowIndex": chart_row, "columnIndex": 0},
+                "widthPixels": 720, "heightPixels": 400,
+            }},
+        }}},
+        # Chart 2: ROAS推移（折れ線グラフ）
+        {"addChart": {"chart": {
+            "spec": {
+                "title": "ROAS推移",
+                "basicChart": {
+                    "chartType": "LINE",
+                    "legendPosition": "BOTTOM_LEGEND",
+                    "axis": [
+                        {"position": "BOTTOM_AXIS"},
+                        {"position": "LEFT_AXIS", "title": "ROAS (%)"},
+                    ],
+                    "domains": [{"domain": _src(0, 1)}],
+                    "series": [
+                        {"series": _src(6, 7), "targetAxis": "LEFT_AXIS",
+                         "color": {"red": 0.93, "green": 0.49, "blue": 0.19}},
+                    ],
+                    "headerCount": 1,
+                },
+            },
+            "position": {"overlayPosition": {
+                "anchorCell": {"sheetId": ws.id, "rowIndex": chart_row, "columnIndex": 7},
+                "widthPixels": 520, "heightPixels": 400,
+            }},
+        }}},
+        # Chart 3: 集客数・予約数・実施数（棒グラフ）
+        {"addChart": {"chart": {
+            "spec": {
+                "title": "集客数・予約数・実施数",
+                "basicChart": {
+                    "chartType": "COLUMN",
+                    "legendPosition": "BOTTOM_LEGEND",
+                    "axis": [
+                        {"position": "BOTTOM_AXIS"},
+                        {"position": "LEFT_AXIS", "title": "件数"},
+                    ],
+                    "domains": [{"domain": _src(0, 1)}],
+                    "series": [
+                        {"series": _src(1, 2), "targetAxis": "LEFT_AXIS",
+                         "color": {"red": 0.27, "green": 0.45, "blue": 0.77}},
+                        {"series": _src(2, 3), "targetAxis": "LEFT_AXIS",
+                         "color": {"red": 0.44, "green": 0.68, "blue": 0.28}},
+                        {"series": _src(3, 4), "targetAxis": "LEFT_AXIS",
+                         "color": {"red": 0.93, "green": 0.49, "blue": 0.19}},
+                    ],
+                    "headerCount": 1,
+                },
+            },
+            "position": {"overlayPosition": {
+                "anchorCell": {"sheetId": ws.id, "rowIndex": chart_row + 23, "columnIndex": 0},
+                "widthPixels": 720, "heightPixels": 400,
+            }},
+        }}},
+    ]
+    spreadsheet.batch_update({"requests": chart_reqs})
+    logger.info("チャート作成: 3 件")
 
     # 最終更新日
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    ws.update_acell("A2", f"最終更新: {now}")
+    ws.update_acell("A1", f"最終更新: {now}")
 
-    logger.info(f"スキルプラス（月別）構築完了: {len(sheet_rows)} ヶ月")
+    logger.info(f"スキルプラス（月別）構築完了: {month_count} ヶ月, {len(sheet_rows)} 行")
 
     # LINE通知
-    months = [r[0] for r in sheet_rows]
     message = (
         f"📊 スキルプラス（月別）シート更新完了\n"
-        f"{months[0]} 〜 {months[-1]} ({len(months)} ヶ月)"
+        f"{months[0]} 〜 {months[-1]} ({month_count} ヶ月, {len(sheet_rows)} 行)"
     )
     send_line_notify(message)
 
@@ -586,9 +928,42 @@ def generate_kpi_cache(dry_run=False):
         monthly_by_media[mk] = {}
         for media, vals in sorted(media_monthly[mk].items()):
             monthly_by_media[mk][media] = {
-                "集客数": vals["集客数"], "予約数": vals["予約数"],
+                "集客数": vals["集客数"], "個別予約数": vals["予約数"],
                 "売上": vals["売上"], "広告費": vals["広告費"],
                 "ROAS": round(vals["売上"] / vals["広告費"] * 100, 1) if vals["広告費"] > 0 else 0,
+            }
+
+    # ── 2b. 月別×媒体×ファネル 内訳 ──
+    mf_monthly = defaultdict(lambda: defaultdict(lambda: {
+        "集客数": 0, "予約数": 0, "実施数": 0, "売上": 0, "広告費": 0
+    }))
+    for row in all_rows:
+        mk = row[0][:7]
+        media = row[2] or "(未分類)"
+        funnel = row[3] or "(未分類)"
+        mf_key = f"{media}|{funnel}"
+        mf_monthly[mk][mf_key]["集客数"] += row[4]
+        mf_monthly[mk][mf_key]["予約数"] += row[5]
+        mf_monthly[mk][mf_key]["実施数"] += row[6]
+        mf_monthly[mk][mf_key]["売上"] += row[7]
+        mf_monthly[mk][mf_key]["広告費"] += row[8]
+
+    monthly_by_media_funnel = {}
+    for mk in sorted(mf_monthly.keys()):
+        monthly_by_media_funnel[mk] = {}
+        for mf_key, vals in sorted(mf_monthly[mk].items()):
+            集客 = vals["集客数"]; 予約 = vals["予約数"]
+            売上 = vals["売上"]; 広告費 = vals["広告費"]
+            monthly_by_media_funnel[mk][mf_key] = {
+                "集客媒体": mf_key.split("|")[0],
+                "ファネル名": mf_key.split("|")[1],
+                "集客数": 集客, "個別予約数": 予約,
+                "実施数": vals["実施数"], "売上": 売上, "広告費": 広告費,
+                "CPA": round(広告費 / 集客) if 集客 > 0 else 0,
+                "CPO": round(広告費 / 予約) if 予約 > 0 else 0,
+                "ROAS": round(売上 / 広告費 * 100, 1) if 広告費 > 0 else 0,
+                "LTV": round(売上 / 集客) if 集客 > 0 else 0,
+                "粗利": 売上 - 広告費,
             }
 
     # ── 3. 直近14日 日別合計 ──
@@ -637,16 +1012,32 @@ def generate_kpi_cache(dry_run=False):
         "updated_at": datetime.now().isoformat(timespec="seconds"),
         "monthly": monthly_list,
         "monthly_by_media": monthly_by_media,
+        "monthly_by_media_funnel": monthly_by_media_funnel,
         "recent_daily": recent_daily,
         "recent_daily_by_media": recent_daily_by_media,
     }
+
+    # バリデーション: 空データチェック
+    if not monthly_list and not recent_daily:
+        logger.warning("KPIキャッシュ生成スキップ: 月別・日別データが両方空です")
+        return False
 
     if dry_run:
         logger.info(f"(dry-run) KPIキャッシュ生成予定: {len(monthly_list)}ヶ月, {len(recent_daily)}日分")
         return True
 
-    with open(KPI_CACHE_PATH, "w", encoding="utf-8") as f:
-        json.dump(cache, f, ensure_ascii=False, indent=2)
+    # アトミック書き込み: tmpfile → rename で破損を防止
+    KPI_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    json_str = json.dumps(cache, ensure_ascii=False, indent=2)
+    fd, tmp_path = tempfile.mkstemp(dir=KPI_CACHE_PATH.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json_str)
+        os.replace(tmp_path, str(KPI_CACHE_PATH))
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
 
     logger.info(f"KPIキャッシュ生成完了: {KPI_CACHE_PATH} ({len(monthly_list)}ヶ月, {len(recent_daily)}日分)")
     return True

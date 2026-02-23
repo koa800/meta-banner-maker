@@ -17,6 +17,7 @@ import csv
 import json
 import os
 import sys
+import tempfile
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -49,7 +50,7 @@ def _read_monthly_csv() -> list[dict]:
         return []
 
     results = []
-    with open(MONTHLY_CSV, encoding="utf-8") as f:
+    with open(MONTHLY_CSV, encoding="utf-8-sig") as f:
         reader = csv.reader(f)
         header = None
         for row in reader:
@@ -73,15 +74,17 @@ def _read_monthly_csv() -> list[dict]:
     return results
 
 
-def _read_daily_csv() -> tuple[list[dict], dict]:
-    """日別CSVを読み、(recent_daily_totals, monthly_by_media) を返す"""
+def _read_daily_csv() -> tuple[list[dict], dict, dict, dict]:
+    """日別CSVを読み、(recent_daily, monthly_by_media, monthly_by_media_funnel, recent_daily_by_media) を返す"""
     if not DAILY_CSV.exists():
-        return [], {}
+        return [], {}, {}, {}
 
     daily_totals = defaultdict(lambda: {"集客数": 0, "個別予約数": 0, "実施数": 0, "売上": 0, "広告費": 0})
     monthly_media = defaultdict(lambda: defaultdict(lambda: {"集客数": 0, "個別予約数": 0, "実施数": 0, "売上": 0, "広告費": 0}))
+    mf_monthly = defaultdict(lambda: defaultdict(lambda: {"集客数": 0, "個別予約数": 0, "実施数": 0, "売上": 0, "広告費": 0}))
+    media_daily = defaultdict(lambda: defaultdict(lambda: {"集客数": 0, "売上": 0, "広告費": 0}))
 
-    with open(DAILY_CSV, encoding="utf-8") as f:
+    with open(DAILY_CSV, encoding="utf-8-sig") as f:
         reader = csv.reader(f)
         header = None
         col_map = {}
@@ -99,8 +102,12 @@ def _read_daily_csv() -> tuple[list[dict], dict]:
             if len(dt) < 10 or dt[4] != "-":
                 continue
 
-            media = row[col_map.get("集客媒体", 2)] if col_map.get("集客媒体", 2) < len(row) else "不明"
+            media_idx = col_map.get("集客媒体", 2)
+            funnel_idx = col_map.get("ファネル名", 3)
+            media = row[media_idx] if media_idx < len(row) else "不明"
+            funnel = row[funnel_idx] if funnel_idx < len(row) else "不明"
             month_key = dt[:7]
+            mf_key = f"{media}|{funnel}"
 
             for key in ("集客数", "個別予約数", "実施数", "売上", "広告費"):
                 idx = col_map.get(key)
@@ -108,9 +115,16 @@ def _read_daily_csv() -> tuple[list[dict], dict]:
                     val = _parse_num(row[idx])
                     daily_totals[dt][key] += val
                     monthly_media[month_key][media][key] += val
+                    mf_monthly[month_key][mf_key][key] += val
 
-    # 直近7日の日別合計
-    sorted_dates = sorted(daily_totals.keys(), reverse=True)[:7]
+            # 日別×媒体（集客数・売上・広告費のみ）
+            for key in ("集客数", "売上", "広告費"):
+                idx = col_map.get(key)
+                if idx is not None and idx < len(row):
+                    media_daily[dt][media][key] += _parse_num(row[idx])
+
+    # 直近14日の日別合計
+    sorted_dates = sorted(daily_totals.keys(), reverse=True)[:14]
     recent_daily = []
     for dt in sorted_dates:
         d = daily_totals[dt]
@@ -141,7 +155,37 @@ def _read_daily_csv() -> tuple[list[dict], dict]:
                 "ROAS": roas,
             }
 
-    return recent_daily, mbm
+    # 月別×媒体×ファネル（全月）
+    monthly_by_media_funnel = {}
+    for mk in sorted(mf_monthly.keys()):
+        monthly_by_media_funnel[mk] = {}
+        for mf_key, vals in sorted(mf_monthly[mk].items()):
+            集客 = int(vals["集客数"]); 予約 = int(vals["個別予約数"])
+            売上 = int(vals["売上"]); 広告費 = int(vals["広告費"])
+            monthly_by_media_funnel[mk][mf_key] = {
+                "集客媒体": mf_key.split("|")[0],
+                "ファネル名": mf_key.split("|")[1],
+                "集客数": 集客, "個別予約数": 予約,
+                "実施数": int(vals["実施数"]), "売上": 売上, "広告費": 広告費,
+                "CPA": round(広告費 / 集客) if 集客 > 0 else 0,
+                "CPO": round(広告費 / 予約) if 予約 > 0 else 0,
+                "ROAS": round(売上 / 広告費 * 100, 1) if 広告費 > 0 else 0,
+                "LTV": round(売上 / 集客) if 集客 > 0 else 0,
+                "粗利": 売上 - 広告費,
+            }
+
+    # 直近14日 日別×媒体
+    recent_daily_by_media = {}
+    for dt in sorted_dates:
+        recent_daily_by_media[dt] = {}
+        for media, vals in sorted(media_daily[dt].items()):
+            recent_daily_by_media[dt][media] = {
+                "集客数": int(vals["集客数"]),
+                "売上": int(vals["売上"]),
+                "広告費": int(vals["広告費"]),
+            }
+
+    return recent_daily, mbm, monthly_by_media_funnel, recent_daily_by_media
 
 
 def _read_report_csv() -> dict:
@@ -149,7 +193,7 @@ def _read_report_csv() -> dict:
     if not REPORT_CSV.exists():
         return {}
 
-    with open(REPORT_CSV, encoding="utf-8") as f:
+    with open(REPORT_CSV, encoding="utf-8-sig") as f:
         reader = csv.reader(f)
         rows = list(reader)
 
@@ -198,22 +242,43 @@ def _read_report_csv() -> dict:
 def build_cache(output_path: Path = None) -> dict:
     """CSVからKPIサマリーJSONを構築"""
     monthly = _read_monthly_csv()
-    recent_daily, monthly_by_media = _read_daily_csv()
+    recent_daily, monthly_by_media, monthly_by_media_funnel, recent_daily_by_media = _read_daily_csv()
     report_summary = _read_report_csv()
 
+    # バリデーション: 空データチェック
+    if not monthly and not recent_daily:
+        print("❌ KPIキャッシュ生成スキップ: 月別・日別データが両方空です（CSVが存在しないか破損の可能性）")
+        return {}
+
     cache = {
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
         "monthly": monthly,
         "monthly_by_media": monthly_by_media,
+        "monthly_by_media_funnel": monthly_by_media_funnel,
         "recent_daily": recent_daily,
+        "recent_daily_by_media": recent_daily_by_media,
         "report_summary": report_summary,
-        "updated_at": datetime.now().isoformat(),
         "source": "csv_cache",
     }
 
     out = output_path or DEFAULT_OUTPUT
-    out.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    # アトミック書き込み: tmpfile → rename で破損を防止
+    json_str = json.dumps(cache, ensure_ascii=False, indent=2)
+    fd, tmp_path = tempfile.mkstemp(dir=out.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json_str)
+        os.replace(tmp_path, str(out))
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+
     print(f"✅ KPIキャッシュ生成完了: {out}")
     print(f"   月別: {len(monthly)}ヶ月 / 日別: {len(recent_daily)}日 / 媒体別: {len(monthly_by_media)}ヶ月")
+    print(f"   媒体×ファネル: {len(monthly_by_media_funnel)}ヶ月 / 日別×媒体: {len(recent_daily_by_media)}日")
     if report_summary:
         print(f"   日報サマリー: {', '.join(report_summary.keys())}")
 

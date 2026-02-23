@@ -12,6 +12,7 @@ LOG_FILE="$DEPLOY_DIR/System/mac_mini/agent_orchestrator/logs/git_sync.log"
 STATUS_FILE="$DEPLOY_DIR/System/mac_mini/agent_orchestrator/sync_status.json"
 
 log() {
+  mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
 }
 
@@ -35,12 +36,17 @@ write_status() {
   local commit="$2"
   local msg="$3"
   local changed="${4:-0}"
+  # msgに含まれるダブルクォート・バックスラッシュ・改行をエスケープ
+  local escaped_msg
+  escaped_msg=$(printf '%s' "$msg" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))" 2>/dev/null) || escaped_msg="\"$msg\""
+  local escaped_status
+  escaped_status=$(printf '%s' "$status" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))" 2>/dev/null) || escaped_status="\"$status\""
   cat > "$STATUS_FILE" <<EOJSON
 {
-  "status": "$status",
-  "commit": "$commit",
+  "status": $escaped_status,
+  "commit": "$(echo "$commit" | cut -c1-40)",
   "commit_short": "$(echo "$commit" | cut -c1-7)",
-  "message": "$msg",
+  "message": $escaped_msg,
   "changed_files": $changed,
   "checked_at": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
   "checked_at_jst": "$(date '+%Y-%m-%d %H:%M:%S')"
@@ -150,11 +156,25 @@ EOPLIST
 
 ensure_plist_path
 
-# --- fetch して差分チェック ---
-git fetch origin main 2>> "$LOG_FILE"
+# --- fetch して差分チェック（厳密検証） ---
+FETCH_STDERR=$(mktemp)
+if ! git fetch origin main 2>"$FETCH_STDERR"; then
+  FETCH_ERR=$(cat "$FETCH_STDERR")
+  rm -f "$FETCH_STDERR"
+  log "ERROR: git fetch 失敗: $FETCH_ERR"
+  write_status "fetch_failed" "$(git rev-parse HEAD 2>/dev/null || echo 'unknown')" "fetch失敗" 0
+  exit 1
+fi
+rm -f "$FETCH_STDERR"
 
 LOCAL_HEAD=$(git rev-parse HEAD)
-REMOTE_HEAD=$(git rev-parse origin/main)
+REMOTE_HEAD=$(git rev-parse origin/main 2>/dev/null || echo "")
+
+if [ -z "$REMOTE_HEAD" ]; then
+  log "ERROR: origin/main の解決に失敗（fetch後にrefが見つからない）"
+  write_status "fetch_failed" "$LOCAL_HEAD" "origin/main 解決失敗" 0
+  exit 1
+fi
 
 if [ "$LOCAL_HEAD" = "$REMOTE_HEAD" ]; then
   write_status "synced" "$LOCAL_HEAD" "変更なし" 0
@@ -167,7 +187,16 @@ log "変更検出: $LOCAL_HEAD → $REMOTE_HEAD"
 CHANGED=$(git diff --name-only "$LOCAL_HEAD" "$REMOTE_HEAD" 2>/dev/null || echo "")
 
 # --- リセット ---
-git reset --hard origin/main 2>> "$LOG_FILE"
+if ! git reset --hard origin/main 2>> "$LOG_FILE"; then
+  log "ERROR: git reset --hard 失敗 — rsyncをスキップして安全に終了"
+  write_status "reset_failed" "$LOCAL_HEAD" "git reset失敗" 0
+  notify_line "⚠️ git reset --hard 失敗
+━━━━━━━━━━━━
+リポジトリ: $REPO_DIR
+古いコードのままデプロイは行いません。
+手動確認が必要です。"
+  exit 1
+fi
 log "git reset 完了"
 
 # --- ローカル rsync でデプロイ ---
@@ -256,6 +285,38 @@ if echo "$CHANGED" | grep -q "mac_mini/agent_orchestrator/"; then
     launchctl start com.addness.agent-orchestrator 2>/dev/null || true
   ) &
 fi
+
+# --- config.json バリデーション ---
+_validate_config() {
+  local config_file="$DEPLOY_DIR/line_bot_local/config.json"
+  if [ ! -f "$config_file" ]; then
+    log "WARNING: config.json が存在しません: $config_file"
+    notify_line "⚠️ config.json 未設定
+━━━━━━━━━━━━
+$config_file が存在しません。
+手動でセットアップしてください。"
+    return 1
+  fi
+
+  local missing=""
+  for key in server_url agent_token; do
+    local val
+    val=$(python3 -c "import json; c=json.load(open('$config_file')); print('OK' if c.get('$key') else 'MISSING')" 2>/dev/null || echo "ERROR")
+    if [ "$val" != "OK" ]; then
+      missing="$missing $key"
+    fi
+  done
+
+  if [ -n "$missing" ]; then
+    log "WARNING: config.json に必須キーが不足:$missing"
+    notify_line "⚠️ config.json 設定不足
+━━━━━━━━━━━━
+不足キー:$missing
+ファイル: $config_file"
+    return 1
+  fi
+}
+_validate_config || true   # バリデーション失敗でもスクリプトは続行（通知は済んでいる）
 
 CHANGED_COUNT=$(echo "$CHANGED" | wc -l | tr -d ' ')
 log "同期完了: ${CHANGED_COUNT}ファイル更新"
