@@ -53,6 +53,7 @@ class TaskScheduler:
             "weekly_profile_learning": self._run_weekly_profile_learning,
             "kpi_nightly_cache": self._run_kpi_nightly_cache,
             "log_rotate": self._run_log_rotate,
+            "slack_ai_team_check": self._run_slack_ai_team_check,
         }
 
     def setup(self):
@@ -265,24 +266,34 @@ class TaskScheduler:
             except Exception as e:
                 logger.debug(f"Q&A state check error: {e}")
 
-        # local_agent.py の生存確認（agent.log 更新時刻チェック）
-        agent_log = os.path.expanduser("~/agents/line_bot_local/agent.log")
-        if os.path.exists(agent_log):
+        # local_agent.py の生存確認（プロセス存在チェック → ログ更新時刻はフォールバック）
+        try:
+            import time
+            agent_alive = False
             try:
-                import time
-                log_age_min = (time.time() - os.path.getmtime(agent_log)) / 60
-                if log_age_min > 30:
-                    logger.warning(f"local_agent may be stale: log not updated for {log_age_min:.0f} min")
-                    state_key = "local_agent_stale_notified"
-                    last_n = self.memory.get_state(state_key)
-                    if not last_n or (datetime.now() - datetime.fromisoformat(last_n)).total_seconds() > 3600:
-                        send_line_notify(
-                            f"\n⚠️ local_agent 停止の可能性\nログが{log_age_min:.0f}分間更新されていません\n"
-                            f"com.linebot.localagent を確認してください"
-                        )
-                        self.memory.set_state(state_key, datetime.now().isoformat())
-            except Exception as e:
-                logger.debug(f"local_agent log check error: {e}")
+                result = subprocess.run(
+                    ["launchctl", "list", "com.linebot.localagent"],
+                    capture_output=True, text=True, timeout=5
+                )
+                # launchctl list が成功 & PID が数字ならプロセス生存
+                if result.returncode == 0 and result.stdout.strip():
+                    parts = result.stdout.strip().split()
+                    agent_alive = parts[0].isdigit() if parts else False
+            except Exception:
+                pass
+
+            if not agent_alive:
+                logger.warning("local_agent process not found via launchctl")
+                state_key = "local_agent_stale_notified"
+                last_n = self.memory.get_state(state_key)
+                if not last_n or (datetime.now() - datetime.fromisoformat(last_n)).total_seconds() > 3600:
+                    send_line_notify(
+                        "\n⚠️ local_agent 停止\nプロセスが見つかりません\n"
+                        "com.linebot.localagent を確認してください"
+                    )
+                    self.memory.set_state(state_key, datetime.now().isoformat())
+        except Exception as e:
+            logger.debug(f"local_agent check error: {e}")
 
         # KPIキャッシュ鮮度チェック（48時間超で警告）
         kpi_cache = os.path.expanduser("~/agents/System/data/kpi_summary.json")
@@ -1407,3 +1418,50 @@ JSON以外の文字は出力しないでください。"""}],
         except Exception as e:
             self.memory.log_task_end(task_id, "error", error_message=str(e))
             logger.exception("Repair check failed")
+
+    async def _run_slack_ai_team_check(self):
+        """定期チェック: Slack #ai-team の新着メッセージを読み取り→LINEに転送"""
+        from .slack_reader import fetch_channel_messages
+        from .notifier import send_line_notify
+
+        AI_TEAM_CHANNEL = "C0AGLRJ8N3G"
+        state_key = "slack_ai_team_last_ts"
+        last_ts = self.memory.get_state(state_key)
+
+        messages = fetch_channel_messages(
+            AI_TEAM_CHANNEL,
+            oldest=last_ts,
+            limit=30,
+        )
+
+        if not messages:
+            logger.debug("slack_ai_team_check: no new messages")
+            return
+
+        # AI Secretary自身のメッセージは除外
+        new_msgs = [m for m in messages if m["ts"] != last_ts]
+        if not new_msgs:
+            return
+
+        # 最新のタイムスタンプを保存
+        latest_ts = new_msgs[-1]["ts"]
+        self.memory.set_state(state_key, latest_ts)
+
+        # bot自身の投稿（AI Secretary / webhook経由）は除外
+        human_msgs = [m for m in new_msgs if not m.get("user_id", "").startswith("B")]
+        if not human_msgs:
+            logger.debug("slack_ai_team_check: only bot messages, skipping LINE forward")
+            return
+
+        # LINEに転送
+        lines = [f"\n💬 Slack #ai-team 新着 ({len(human_msgs)}件)\n━━━━━━━━━━━━"]
+        for msg in human_msgs[:10]:
+            text_preview = msg["text"][:100]
+            lines.append(f"[{msg['datetime']}] {msg['user']}: {text_preview}")
+        lines.append("━━━━━━━━━━━━")
+
+        ok = send_line_notify("\n".join(lines))
+        if ok:
+            logger.info(f"Slack #ai-team: forwarded {len(human_msgs)} messages to LINE")
+        else:
+            logger.warning("Slack #ai-team: LINE forward failed")
