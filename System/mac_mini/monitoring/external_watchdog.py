@@ -21,7 +21,7 @@ from pathlib import Path
 DEPLOY_DIR = Path.home() / ".config" / "addness" / "monitoring"
 STATE_FILE = DEPLOY_DIR / "watchdog_state.json"
 
-MAC_MINI_HOST = os.environ.get("MAC_MINI_HOST", "mac-mini-agent.local")
+MAC_MINI_HOST = os.environ.get("MAC_MINI_HOST", "mac-mini-agent")
 MAC_MINI_PORT = int(os.environ.get("MAC_MINI_PORT", "8500"))
 HEALTH_URL = f"http://{MAC_MINI_HOST}:{MAC_MINI_PORT}/health"
 
