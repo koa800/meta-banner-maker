@@ -115,8 +115,8 @@ class TaskScheduler:
             raise
 
     def _maybe_notify_task_failure(self, task_name: str, error_msg: str):
-        """タスク失敗をLINE通知（2時間以内に同タスクの通知済みならスキップ）"""
-        from .notifier import send_line_notify
+        """タスク失敗をLINE+Slack通知（2時間以内に同タスクの通知済みならスキップ）"""
+        from .notifier import notify_ai_team
         now = datetime.now()
         state_key = f"failure_notified_{task_name}"
         last_notified = self.memory.get_state(state_key)
@@ -127,7 +127,7 @@ class TaskScheduler:
                     return  # 2時間以内は通知済み
             except (ValueError, TypeError):
                 pass
-        ok = send_line_notify(
+        ok = notify_ai_team(
             f"\n⚠️ タスクエラー: {task_name}\n"
             f"━━━━━━━━━━━━\n"
             f"{error_msg[:250]}\n"
@@ -161,10 +161,10 @@ class TaskScheduler:
         await self._notify_mail_result(result, "kohara")
 
     async def _notify_mail_result(self, result: tools.ToolResult, account: str):
-        """メール処理結果をLINE通知（返信待ちがある場合のみ）"""
+        """メール処理結果をLINE+Slack通知（返信待ちがある場合のみ）"""
         if not result.success or not result.output:
             return
-        from .notifier import send_line_notify
+        from .notifier import notify_ai_team as send_line_notify  # LINE+Slack同時送信
 
         waiting_m = re.search(r"返信待ち[：:]\s*(\d+)\s*件", result.output)
         delete_m = re.search(r"削除確認[：:]\s*(\d+)\s*件", result.output)
@@ -418,8 +418,8 @@ class TaskScheduler:
         logger.info(f"Weekly idea proposal sent: {task_text[:80]}")
 
     async def _run_daily_addness_digest(self):
-        """毎朝8:30: actionable-tasks.md（タスク）+ カレンダー（今日の予定）をLINE通知"""
-        from .notifier import send_line_notify
+        """毎朝8:30: actionable-tasks.md（タスク）+ カレンダー（今日の予定）をLINE+Slack通知"""
+        from .notifier import notify_ai_team as send_line_notify  # LINE+Slack同時送信
         from datetime import date
 
         master_dir = self.config.get("paths", {}).get("master_dir", "~/agents/Master")
@@ -722,9 +722,9 @@ class TaskScheduler:
             logger.info("OAuth health check OK")
 
     async def _run_weekly_stats(self):
-        """毎週月曜9:30: 先週のシステム稼働サマリーをLINE通知"""
+        """毎週月曜9:30: 先週のシステム稼働サマリーをLINE+Slack通知"""
         import json as _json
-        from .notifier import send_line_notify
+        from .notifier import notify_ai_team as send_line_notify  # LINE+Slack同時送信
         from datetime import date
 
         stats = self.memory.get_task_stats(since_hours=168)  # 7日間
