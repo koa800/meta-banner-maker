@@ -42,6 +42,33 @@ _ADDNESS_KEYWORDS = frozenset({
 SELF_IDENTITY_MD = _PROJECT_ROOT / "Master" / "self_clone" / "kohara" / "IDENTITY.md"
 SELF_PROFILE_MD = _PROJECT_ROOT / "Master" / "self_clone" / "kohara" / "SELF_PROFILE.md"
 FEEDBACK_FILE = _PROJECT_ROOT / "Master" / "learning" / "reply_feedback.json"
+_SKILLS_DIR = _SYSTEM_DIR / "line_bot" / "skills"
+
+
+_skills_cache: str = ""
+_skills_cache_mtime: float = 0
+
+
+def _load_skills_knowledge() -> str:
+    """Skillsディレクトリから甲原海人の専門知識を読み込み（5分キャッシュ）"""
+    global _skills_cache, _skills_cache_mtime
+    now = time.time()
+    if _skills_cache and (now - _skills_cache_mtime) < 300:
+        return _skills_cache
+
+    parts = []
+    if _SKILLS_DIR.exists():
+        for fp in sorted(_SKILLS_DIR.glob("*.md")):
+            try:
+                parts.append(f"【{fp.stem}】\n{fp.read_text(encoding='utf-8')}")
+            except Exception as e:
+                print(f"Skills読み込みエラー: {fp.name} - {e}")
+
+    _skills_cache = "\n\n".join(parts) if parts else ""
+    _skills_cache_mtime = now
+    if _skills_cache:
+        print(f"   📚 Skills知識ロード: {len(_skills_cache)}文字 ({len(parts)}ファイル)")
+    return _skills_cache
 
 
 def _load_self_identity() -> str:
@@ -1118,13 +1145,21 @@ def call_claude_api(instruction: str, task: dict):
 {platform_note}{('- 会話文脈を踏まえた流れのある返信にすること' if context_messages else '')}{('- 引用元の内容を踏まえた返信にすること' if quoted_text else '')}
 返信文:"""
 
+            # Skills知識を読み込み（甲原海人の専門知識としてシステムプロンプトに注入）
+            skills_knowledge = _load_skills_knowledge()
+            skills_system = (
+                "\n\n【甲原海人の専門知識（マーケティング・広告・ビジネス）】\n"
+                "以下は甲原海人が持つ専門知識。会話内容が関連する場合のみ活用すること。\n"
+                f"{skills_knowledge}"
+            ) if skills_knowledge else ""
+
             # シートデータありの場合はmax_tokensを拡大（計算・根拠提示に十分な量）
             max_tokens = 600 if sheet_section else 200
             response = client.messages.create(
                 model="claude-sonnet-4-6",  # 口調再現は精度重視でSonnet
                 max_tokens=max_tokens,
-                system="あなたは甲原海人です。定義されたスタイルで返信文のみを出力してください。" + (
-                    "関連データがある場合は必ず数字を計算して根拠を示し、相手の質問にクリティカルに答えてください。" if sheet_section else ""
+                system="あなたは甲原海人です。定義されたスタイルで返信文のみを出力してください。" + skills_system + (
+                    "\n関連データがある場合は必ず数字を計算して根拠を示し、相手の質問にクリティカルに答えてください。" if sheet_section else ""
                 ),
                 messages=[{"role": "user", "content": prompt}]
             )
