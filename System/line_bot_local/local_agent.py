@@ -1118,6 +1118,7 @@ def call_claude_api(instruction: str, task: dict):
 ---
 
 【送信者: {sender_name}】{category_line}
+{f"呼び方: {profile.get('line_my_name', '')}" if profile and profile.get('line_my_name') else ''}
 返信スタイル: {comm_style_note or tone_guide or '関係性に応じたトーンで'}
 {f'敬語レベル: タメ口（敬語禁止。「です」「ます」は使わない）' if comm_formality == 'low' else f'敬語レベル: 丁寧語（「です」「ます」を使う）' if comm_formality == 'high' else f'敬語レベル: 中間（フランクだが最低限の丁寧さ）' if comm_formality in ('medium', 'mid') else ''}
 推奨挨拶: {comm_greeting or 'お疲れ様！'}
@@ -1132,13 +1133,14 @@ def call_claude_api(instruction: str, task: dict):
 
 【出力ルール】
 - 甲原海人が実際に送る文章のみ出力（説明・前置き不要）
-- 50文字以内を目安に簡潔に
-{f'- 関連データあり。ただし相手が数字や分析を求めている場合のみデータを使って回答する。報告・共有・喜びの共有にはデータを展開せず短い共感で返す' if sheet_section else ''}
-{f'- データを使う場合は計算式・前提条件・結論を明確に構造化して提示する' if sheet_section else ''}
+{f'- 【内部メンバー向け】基本はオフラインで話す前提のため、LINEは極めてシンプル・最低限でOK。相手が明確に厳密な回答を求めている場合のみ丁寧に答える。それ以外は一言〜二言で十分。受け取った相手がポジティブな気持ちになる簡潔さを優先する' if sender_cat in ('本人', '上司', '直下メンバー', '横（並列）') else '- 50文字以内を目安に簡潔に'}
+{f'- 関連データあり。相手が具体的に数字や分析を質問している場合のみデータで回答する。報告・共有・確認には「了解！」「ナイス！」等の短い返しで十分。自分から分析を展開しない' if sheet_section else ''}
+{f'- データを使う場合も要点だけ簡潔に。計算過程や前提条件の列挙は不要' if sheet_section and sender_cat in ('本人', '上司', '直下メンバー', '横（並列）') else f'- データを使う場合は計算式・前提条件・結論を明確に構造化して提示する' if sheet_section else ''}
 - 相手固有のスタイルノートと口調の癖をそのまま再現する
 - 【最重要】敬語レベルを厳守すること。「タメ口（敬語禁止）」の相手には「です」「ます」「ございます」「いたします」を絶対に使わない。「了解！」「やっておくよ！」「いいね！」のようなタメ口で返す
 - メモ・現在の取り組みがあれば文脈として活用する
-- 絶対に使わない表現: 「そっかー」「そっかぁ」「そうなんだー」「〜だよね」「〜だよー」「わかるー」「たしかにー」等の長音カジュアル表現。「マジで」も使わない
+- 絶対に使わない表現: 「そっかー」「そっかぁ」「そうなんだー」「〜だよね」「〜だよー」「わかるー」「たしかにー」等の長音カジュアル表現。「マジで」「見立て」「やばい」「やばっ」も使わない。「〇〇教えて」→「教えてほしい」を使う
+- AとBの比較・選択の話題には分析を展開せず「〇〇だから△△にしよう」と決定+理由をシンプルに伝える
 - 絶対に使わない絵文字: 😊 😄 😆 🥰 ☺️ 🤗 🔥（ニコニコ系・炎マーク全て禁止。使えるのは😭🙇‍♂️のみ）
 - 「お疲れ様」は今日その人との最初の会話でのみ使う。既に他のグループ等で会話済みなら省略する。判断できない場合は省略する
 - 相手のメッセージの温度感に合わせた返信量にする。報告・喜びの共有には短い共感（「ナイス！」等）で十分。聞かれていないことまで具体的に言いすぎない
@@ -1154,12 +1156,20 @@ def call_claude_api(instruction: str, task: dict):
             ) if skills_knowledge else ""
 
             # シートデータありの場合はmax_tokensを拡大（計算・根拠提示に十分な量）
-            max_tokens = 600 if sheet_section else 200
+            # ただし内部メンバーはLINEで長文不要なので控えめにする
+            _is_internal = sender_cat in ("本人", "上司", "直下メンバー", "横（並列）")
+            if sheet_section and not _is_internal:
+                max_tokens = 600
+            elif sheet_section and _is_internal:
+                max_tokens = 300
+            else:
+                max_tokens = 200
             response = client.messages.create(
                 model="claude-sonnet-4-6",  # 口調再現は精度重視でSonnet
                 max_tokens=max_tokens,
                 system="あなたは甲原海人です。定義されたスタイルで返信文のみを出力してください。" + skills_system + (
-                    "\n関連データがある場合は必ず数字を計算して根拠を示し、相手の質問にクリティカルに答えてください。" if sheet_section else ""
+                    "\n関連データがある場合は必ず数字を計算して根拠を示し、相手の質問にクリティカルに答えてください。" if sheet_section and not _is_internal else
+                    "\n関連データがあっても、相手が明確に数字を聞いている場合以外はシンプルに返す。" if sheet_section and _is_internal else ""
                 ),
                 messages=[{"role": "user", "content": prompt}]
             )
