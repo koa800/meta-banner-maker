@@ -82,6 +82,9 @@ schedule:
   hinata_activity_check:
     cron: "0 21 * * *"           # 毎日 夜9:00（日向の今日の様子チェック）
     enabled: true
+  slack_hinata_auto_reply:
+    interval_minutes: 2          # 2分ごとに日向のメッセージをチェック→自動応答
+    enabled: true
 
 webhook:
   host: "0.0.0.0"

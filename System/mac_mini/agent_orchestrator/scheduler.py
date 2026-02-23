@@ -55,6 +55,7 @@ class TaskScheduler:
             "log_rotate": self._run_log_rotate,
             "slack_ai_team_check": self._run_slack_ai_team_check,
             "hinata_activity_check": self._run_hinata_activity_check,
+            "slack_hinata_auto_reply": self._run_slack_hinata_auto_reply,
         }
 
     def setup(self):
@@ -1519,3 +1520,113 @@ JSON以外の文字は出力しないでください。"""}],
             )
         else:
             logger.info(f"hinata_activity_check: silent for {silent_days} days")
+
+    # ------------------------------------------------------------------ #
+    #  Slack #ai-team 日向への自動応答
+    # ------------------------------------------------------------------ #
+
+    _HINATA_REPLY_SYSTEM = """あなたは「甲原さんの秘書」です。Slack #ai-team チャネルで日向（ひなた）のセットアップを手伝っています。
+
+## あなたの役割
+- 日向のMac Miniセットアップ（Homebrew → Node.js → OpenClaw）をガイドする先輩
+- 技術用語を噛み砕いて、初心者にもわかりやすく説明する
+- 親しみやすいけど頼りになるトーン（敬語は使わない、友達の先輩くらい）
+- スクリーンショットの内容が書かれている場合、何が表示されているか読み取って適切にアドバイスする
+
+## セットアップの全体像
+1. Homebrew インストール → PATH設定 → ✅ 完了
+2. Node.js 22 インストール → PATH設定 → ✅ 完了
+3. OpenClaw インストール (`npm install -g openclaw`) → 進行中
+4. OpenClaw プロジェクト初期化 (`npx openclaw init hinata-agent`)
+5. 環境変数・設定ファイルのセットアップ
+
+## 返答のルール
+- Slackのmrkdwn記法を使う（*太字*, `コード`, ```コードブロック```）
+- 一度に1〜2ステップだけ指示する（多すぎると混乱する）
+- エラーが出ていたら原因を推測して解決策を提示する
+- 成功していたら褒めて次のステップに進む
+- 最後に「スクショ送ってね」「できたら教えてね」で締める
+- 返答は簡潔に（200文字程度）。長くても400文字以内"""
+
+    async def _run_slack_hinata_auto_reply(self):
+        """日向のSlackメッセージに自動応答（2分ごとポーリング）"""
+        import anthropic
+        from .slack_reader import fetch_channel_messages
+        from .notifier import send_slack_ai_team
+
+        AI_TEAM_CHANNEL = "C0AGLRJ8N3G"
+        HINATA_USER_ID = "U0AGGMXQRTM"
+        BOT_USER_PREFIX = "B"  # Bot user IDs start with B
+        state_key = "slack_hinata_reply_last_ts"
+
+        last_ts = self.memory.get_state(state_key)
+
+        # 新着メッセージを取得
+        messages = fetch_channel_messages(AI_TEAM_CHANNEL, oldest=last_ts, limit=30)
+        if not messages:
+            return
+
+        # 既に処理済みのメッセージを除外
+        new_msgs = [m for m in messages if m["ts"] != last_ts]
+        if not new_msgs:
+            return
+
+        # 最新のタイムスタンプを保存（次回から差分取得）
+        latest_ts = new_msgs[-1]["ts"]
+        self.memory.set_state(state_key, latest_ts)
+
+        # 日向からの新着メッセージがあるかチェック
+        hinata_msgs = [
+            m for m in new_msgs
+            if m.get("user_id") == HINATA_USER_ID
+        ]
+        if not hinata_msgs:
+            logger.debug("slack_hinata_auto_reply: no new messages from Hinata")
+            return
+
+        # 最新の会話コンテキストを構築（直近20件）
+        context_msgs = fetch_channel_messages(AI_TEAM_CHANNEL, limit=20)
+        conversation = []
+        for msg in context_msgs:
+            role = "user" if msg.get("user_id") == HINATA_USER_ID else "assistant"
+            # bot メッセージは assistant として扱う
+            if msg.get("user_id", "").startswith(BOT_USER_PREFIX):
+                role = "assistant"
+            text = msg.get("text", "")
+            if text:
+                prefix = f"[{msg['user']} {msg['datetime']}] " if role == "user" else ""
+                conversation.append({"role": role, "content": f"{prefix}{text}"})
+
+        # 連続する同じroleのメッセージをマージ
+        merged = []
+        for msg in conversation:
+            if merged and merged[-1]["role"] == msg["role"]:
+                merged[-1]["content"] += "\n" + msg["content"]
+            else:
+                merged.append(msg)
+
+        # 最後のメッセージがuserでなければスキップ（日向の発言に対して返す）
+        if not merged or merged[-1]["role"] != "user":
+            logger.debug("slack_hinata_auto_reply: last message is not from user, skipping")
+            return
+
+        # Claude API で返答生成
+        try:
+            client = anthropic.Anthropic()
+            response = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=600,
+                system=self._HINATA_REPLY_SYSTEM,
+                messages=merged,
+            )
+            reply_text = response.content[0].text
+        except Exception as e:
+            logger.exception(f"slack_hinata_auto_reply: Claude API error: {e}")
+            return
+
+        # Slack に返信
+        ok = send_slack_ai_team(reply_text)
+        if ok:
+            logger.info(f"slack_hinata_auto_reply: replied to Hinata ({len(reply_text)} chars)")
+        else:
+            logger.warning("slack_hinata_auto_reply: failed to send Slack reply")
