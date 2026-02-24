@@ -1559,7 +1559,7 @@ JSON以外の文字は出力しないでください。"""}],
         from .notifier import send_slack_ai_team
 
         AI_TEAM_CHANNEL = "C0AGLRJ8N3G"
-        HINATA_USER_ID = "U0AGGMXQRTM"
+        HINATA_USER_ID = "U0AHJGVDRBJ"  # 日向 Bot (OpenClaw App)
         BOT_USER_PREFIX = "B"  # Bot user IDs start with B
         state_key = "slack_hinata_reply_last_ts"
 
