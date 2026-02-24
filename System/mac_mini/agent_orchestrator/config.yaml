@@ -78,13 +78,13 @@ schedule:
     enabled: true
   slack_ai_team_check:
     interval_minutes: 30         # 30分ごとにSlack #ai-team新着チェック→LINE転送
-    enabled: true
+    enabled: false               # 2026-02-24 無効化: Slack通知はLINEに不要
   hinata_activity_check:
     cron: "0 21 * * *"           # 毎日 夜9:00（日向の今日の様子チェック）
-    enabled: true
+    enabled: false               # 2026-02-24 無効化: Slack監視廃止
   slack_hinata_auto_reply:
     interval_minutes: 2          # 2分ごとに日向のメッセージをチェック→自動応答
-    enabled: true
+    enabled: false               # 2026-02-24 無効化: Slack監視廃止
 
 webhook:
   host: "0.0.0.0"
