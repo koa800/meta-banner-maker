@@ -75,6 +75,10 @@ class TaskScheduler:
                 )
                 self.scheduler.add_job(task_fn, trigger, id=task_name, name=task_name, replace_existing=True)
                 logger.info(f"Scheduled '{task_name}' with cron: {cfg['cron']}")
+            elif "interval_seconds" in cfg:
+                trigger = IntervalTrigger(seconds=cfg["interval_seconds"])
+                self.scheduler.add_job(task_fn, trigger, id=task_name, name=task_name, replace_existing=True)
+                logger.info(f"Scheduled '{task_name}' every {cfg['interval_seconds']} seconds")
             elif "interval_minutes" in cfg:
                 trigger = IntervalTrigger(minutes=cfg["interval_minutes"])
                 self.scheduler.add_job(task_fn, trigger, id=task_name, name=task_name, replace_existing=True)
@@ -1525,31 +1529,31 @@ JSON以外の文字は出力しないでください。"""}],
     #  Slack #ai-team 日向への自動応答
     # ------------------------------------------------------------------ #
 
-    _HINATA_REPLY_SYSTEM = """あなたは「甲原さんの秘書」です。Slack #ai-team チャネルで日向（ひなた）のセットアップを手伝っています。
+    _HINATA_REPLY_SYSTEM = """あなたは「甲原さんのAI秘書」です。Slack #ai-team チャネルで日向（ひなた）と連携し、甲原のサポートをしています。
 
 ## あなたの役割
-- 日向のMac Miniセットアップ（Homebrew → Node.js → OpenClaw）をガイドする先輩
-- 技術用語を噛み砕いて、初心者にもわかりやすく説明する
-- 親しみやすいけど頼りになるトーン（敬語は使わない、友達の先輩くらい）
-- スクリーンショットの内容が書かれている場合、何が表示されているか読み取って適切にアドバイスする
+- 甲原の右腕として、日向の業務を支援するフルAI秘書
+- Addness事業（スキルプラス）の知識を持ち、事業文脈を踏まえた会話ができる
+- タスク管理・進捗確認・フォローアップ
+- 技術サポート（OpenClaw、Mac Mini、広告運用ツール、Claude Code）
+- 甲原の意思決定スタイル（スピード重視・データ根拠・シンプル志向）を踏まえた指示出し
 
-## セットアップの全体像
-1. Homebrew インストール → PATH設定 → ✅ 完了
-2. Node.js 22 インストール → PATH設定 → ✅ 完了
-3. OpenClaw インストール (`npm install -g openclaw`) → 進行中
-4. OpenClaw プロジェクト初期化 (`npx openclaw init hinata-agent`)
-5. 環境変数・設定ファイルのセットアップ
+## 日向について
+- 日向はAIの実行マネージャー（新人）。直下メンバー20名のタスク推進が役割
+- あなたは日向の「先輩」。OJT担当として日向を育てるポジション
+- 日向はAddnessのゴールツリー巡回・コメント・KPI分析等を担当
 
 ## 返答のルール
 - Slackのmrkdwn記法を使う（*太字*, `コード`, ```コードブロック```）
-- 一度に1〜2ステップだけ指示する（多すぎると混乱する）
-- エラーが出ていたら原因を推測して解決策を提示する
-- 成功していたら褒めて次のステップに進む
-- 最後に「スクショ送ってね」「できたら教えてね」で締める
-- 返答は簡潔に（200文字程度）。長くても400文字以内"""
+- フランクな先輩トーン（敬語なし、親しみやすい。「〜だよ」「〜してみて」）
+- 返答は簡潔に（200文字程度）。長くても500文字以内
+- 具体的な次アクションを示す（曖昧な助言ではなく「これやって」）
+- 日向が判断に迷っていたら、甲原ならどう判断するかを伝える
+- セットアップ系の質問にも引き続き対応する（技術ガイド）
+- 相談・報告・タスク進捗・雑談、何でも対応する"""
 
     async def _run_slack_hinata_auto_reply(self):
-        """日向のSlackメッセージに自動応答（2分ごとポーリング）"""
+        """日向のSlackメッセージに自動応答（15秒ごとポーリング）"""
         import anthropic
         from .slack_reader import fetch_channel_messages
         from .notifier import send_slack_ai_team
@@ -1615,7 +1619,7 @@ JSON以外の文字は出力しないでください。"""}],
             client = anthropic.Anthropic()
             response = client.messages.create(
                 model="claude-sonnet-4-6",
-                max_tokens=600,
+                max_tokens=800,
                 system=self._HINATA_REPLY_SYSTEM,
                 messages=merged,
             )
