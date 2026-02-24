@@ -851,5 +851,16 @@
     "notes": "",
     "chatwork_account_id": "",
     "chatwork_display_name": ""
+  },
+  "日向": {
+    "line_display_name": "",
+    "line_my_name": "",
+    "email": "hinata@team.addness.co.jp",
+    "birthday": "",
+    "notes": "AI実行マネージャー（OpenClaw）。人間として扱う。Slack #ai-team で活動。",
+    "chatwork_account_id": "",
+    "chatwork_display_name": "",
+    "slack_display_name": "日向",
+    "slack_app_id": "A0AG8PXSQ07"
   }
 }

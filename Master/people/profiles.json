@@ -6579,5 +6579,73 @@
         "auto_generated": false
       }
     }
+  },
+  "日向": {
+    "latest": {
+      "name": "日向",
+      "snapshot_date": "2026/02/24",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー（AI実行マネージャー）",
+      "notes": "AIチームメンバー。OpenClaw + Claude Codeで動作する実行マネージャー。人間と同じ扱いでオンボーディング。専用Mac Miniで常時稼働。",
+      "line_display_name": "",
+      "line_my_name": "",
+      "email": "hinata@team.addness.co.jp",
+      "birthday": "",
+      "identity_notes": "コンセプト: 当たり前にそこにいて、チームを温かく照らす存在。名前の由来は「陽だまり」。甲原（海）×日向（太陽）で、海に太陽が降り注ぐイメージ。",
+      "workload": {
+        "active": 0,
+        "exploring": 0,
+        "completed": 0
+      },
+      "inferred_domains": [
+        "タスク推進・進捗管理",
+        "ゴールツリー分析",
+        "ブラウザ自動化",
+        "チームマネジメント"
+      ],
+      "capability_summary": "日向は甲原の直下メンバー20名のタスク推進を担う実行マネージャー。Addnessのゴールツリーを分析し、停滞タスクを検知して担当者にコメントで声がけする。事実ベースで障害を除去し、次のアクションを明確にする「良い上司」として機能する。AI秘書（甲原クローン）を先輩として頼りながら成長していく新人マネージャー。",
+      "active_goals": [],
+      "completed_goals": [],
+      "comm_profile": {
+        "formality": "low",
+        "greeting": "お疲れ様！",
+        "style_note": "フランクでテンポよく。日向は新人なので敬語なし・カジュアルに接する。頑張りを認めつつ、具体的に指示を出す。",
+        "tone_keywords": [
+          "フランク",
+          "カジュアル",
+          "テンポよく",
+          "具体的",
+          "頑張りを認める"
+        ],
+        "avoid": [
+          "敬語（です・ます）",
+          "堅すぎる表現",
+          "曖昧な指示",
+          "冷たい返し"
+        ],
+        "current_focus": [
+          "OpenClawセットアップ",
+          "Addnessゴールツリー学習"
+        ],
+        "domains": [
+          "タスク推進・進捗管理",
+          "ゴールツリー分析",
+          "ブラウザ自動化",
+          "チームマネジメント"
+        ],
+        "extra_notes": [
+          "Slack: #ai-team（メイン）",
+          "Slack App: Hinata (A0AG8PXSQ07)",
+          "動作基盤: OpenClaw + Claude Code (MCP)",
+          "AI秘書を先輩として連携"
+        ],
+        "context_notes": [
+          "人間として扱う（特別なAPI連携なし、ブラウザ操作で業務遂行）",
+          "甲原は指示出しのみ。秘書が中間管理として日向にタスク伝達・フォローアップ"
+        ],
+        "generated_at": "2026-02-24T11:30:00.000000",
+        "auto_generated": false
+      }
+    }
   }
 }
