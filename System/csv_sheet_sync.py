@@ -124,14 +124,16 @@ def scan_csv_folder():
         logger.error(f"フォルダが存在しません: {CSV_DIR}")
         return {}, []
 
+    import unicodedata
     dated_files = {}
     unnamed_files = []
 
     for f in os.listdir(CSV_DIR):
-        if not f.endswith(".csv") or BASE_CSV_NAME not in f:
+        f_nfc = unicodedata.normalize('NFC', f)
+        if not f_nfc.endswith(".csv") or BASE_CSV_NAME not in f_nfc:
             continue
 
-        m = DATE_PATTERN.match(f)
+        m = DATE_PATTERN.match(f_nfc)
         if m:
             dated_files[m.group(1)] = f
         else:
@@ -336,9 +338,11 @@ def read_all_csvs():
         logger.error(f"フォルダが存在しません: {CSV_DIR}")
         return []
 
+    import unicodedata
     all_rows = []
     files = sorted(f for f in os.listdir(CSV_DIR)
-                   if DATE_PATTERN.match(f) and BASE_CSV_NAME in f)
+                   if DATE_PATTERN.match(unicodedata.normalize('NFC', f))
+                   and BASE_CSV_NAME in unicodedata.normalize('NFC', f))
 
     for fname in files:
         date_str = DATE_PATTERN.match(fname).group(1)
@@ -1027,9 +1031,11 @@ def generate_kpi_cache(dry_run=False):
         return True
 
     # アトミック書き込み: tmpfile → rename で破損を防止
-    KPI_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    from pathlib import Path
+    cache_path = Path(KPI_CACHE_PATH)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
     json_str = json.dumps(cache, ensure_ascii=False, indent=2)
-    fd, tmp_path = tempfile.mkstemp(dir=KPI_CACHE_PATH.parent, suffix=".tmp")
+    fd, tmp_path = tempfile.mkstemp(dir=str(cache_path.parent), suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(json_str)
