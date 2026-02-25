@@ -224,10 +224,20 @@ def execute_goal(
         (success: bool, result_text: str)
     """
     # --- 初期化 ---
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        return False, "ANTHROPIC_API_KEY が未設定です。環境変数を確認してください"
+    # APIキー: 環境変数 → config.json の順で取得
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        config_path = Path(__file__).parent / "config.json"
+        if config_path.exists():
+            try:
+                cfg = json.loads(config_path.read_text(encoding="utf-8"))
+                api_key = cfg.get("anthropic_api_key", "")
+            except Exception:
+                pass
+    if not api_key:
+        return False, "ANTHROPIC_API_KEY が未設定です。環境変数または config.json を確認してください"
     try:
-        client = anthropic.Anthropic()
+        client = anthropic.Anthropic(api_key=api_key)
     except Exception as e:
         return False, f"Claude API クライアントの初期化に失敗しました: {e}"
 

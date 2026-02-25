@@ -45,6 +45,9 @@ class HandlerRunner:
         # profiles.json 読み込み（api_call / workflow_endpoint で使用）
         self._profiles = self._load_profiles()
 
+        # subprocess 用の環境変数を構築（config.json から APIキーを注入）
+        self._subprocess_env = self._build_subprocess_env()
+
     def _load_profiles(self) -> dict:
         """profiles.json を読み込む"""
         profiles_path = self.project_root / "Master" / "people" / "profiles.json"
@@ -54,6 +57,20 @@ class HandlerRunner:
             return json.loads(profiles_path.read_text(encoding="utf-8"))
         except Exception:
             return {}
+
+    def _build_subprocess_env(self) -> dict:
+        """subprocess 実行用の環境変数を構築。config.json のキーを注入する"""
+        env = os.environ.copy()
+        config_path = Path(__file__).parent / "config.json"
+        if config_path.exists():
+            try:
+                cfg = json.loads(config_path.read_text(encoding="utf-8"))
+                # config.json の APIキーを環境変数に注入（未設定の場合のみ）
+                if cfg.get("anthropic_api_key") and not env.get("ANTHROPIC_API_KEY"):
+                    env["ANTHROPIC_API_KEY"] = cfg["anthropic_api_key"]
+            except Exception:
+                pass
+        return env
 
     def _get_agent_config(self, agent_name: str) -> dict:
         """profiles.json からエージェントの interface.config を取得する"""
@@ -120,15 +137,20 @@ class HandlerRunner:
         if tool_name == "calendar":
             action = arguments.get("action", "list")
             cmd.append(action)
+            # calendar_manager.py list は日付(YYYY-MM-DD)を受け取る。未指定なら30日分
             days = arguments.get("days")
             if days and action == "list":
-                cmd.append(str(days))
+                from datetime import datetime, timedelta
+                target = (datetime.now() + timedelta(days=int(days) - 1)).strftime("%Y-%m-%d")
+                cmd.append(target)
 
         elif tool_name == "mail":
             action = arguments.get("action", "check")
-            cmd.append(action)
+            # tool_registry の "check" → mail_manager.py の "status" にマッピング
+            mail_cmd = "status" if action == "check" else action
+            cmd.append(mail_cmd)
             account = arguments.get("account", "personal")
-            cmd.append(account)
+            cmd.extend(["--account", account])
 
         elif tool_name == "people":
             query = arguments.get("query", "")
@@ -150,6 +172,7 @@ class HandlerRunner:
             text=True,
             timeout=120,
             cwd=str(self.system_dir),
+            env=self._subprocess_env,
         )
 
         output = result.stdout.strip()
