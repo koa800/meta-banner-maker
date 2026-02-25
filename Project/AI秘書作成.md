@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月25日（2台のPC間タスク取り合い防止: start_taskで早い者勝ち方式実装。post-commitフックでコード自動同期追加） |
+| 最終更新 | 2026年2月25日（タスク担当をMac Miniに一本化。MacBookはタスク取得OFF。LP構成案・動画台本ツール削除） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -664,6 +664,8 @@ MacBook (どこからでも)
 - [x] LINE→ゴール実行エンジン（Coordinator）接続完了（app.pyのexecute_goalツール定義改善→調査・リサーチ系を確実にルーティング。Render環境変数にANTHROPIC_API_KEY追加。E2Eフロー: LINE→Render→task_queue→local_agent→coordinator→LINE通知）
 - [x] MacBook LaunchAgent ~/Library/LineBot/ デプロイ対応（TCC制限により~/Desktopをlaunchdから直接読めないため、コード+データをコピー配置。post-commitフックで自動同期）
 - [x] 2台のPC間のタスク取り合い防止（MacBookとMac Miniが同じタスクを二重処理しないよう、start_taskで早い者勝ち方式を実装。処理中タスクには409を返す。X-Agent-IDヘッダーでマシン識別）
+- [x] タスク担当をMac Miniに一本化（MacBookの`config.json`で`task_polling: false`に設定。LINEからのタスクはMac Miniだけが処理する。MacBookはCursorからの直接操作専用）
+- [x] LP構成案（generate_lp_draft）・動画台本（generate_video_script）ツール削除（不要）
 
 ---
 
