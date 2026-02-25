@@ -223,22 +223,31 @@ def execute_goal(
         (success: bool, result_text: str)
     """
     # --- 初期化 ---
-    client = anthropic.Anthropic()
+    try:
+        client = anthropic.Anthropic()
+    except Exception as e:
+        return False, f"Claude API クライアントの初期化に失敗しました: {e}"
 
     # ツールレジストリ読み込み
     registry_path = Path(__file__).parent / "tool_registry.json"
-    with open(registry_path, encoding="utf-8") as f:
-        registry = json.load(f)
+    try:
+        with open(registry_path, encoding="utf-8") as f:
+            registry = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        return False, f"tool_registry.json の読み込みに失敗しました: {e}"
 
     claude_tools = _build_claude_tools(registry)
     system_prompt = _build_system_prompt(sender_name, project_root)
 
     # ハンドラランナー
-    runner = HandlerRunner(
-        system_dir=system_dir,
-        project_root=project_root,
-        function_handlers=function_handlers or {},
-    )
+    try:
+        runner = HandlerRunner(
+            system_dir=system_dir,
+            project_root=project_root,
+            function_handlers=function_handlers or {},
+        )
+    except Exception as e:
+        return False, f"HandlerRunner の初期化に失敗しました: {e}"
 
     # --- ツール呼び出しループ ---
     messages = [{"role": "user", "content": goal}]
@@ -254,8 +263,14 @@ def execute_goal(
                 tools=claude_tools,
                 messages=messages,
             )
+        except anthropic.APITimeoutError:
+            return False, "Claude API がタイムアウトしました。時間をおいて再度お試しください"
+        except anthropic.APIConnectionError:
+            return False, "Claude API に接続できません。ネットワーク状態を確認してください"
         except anthropic.APIError as e:
-            return False, f"Claude API エラー: {e}"
+            return False, f"Claude API エラーが発生しました: {e}"
+        except Exception as e:
+            return False, f"Coordinator の処理中に予期しないエラーが発生しました: {type(e).__name__}: {e}"
 
         # 完了判定: end_turn → 最終回答
         if response.stop_reason == "end_turn":
@@ -287,7 +302,7 @@ def execute_goal(
 
                     print(f"   🔧 [{round_num + 1}] {tool_name}({json.dumps(tool_input, ensure_ascii=False)[:100]})")
 
-                    result_text = runner.run(tool_name, tool_input)
+                    result_text = runner.run(tool_name, tool_input) or "（結果なし）"
 
                     # 結果を 2000 文字に制限（トークン節約）
                     if len(result_text) > 2000:

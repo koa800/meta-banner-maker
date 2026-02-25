@@ -40,7 +40,7 @@ class HandlerRunner:
         registry_path = Path(__file__).parent / "tool_registry.json"
         with open(registry_path, encoding="utf-8") as f:
             self._registry = json.load(f)
-        self._tool_map = {t["name"]: t for t in self._registry["tools"]}
+        self._tool_map = {t["name"]: t for t in self._registry.get("tools", [])}
 
         # profiles.json 読み込み（api_call / workflow_endpoint で使用）
         self._profiles = self._load_profiles()
@@ -59,6 +59,11 @@ class HandlerRunner:
         """profiles.json からエージェントの interface.config を取得する"""
         profile = self._profiles.get(agent_name, {})
         return profile.get("latest", {}).get("interface", {}).get("config", {})
+
+    def _get_agent_transfer(self, agent_name: str) -> dict:
+        """profiles.json からエージェントの transfer 情報を取得する"""
+        profile = self._profiles.get(agent_name, {})
+        return profile.get("latest", {}).get("transfer", {})
 
     def run(self, tool_name: str, arguments: dict) -> str:
         """ツールを実行して結果テキストを返す"""
@@ -84,9 +89,19 @@ class HandlerRunner:
             elif handler_type == "mcp":
                 return self._run_mcp(tool_def, arguments)
             else:
-                return f"未対応の handler_type: {handler_type}"
+                return f"未対応の handler_type です: {handler_type}"
+        except requests.Timeout:
+            return f"ツール '{tool_name}' がタイムアウトしました。時間をおいて再度お試しください"
+        except requests.ConnectionError:
+            return f"ツール '{tool_name}' の接続先に到達できません。ネットワーク状態を確認してください"
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else "不明"
+            return f"ツール '{tool_name}' の API 呼び出しでエラーが発生しました（HTTP {status}）"
+        except subprocess.TimeoutExpired:
+            return f"ツール '{tool_name}' の実行がタイムアウトしました（120秒）"
         except Exception as e:
-            return f"ツール '{tool_name}' の実行中にエラー: {e}"
+            err_type = type(e).__name__
+            return f"ツール '{tool_name}' の実行中にエラーが発生しました: {err_type}: {e}"
 
     # ------------------------------------------------------------------
     # subprocess: 外部Pythonスクリプト実行
@@ -155,10 +170,16 @@ class HandlerRunner:
         if not handler:
             return f"関数ハンドラ '{func_name}' が未登録です"
 
-        result = handler(arguments)
+        try:
+            result = handler(arguments)
+        except Exception as e:
+            return f"関数 '{func_name}' の実行中にエラーが発生しました: {e}"
+
         if isinstance(result, tuple):
             # (success, text) 形式の場合
             return result[1] if len(result) > 1 else str(result[0])
+        if result is None:
+            return "（結果なし）"
         return str(result)
 
     # ------------------------------------------------------------------
@@ -218,50 +239,78 @@ class HandlerRunner:
     # api_call: profiles.json の preferred_agent に基づく外部API呼び出し
     # ------------------------------------------------------------------
     def _run_api_call(self, tool_def: dict, arguments: dict) -> str:
-        agent_name = tool_def.get("preferred_agent", "")
+        agent_name = tool_def.get("preferred_agent") or ""
+        tool_name = tool_def.get("name", "")
         if not agent_name:
-            return "preferred_agent が未設定です"
+            return (
+                f"ツール '{tool_name}' の担当 AI が未設定です。"
+                f"profiles.json にエージェントを登録し、"
+                f"tool_registry.json の preferred_agent を設定してください"
+            )
 
         config = self._get_agent_config(agent_name)
         if not config:
-            return f"エージェント '{agent_name}' の設定が profiles.json に見つかりません"
+            return (
+                f"エージェント '{agent_name}' の接続設定が profiles.json に見つかりません。"
+                f"interface.config を確認してください"
+            )
 
         provider = config.get("provider", "")
         api_key_env = config.get("api_key_env", "")
         api_key = os.environ.get(api_key_env, "") if api_key_env else ""
 
         if api_key_env and not api_key:
-            return f"APIキーが未設定です（環境変数: {api_key_env}）。設定後に利用可能になります"
+            return (
+                f"'{agent_name}' の APIキーが未設定です"
+                f"（環境変数 {api_key_env} を設定してください）"
+            )
 
         if provider == "perplexity":
             return self._call_perplexity(config, api_key, arguments)
         else:
-            # Lubert / 動画AI / 将来の汎用プロバイダー
             return self._call_generic_api(config, api_key, agent_name, arguments)
 
     def _call_perplexity(self, config: dict, api_key: str, arguments: dict) -> str:
         """Perplexity API（OpenAI互換）でWeb検索を実行"""
         endpoint = config.get("endpoint", "https://api.perplexity.ai/chat/completions")
+        model = config.get("model", "llama-3.1-sonar-large-128k-online")
         query = arguments.get("query", arguments.get("prompt", ""))
         if not query:
             return "検索クエリが指定されていません"
 
-        resp = requests.post(
-            endpoint,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "llama-3.1-sonar-large-128k-online",
-                "messages": [{"role": "user", "content": query}],
-            },
-            timeout=60,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        try:
+            resp = requests.post(
+                endpoint,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": query}],
+                },
+                timeout=60,
+            )
+            resp.raise_for_status()
+        except requests.Timeout:
+            return "Perplexity API がタイムアウトしました（60秒）。時間をおいて再度お試しください"
+        except requests.ConnectionError:
+            return "Perplexity API に接続できません。ネットワーク状態を確認してください"
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else "不明"
+            if status == 401:
+                return "Perplexity API の認証に失敗しました。APIキーを確認してください"
+            elif status == 429:
+                return "Perplexity API のレート制限に達しました。しばらくお待ちください"
+            return f"Perplexity API でエラーが発生しました（HTTP {status}）"
+
+        try:
+            data = resp.json()
+        except ValueError:
+            return "Perplexity API のレスポンスが不正です"
+
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        return content if content else json.dumps(data, ensure_ascii=False)[:2000]
+        return content if content else "（検索結果が空でした）"
 
     def _call_generic_api(self, config: dict, api_key: str,
                           agent_name: str, arguments: dict) -> str:
@@ -269,7 +318,7 @@ class HandlerRunner:
         endpoint = config.get("endpoint", "")
         if not endpoint:
             return (
-                f"エージェント '{agent_name}' の API endpoint が未設定です。"
+                f"エージェント '{agent_name}' の API エンドポイントが未設定です。"
                 f"profiles.json の interface.config.endpoint を設定してください"
             )
 
@@ -277,14 +326,30 @@ class HandlerRunner:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        resp = requests.post(
-            endpoint,
-            headers=headers,
-            json=arguments,
-            timeout=120,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        try:
+            resp = requests.post(
+                endpoint,
+                headers=headers,
+                json=arguments,
+                timeout=120,
+            )
+            resp.raise_for_status()
+        except requests.Timeout:
+            return f"'{agent_name}' の API がタイムアウトしました（120秒）"
+        except requests.ConnectionError:
+            return f"'{agent_name}' の API に接続できません（{endpoint}）"
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else "不明"
+            if status == 401:
+                return f"'{agent_name}' の API 認証に失敗しました。APIキーを確認してください"
+            elif status == 429:
+                return f"'{agent_name}' の API レート制限に達しました。しばらくお待ちください"
+            return f"'{agent_name}' の API でエラーが発生しました（HTTP {status}）"
+
+        try:
+            data = resp.json()
+        except ValueError:
+            return f"'{agent_name}' の API レスポンスが不正です"
 
         # よくあるレスポンス形式を試す
         if isinstance(data, dict):
@@ -297,6 +362,7 @@ class HandlerRunner:
 
     # ------------------------------------------------------------------
     # workflow_endpoint: ワークフローエンドポイントにHTTP POST
+    # transfer_status によるコードレベルの制御も行う
     # ------------------------------------------------------------------
     def _run_workflow(self, tool_def: dict, arguments: dict) -> str:
         agent_name = tool_def.get("preferred_agent", "")
@@ -304,7 +370,25 @@ class HandlerRunner:
         endpoint = config.get("endpoint") or tool_def.get("endpoint", "")
 
         if not endpoint:
-            return "ワークフローエンドポイントが未設定です"
+            return f"ワークフロー '{agent_name or tool_def.get('name', '')}' のエンドポイントが未設定です"
+
+        # --- transfer_status によるコードレベル制御 ---
+        if agent_name:
+            transfer = self._get_agent_transfer(agent_name)
+            t_status = transfer.get("transfer_status", "")
+            t_target = transfer.get("transferable_to", "")
+
+            if t_status and t_target:
+                # Phase 3/4: AI は実行しない。人間に委任する
+                if "Phase 3" in t_status or "Phase 4" in t_status:
+                    return (
+                        f"ワークフロー '{agent_name}' は現在 {t_status} です。\n"
+                        f"{t_target} さんに直接依頼してください（ask_human ツールを使用）"
+                    )
+                # Phase 2: 実行するが、人間確認が必要な旨を付記
+                phase2_note = ""
+                if "Phase 2" in t_status:
+                    phase2_note = f"\n\n※ このワークフローは移譲中（{t_status}）です。結果を {t_target} さんにも確認してもらってください"
 
         try:
             resp = requests.post(
@@ -313,15 +397,31 @@ class HandlerRunner:
                 timeout=180,
             )
             resp.raise_for_status()
-            data = resp.json()
-            result = data.get("result", data.get("output", ""))
-            if result:
-                return str(result)[:2000]
-            return json.dumps(data, ensure_ascii=False)[:2000]
         except requests.Timeout:
             return f"ワークフロー '{agent_name}' がタイムアウトしました（180秒）"
         except requests.ConnectionError:
-            return f"ワークフロー '{agent_name}' に接続できません（endpoint: {endpoint}）"
+            return f"ワークフロー '{agent_name}' に接続できません。Mac Mini の稼働状態を確認してください"
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else "不明"
+            return f"ワークフロー '{agent_name}' でエラーが発生しました（HTTP {status}）"
+
+        try:
+            data = resp.json()
+        except ValueError:
+            return f"ワークフロー '{agent_name}' のレスポンスが不正です"
+
+        result = data.get("result", data.get("output", ""))
+        result_text = str(result)[:2000] if result else json.dumps(data, ensure_ascii=False)[:2000]
+
+        # Phase 2 の場合は確認依頼を付記
+        if agent_name:
+            transfer = self._get_agent_transfer(agent_name)
+            t_status = transfer.get("transfer_status", "")
+            t_target = transfer.get("transferable_to", "")
+            if "Phase 2" in t_status and t_target:
+                result_text += f"\n\n※ 移譲中（{t_status}）: {t_target} さんにも結果を確認してもらってください"
+
+        return result_text
 
     # ------------------------------------------------------------------
     # mcp: MCP プロトコル呼び出し（将来用）
@@ -329,6 +429,6 @@ class HandlerRunner:
     def _run_mcp(self, tool_def: dict, arguments: dict) -> str:
         agent_name = tool_def.get("preferred_agent", "")
         return (
-            f"MCP プロトコル（{agent_name or 'unknown'}）は現在準備中です。\n"
+            f"MCP ツール（{agent_name or '未指定'}）は現在準備中です。\n"
             f"profiles.json に MCP 接続情報を設定後、利用可能になります"
         )
