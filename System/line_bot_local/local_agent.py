@@ -204,9 +204,23 @@ def build_feedback_prompt_section(sender_name: str = "", sender_category: str = 
             f"  採用された返信: 「{actual}」"
         )
 
+    # style_rules.json からhighconfidenceルールを注入
+    style_rule_parts = []
+    try:
+        _style_rules_path = _PROJECT_ROOT / "Master" / "learning" / "style_rules.json"
+        if _style_rules_path.exists():
+            _rules = json.loads(_style_rules_path.read_text(encoding="utf-8"))
+            high_rules = [r for r in _rules if r.get("confidence") == "high"]
+            for r in high_rules[:5]:
+                style_rule_parts.append(f"・{r.get('rule', '')}（例: {r.get('example', '')}）")
+    except Exception as e:
+        print(f"⚠️ style_rules読み込みエラー: {e}")
+
     section = ""
-    if note_parts or correction_parts or approval_parts:
+    if note_parts or correction_parts or approval_parts or style_rule_parts:
         section = "\n【過去の学習データ（優先して参考にすること）】\n"
+        if style_rule_parts:
+            section += "自動抽出スタイルルール:\n" + "\n".join(style_rule_parts) + "\n"
         if note_parts:
             section += "スタイルノート:\n" + "\n".join(note_parts) + "\n"
         if correction_parts:
@@ -1336,6 +1350,24 @@ def call_claude_api(instruction: str, task: dict):
             _disclosure = _get_disclosure_level(sender_cat)
             _disclosure_note = _disclosure["note"]
 
+            # 会話記憶: sender_nameの過去会話を取得
+            conversation_history_section = ""
+            if sender_name:
+                try:
+                    _cs_path = Path(__file__).parent / "contact_state.json"
+                    if _cs_path.exists():
+                        _cs = json.loads(_cs_path.read_text(encoding="utf-8"))
+                        _person = _cs.get(sender_name)
+                        if isinstance(_person, dict):
+                            convs = _person.get("conversations", [])
+                            if convs:
+                                recent = convs[-5:]
+                                lines = [f"  ・{c['date']} ({c.get('group','')}) {c['summary']}" for c in recent]
+                                conversation_history_section = "\n過去の会話:\n" + "\n".join(lines)
+                                print(f"   💬 会話記憶注入: {sender_name} ({len(recent)}件)")
+                except Exception as e:
+                    print(f"⚠️ 会話記憶読み込みエラー: {e}")
+
             prompt = f"""あなたは甲原海人本人として返信を書きます。
 以下の全情報を統合し、甲原海人が実際に送るようなメッセージを生成してください。
 
@@ -1351,7 +1383,7 @@ def call_claude_api(instruction: str, task: dict):
 推奨挨拶: {comm_greeting or 'お疲れ様！'}
 {f"口調キーワード: {', '.join(comm_tone_keywords)}" if comm_tone_keywords else ''}
 {f"避けるべき表現: {', '.join(comm_avoid)}" if comm_avoid else ''}
-{goals_context}{notes_text}{insights_text}
+{goals_context}{notes_text}{insights_text}{conversation_history_section}
 {profile_info}
 {context_section}{quoted_section}{sheet_section}
 【受信メッセージ】
@@ -1429,14 +1461,30 @@ def call_claude_api(instruction: str, task: dict):
                 f"1 → 承認して送信\n"
                 f"2 [別の内容] → 編集して送信"
             )
-            # 接触記録を更新（フォローアップ追跡用）
+            # 接触記録を更新（フォローアップ追跡用 + 会話記憶）
             if sender_name:
                 _contact_state_path = Path(__file__).parent / "contact_state.json"
                 try:
                     contact_state = {}
                     if _contact_state_path.exists():
                         contact_state = json.loads(_contact_state_path.read_text(encoding="utf-8"))
-                    contact_state[sender_name] = datetime.now().isoformat()
+                    # 後方互換: 旧形式(文字列)→新形式(dict)に自動変換
+                    existing = contact_state.get(sender_name)
+                    if isinstance(existing, str):
+                        existing = {"last_contact": existing, "conversations": []}
+                    elif not isinstance(existing, dict):
+                        existing = {"conversations": []}
+                    existing["last_contact"] = datetime.now().isoformat()
+                    # 会話要約を追記（1人あたり最大20件）
+                    conv_entry = {
+                        "date": datetime.now().strftime("%Y-%m-%d"),
+                        "summary": original_message[:80],
+                        "group": group_name,
+                    }
+                    convs = existing.get("conversations", [])
+                    convs.append(conv_entry)
+                    existing["conversations"] = convs[-20:]
+                    contact_state[sender_name] = existing
                     _contact_state_path.write_text(json.dumps(contact_state, ensure_ascii=False, indent=2), encoding="utf-8")
                 except Exception as e:
                     print(f"⚠️ contact_state記録エラー: {e}")

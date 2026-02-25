@@ -1413,21 +1413,147 @@ JSON以外の文字は出力しないでください。"""}],
                 logger.warning(f"weekly_profile_learning: analysis failed for {person_name}: {e}")
                 continue
 
+        # ===== フェーズ2: reply_feedback分析 → style_rules.json 生成 =====
+        style_rules_count = 0
+        try:
+            feedback_path = os.path.join(master_dir, "learning", "reply_feedback.json")
+            style_rules_path = os.path.join(master_dir, "learning", "style_rules.json")
+            if os.path.exists(feedback_path):
+                with open(feedback_path, encoding="utf-8") as ff:
+                    all_feedback = _json.load(ff)
+                corrections = [f for f in all_feedback if f.get("type") == "correction"]
+                if len(corrections) >= 3:
+                    fb_text = "\n".join(
+                        f"[{i}] 送信者:{c.get('sender_name','')} 受信:「{c.get('original_message','')[:60]}」 "
+                        f"AI案:「{c.get('ai_suggested','')[:60]}」 実際:「{c.get('actual_sent','')[:60]}」"
+                        for i, c in enumerate(corrections[-20:], 1)
+                    )
+                    rules_response = client.messages.create(
+                        model="claude-haiku-4-5-20251001",
+                        max_tokens=600,
+                        system="あなたはコミュニケーションスタイル分析の専門家です。修正パターンから再現可能なルールを抽出してください。",
+                        messages=[{"role": "user", "content": f"""以下はAI返信案が修正された履歴です。パターンを分析し、再利用できるスタイルルールをJSON配列で出力してください。
+
+{fb_text}
+
+以下のJSON形式で出力（JSON以外の文字は不要）:
+[
+  {{"rule": "ルールの説明", "confidence": "high/medium", "example": "具体例"}}
+]"""}],
+                    )
+                    raw = rules_response.content[0].text.strip()
+                    j_start = raw.find("[")
+                    j_end = raw.rfind("]") + 1
+                    if j_start >= 0 and j_end > j_start:
+                        style_rules = _json.loads(raw[j_start:j_end])
+                        style_rules_count = len(style_rules)
+                        os.makedirs(os.path.dirname(style_rules_path), exist_ok=True)
+                        with open(style_rules_path, "w", encoding="utf-8") as sf:
+                            _json.dump(style_rules, sf, ensure_ascii=False, indent=2)
+                        logger.info(f"weekly_profile_learning: style_rules generated ({style_rules_count} rules)")
+                else:
+                    logger.info(f"weekly_profile_learning: skipping style_rules (corrections={len(corrections)}, need>=3)")
+        except Exception as e:
+            logger.warning(f"weekly_profile_learning: style_rules generation failed: {e}")
+
+        # ===== フェーズ3: comm_profile自動更新 =====
+        comm_updated_names = []
+        try:
+            if os.path.exists(feedback_path):
+                with open(feedback_path, encoding="utf-8") as ff:
+                    all_feedback = _json.load(ff)
+                # 人物ごとに修正パターンを集計
+                person_corrections = {}
+                for fb in all_feedback:
+                    sname = fb.get("sender_name", "")
+                    if not sname:
+                        continue
+                    person_corrections.setdefault(sname, []).append(fb)
+
+                for person_name_fb, person_fbs in person_corrections.items():
+                    corrections_for_person = [f for f in person_fbs if f.get("type") == "correction"]
+                    if len(corrections_for_person) < 3:
+                        continue
+
+                    # profileキーを解決
+                    p_key = display_name_map.get(person_name_fb)
+                    if not p_key:
+                        for mn, mk in display_name_map.items():
+                            if person_name_fb in mn or mn in person_name_fb:
+                                p_key = mk
+                                break
+                    if not p_key or p_key not in profiles:
+                        continue
+
+                    # 既存comm_profileを取得
+                    p_entry = profiles[p_key]
+                    p_latest = p_entry.get("latest", p_entry)
+                    existing_comm = p_latest.get("comm_profile", {})
+
+                    fb_text_person = "\n".join(
+                        f"AI案:「{c.get('ai_suggested','')[:60]}」→実際:「{c.get('actual_sent','')[:60]}」"
+                        for c in corrections_for_person[-10:]
+                    )
+                    # group_insightsも参照
+                    gi = p_latest.get("group_insights", {})
+                    gi_style = gi.get("communication_style", "")
+
+                    try:
+                        comm_response = client.messages.create(
+                            model="claude-haiku-4-5-20251001",
+                            max_tokens=300,
+                            system="あなたはコミュニケーション分析の専門家です。修正パターンからcomm_profileを提案してください。",
+                            messages=[{"role": "user", "content": f"""「{person_name_fb}」への返信修正パターンと会話スタイル分析から、comm_profileを更新してください。
+
+修正履歴:
+{fb_text_person}
+
+{f'会話スタイル分析: {gi_style}' if gi_style else ''}
+
+現在のcomm_profile: {_json.dumps(existing_comm, ensure_ascii=False) if existing_comm else '未設定'}
+
+以下のJSON形式で更新内容のみ出力（JSON以外の文字は不要）:
+{{
+  "tone_keywords": ["口調キーワード（3個以内）"],
+  "style_note": "この人への返信スタイルを1文で"
+}}"""}],
+                        )
+                        raw_comm = comm_response.content[0].text.strip()
+                        j_s = raw_comm.find("{")
+                        j_e = raw_comm.rfind("}") + 1
+                        if j_s >= 0 and j_e > j_s:
+                            comm_updates = _json.loads(raw_comm[j_s:j_e])
+                            # comm_profileをマージ更新
+                            result = tools.update_people_profiles(
+                                p_key, p_latest.get("group_insights", {}),
+                                comm_profile_updates=comm_updates
+                            )
+                            if result.success:
+                                comm_updated_names.append(person_name_fb)
+                                logger.info(f"weekly_profile_learning: comm_profile updated for {person_name_fb}")
+                    except Exception as e:
+                        logger.warning(f"weekly_profile_learning: comm_profile update failed for {person_name_fb}: {e}")
+        except Exception as e:
+            logger.warning(f"weekly_profile_learning: comm_profile phase failed: {e}")
+
         # 4. 結果をLINE通知
+        style_line = f"\nスタイルルール: {style_rules_count}件抽出" if style_rules_count else ""
+        comm_line = f"\ncomm_profile更新: {len(comm_updated_names)}名" if comm_updated_names else ""
         message = (
             f"\n🧠 週次プロファイル学習完了\n"
             f"━━━━━━━━━━━━\n"
             f"更新: {updated_count}名\n"
             f"スキップ: {skipped_count}名（3件未満 or プロファイル未登録）\n"
-            f"分析対象: {len(all_messages_by_person)}名 / {sum(len(m) for m in all_messages_by_person.values())}メッセージ\n"
+            f"分析対象: {len(all_messages_by_person)}名 / {sum(len(m) for m in all_messages_by_person.values())}メッセージ"
+            f"{style_line}{comm_line}\n"
             f"━━━━━━━━━━━━"
         )
         send_line_notify(message)
         self.memory.log_task_end(
             task_id, "success",
-            result_summary=f"Updated {updated_count} profiles, skipped {skipped_count}"
+            result_summary=f"Updated {updated_count} profiles, skipped {skipped_count}, style_rules={style_rules_count}, comm_updated={len(comm_updated_names)}"
         )
-        logger.info(f"weekly_profile_learning completed: {updated_count} updated, {skipped_count} skipped")
+        logger.info(f"weekly_profile_learning completed: {updated_count} updated, {skipped_count} skipped, style_rules={style_rules_count}, comm_updated={len(comm_updated_names)}")
 
     async def _run_repair_check(self):
         if _repair_agent_ref is None:

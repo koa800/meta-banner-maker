@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月25日（タスク担当をMac Miniに一本化。MacBookはタスク取得OFF。LP構成案・動画台本ツール削除） |
+| 最終更新 | 2026年2月25日（「積み上がる」4機能追加: 会話記憶・Q&Aスタイル学習・返信スタイル自動学習・comm_profile自動更新） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -145,6 +145,12 @@
 26. **遠隔エージェント再起動**: LINEから「再起動」と送信するとMac Mini上の`local_agent.py`が`launchctl unload/load`で自動再起動。コード更新後の反映やエラー回復に使用
 27. **自動再起動改善**: `git_pull_sync.sh`が`line_bot_local/`配下の`.py`ファイル変更を検知すると自動で`local_agent`を再起動し、LINEに通知（変更ファイル名・コミットハッシュ・時刻を含む）
 28. **plistパス自動修正**: `git_pull_sync.sh`が毎回実行時にlaunchctl plistのパス整合性をチェック。Library版（`~/Library/LineBot/`）など古いパスを参照していた場合、正しいデプロイ先（`~/agents/line_bot_local/`）に自動修正＆再起動。config.jsonも旧パスから自動マイグレーション
+
+### Phase 7: 積み上がる学習（完了）
+29. **人ごとの会話記憶**: 返信案生成のたびに `contact_state.json` へ会話要約を保存（1人最大20件）。次回の返信プロンプトに直近5件の過去会話を注入し、文脈の連続性を向上。旧形式（タイムスタンプ文字列）からの自動マイグレーション対応
+30. **Q&A回答スタイル学習**: Q&A承認時にAI案と異なる修正があれば `qa_feedback.json`（Render永続ディスク）に自動保存（最大30件）。次のQ&A回答生成時に直近5件の修正例をプロンプトに注入し、回答スタイルを学習
+31. **返信スタイル自動学習**: 毎週日曜10:00の `weekly_profile_learning` 内で `reply_feedback.json` の修正パターンをClaude Haikuで分析し、再利用可能なスタイルルールを `Master/learning/style_rules.json` に自動生成。highconfidenceルールは全返信プロンプトに注入
+32. **comm_profile自動更新**: 同じく `weekly_profile_learning` 内で、修正パターンが3件以上ある人物の `comm_profile`（tone_keywords, style_note）をClaude Haikuで分析・自動更新。`profiles.json` にマージ書き込み
 
 ---
 
@@ -477,31 +483,91 @@ bash System/line_bot_local/sync_data.sh
 | `com.addness.agent-orchestrator` | タスクスケジューラ・修復エージェント・git同期 | 8500 |
 | `com.prevent.sleep` | Macスリープ防止（caffeinate） | — |
 
-### Orchestratorスケジュール
+### Orchestratorスケジュール（業務カレンダー）
 
-| タスク | スケジュール | 内容 |
-|--------|------------|------|
-| `mail_inbox_personal` | 3時間ごと :00 | personalメール処理・返信待ちLINE通知 |
-| `mail_inbox_kohara` | 3時間ごと :00 | koharaメール処理・返信待ちLINE通知（personalと同時刻） |
-| `ai_news` | 毎朝 8:00 | AIニュース収集・要約・通知 |
-| `addness_fetch` | 3日ごと 8:00 | Addnessゴールツリー取得 |
-| `daily_addness_digest` | 毎朝 8:30 | 期限超過・直近期限ゴールをLINE通知 |
-| `addness_goal_check` | 毎朝 9:00 | actionable-tasks.mdをaddness-goal-tree.mdから再生成 |
-| `oauth_health_check` | 毎朝 9:00 | Google OAuth有効性チェック・失敗時通知 |
-| `weekly_idea_proposal` | 毎週月曜 9:00 | agent_ideas.mdのP0/P1タスクをLINE提案 |
-| `weekly_stats` | 毎週月曜 9:30 | 週次サマリー（成功率・Q&A件数・Addness鮮度）をLINE通知 |
-| `daily_report` | 毎夜 21:00 | 日次タスク集計をLINE通知 |
-| `render_health_check` | 30分ごと | Renderサーバー死活監視・ダウン時LINE通知 |
-| `health_check` | 5分ごと | API使用量・Q&Aモニター・local_agent停止を検知。停止時は自動再起動（launchctl unload/load）→結果をLINE通知 |
-| `repair_check` | 30分ごと | ログエラー検知・自動修復提案 |
-| `weekly_content_suggestions` | 毎週水曜 10:00 | 最新AIニュースを分析してコンテンツ更新提案をLINE通知 |
-| `kpi_daily_import` | 毎日 12:00 | 2日前のKPIデータ完了チェック→投入→KPIキャッシュ再生成→LINE通知（失敗時は個別エラー通知） |
-| `kpi_nightly_cache` | 毎晩 22:00 | KPIキャッシュ再生成（AI秘書が夜間も最新データを参照できるように） |
-| `sheets_sync` | 毎朝 6:30 | Master/sheets/ CSVキャッシュ最新化→KPIキャッシュ再生成（失敗時はLINE通知） |
-| `git_pull_sync` | 5分ごと | GitHubからpull→rsyncデプロイ→サービス再起動→LINE通知（30分連続失敗で警告通知） |
-| `daily_group_digest` | 毎夜 21:00 | Renderからグループログ取得→Claude Haiku分析→秘書グループにダイジェスト通知 |
-| `weekly_profile_learning` | 毎週日曜 10:00 | 過去7日間のグループログから各メンバーの会話を分析→profiles.jsonに`group_insights`として書き込み |
-| `log_rotate` | 毎日 3:00 | ログローテーション（50MB超を圧縮、30日超の古いgzを自動削除） |
+#### タスク重さの目安
+
+| 重さ | 意味 | 目安時間 | API呼び出し |
+|------|------|---------|------------|
+| 🟢 軽い | ローカル処理のみ、すぐ終わる | ~30秒 | なし or 1回 |
+| 🟡 中くらい | API数回呼ぶ、少し時間かかる | 30秒〜2分 | 2〜5回 |
+| 🔴 重い | API大量呼び出し、時間かかる | 2〜5分 | 5回以上 |
+
+#### 毎日のスケジュール
+
+| 時刻 | タスク | 重さ | やること | LINE通知 |
+|------|--------|------|---------|---------|
+| 03:00 | `log_rotate` | 🟢 | ログ圧縮（50MB超→gz、30日超削除） | なし |
+| 06:30 | `sheets_sync` | 🔴 | Googleスプレッドシート全同期→KPIキャッシュ再生成 | ✅ あり |
+| 08:00 | `addness_fetch` ※3日ごと | 🟡 | Addnessゴールツリー取得 | ✅ あり |
+| 08:10 | `ai_news` | 🟡 | Web検索でAI関連ニュース収集 | なし |
+| 08:30 | `daily_addness_digest` | 🟡 | ゴール進捗+今日の予定まとめ | ✅ あり |
+| 09:00 | `addness_goal_check` | 🟢 | やることリスト更新 | ✅ あり |
+| 09:10 | `oauth_health_check` | 🟢 | Google認証トークン確認 | エラー時のみ |
+| 3h毎 :00 | `mail_inbox_personal` | 🟡 | 個人メール確認・分類 | 返信待ちあれば |
+| 3h毎 :05 | `mail_inbox_kohara` | 🟡 | koharaメール確認・分類 | 返信待ちあれば |
+| 12:00 | `kpi_daily_import` | 🟡 | CSVからスプレッドシートへKPI取込 | ✅ あり |
+| 21:00 | `daily_report` | 🟢 | 日次タスク集計 | ✅ あり |
+| 21:10 | `daily_group_digest` | 🟡 | グループLINE未読ダイジェスト | ✅ あり |
+| 22:00 | `kpi_nightly_cache` | 🟢 | KPIキャッシュ再生成 | なし |
+
+#### 常時動いているもの（バックグラウンド）
+
+| 間隔 | タスク | 重さ | やること |
+|------|--------|------|---------|
+| 5分ごと | `health_check` | 🟢 | 死活監視・自動復旧（停止検知→再起動→LINE通知） |
+| 5分ごと | `git_pull_sync` | 🟢 | GitHubからpull→rsyncデプロイ→サービス再起動 |
+| 30分ごと | `render_health_check` | 🟢 | Renderサーバー死活監視（ダウン時LINE通知） |
+| 30分ごと | `repair_check` | 🟢 | ログからエラー検知→修復提案 |
+
+#### 週次タスク
+
+| 曜日 | 時刻 | タスク | 重さ | やること | LINE通知 |
+|------|------|--------|------|---------|---------|
+| 月曜 | 09:00 | `weekly_idea_proposal` | 🟢 | バックログからP0/P1を1件提案 | ✅ あり |
+| 月曜 | 09:30 | `weekly_stats` | 🟡 | 週次サマリー（成功率・Q&A件数・Addness鮮度） | ✅ あり |
+| 水曜 | 10:00 | `weekly_content_suggestions` | 🟡 | AIニュースからコンテンツ更新提案 | ✅ あり |
+| 日曜 | 10:00 | `weekly_profile_learning` | 🔴 | グループ会話分析→profiles.json書き込み + 返信スタイルルール抽出→style_rules.json + comm_profile自動更新 | ✅ あり |
+
+#### 1日のタイムライン
+
+```
+ 3:00 ┃🟢 ログ圧縮
+ 6:30 ┃🔴 データ準備 ━━━━━━━━━━━━ (重い・最大2分) 📱
+ 8:00 ┃🟡 Addnessゴール取得 (3日ごと) 📱
+ 8:10 ┃🟡 AIニュース収集
+ 8:30 ┃🟡 朝のブリーフィング 📱
+ 9:00 ┃🟢 ゴール整理 📱  ＋[月] アイデア提案 📱
+ 9:10 ┃🟢 Google認証チェック
+ 9:30 ┃🟡 [月] 週次レポート 📱
+10:00 ┃🟡 [水] コンテンツ提案 📱 / 🔴 [日] プロファイル学習 📱
+      ┃  ── ここから空き時間 ──
+12:00 ┃🟡 KPIデータ投入
+      ┃  ── 午後は空き（メール確認が3時間ごとに入るだけ）──
+21:00 ┃🟢 日次レポート 📱
+21:10 ┃🟡 グループLINEダイジェスト 📱
+22:00 ┃🟢 KPIキャッシュ再生成
+
+ ＋ 常時: 死活監視(5分) / GitHub同期(5分) / Render監視(30分) / エラー検知(30分)
+ ＋ 3時間ごと: メール確認 x2（:00 個人 / :05 kohara）
+```
+
+#### 空き時間（新タスクを入れやすい時間帯）
+
+| 時間帯 | 空き具合 | 備考 |
+|--------|---------|------|
+| 3:00〜6:00 | ⬜⬜⬜ 完全に空き | 深夜。重いタスクも影響なし |
+| 7:00〜8:00 | ⬜⬜⬜ 空き | データ準備の後、朝タスク前 |
+| 10:00〜12:00 | ⬜⬜ ほぼ空き | 水曜・日曜は週次タスクあり |
+| 12:30〜21:00 | ⬜⬜⬜ 大きく空き | メール確認のみ。新タスクに最適 |
+| 22:30〜3:00 | ⬜⬜⬜ 完全に空き | 深夜帯 |
+
+**新タスク配置のルール:**
+1. 🔴重いタスク → 前後5分空ける
+2. 🟡中くらい → 前後3分空ける
+3. 🟢軽い → 連続OK
+4. 月曜 9:00〜10:00 は週次集中 → 避ける
+5. 3時間ごとの :00 と :05 はメール確認 → :10 以降に配置
 
 ### Orchestrator API エンドポイント（port 8500）
 

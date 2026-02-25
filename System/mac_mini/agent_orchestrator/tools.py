@@ -346,8 +346,8 @@ def fetch_group_log(date: str = None) -> ToolResult:
 
 # --------------- People Profiles ---------------
 
-def update_people_profiles(person_name: str, group_insights: dict) -> ToolResult:
-    """profiles.json の指定人物に group_insights を書き込む（既存フィールドには一切触れない）"""
+def update_people_profiles(person_name: str, group_insights: dict, comm_profile_updates: dict = None) -> ToolResult:
+    """profiles.json の指定人物に group_insights / comm_profile を書き込む（既存フィールドには一切触れない）"""
     import json as _json
     import tempfile
 
@@ -370,10 +370,19 @@ def update_people_profiles(person_name: str, group_insights: dict) -> ToolResult
 
     # latest.group_insights を上書き
     entry = profiles[person_name]
+    target = entry.get("latest", entry)
     if "latest" in entry:
         entry["latest"]["group_insights"] = group_insights
     else:
         entry["group_insights"] = group_insights
+
+    # comm_profile をマージ更新（オプション）
+    updated_parts = ["group_insights"]
+    if comm_profile_updates:
+        existing_comm = target.get("comm_profile", {})
+        existing_comm.update(comm_profile_updates)
+        target["comm_profile"] = existing_comm
+        updated_parts.append("comm_profile")
 
     # アトミック書き込み
     try:
@@ -389,7 +398,7 @@ def update_people_profiles(person_name: str, group_insights: dict) -> ToolResult
             except OSError:
                 pass
             raise
-        return ToolResult(success=True, output=f"Updated group_insights for {person_name}")
+        return ToolResult(success=True, output=f"Updated {'+'.join(updated_parts)} for {person_name}")
     except Exception as e:
         return ToolResult(success=False, output="", error=f"Failed to write profiles.json: {e}")
 
