@@ -1319,6 +1319,7 @@ class TaskScheduler:
         # 3. LINE表示名→profileキーのマッチング + 人物ごとにClaude分析
         updated_count = 0
         skipped_count = 0
+        updated_details = []  # [(name, msg_count, style, topics), ...]
         try:
             client = _anthropic.Anthropic()
         except Exception as e:
@@ -1405,6 +1406,12 @@ JSON以外の文字は出力しないでください。"""}],
                 write_result = tools.update_people_profiles(profile_key, group_insights)
                 if write_result.success:
                     updated_count += 1
+                    updated_details.append((
+                        person_name,
+                        len(messages),
+                        analysis.get("communication_style", ""),
+                        analysis.get("recent_topics", []),
+                    ))
                     logger.info(f"weekly_profile_learning: updated {person_name} ({len(messages)} msgs)")
                 else:
                     logger.warning(f"weekly_profile_learning: write failed for {person_name}: {write_result.error}")
@@ -1537,13 +1544,24 @@ JSON以外の文字は出力しないでください。"""}],
             logger.warning(f"weekly_profile_learning: comm_profile phase failed: {e}")
 
         # 4. 結果をLINE通知
+        # 更新された人物の詳細を組み立て
+        detail_lines = []
+        for name, msg_cnt, style, topics in updated_details:
+            topics_str = "、".join(topics[:3]) if topics else ""
+            line = f"・{name}（{msg_cnt}件）\n  {style}"
+            if topics_str:
+                line += f"\n  関心: {topics_str}"
+            detail_lines.append(line)
+        details_section = "\n".join(detail_lines) if detail_lines else ""
+
         style_line = f"\nスタイルルール: {style_rules_count}件抽出" if style_rules_count else ""
-        comm_line = f"\ncomm_profile更新: {len(comm_updated_names)}名" if comm_updated_names else ""
+        comm_line = f"\ncomm_profile更新: {', '.join(comm_updated_names)}" if comm_updated_names else ""
         message = (
             f"\n🧠 週次プロファイル学習完了\n"
             f"━━━━━━━━━━━━\n"
             f"更新: {updated_count}名\n"
-            f"スキップ: {skipped_count}名（3件未満 or プロファイル未登録）\n"
+            f"{details_section}\n"
+            f"\nスキップ: {skipped_count}名\n"
             f"分析対象: {len(all_messages_by_person)}名 / {sum(len(m) for m in all_messages_by_person.values())}メッセージ"
             f"{style_line}{comm_line}\n"
             f"━━━━━━━━━━━━"
