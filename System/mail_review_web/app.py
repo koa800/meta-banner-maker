@@ -429,12 +429,7 @@ def reply_action(account, msg_id):
             held.append(msg_id)
             state["held_message_ids"] = held
             mail_manager.save_state(state)
-        try:
-            service = mail_manager.get_gmail_service(account)
-            mail_manager.archive_message(service, msg_id)
-        except Exception:
-            pass
-        return base_redirect(account, f"✅ 保留しました（今後表示されません）")
+        return base_redirect(account, f"✅ 保留しました（受信トレイに残ります）")
 
     elif action == "trash":
         try:
@@ -656,12 +651,7 @@ def keep_mail(account, msg_id):
         held.append(msg_id)
         state["held_message_ids"] = held
         mail_manager.save_state(state)
-    try:
-        service = mail_manager.get_gmail_service(account)
-        mail_manager.archive_message(service, msg_id)
-    except Exception:
-        pass
-    return base_redirect(account, "✅ 保留しました（今後表示されません）")
+    return base_redirect(account, "✅ 保留しました（受信トレイに残ります）")
 
 
 # ───────── ラベル・フィルター API ─────────
