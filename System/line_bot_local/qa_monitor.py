@@ -121,14 +121,22 @@ def get_sheets_service():
     """Google Sheets APIサービスを取得"""
     if not GOOGLE_API_AVAILABLE:
         return None
-    
-    # credentials/token.json のパスを探す（MacBook: ../credentials/, Mac Mini: ../System/credentials/）
-    _parent = Path(__file__).parent.parent
-    token_file = _parent / "credentials" / "token.json"
-    if not token_file.exists():
-        token_file = _parent / "System" / "credentials" / "token.json"
 
-    if not token_file.exists():
+    # credentials/token.json のパスを探す（複数パス対応）
+    _parent = Path(__file__).resolve().parent.parent
+    candidates = [
+        _parent / "credentials" / "token.json",
+        _parent / "System" / "credentials" / "token.json",
+        Path(__file__).parent.parent / "credentials" / "token.json",
+        Path(__file__).parent.parent / "System" / "credentials" / "token.json",
+    ]
+    token_file = None
+    for c in candidates:
+        if c.exists():
+            token_file = c
+            break
+
+    if not token_file:
         return None
     
     try:
