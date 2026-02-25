@@ -122,8 +122,12 @@ def get_sheets_service():
     if not GOOGLE_API_AVAILABLE:
         return None
     
-    token_file = Path(__file__).parent.parent / "credentials" / "token.json"
-    
+    # credentials/token.json のパスを探す（MacBook: ../credentials/, Mac Mini: ../System/credentials/）
+    _parent = Path(__file__).parent.parent
+    token_file = _parent / "credentials" / "token.json"
+    if not token_file.exists():
+        token_file = _parent / "System" / "credentials" / "token.json"
+
     if not token_file.exists():
         return None
     
