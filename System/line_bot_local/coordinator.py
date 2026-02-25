@@ -92,6 +92,25 @@ def _load_agent_summary(project_root: Path) -> str:
         lines.append("人間（主要メンバー）:")
         lines.extend(human_agents[:10])  # 上位10名に制限
 
+    # ワークフロー型エージェント（transfer_status 付き）
+    workflow_agents = []
+    for name, prof in profiles.items():
+        latest = prof.get("latest", {})
+        if latest.get("type") != "workflow":
+            continue
+        if latest.get("status", "active") == "inactive":
+            continue
+        best = ", ".join(latest.get("best_for", []))
+        transfer = latest.get("transfer", {})
+        t_status = transfer.get("transfer_status", "")
+        t_target = transfer.get("transferable_to", "")
+        status_text = f" [移譲: {t_status} → {t_target}]" if t_status and t_target else ""
+        workflow_agents.append(f"  [{name}] ワークフロー / 用途: {best}{status_text}")
+
+    if workflow_agents:
+        lines.append("ワークフロー:")
+        lines.extend(workflow_agents)
+
     return "\n".join(lines)
 
 
@@ -134,11 +153,24 @@ def _build_system_prompt(sender_name: str = "", project_root: Path = None) -> st
 
 【ルール】
 1. 曖昧なゴールや複数解釈できるゴール → 必ず認識確認してから実行
-2. 情報取得系のツール（calendar, mail, kpi, people, addness, sheets）は並列で呼んでOK
-3. draft_reply や analyze は、必要な情報が揃ってから呼ぶ
+2. 情報取得系のツール（calendar, mail, kpi, people, addness, sheets, search）は並列で呼んでOK
+3. draft_reply, analyze, generate_image, generate_video は、必要な情報が揃ってから呼ぶ
 4. send_message, ask_human は「送信提案」を返すだけ。実際の送信はユーザーの承認後
 5. 最終報告は簡潔に。箇条書きで。LINEメッセージとして読みやすい形式で
 6. ツールが不要な簡単な質問には、ツールを呼ばず直接回答してもOK
+
+【生成AI系ツール】
+- search: Web検索が必要なとき（最新情報、企業調査、市場動向）→ Perplexity に委任
+- generate_image: 画像・バナー制作 → Lubert に委任
+- generate_video: 動画制作 → 動画AI に委任（未設定の場合はその旨を返す）
+- APIキーが未設定のツールは、未設定である旨をユーザーに報告する
+
+【ワークフロー移譲ルール】
+profiles.json の transfer.transfer_status に応じて、ワークフローの振り先を自動で変える:
+- Phase 1（AI全自動）: ワークフローに直接実行を委任
+- Phase 2（AI実行+人間確認）: ワークフローを実行し、結果を transfer_target の人間にも共有
+- Phase 3（人間実行+AIサポート）: transfer_target の人間に依頼し、AIはサポート情報を提供
+- Phase 4（完全自走）: transfer_target の人間に直接依頼。AIは不要
 
 【禁止】
 - 認識確認なしに曖昧なゴールを実行すること

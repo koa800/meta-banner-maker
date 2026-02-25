@@ -1,20 +1,26 @@
 """
 handler_runner.py — ツール定義に従って既存ハンドラを実行する汎用ランナー
 
-Coordinator から呼ばれる。ツールごとの実行方法（subprocess / function / file_read / action）を
+Coordinator から呼ばれる。ツールごとの実行方法を
 tool_registry.json の handler_type に従って振り分ける。
 
 handler_type:
-  - subprocess: 外部Pythonスクリプトを実行
-  - function:   local_agent.py から渡されたコールバック関数を実行
-  - file_read:  ファイルを読み込んで返す
-  - action:     L3+ 確認が必要な操作。実行せず提案テキストを返す
+  - subprocess:         外部Pythonスクリプトを実行
+  - function:           local_agent.py から渡されたコールバック関数を実行
+  - file_read:          ファイルを読み込んで返す
+  - action:             L3+ 確認が必要な操作。実行せず提案テキストを返す
+  - api_call:           profiles.json の preferred_agent → interface.config に従って外部API呼び出し
+  - workflow_endpoint:  ワークフローエンドポイント（Mac Mini Orchestrator等）にHTTP POST
+  - mcp:                MCP プロトコル呼び出し（将来用）
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+import requests
 
 
 class HandlerRunner:
@@ -36,6 +42,24 @@ class HandlerRunner:
             self._registry = json.load(f)
         self._tool_map = {t["name"]: t for t in self._registry["tools"]}
 
+        # profiles.json 読み込み（api_call / workflow_endpoint で使用）
+        self._profiles = self._load_profiles()
+
+    def _load_profiles(self) -> dict:
+        """profiles.json を読み込む"""
+        profiles_path = self.project_root / "Master" / "people" / "profiles.json"
+        if not profiles_path.exists():
+            return {}
+        try:
+            return json.loads(profiles_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _get_agent_config(self, agent_name: str) -> dict:
+        """profiles.json からエージェントの interface.config を取得する"""
+        profile = self._profiles.get(agent_name, {})
+        return profile.get("latest", {}).get("interface", {}).get("config", {})
+
     def run(self, tool_name: str, arguments: dict) -> str:
         """ツールを実行して結果テキストを返す"""
         tool_def = self._tool_map.get(tool_name)
@@ -53,6 +77,12 @@ class HandlerRunner:
                 return self._run_file_read(tool_def, arguments)
             elif handler_type == "action":
                 return self._run_action(tool_def, arguments)
+            elif handler_type == "api_call":
+                return self._run_api_call(tool_def, arguments)
+            elif handler_type == "workflow_endpoint":
+                return self._run_workflow(tool_def, arguments)
+            elif handler_type == "mcp":
+                return self._run_mcp(tool_def, arguments)
             else:
                 return f"未対応の handler_type: {handler_type}"
         except Exception as e:
@@ -183,3 +213,122 @@ class HandlerRunner:
             )
 
         return f"アクション '{tool_name}' は確認が必要です。引数: {json.dumps(arguments, ensure_ascii=False)}"
+
+    # ------------------------------------------------------------------
+    # api_call: profiles.json の preferred_agent に基づく外部API呼び出し
+    # ------------------------------------------------------------------
+    def _run_api_call(self, tool_def: dict, arguments: dict) -> str:
+        agent_name = tool_def.get("preferred_agent", "")
+        if not agent_name:
+            return "preferred_agent が未設定です"
+
+        config = self._get_agent_config(agent_name)
+        if not config:
+            return f"エージェント '{agent_name}' の設定が profiles.json に見つかりません"
+
+        provider = config.get("provider", "")
+        api_key_env = config.get("api_key_env", "")
+        api_key = os.environ.get(api_key_env, "") if api_key_env else ""
+
+        if api_key_env and not api_key:
+            return f"APIキーが未設定です（環境変数: {api_key_env}）。設定後に利用可能になります"
+
+        if provider == "perplexity":
+            return self._call_perplexity(config, api_key, arguments)
+        else:
+            # Lubert / 動画AI / 将来の汎用プロバイダー
+            return self._call_generic_api(config, api_key, agent_name, arguments)
+
+    def _call_perplexity(self, config: dict, api_key: str, arguments: dict) -> str:
+        """Perplexity API（OpenAI互換）でWeb検索を実行"""
+        endpoint = config.get("endpoint", "https://api.perplexity.ai/chat/completions")
+        query = arguments.get("query", arguments.get("prompt", ""))
+        if not query:
+            return "検索クエリが指定されていません"
+
+        resp = requests.post(
+            endpoint,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "llama-3.1-sonar-large-128k-online",
+                "messages": [{"role": "user", "content": query}],
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        return content if content else json.dumps(data, ensure_ascii=False)[:2000]
+
+    def _call_generic_api(self, config: dict, api_key: str,
+                          agent_name: str, arguments: dict) -> str:
+        """汎用API呼び出し。endpoint に POST してレスポンスを返す"""
+        endpoint = config.get("endpoint", "")
+        if not endpoint:
+            return (
+                f"エージェント '{agent_name}' の API endpoint が未設定です。"
+                f"profiles.json の interface.config.endpoint を設定してください"
+            )
+
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        resp = requests.post(
+            endpoint,
+            headers=headers,
+            json=arguments,
+            timeout=120,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        # よくあるレスポンス形式を試す
+        if isinstance(data, dict):
+            for key in ("result", "output", "data", "content"):
+                if key in data:
+                    return str(data[key])[:2000]
+            if "choices" in data:
+                return data["choices"][0].get("message", {}).get("content", str(data))[:2000]
+        return json.dumps(data, ensure_ascii=False)[:2000]
+
+    # ------------------------------------------------------------------
+    # workflow_endpoint: ワークフローエンドポイントにHTTP POST
+    # ------------------------------------------------------------------
+    def _run_workflow(self, tool_def: dict, arguments: dict) -> str:
+        agent_name = tool_def.get("preferred_agent", "")
+        config = self._get_agent_config(agent_name) if agent_name else {}
+        endpoint = config.get("endpoint") or tool_def.get("endpoint", "")
+
+        if not endpoint:
+            return "ワークフローエンドポイントが未設定です"
+
+        try:
+            resp = requests.post(
+                endpoint,
+                json=arguments,
+                timeout=180,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            result = data.get("result", data.get("output", ""))
+            if result:
+                return str(result)[:2000]
+            return json.dumps(data, ensure_ascii=False)[:2000]
+        except requests.Timeout:
+            return f"ワークフロー '{agent_name}' がタイムアウトしました（180秒）"
+        except requests.ConnectionError:
+            return f"ワークフロー '{agent_name}' に接続できません（endpoint: {endpoint}）"
+
+    # ------------------------------------------------------------------
+    # mcp: MCP プロトコル呼び出し（将来用）
+    # ------------------------------------------------------------------
+    def _run_mcp(self, tool_def: dict, arguments: dict) -> str:
+        agent_name = tool_def.get("preferred_agent", "")
+        return (
+            f"MCP プロトコル（{agent_name or 'unknown'}）は現在準備中です。\n"
+            f"profiles.json に MCP 接続情報を設定後、利用可能になります"
+        )

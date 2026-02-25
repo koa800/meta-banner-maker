@@ -217,6 +217,73 @@
         },
         "required": ["recipient", "message"]
       }
+    },
+    {
+      "name": "search",
+      "description": "Web検索で最新情報を調べる。企業調査・市場動向・競合分析・ニュースなど、リアルタイムの情報取得に使う",
+      "confirmation_level": "L1",
+      "handler_type": "api_call",
+      "preferred_agent": "Perplexity",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "検索クエリ（自然言語）"
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "generate_image",
+      "description": "画像・バナー・広告ビジュアルを生成する。プロンプトに基づいて画像を作成する",
+      "confirmation_level": "L2",
+      "handler_type": "api_call",
+      "preferred_agent": "Lubert",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "画像生成のプロンプト（生成したい画像の詳細な説明）"
+          },
+          "style": {
+            "type": "string",
+            "description": "画像スタイル（例: photorealistic, illustration, minimal）"
+          },
+          "size": {
+            "type": "string",
+            "description": "画像サイズ（例: 1080x1080, 1200x628）"
+          }
+        },
+        "required": ["prompt"]
+      }
+    },
+    {
+      "name": "generate_video",
+      "description": "動画素材・広告動画を生成する。プロンプトに基づいて動画を作成する",
+      "confirmation_level": "L2",
+      "handler_type": "api_call",
+      "preferred_agent": null,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "動画生成のプロンプト（生成したい動画の詳細な説明）"
+          },
+          "duration": {
+            "type": "integer",
+            "description": "動画の長さ（秒）"
+          },
+          "style": {
+            "type": "string",
+            "description": "動画スタイル"
+          }
+        },
+        "required": ["prompt"]
+      }
     }
   ]
 }
