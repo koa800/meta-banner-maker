@@ -194,7 +194,13 @@ class TaskScheduler:
         if ok:
             logger.info(f"Mail notification sent for {account}: waiting={waiting}")
         else:
-            logger.warning(f"Mail notification failed for {account}")
+            # 1回リトライ（ネットワーク一時エラー対策）
+            import asyncio; await asyncio.sleep(5)
+            ok = send_line_notify(message)
+            if ok:
+                logger.info(f"Mail notification sent for {account} (retry): waiting={waiting}")
+            else:
+                logger.warning(f"Mail notification failed for {account} after retry")
 
     async def _run_addness_goal_check(self):
         result = await self._execute_tool("addness_to_context", tools.addness_to_context)
@@ -237,6 +243,7 @@ class TaskScheduler:
 
     async def _run_health_check(self):
         import json as _json
+        import subprocess
         from .notifier import send_line_notify
         api_calls = self.memory.get_api_calls_last_hour()
         limit = self.config.get("safety", {}).get("api_call_limit_per_hour", 100)
@@ -260,14 +267,25 @@ class TaskScheduler:
                     dt = datetime.fromisoformat(last_check.replace("Z", "+00:00"))
                     age_hours = (datetime.now().astimezone() - dt).total_seconds() / 3600
                     if age_hours > 4:
-                        logger.warning(f"Q&A monitor stale: last check {age_hours:.1f}h ago")
+                        logger.warning(f"Q&A monitor stale: last check {age_hours:.1f}h ago — triggering local_agent restart")
                         state_key = "qa_monitor_stale_notified"
                         last_n = self.memory.get_state(state_key)
                         if not last_n or (datetime.now() - datetime.fromisoformat(last_n)).total_seconds() > 14400:
-                            send_line_notify(
-                                f"\n⚠️ Q&Aモニター停止の可能性\n最終チェック: {age_hours:.0f}時間前\n"
-                                f"local_agent.py が正常に動作しているか確認してください"
-                            )
+                            # local_agent再起動を試みる（Q&Aモニターはlocal_agentの一部）
+                            plist = os.path.expanduser("~/Library/LaunchAgents/com.linebot.localagent.plist")
+                            restarted = False
+                            if os.path.exists(plist):
+                                try:
+                                    subprocess.run(["launchctl", "unload", plist], capture_output=True, timeout=5)
+                                    import asyncio; await asyncio.sleep(2)
+                                    subprocess.run(["launchctl", "load", plist], capture_output=True, timeout=5)
+                                    restarted = True
+                                except Exception:
+                                    pass
+                            msg = (f"\n🔄 Q&Aモニター停止検知→local_agent再起動\n最終チェック: {age_hours:.0f}時間前"
+                                   if restarted else
+                                   f"\n⚠️ Q&Aモニター停止\n最終チェック: {age_hours:.0f}時間前\n再起動失敗。手動確認してください")
+                            send_line_notify(msg)
                             self.memory.set_state(state_key, datetime.now().isoformat())
             except Exception as e:
                 logger.debug(f"Q&A state check error: {e}")
@@ -289,14 +307,31 @@ class TaskScheduler:
                 pass
 
             if not agent_alive:
-                logger.warning("local_agent process not found via launchctl")
+                logger.warning("local_agent process not found via launchctl — attempting auto-restart")
+                plist = os.path.expanduser("~/Library/LaunchAgents/com.linebot.localagent.plist")
+                restarted = False
+                if os.path.exists(plist):
+                    try:
+                        subprocess.run(["launchctl", "unload", plist], capture_output=True, timeout=5)
+                        import asyncio; await asyncio.sleep(2)
+                        subprocess.run(["launchctl", "load", plist], capture_output=True, timeout=5)
+                        restarted = True
+                        logger.info("local_agent auto-restarted via launchctl")
+                    except Exception as re_err:
+                        logger.error(f"local_agent restart failed: {re_err}")
+
                 state_key = "local_agent_stale_notified"
                 last_n = self.memory.get_state(state_key)
                 if not last_n or (datetime.now() - datetime.fromisoformat(last_n)).total_seconds() > 3600:
-                    send_line_notify(
-                        "\n⚠️ local_agent 停止\nプロセスが見つかりません\n"
-                        "com.linebot.localagent を確認してください"
-                    )
+                    if restarted:
+                        send_line_notify(
+                            "\n🔄 local_agent 自動再起動\nプロセス停止を検知→自動で再起動しました"
+                        )
+                    else:
+                        send_line_notify(
+                            "\n⚠️ local_agent 停止\nプロセスが見つかりません\n"
+                            "自動再起動にも失敗。手動で確認してください"
+                        )
                     self.memory.set_state(state_key, datetime.now().isoformat())
         except Exception as e:
             logger.debug(f"local_agent check error: {e}")

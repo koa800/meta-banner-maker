@@ -430,6 +430,7 @@ bash System/line_bot_local/sync_data.sh
 | Addness KPIシート | `【アドネス全体】数値管理シート`（ID: `1FOh_XGZWaEisfFEngiN848kSm2E6HotAZiMDTmO7BNA`）。タブ: 元データ / スキルプラス（日別）/ スキルプラス（月別）。`csv_sheet_sync.py` がCSV同期→日別月別構築→KPIキャッシュ生成を連鎖実行。詳細は `Project/数値管理自動化.md` を参照。kohara アカウントで読み書き |
 | KPIデータ開示制御 | 事業KPI（売上・広告費・ROAS等）は内部メンバーのみ開示。外部パートナー・未登録者には `fetch_addness_kpi()` のデータ注入をスキップ。ただしプロファイルの `related_sheets` に登録されたシートデータは外部にも開示可 |
 | タスク失敗通知 | Orchestratorのタスクが失敗するとLINE通知（2時間レート制限）。health_check/oauth_health_checkは除外 |
+| 自動復旧（health_check） | local_agent停止検知→launchctl自動再起動→LINE報告。Q&Aモニター4時間以上停止→local_agent再起動。メール通知失敗→5秒後に1回リトライ |
 
 ### MacBook を閉じてもスリープしない（クラムシェルモード）
 
@@ -491,7 +492,7 @@ bash System/line_bot_local/sync_data.sh
 | `weekly_stats` | 毎週月曜 9:30 | 週次サマリー（成功率・Q&A件数・Addness鮮度）をLINE通知 |
 | `daily_report` | 毎夜 21:00 | 日次タスク集計をLINE通知 |
 | `render_health_check` | 30分ごと | Renderサーバー死活監視・ダウン時LINE通知 |
-| `health_check` | 5分ごと | API使用量・Q&Aモニター・local_agent停止を検知してLINE警告 |
+| `health_check` | 5分ごと | API使用量・Q&Aモニター・local_agent停止を検知。停止時は自動再起動（launchctl unload/load）→結果をLINE通知 |
 | `repair_check` | 30分ごと | ログエラー検知・自動修復提案 |
 | `weekly_content_suggestions` | 毎週水曜 10:00 | 最新AIニュースを分析してコンテンツ更新提案をLINE通知 |
 | `kpi_daily_import` | 毎日 12:00 | 2日前のKPIデータ完了チェック→投入→KPIキャッシュ再生成→LINE通知（失敗時は個別エラー通知） |
