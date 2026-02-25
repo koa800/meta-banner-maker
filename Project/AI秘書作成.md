@@ -666,6 +666,8 @@ MacBook (どこからでも)
 - [x] 2台のPC間のタスク取り合い防止（MacBookとMac Miniが同じタスクを二重処理しないよう、start_taskで早い者勝ち方式を実装。処理中タスクには409を返す。X-Agent-IDヘッダーでマシン識別）
 - [x] タスク担当をMac Miniに一本化（MacBookの`config.json`で`task_polling: false`に設定。LINEからのタスクはMac Miniだけが処理する。MacBookはCursorからの直接操作専用）
 - [x] LP構成案（generate_lp_draft）・動画台本（generate_video_script）ツール削除（不要）
+- [x] 情報開示ルール（相手カテゴリ別）: 甲原のみ→全情報OK / 内部メンバー→事業数値・進捗OK、予定・プライベートNG / 外部→一般知識のみ。返信案生成プロンプトに自動注入
+- [x] 曖昧な指示へのヒヤリング: 「広告どう？」等の抽象質問には選択肢を提示して聞き返す
 
 ---
 
