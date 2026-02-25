@@ -108,6 +108,7 @@ textarea:focus { outline: none; border-color: #2563eb;
 .btn-hold { background: #f59e0b; color: white; }
 .btn-del  { background: #ef4444; color: white; }
 .btn-skip { background: #e5e7eb; color: #374151; }
+.btn-trash { background: #6b7280; color: white; }
 .btn-folder { background: #8b5cf6; color: white; }
 .empty { text-align: center; color: #9ca3af; padding: 28px;
          background: white; border-radius: 12px; font-size: 0.88em; }
@@ -178,16 +179,22 @@ textarea:focus { outline: none; border-color: #2563eb;
       <div class="from">{{ p['from'] }}</div>
       <div class="subject">{{ p['subject'] }}</div>
       <div class="snippet">{{ p['snippet'][:150] }}{% if p['snippet']|length > 150 %}...{% endif %}</div>
+      {% if p.get('no_reply_reason') %}
+      <div class="reason">💡 {{ p['no_reply_reason'] }}</div>
+      {% endif %}
       {% if p['suggested_reply'] %}
       <div class="suggested">{{ p['suggested_reply'] }}</div>
       {% else %}
+      {% if not p.get('no_reply_reason') %}
       <div class="no-reply">（返信提案なし）</div>
+      {% endif %}
       {% endif %}
       <form method="post" action="/reply/{{ account }}/{{ p['message_id'] }}">
         <textarea name="reply_text" placeholder="返信文を編集してから「送信」してください">{{ p['suggested_reply'] or '' }}</textarea>
         <div class="btns">
           <button class="btn btn-send" name="action" value="send">送信</button>
           <button class="btn btn-hold" name="action" value="hold">保留</button>
+          <button class="btn btn-trash" name="action" value="trash">ゴミ箱</button>
           <button class="btn btn-del"  name="action" value="delete">削除して学習</button>
           <button type="button" class="btn btn-folder" onclick="openFilterModal('{{ p['from'] }}', '{{ p['message_id'] }}')">📁 振り分け</button>
         </div>
@@ -217,6 +224,7 @@ textarea:focus { outline: none; border-color: #2563eb;
       <div class="snippet">{{ r['snippet'][:150] }}{% if r['snippet']|length > 150 %}...{% endif %}</div>
       <div class="reason">理由: {{ r['reason'] or '不明' }}</div>
       <div class="btns">
+        <a href="/trash/{{ account }}/{{ r['message_id'] }}" class="btn btn-trash">ゴミ箱</a>
         <a href="/delete/{{ account }}/{{ r['message_id'] }}" class="btn btn-del">削除して学習</a>
         <a href="/keep/{{ account }}/{{ r['message_id'] }}"   class="btn btn-hold">保留</a>
         <button type="button" class="btn btn-folder" onclick="openFilterModal('{{ r['from'] }}', '{{ r['message_id'] }}')">📁 振り分け</button>
@@ -428,6 +436,15 @@ def reply_action(account, msg_id):
             pass
         return base_redirect(account, f"✅ 保留しました（今後表示されません）")
 
+    elif action == "trash":
+        try:
+            service = mail_manager.get_gmail_service(account)
+            mail_manager.trash_message(service, msg_id)
+            mail_manager.save_pending(remaining)
+            return base_redirect(account, f"✅ ゴミ箱に移動しました（学習なし）: {item['from']}")
+        except Exception as e:
+            return base_redirect(account, f"エラー: {e}")
+
     elif action == "delete":
         try:
             service = mail_manager.get_gmail_service(account)
@@ -504,6 +521,35 @@ def bulk_clear_pending(account):
     if remaining:
         flash += f"。{len(remaining)} 件はスキップ（既に削除済み等）"
     return base_redirect(account, flash)
+
+
+# ───────── ゴミ箱（学習なし） ─────────
+
+@app.route("/trash/<account>/<msg_id>")
+def trash_only(account, msg_id):
+    """メールをゴミ箱に移動するが、送信者を学習しない"""
+    if account not in ACCOUNTS:
+        return base_redirect("personal", "不正なアカウント")
+    setup_account(account)
+    # 削除確認リストから除去
+    reviews = mail_manager.load_delete_review()
+    item = next((r for r in reviews if r["message_id"] == msg_id), None)
+    remaining = [r for r in reviews if r["message_id"] != msg_id]
+    if item:
+        mail_manager.save_delete_review(remaining)
+    # 返信待ちリストからも除去
+    pending = mail_manager.load_pending()
+    item_p = next((p for p in pending if p["message_id"] == msg_id), None)
+    remaining_p = [p for p in pending if p["message_id"] != msg_id]
+    if item_p:
+        mail_manager.save_pending(remaining_p)
+    sender = (item or item_p or {}).get("from", "不明")
+    try:
+        service = mail_manager.get_gmail_service(account)
+        mail_manager.trash_message(service, msg_id)
+        return base_redirect(account, f"✅ ゴミ箱に移動しました（学習なし）: {sender}")
+    except Exception as e:
+        return base_redirect(account, f"エラー: {e}")
 
 
 # ───────── 削除確認（1件） ─────────

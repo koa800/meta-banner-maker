@@ -235,8 +235,8 @@ def get_header(msg, name):
     return ""
 
 
-def get_body_snippet(msg, max_len=500):
-    """本文のスニペットを取得"""
+def get_body_text(msg, max_len=2000):
+    """本文テキストを取得"""
     payload = msg.get("payload", {})
     body = ""
     if "body" in payload and payload["body"].get("data"):
@@ -272,7 +272,8 @@ def fetch_inbox(service, max_results=50, exclude_senders=None):
         if sender in exclude_senders:
             continue
         subject = get_header(msg, "Subject")
-        snippet = msg.get("snippet", "") or get_body_snippet(msg, 300)
+        body_text = get_body_text(msg, 2000)
+        snippet = msg.get("snippet", "") or body_text[:300]
         label_ids = set(msg.get("labelIds", []))
         has_custom_label = bool(label_ids - SYSTEM_LABELS)
         out.append({
@@ -281,6 +282,7 @@ def fetch_inbox(service, max_results=50, exclude_senders=None):
             "from": sender,
             "subject": subject,
             "snippet": snippet,
+            "body": body_text,
             "message_id_header": get_header(msg, "Message-ID"),
             "date": get_header(msg, "Date"),
             "has_custom_label": has_custom_label,
@@ -289,7 +291,7 @@ def fetch_inbox(service, max_results=50, exclude_senders=None):
 
 
 def classify_messages(messages, openai_api_key=None):
-    """OpenAI で返信必要/不要を分類し、必要な場合は返信文を提案"""
+    """OpenAI で返信必要/不要を分類"""
     if not messages:
         return []
     try:
@@ -310,7 +312,7 @@ def classify_messages(messages, openai_api_key=None):
             f"From: {m['from']}\nSubject: {m['subject']}\n\n{m['snippet']}"
         )
 
-    prompt = """以下のメールそれぞれについて、返信が必要か不要かを判定し、必要な場合は短い返信文を1つ提案してください。
+    prompt = """以下のメールそれぞれについて、返信が必要か不要かを判定してください。
 
 【絶対に削除してはいけない（返信必要として扱う）】
 - イベント予約・申し込み確認（イベサポ、予約確認、チケットなど）
@@ -333,7 +335,7 @@ def classify_messages(messages, openai_api_key=None):
 ※迷ったら「返信必要」として扱う。削除より残す方が安全。
 
 各メールに対して、次のJSON形式で1行ずつ出力してください（他に説明文は不要）:
-{"need_reply": true/false, "reason": "理由（短く）", "suggested_reply": "返信が必要な場合のみ日本語で提案文"}
+{"need_reply": true/false, "reason": "理由（短く）"}
 
 メール一覧:
 """
@@ -351,29 +353,25 @@ def classify_messages(messages, openai_api_key=None):
             temperature=0.2,
         )
         text = response.choices[0].message.content.strip()
-        # 行ごとにJSONをパース（--- で区切られたブロックを無視）
         results = []
         for line in text.split("\n"):
             line = line.strip()
             if not line or line.startswith("---"):
                 continue
-            # 行がJSONオブジェクトならパース
             if line.startswith("{"):
                 try:
                     results.append(json.loads(line))
                 except json.JSONDecodeError:
-                    results.append({"need_reply": True, "reason": "parse error", "suggested_reply": ""})
-        # 件数が合わない場合は不足分を「返信必要」で埋める
+                    results.append({"need_reply": True, "reason": "parse error"})
         while len(results) < len(messages):
-            results.append({"need_reply": True, "reason": "未分類", "suggested_reply": ""})
-        # メールと結果を対応させる
+            results.append({"need_reply": True, "reason": "未分類"})
         out = []
         for m, r in zip(messages, results[: len(messages)]):
             out.append({
                 "message": m,
                 "need_reply": bool(r.get("need_reply", True)),
                 "reason": str(r.get("reason", "")),
-                "suggested_reply": str(r.get("suggested_reply", "") or "").strip(),
+                "suggested_reply": "",
             })
         return out
     except Exception as e:
@@ -383,6 +381,126 @@ def classify_messages(messages, openai_api_key=None):
         })
         print(f"分類エラー: {e}")
         return [{"message": m, "need_reply": True, "reason": str(e), "suggested_reply": ""} for m in messages]
+
+
+def _load_identity_context():
+    """IDENTITY.md から文体情報を読み込む"""
+    identity_path = BASE_DIR.parent / "Master" / "self_clone" / "kohara" / "IDENTITY.md"
+    if not identity_path.exists():
+        return ""
+    try:
+        return identity_path.read_text(encoding="utf-8")
+    except Exception:
+        return ""
+
+
+def generate_replies(need_reply_items, openai_api_key=None):
+    """返信必要メールに対して、甲原さんの文体で適切な返信案を生成"""
+    if not need_reply_items:
+        return need_reply_items
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return need_reply_items
+
+    api_key = openai_api_key or os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return need_reply_items
+
+    client = OpenAI(api_key=api_key)
+    identity = _load_identity_context()
+
+    batch = []
+    for item in need_reply_items:
+        m = item["message"]
+        body = m.get("body", m.get("snippet", ""))
+        batch.append(f"From: {m['from']}\nSubject: {m['subject']}\nDate: {m.get('date', '')}\n\n{body}")
+
+    prompt = f"""あなたは甲原海人（こうはらかいと）のメール秘書です。
+以下のメールそれぞれに対して、甲原として適切な返信案を作成してください。
+
+## 甲原海人のプロフィール・文体
+{identity}
+
+## メール返信のルール
+
+1. **返信が不要なメール（自動通知・領収書・セキュリティ通知など）には「返信不要」と書く**
+   - 決済完了通知、領収書、パスワード変更通知など → 返信不要
+   - サービスからの自動通知（料金改定のお知らせ等） → 返信不要
+   - ただしアクションが必要な場合は返信案を書く
+
+2. **返信する場合のルール**
+   - メール文体は丁寧語ベース（LINEよりフォーマル）
+   - ただし甲原らしい温度感・テンポは残す
+   - 「お疲れ様です！」「ありがとうございます！」など、甲原らしい挨拶で始める
+   - 要件に対して的確に回答する
+   - 不明点があれば素直に聞く
+   - 過度に丁寧な敬語は使わない（「かしこまりました」→「承知しました！」）
+
+3. **イベント招待・セミナー案内**
+   - 参加するかどうかは甲原が判断するので、「参加/不参加を選べる形」で返信案を2パターン提示
+   - 形式: 「【参加する場合】...」「【不参加の場合】...」
+
+4. **送信者が個人（ビジネス相手）の場合**
+   - 相手の要件をしっかり読み取って回答
+   - 相手が返答を求めている質問には具体的に答える
+
+## 出力形式
+各メールに対して、次のJSON形式で1行ずつ出力してください（他に説明文は不要）:
+- 返信する場合: {{"reply": "返信案テキスト", "no_reply_reason": ""}}
+- 返信不要の場合: {{"reply": "", "no_reply_reason": "理由（例: 決済完了通知のため返信不要）"}}
+
+重要:
+- replyフィールドに「返信不要」というテキストを入れないでください。返信不要の場合はreplyを空文字にしてno_reply_reasonに理由を書いてください
+- イベント招待の場合はreplyに「【参加する場合】\\n...\\n\\n【不参加の場合】\\n...」の形で2パターン書いてください
+
+メール一覧:
+"""
+    for i, body_text in enumerate(batch, 1):
+        prompt += f"\n--- メール{i} ---\n{body_text}\n"
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "あなたは甲原海人のメール秘書です。甲原の文体を再現した実用的な返信案を作成してください。JSONのみを出力してください。"},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=4000,
+            temperature=0.4,
+        )
+        text = response.choices[0].message.content.strip()
+        results = []
+        for line in text.split("\n"):
+            line = line.strip()
+            if not line or line.startswith("---"):
+                continue
+            if line.startswith("{"):
+                try:
+                    results.append(json.loads(line))
+                except json.JSONDecodeError:
+                    results.append({"reply": "", "no_reply_reason": ""})
+        while len(results) < len(need_reply_items):
+            results.append({"reply": "", "no_reply_reason": ""})
+
+        for item, r in zip(need_reply_items, results[:len(need_reply_items)]):
+            reply = str(r.get("reply", "") or "").strip()
+            no_reply_reason = str(r.get("no_reply_reason", "") or "").strip()
+            # "返信不要" がreplyに入ってしまった場合のフォールバック
+            if reply in ("返信不要", "返信不要です", "返信不要。"):
+                no_reply_reason = no_reply_reason or "自動通知のため返信不要"
+                reply = ""
+            if no_reply_reason and not reply:
+                item["suggested_reply"] = ""
+                item["no_reply_reason"] = no_reply_reason
+            else:
+                item["suggested_reply"] = reply
+                item["no_reply_reason"] = ""
+        return need_reply_items
+    except Exception as e:
+        logger.exception("返信案生成エラー", extra={"error": str(e)})
+        print(f"返信案生成エラー: {e}")
+        return need_reply_items
 
 
 def create_block_filter(service, sender_email):
@@ -559,12 +677,12 @@ def run_once(account=None, openai_api_key=None):
 
     new_delete_review = 0
     auto_deleted = 0
+    new_pending_items = []
 
     for item in classified:
         m = item["message"]
         need = item["need_reply"]
         reason = item.get("reason", "")
-        suggested = item.get("suggested_reply", "")
         sender = m["from"]
         has_custom_label = m.get("has_custom_label", False)
 
@@ -577,16 +695,18 @@ def run_once(account=None, openai_api_key=None):
 
         if need:
             if m["id"] not in pending_ids:
-                pending.append({
+                new_item = {
                     "message_id": m["id"],
                     "thread_id": m["thread_id"],
                     "from": m["from"],
                     "subject": m["subject"],
                     "snippet": m["snippet"],
                     "message_id_header": m.get("message_id_header"),
-                    "suggested_reply": suggested,
+                    "suggested_reply": "",
+                    "no_reply_reason": "",
                     "date": m.get("date", ""),
-                })
+                }
+                new_pending_items.append({"message": m, "pending_item": new_item})
                 pending_ids.add(m["id"])
             label_mark = " [ラベル付]" if has_custom_label else ""
             print(f"  [返信必要{label_mark}] {sender} - {m['subject'][:40]}...")
@@ -616,6 +736,16 @@ def run_once(account=None, openai_api_key=None):
                     delete_review_ids.add(m["id"])
                     new_delete_review += 1
                 print(f"  [削除確認待ち] {sender} - {m['subject'][:40]}... (理由: {reason})")
+
+    # 新規返信待ちメールの返信案を一括生成
+    if new_pending_items:
+        print(f"\n返信案を生成中（{len(new_pending_items)} 件）...")
+        reply_items = [{"message": npi["message"], "suggested_reply": "", "no_reply_reason": ""} for npi in new_pending_items]
+        generate_replies(reply_items, openai_api_key)
+        for npi, ri in zip(new_pending_items, reply_items):
+            npi["pending_item"]["suggested_reply"] = ri.get("suggested_reply", "")
+            npi["pending_item"]["no_reply_reason"] = ri.get("no_reply_reason", "")
+        pending.extend([npi["pending_item"] for npi in new_pending_items])
 
     state["not_needed_count"] = count_map
     save_state(state)
