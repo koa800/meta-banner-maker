@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月25日（LINE→ゴール実行エンジン（Coordinator）接続完了: E2Eフロー LINE→Render→task_queue→local_agent→coordinator→LINE通知。MacBook LaunchAgent ~/Library/LineBot/ デプロイ対応） |
+| 最終更新 | 2026年2月25日（2台のPC間タスク取り合い防止: start_taskで早い者勝ち方式実装。post-commitフックでコード自動同期追加） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -532,6 +532,8 @@ Mac Mini Orchestrator
 | `/notify` | POST | 秘書グループにメッセージ送信 |
 | `/api/group-log` | GET | グループメッセージ日次ログ取得（`?date=YYYY-MM-DD`、省略時は当日） |
 | `/tasks` | GET | 未処理タスクキュー取得 |
+| `/tasks/<id>/start` | POST | タスク処理開始（早い者勝ち: 処理中なら409） |
+| `/tasks/<id>/complete` | POST | タスク完了報告→LINE通知 |
 | `/qa/new` | POST | 新着Q&A受け取り・AI回答生成 |
 
 ### コード同期アーキテクチャ
@@ -540,7 +542,7 @@ Mac Mini Orchestrator
 MacBook (どこからでも)
   │
   ├── コミット → post-commit フック → git push origin main  [自動]
-  │                                 → ~/Library/LineBot/data/ にキャッシュ同期 [自動]
+  │                                 → ~/Library/LineBot/ にコード+データ同期 [自動]
   │
   ▼ GitHub (koa800/meta-banner-maker)
   │
@@ -659,7 +661,8 @@ MacBook (どこからでも)
 - [x] フィードバック保存エラーハンドリング（`save_feedback_example`にtry/except追加。Mac Miniでパス不正時もタスクが「タスクエラー」にならない）
 - [x] plist環境変数自動設定（`ensure_plist_path`がplist再生成時に`config.json`から`ANTHROPIC_API_KEY`/`AGENT_TOKEN`/`LINE_BOT_SERVER_URL`を読み取って埋め込み）
 - [x] LINE→ゴール実行エンジン（Coordinator）接続完了（app.pyのexecute_goalツール定義改善→調査・リサーチ系を確実にルーティング。Render環境変数にANTHROPIC_API_KEY追加。E2Eフロー: LINE→Render→task_queue→local_agent→coordinator→LINE通知）
-- [x] MacBook LaunchAgent ~/Library/LineBot/ デプロイ対応（TCC制限により~/Desktopをlaunchdから直接読めないため、data/にキャッシュコピーを配置。post-commitフックでデータキャッシュを自動同期）
+- [x] MacBook LaunchAgent ~/Library/LineBot/ デプロイ対応（TCC制限により~/Desktopをlaunchdから直接読めないため、コード+データをコピー配置。post-commitフックで自動同期）
+- [x] 2台のPC間のタスク取り合い防止（MacBookとMac Miniが同じタスクを二重処理しないよう、start_taskで早い者勝ち方式を実装。処理中タスクには409を返す。X-Agent-IDヘッダーでマシン識別）
 
 ---
 
