@@ -33,7 +33,14 @@ logger = logging.getLogger("calendar_manager")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CREDENTIALS_DIR = os.path.join(BASE_DIR, "credentials")
-CLIENT_SECRET_PATH = os.path.join(CREDENTIALS_DIR, "client_secret.json")
+
+# アカウント別クライアントシークレット（mail_manager.py と同パターン）
+# personal(Gmail) → 外部ユーザー用GCPプロジェクト、kohara/gwsadmin → 組織内部用
+CLIENT_SECRETS = {
+    "personal": os.path.join(CREDENTIALS_DIR, "client_secret_personal.json"),
+    "kohara": os.path.join(CREDENTIALS_DIR, "client_secret.json"),
+    "gwsadmin": os.path.join(CREDENTIALS_DIR, "client_secret.json"),
+}
 
 ACCOUNTS = {
     "kohara": os.path.join(CREDENTIALS_DIR, "token_calendar.json"),
@@ -67,8 +74,12 @@ def get_credentials(account=None):
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
+            client_secret = CLIENT_SECRETS.get(account, CLIENT_SECRETS.get("kohara"))
+            if not os.path.exists(client_secret):
+                print(f"エラー: クライアントシークレットが見つかりません: {client_secret}")
+                sys.exit(1)
             print(f"[{account}] ブラウザが開きます。対象アカウントでログインしてください。")
-            flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_PATH, SCOPES)
+            flow = InstalledAppFlow.from_client_secrets_file(client_secret, SCOPES)
             creds = flow.run_local_server(port=0)
 
         with open(token_path, "w") as f:
