@@ -226,18 +226,51 @@ config = {}
 
 
 def load_config():
-    """設定を読み込む"""
+    """設定を読み込む（環境変数フォールバック付き）"""
     global config
-    
+
     if CONFIG_FILE.exists():
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             config = json.load(f)
     else:
         config = DEFAULT_CONFIG.copy()
+        print(f"⚠️ config.json が見つかりません: {CONFIG_FILE}")
+
+    # 環境変数でconfig値を補完（plistフォールバック: config.json消失時の安全網）
+    # config.jsonが存在しなかった場合は環境変数を優先、存在する場合は空値のみ補完
+    _from_file = CONFIG_FILE.exists()
+    env_overrides = {
+        "server_url": os.environ.get("LINE_BOT_SERVER_URL"),
+        "agent_token": os.environ.get("AGENT_TOKEN") or os.environ.get("LOCAL_AGENT_TOKEN"),
+        "anthropic_api_key": os.environ.get("ANTHROPIC_API_KEY"),
+    }
+    patched = False
+    for key, env_val in env_overrides.items():
+        if not env_val:
+            continue
+        # config.jsonがない場合: 環境変数で常に上書き（デフォルト値より環境変数が正確）
+        # config.jsonがある場合: 空値のみ補完
+        if not _from_file or not config.get(key):
+            config[key] = env_val
+            patched = True
+
+    # config.jsonが存在しない場合、環境変数で補完した設定を保存
+    if not CONFIG_FILE.exists() and config.get("server_url") and config.get("agent_token"):
         save_config()
-        print(f"設定ファイルを作成しました: {CONFIG_FILE}")
-        print("server_url と agent_token を設定してください")
-    
+        print(f"✅ 環境変数からconfig.jsonを自動生成しました: {CONFIG_FILE}")
+    elif patched:
+        print(f"✅ 環境変数でconfig値を補完しました")
+
+    # 起動時バリデーション: 必須設定がなければ明示的に警告
+    missing = []
+    if not config.get("server_url"):
+        missing.append("server_url")
+    if not config.get("agent_token"):
+        missing.append("agent_token")
+    if missing:
+        print(f"🚨 致命的な設定不備: {', '.join(missing)} が未設定です")
+        print(f"   config.json を確認するか、plistに環境変数を設定してください")
+
     return config
 
 
@@ -248,9 +281,12 @@ def save_config():
 
 
 def get_headers():
-    """APIリクエスト用ヘッダー（agent_token は config または環境変数 LOCAL_AGENT_TOKEN）"""
+    """APIリクエスト用ヘッダー（agent_token は config → AGENT_TOKEN → LOCAL_AGENT_TOKEN）"""
     headers = {"Content-Type": "application/json"}
-    token = (config.get("agent_token") or os.environ.get("LOCAL_AGENT_TOKEN") or "").strip()
+    token = (config.get("agent_token")
+             or os.environ.get("AGENT_TOKEN")
+             or os.environ.get("LOCAL_AGENT_TOKEN")
+             or "").strip()
     if token:
         headers["Authorization"] = f"Bearer {token}"
     return headers
