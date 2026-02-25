@@ -244,6 +244,7 @@ DEFAULT_CONFIG = {
     "cursor_workspace": str(Path(__file__).parent.parent.parent),  # /Users/koa800/Desktop/cursor
     "anthropic_api_key": "",  # Anthropic APIキー
     "auto_mode": "claude",  # "claude" = Claude API直接, "cursor" = Cursor経由
+    "task_polling": True,  # LINEからのタスクを取得するか（Mac Mini: True, MacBook: False）
     "qa_monitor_enabled": True,  # Q&A監視を有効化
     "qa_poll_interval": 60,  # Q&Aポーリング間隔（秒）
 }
@@ -2077,6 +2078,8 @@ def run_agent():
     print("🤖 LINE AI秘書 ローカルエージェント")
     print("=" * 50)
     print(f"サーバー: {config['server_url']}")
+    task_polling = config.get("task_polling", True)
+    print(f"タスク取得: {'有効' if task_polling else '無効（Mac Mini が担当）'}")
     print(f"ポーリング間隔: {config['poll_interval']}秒")
     print(f"実行モード: {auto_mode}")
     print(f"Q&A監視: {'有効' if qa_enabled else '無効'}")
@@ -2119,7 +2122,11 @@ def run_agent():
     while True:
         try:
             # ===== タスクポーリング =====
-            tasks = fetch_tasks()
+            if not config.get("task_polling", True):
+                # タスク取得OFF（MacBook等）→ スキップしてQ&A監視だけ動かす
+                tasks = []
+            else:
+                tasks = fetch_tasks()
             
             if tasks:
                 print(f"\n📥 {len(tasks)} 件のタスクを受信")
