@@ -27,16 +27,40 @@ except ImportError:
 
 # ---- プロファイルパス ----
 _AGENT_DIR = Path(__file__).parent
-# Desktop: System/line_bot_local/ → parent.parent = cursor/
-# Mac Mini: line_bot_local/ → parent = agents/  (line_bot_local は agents/ 直下にデプロイ)
-_PROJECT_ROOT = _AGENT_DIR.parent.parent
-if not (_PROJECT_ROOT / "Master").is_dir():
-    _PROJECT_ROOT = _AGENT_DIR.parent
+# 環境変数 → Desktop自動解決 → Mac Mini自動解決 の順でプロジェクトルートを探す
+_env_root = os.environ.get("LINEBOT_PROJECT_ROOT", "")
+if _env_root and (Path(_env_root) / "Master").is_dir():
+    _PROJECT_ROOT = Path(_env_root)
+else:
+    # Desktop: System/line_bot_local/ → parent.parent = cursor/
+    # Mac Mini: line_bot_local/ → parent = agents/
+    _PROJECT_ROOT = _AGENT_DIR.parent.parent
+    if not (_PROJECT_ROOT / "Master").is_dir():
+        _PROJECT_ROOT = _AGENT_DIR.parent
 _SYSTEM_DIR = _AGENT_DIR.parent
 if not (_SYSTEM_DIR / "mail_manager.py").exists():
     _SYSTEM_DIR = _SYSTEM_DIR / "System"
-PEOPLE_PROFILES_JSON = _PROJECT_ROOT / "Master" / "people" / "profiles.json"
-PEOPLE_IDENTITIES_JSON = _PROJECT_ROOT / "Master" / "people" / "identities.json"
+if not (_SYSTEM_DIR / "mail_manager.py").exists():
+    _SYSTEM_DIR = _PROJECT_ROOT / "System"
+# TCC制限対策: ~/Desktop はLaunchAgentから読めない場合がある
+# → _AGENT_DIR/data/ にキャッシュコピーを配置しフォールバック
+_LOCAL_DATA_DIR = _AGENT_DIR / "data"
+
+def _tcc_safe_path(primary: Path, fallback_name: str) -> Path:
+    """TCC制限を回避するパス解決。primaryが読めなければ _LOCAL_DATA_DIR 内のフォールバックを返す"""
+    try:
+        if primary.exists():
+            primary.read_bytes()[:1]  # 実際にアクセスできるかテスト
+            return primary
+    except PermissionError:
+        pass
+    fb = _LOCAL_DATA_DIR / fallback_name
+    return fb if fb.exists() else primary
+
+PEOPLE_PROFILES_JSON = _tcc_safe_path(
+    _PROJECT_ROOT / "Master" / "people" / "profiles.json", "people-profiles.json")
+PEOPLE_IDENTITIES_JSON = _tcc_safe_path(
+    _PROJECT_ROOT / "Master" / "people" / "identities.json", "people-identities.json")
 
 # Addness KPIデータソース（【アドネス全体】数値管理シート）
 ADDNESS_KPI_SHEET_ID = "1FOh_XGZWaEisfFEngiN848kSm2E6HotAZiMDTmO7BNA"
@@ -47,9 +71,12 @@ _ADDNESS_KEYWORDS = frozenset({
     "数値", "実績", "着金", "LTV", "広告費", "目標", "コスト", "リスト",
     "件数", "CVR", "転換", "成約", "歩留", "ファネル", "媒体",
 })
-SELF_IDENTITY_MD = _PROJECT_ROOT / "Master" / "self_clone" / "kohara" / "IDENTITY.md"
-SELF_PROFILE_MD = _PROJECT_ROOT / "Master" / "self_clone" / "kohara" / "SELF_PROFILE.md"
-FEEDBACK_FILE = _PROJECT_ROOT / "Master" / "learning" / "reply_feedback.json"
+SELF_IDENTITY_MD = _tcc_safe_path(
+    _PROJECT_ROOT / "Master" / "self_clone" / "kohara" / "IDENTITY.md", "IDENTITY.md")
+SELF_PROFILE_MD = _tcc_safe_path(
+    _PROJECT_ROOT / "Master" / "self_clone" / "kohara" / "SELF_PROFILE.md", "SELF_PROFILE.md")
+FEEDBACK_FILE = _tcc_safe_path(
+    _PROJECT_ROOT / "Master" / "learning" / "reply_feedback.json", "reply_feedback.json")
 _SKILLS_DIR = _SYSTEM_DIR / "line_bot" / "skills"
 
 
