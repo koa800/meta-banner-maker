@@ -1,0 +1,222 @@
+{
+  "version": "1.0.0",
+  "description": "Coordinator が使えるツール定義。追加・削除はこのファイルだけで完結する",
+  "tools": [
+    {
+      "name": "calendar",
+      "description": "Googleカレンダーの予定を確認する。今日・明日・来週などの予定一覧を取得できる",
+      "confirmation_level": "L1",
+      "handler_type": "subprocess",
+      "handler_path": "calendar_manager.py",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["list"],
+            "description": "list: 予定一覧を取得"
+          },
+          "days": {
+            "type": "integer",
+            "description": "何日先まで取得するか（デフォルト: 7）"
+          }
+        },
+        "required": ["action"]
+      }
+    },
+    {
+      "name": "mail",
+      "description": "メールの状況を確認する。返信待ちの件数と概要を取得できる",
+      "confirmation_level": "L1",
+      "handler_type": "subprocess",
+      "handler_path": "mail_manager.py",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["check"],
+            "description": "check: 返信待ちメールを確認"
+          },
+          "account": {
+            "type": "string",
+            "enum": ["personal", "kohara"],
+            "description": "メールアカウント（デフォルト: personal）"
+          }
+        },
+        "required": ["action"]
+      }
+    },
+    {
+      "name": "kpi",
+      "description": "スキルプラス事業の広告数値・KPIデータを取得して分析する。ROAS、CPA、売上などの指標が含まれる",
+      "confirmation_level": "L1",
+      "handler_type": "function",
+      "handler_function": "kpi",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "KPIに関する質問（例: 今月のROASは？Meta広告のCPAは？）"
+          }
+        },
+        "required": ["question"]
+      }
+    },
+    {
+      "name": "people",
+      "description": "チームメンバーや関係者のプロファイルを検索する。スキル・役割・連絡先・得意分野がわかる。タスクを誰に頼むべきかの推薦もできる",
+      "confirmation_level": "L1",
+      "handler_type": "subprocess",
+      "handler_path": "who_to_ask.py",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "検索クエリ（例: Meta広告に詳しい人、デザインができる人）"
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "addness",
+      "description": "Addnessのゴール・タスク一覧を確認する。現在進行中のゴールや期限が近いタスクを取得できる",
+      "confirmation_level": "L1",
+      "handler_type": "file_read",
+      "handler_path": "actionable-tasks.md",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["list"],
+            "description": "list: 現在のゴール・タスク一覧を取得"
+          }
+        },
+        "required": ["action"]
+      }
+    },
+    {
+      "name": "sheets",
+      "description": "Googleスプレッドシートのデータを読み取る",
+      "confirmation_level": "L1",
+      "handler_type": "subprocess",
+      "handler_path": "sheets_manager.py",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["read"],
+            "description": "read: データを読み取る"
+          },
+          "sheet_id": {
+            "type": "string",
+            "description": "スプレッドシートID"
+          },
+          "range": {
+            "type": "string",
+            "description": "読み取り範囲（例: シート名!A1:D10）"
+          }
+        },
+        "required": ["action", "sheet_id"]
+      }
+    },
+    {
+      "name": "draft_reply",
+      "description": "甲原海人の口調で返信案やメッセージを生成する。IDENTITY.mdのスタイルに従い、相手のプロファイルに応じた口調で書く",
+      "confirmation_level": "L2",
+      "handler_type": "function",
+      "handler_function": "draft_reply",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "recipient": {
+            "type": "string",
+            "description": "送り先の人物名"
+          },
+          "context": {
+            "type": "string",
+            "description": "メッセージの文脈・内容"
+          },
+          "channel": {
+            "type": "string",
+            "enum": ["line", "chatwork", "email"],
+            "description": "送信チャネル（デフォルト: line）"
+          }
+        },
+        "required": ["recipient", "context"]
+      }
+    },
+    {
+      "name": "analyze",
+      "description": "状況を分析して提案する。複数のデータソース（KPI、メール、カレンダー、Addness）を統合して優先度や次のアクションを判定する",
+      "confirmation_level": "L2",
+      "handler_type": "function",
+      "handler_function": "analyze",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "分析してほしい内容"
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "send_message",
+      "description": "LINE・Chatwork・メールでメッセージを送信する。必ず送信内容を甲原さんに確認してから実行すること",
+      "confirmation_level": "L3",
+      "handler_type": "action",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "recipient": {
+            "type": "string",
+            "description": "送り先の人物名"
+          },
+          "channel": {
+            "type": "string",
+            "enum": ["line", "chatwork", "email"],
+            "description": "送信チャネル"
+          },
+          "content": {
+            "type": "string",
+            "description": "送信内容"
+          }
+        },
+        "required": ["recipient", "channel", "content"]
+      }
+    },
+    {
+      "name": "ask_human",
+      "description": "チームメンバーに質問・確認・依頼をする。甲原さんの承認後にメッセージを送信する",
+      "confirmation_level": "L3",
+      "handler_type": "action",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "recipient": {
+            "type": "string",
+            "description": "質問・依頼先の人物名"
+          },
+          "message": {
+            "type": "string",
+            "description": "質問・依頼の内容"
+          },
+          "urgency": {
+            "type": "string",
+            "enum": ["high", "normal", "low"],
+            "description": "緊急度"
+          }
+        },
+        "required": ["recipient", "message"]
+      }
+    }
+  ]
+}

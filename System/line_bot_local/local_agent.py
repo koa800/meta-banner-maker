@@ -17,6 +17,14 @@ import requests
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# Coordinator（ゴール実行エンジン）
+_COORDINATOR_AVAILABLE = False
+try:
+    from coordinator import execute_goal as _coordinator_execute_goal
+    _COORDINATOR_AVAILABLE = True
+except ImportError:
+    pass
+
 # ---- プロファイルパス ----
 _AGENT_DIR = Path(__file__).parent
 # Desktop: System/line_bot_local/ → parent.parent = cursor/
@@ -585,6 +593,97 @@ def is_addness_related(profile: dict, message: str, group_name: str = "") -> boo
             return True
 
     return False
+
+
+# ---- Coordinator 用の function handlers ----
+def _build_coordinator_handlers() -> dict:
+    """Coordinator に渡す function handler マッピングを構築する。
+    tool_registry.json で handler_type: "function" のツールに対応。"""
+
+    def _handle_kpi(arguments: dict) -> str:
+        """KPIデータを取得して返す"""
+        try:
+            data = fetch_addness_kpi()
+            return data if data else "KPIデータが利用できません"
+        except Exception as e:
+            return f"KPIデータ取得エラー: {e}"
+
+    def _handle_draft_reply(arguments: dict) -> str:
+        """甲原さんの口調で返信案を生成する"""
+        recipient = arguments.get("recipient", "")
+        context = arguments.get("context", "")
+        channel = arguments.get("channel", "line")
+
+        identity_style = _load_self_identity()
+        sender_context = build_sender_context(recipient)
+        feedback_section = build_feedback_prompt_section(recipient)
+
+        system_prompt = f"""あなたは甲原海人です。以下の口調ガイドに従って返信を書いてください。
+
+{identity_style}
+
+{sender_context}
+{feedback_section}
+
+【ルール】
+- {channel}で送るメッセージとして自然な長さ・口調で
+- マークダウン記法は使わない
+- 甲原海人として書く。「甲原さんは…」のような第三者視点にしない"""
+
+        try:
+            client = anthropic.Anthropic()
+            response = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=400,
+                system=system_prompt,
+                messages=[{"role": "user", "content": f"以下の内容で{recipient}に{channel}メッセージを書いてください:\n{context}"}]
+            )
+            return response.content[0].text.strip()
+        except Exception as e:
+            return f"返信案生成エラー: {e}"
+
+    def _handle_analyze(arguments: dict) -> str:
+        """状況分析（context_query の簡易版）"""
+        query = arguments.get("query", "現在の状況を分析してください")
+
+        parts = []
+
+        # actionable-tasks.md
+        actionable_path = _PROJECT_ROOT / "Master" / "addness" / "actionable-tasks.md"
+        if actionable_path.exists():
+            try:
+                parts.append("【Addnessゴール】\n" + actionable_path.read_text(encoding="utf-8")[:2000])
+            except Exception:
+                pass
+
+        # KPI サマリ
+        try:
+            kpi_data = fetch_addness_kpi()
+            if kpi_data:
+                parts.append("【KPIサマリ】\n" + "\n".join(kpi_data.split("\n")[:15]))
+        except Exception:
+            pass
+
+        context_text = "\n\n".join(parts) if parts else "（データなし）"
+        today_str = datetime.now().strftime("%Y/%m/%d (%A)")
+
+        try:
+            client = anthropic.Anthropic()
+            response = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=600,
+                system="あなたは甲原海人のAI秘書です。簡潔で実用的な分析を返してください。マークダウン記法は使わず、【】や★で強調。",
+                messages=[{"role": "user", "content": f"今日: {today_str}\n\n{context_text}\n\n質問: {query}"}]
+            )
+            return response.content[0].text.strip()
+        except Exception as e:
+            return f"分析エラー: {e}"
+
+    return {
+        "kpi": _handle_kpi,
+        "draft_reply": _handle_draft_reply,
+        "analyze": _handle_analyze,
+    }
 
 
 def _strip_markdown_for_line(text: str) -> str:
@@ -1640,6 +1739,24 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
                 messages=[{"role": "user", "content": context_prompt}]
             )
             return True, _strip_markdown_for_line(response.content[0].text.strip())
+
+        # ===== ゴール実行（Coordinator） =====
+        if function_name == "execute_goal":
+            if not _COORDINATOR_AVAILABLE:
+                return False, "Coordinator モジュールが利用できません"
+            goal_text = arguments.get("goal", instruction)
+            print(f"   🎯 Coordinator 起動: {goal_text[:60]}...")
+            handlers = _build_coordinator_handlers()
+            success, result = _coordinator_execute_goal(
+                goal=goal_text,
+                sender_name=sender_name,
+                system_dir=_SYSTEM_DIR,
+                project_root=_PROJECT_ROOT,
+                function_handlers=handlers,
+            )
+            if success:
+                return True, result
+            return False, result
 
         # ===== その他タスクの汎用処理 =====
         sender_context = build_sender_context(sender_name)
