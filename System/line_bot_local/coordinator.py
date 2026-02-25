@@ -39,7 +39,63 @@ def _build_claude_tools(registry: dict) -> list:
     return tools
 
 
-def _build_system_prompt(sender_name: str = "") -> str:
+def _load_agent_summary(project_root: Path) -> str:
+    """profiles.json から active なエージェント（人間+AI）のサマリーを生成する。
+    Coordinator がゴールに対して最適なエージェントを選ぶための情報。"""
+    profiles_path = project_root / "Master" / "people" / "profiles.json"
+    if not profiles_path.exists():
+        return ""
+
+    try:
+        profiles = json.loads(profiles_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+
+    lines = ["【利用可能なエージェント一覧】"]
+
+    # AI エージェント
+    ai_agents = []
+    for name, prof in profiles.items():
+        latest = prof.get("latest", {})
+        if latest.get("type") != "ai":
+            continue
+        if latest.get("status", "active") == "inactive":
+            continue
+        caps = ", ".join(latest.get("capabilities", []))
+        best = ", ".join(latest.get("best_for", []))
+        speed = latest.get("constraints", {}).get("speed", "")
+        cost = latest.get("constraints", {}).get("cost", "")
+        ai_agents.append(f"  [{name}] AI / 得意: {best} / 速度: {speed} / コスト: {cost}")
+
+    if ai_agents:
+        lines.append("AI:")
+        lines.extend(ai_agents)
+
+    # 人間エージェント（主要メンバーのみ。capabilities がある人だけ）
+    human_agents = []
+    for name, prof in profiles.items():
+        latest = prof.get("latest", {})
+        if latest.get("type") != "human":
+            continue
+        caps = latest.get("capabilities")
+        if not caps:
+            # capabilities がない人間は、inferred_domains + category で代替
+            domains = latest.get("inferred_domains", [])
+            cat = latest.get("category", "")
+            if domains and cat in ("直下メンバー", "横（並列）", "上司"):
+                human_agents.append(f"  [{name}] {cat} / スキル: {', '.join(domains[:3])}")
+        else:
+            best = ", ".join(latest.get("best_for", caps[:3]))
+            human_agents.append(f"  [{name}] {latest.get('category', '')} / 得意: {best}")
+
+    if human_agents:
+        lines.append("人間（主要メンバー）:")
+        lines.extend(human_agents[:10])  # 上位10名に制限
+
+    return "\n".join(lines)
+
+
+def _build_system_prompt(sender_name: str = "", project_root: Path = None) -> str:
     """Coordinator 用のシステムプロンプトを構築する"""
     prompt = """あなたは甲原海人のAI秘書システムの Coordinator です。
 
@@ -93,6 +149,13 @@ def _build_system_prompt(sender_name: str = "") -> str:
     if sender_name:
         prompt += f"\n\n【送信者】\n{sender_name}（秘書グループからの指示）"
 
+    # profiles.json からエージェント一覧を注入
+    if project_root:
+        agent_summary = _load_agent_summary(project_root)
+        if agent_summary:
+            prompt += f"\n\n{agent_summary}"
+            prompt += "\n\n上記エージェントの得意分野を踏まえてツールを選択すること。人間に依頼する場合は ask_human ツールを使う。"
+
     return prompt
 
 
@@ -136,7 +199,7 @@ def execute_goal(
         registry = json.load(f)
 
     claude_tools = _build_claude_tools(registry)
-    system_prompt = _build_system_prompt(sender_name)
+    system_prompt = _build_system_prompt(sender_name, project_root)
 
     # ハンドラランナー
     runner = HandlerRunner(
