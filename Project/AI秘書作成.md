@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月25日（ゴール実行エンジン Phase 1-3 実装完了: api_call/workflow_endpoint/mcp ハンドラ追加、search/generate_image/generate_video ツール追加、ワークフロー移譲管理実装） |
+| 最終更新 | 2026年2月25日（LINE→ゴール実行エンジン（Coordinator）接続完了: E2Eフロー LINE→Render→task_queue→local_agent→coordinator→LINE通知。MacBook LaunchAgent ~/Library/LineBot/ デプロイ対応） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -45,6 +45,7 @@
                                │  - handler_runner.py           │
                                │  - tool_registry.json (13ツール)│
                                │  - ゴール→分解→委任→統合→報告  │
+                               │  - LINE→execute_goal接続完了   │
                                │  → 詳細: Project/ゴール実行     │
                                │    エンジン設計.md              │
                                └──────────────────────────────┘
@@ -105,6 +106,7 @@
 ### Phase 2: 自然言語タスク実行（完了）
 5. **Googleカレンダー連携**: 「明日14時に会議入れて」で予定追加
 6. **PC委譲タスク**: 複雑タスクをCursorに転送（日報入力はLINE非対応・Cursor直接実行）
+7. **ゴール実行エンジン接続（execute_goal）**: LINE→Render(app.py)→task_queue→local_agent.py→coordinator.py→LINE通知のE2Eフロー完了。調査・リサーチ系タスクをCoordinatorにルーティング。MacBookは`~/Library/LineBot/`にデプロイ（TCC制限対策）
 
 ### Phase 3: Mac Mini 常駐エージェント（完了）
 7. **launchd常駐**: Mac Mini `~/agents/line_bot_local/local_agent.py` をlaunchdで自動起動
@@ -195,6 +197,7 @@
 | 「Addness更新」「タスク更新」 | addness_to_context.pyを即時実行→actionable-tasks.md再生成→件数サマリー返答（addness_sync） |
 | 「メール確認」「メールチェック」 | mail_manager.py runを即時実行→返信待ち件数と概要を返答（mail_check） |
 | 「再起動」「リスタート」「エージェント再起動」 | Mac Mini上のローカルエージェントを遠隔再起動（restart_agent） |
+| 「〇〇を調べて」「〇〇をリサーチして」等 | ゴール実行エンジン（Coordinator）経由でWeb検索・ツール呼び出し→統合結果をLINE返答（execute_goal） |
 
 ---
 
@@ -214,6 +217,15 @@
 | `~/agents/line_bot_local/logs/agent.log` | 実行ログ（LaunchAgent StandardOutPath） |
 | `~/Library/LaunchAgents/com.linebot.localagent.plist` | launchd設定（git_pull_syncが毎回パス整合性チェック＆自動修正） |
 | `System/line_bot_local/local_agent.py` | Desktop版（開発・編集用。git push→Mac Miniに自動同期） |
+
+### ローカル側（MacBook LaunchAgent）
+| パス | 説明 |
+|------|------|
+| `~/Library/LineBot/local_agent.py` | **実行ファイル**（MacBook launchdから起動。TCC制限のため~/Desktop/から直接読めないため~/Library/LineBot/に配置） |
+| `~/Library/LineBot/coordinator.py` | Coordinator（ゴール実行エンジン司令塔） |
+| `~/Library/LineBot/handler_runner.py` | ハンドラランナー |
+| `~/Library/LineBot/tool_registry.json` | ツール定義（13ツール） |
+| `~/Library/LineBot/data/` | データキャッシュ（Master/等のコピー。post-commitフックで自動同期） |
 | `System/line_bot_local/sync_data.sh` | データファイル同期（Master/配下等。local_agent.pyはgit管理に統一済み） |
 | `System/kpi_processor.py` | KPI投入エンジン（import/process/check_today/refresh） |
 | `System/csv_sheet_sync.py` | CSV同期・日別月別構築・KPIキャッシュ生成（LaunchAgent連携） |
@@ -350,6 +362,10 @@ bash System/line_bot_local/sync_data.sh
 - `SELF_PROFILE.md`
 - `people-identities.json`
 
+**post-commitフック自動同期（Desktop → ~/Library/LineBot/data/）:**
+- Master/配下のデータキャッシュをコミット時に自動コピー
+- MacBook LaunchAgentがTCC制限で~/Desktop/を読めないための対策
+
 ---
 
 ## デプロイ情報
@@ -395,7 +411,8 @@ bash System/line_bot_local/sync_data.sh
 | Render プラン | Starter（$7/月）。Zero Downtime デプロイ・スリープなし |
 | Macスリープ対策 | launchd plist に `caffeinate -s` を追加。エージェント起動中はMacスリープ防止 |
 | データ永続化 | Render永続ディスク `/data` を使用。`DATA_DIR=/data` 環境変数で設定済み。デプロイ後も状態が消えない。`line_bot_group_log.json`（グループメッセージ日次ログ）も同ディレクトリに保存・日付ローテーション |
-| macOS TCC | launchd から Desktop は直接アクセス不可。`~/agents/` をデプロイ先に使用（Library版は廃止済み） |
+| macOS TCC（Mac Mini） | launchd から Desktop は直接アクセス不可。`~/agents/` をデプロイ先に使用（Library版は廃止済み） |
+| macOS TCC（MacBook） | LaunchAgentから `~/Desktop/` は直接アクセス不可。`~/Library/LineBot/` にデプロイ。`data/` にMaster/等のキャッシュコピーを配置し、post-commitフックで自動同期 |
 | LINE webhook重複 | 同一 message_id のタスクは1件のみキューイング済み |
 | Mac Mini TCC制限 | LaunchAgent から `~/Desktop/` は直接アクセス不可。`~/agents/` を作業ディレクトリに使用。plistが古いパス（`~/Library/LineBot/`等）を参照していた場合、`git_pull_sync.sh`の`ensure_plist_path`が自動修正。plist再生成時は`config.json`から`ANTHROPIC_API_KEY`/`AGENT_TOKEN`/`LINE_BOT_SERVER_URL`も自動設定 |
 | MacBook↔Mac Mini同期 | GitHub push/pull方式。post-commitで自動push→Mac Mini Orchestratorが5分ごとにgit pull→ローカルrsyncでデプロイ。外出先からも同期可能。旧rsync over SSH方式（sync_from_macbook.sh）は2026-02-22に無効化済み |
@@ -523,6 +540,7 @@ Mac Mini Orchestrator
 MacBook (どこからでも)
   │
   ├── コミット → post-commit フック → git push origin main  [自動]
+  │                                 → ~/Library/LineBot/data/ にキャッシュ同期 [自動]
   │
   ▼ GitHub (koa800/meta-banner-maker)
   │
@@ -640,6 +658,8 @@ MacBook (どこからでも)
 - [x] handle_approve_mention先頭4文字衝突修正（LINEメッセージIDが連番のため複数pendingで先頭4文字が衝突→生成中のメッセージを誤選択する問題を修正。reply_suggestion準備完了のものを優先選択するよう変更）
 - [x] フィードバック保存エラーハンドリング（`save_feedback_example`にtry/except追加。Mac Miniでパス不正時もタスクが「タスクエラー」にならない）
 - [x] plist環境変数自動設定（`ensure_plist_path`がplist再生成時に`config.json`から`ANTHROPIC_API_KEY`/`AGENT_TOKEN`/`LINE_BOT_SERVER_URL`を読み取って埋め込み）
+- [x] LINE→ゴール実行エンジン（Coordinator）接続完了（app.pyのexecute_goalツール定義改善→調査・リサーチ系を確実にルーティング。Render環境変数にANTHROPIC_API_KEY追加。E2Eフロー: LINE→Render→task_queue→local_agent→coordinator→LINE通知）
+- [x] MacBook LaunchAgent ~/Library/LineBot/ デプロイ対応（TCC制限により~/Desktopをlaunchdから直接読めないため、data/にキャッシュコピーを配置。post-commitフックでデータキャッシュを自動同期）
 
 ---
 
