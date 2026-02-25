@@ -519,6 +519,53 @@ def lookup_sender_profile(sender_name: str, chatwork_account_id: str = ""):
     return None
 
 
+# ===== 情報開示ルール =====
+# 甲原さんとして返信するとき、相手のカテゴリに応じて出していい情報を制御する
+# 秘書グループでの甲原さん本人とのやり取りには制限なし
+_DISCLOSURE_RULES = {
+    "owner": {
+        # 甲原さん本人 → 全情報OK
+        "categories": {"本人"},
+        "allowed": {"schedule", "private", "kpi", "project", "profiles", "general"},
+        "note": "",
+    },
+    "internal": {
+        # 内部メンバー → 事業情報OK、個人情報NG
+        "categories": {"上司", "直下メンバー", "横（並列）"},
+        "allowed": {"kpi", "project", "general"},
+        "note": (
+            "【情報開示制限: 内部メンバー】\n"
+            "- 甲原の予定・スケジュールは教えない（「本人に直接聞いてください」と返す）\n"
+            "- 甲原のプライベート・個人的な事情は教えない\n"
+            "- 他の人のプロファイル情報は教えない\n"
+            "- 事業数値（売上・ROAS等）・プロジェクト進捗はOK\n"
+        ),
+    },
+    "external": {
+        # 外部パートナー・未登録者 → 一般知識のみ
+        "categories": {"外部パートナー", ""},
+        "allowed": {"general"},
+        "note": (
+            "【情報開示制限: 外部メンバー】\n"
+            "- 甲原の予定・スケジュールは教えない\n"
+            "- 甲原のプライベート・個人的な事情は教えない\n"
+            "- 事業数値（売上・ROAS・広告費等）は一切教えない\n"
+            "- プロジェクト進捗・社内の動きは教えない\n"
+            "- 他の人のプロファイル情報は教えない\n"
+            "- 一般的なビジネス知識・公開情報のみ回答OK\n"
+        ),
+    },
+}
+
+
+def _get_disclosure_level(category: str) -> dict:
+    """送信者カテゴリから開示レベルを返す"""
+    for level in _DISCLOSURE_RULES.values():
+        if category in level["categories"]:
+            return level
+    return _DISCLOSURE_RULES["external"]  # 未登録者は外部扱い
+
+
 def build_sender_context(sender_name: str) -> str:
     """送信者プロファイルをシステムプロンプト用テキストに変換"""
     profile = lookup_sender_profile(sender_name)
@@ -1285,10 +1332,14 @@ def call_claude_api(instruction: str, task: dict):
             if platform == "chatwork":
                 platform_note = "- 返信先はChatwork（LINEではない）。Chatworkの文体・フォーマットに合わせる\n"
 
+            # 情報開示ルール（相手のカテゴリに応じて出していい情報を制御）
+            _disclosure = _get_disclosure_level(sender_cat)
+            _disclosure_note = _disclosure["note"]
+
             prompt = f"""あなたは甲原海人本人として返信を書きます。
 以下の全情報を統合し、甲原海人が実際に送るようなメッセージを生成してください。
 
-【言語スタイル定義】
+{_disclosure_note}【言語スタイル定義】
 {identity_style}
 {self_profile_section}{feedback_section}
 ---
