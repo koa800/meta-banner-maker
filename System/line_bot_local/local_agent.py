@@ -307,9 +307,15 @@ def save_config():
         json.dump(config, f, ensure_ascii=False, indent=2)
 
 
+def _get_agent_id() -> str:
+    """このマシンの識別名を返す（MacBook / Mac Mini を区別する）"""
+    import socket
+    return os.environ.get("AGENT_ID") or socket.gethostname()
+
+
 def get_headers():
     """APIリクエスト用ヘッダー（agent_token は config → AGENT_TOKEN → LOCAL_AGENT_TOKEN）"""
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json", "X-Agent-ID": _get_agent_id()}
     token = (config.get("agent_token")
              or os.environ.get("AGENT_TOKEN")
              or os.environ.get("LOCAL_AGENT_TOKEN")
@@ -341,15 +347,22 @@ def fetch_tasks():
     return []
 
 
-def start_task(task_id: str):
-    """タスク処理開始を報告"""
+def start_task(task_id: str) -> str:
+    """タスク処理開始を報告。戻り値: "ok" / "already_claimed" / "error" """
     try:
         url = f"{config['server_url']}/tasks/{task_id}/start"
         response = requests.post(url, headers=get_headers(), timeout=10)
-        return response.status_code == 200
+        if response.status_code == 200:
+            return "ok"
+        if response.status_code == 409:
+            # 別のマシンが先にこのタスクを取った
+            claimed_by = response.json().get("claimed_by", "?")
+            print(f"   ⏭️  別のマシン ({claimed_by}) が処理中 → スキップ")
+            return "already_claimed"
+        return "error"
     except Exception as e:
         print(f"⚠️  開始報告エラー: {e}")
-        return False
+        return "error"
 
 
 def complete_task(task_id: str, success: bool, message: str, error: str = None, extra: dict = None):
@@ -2120,8 +2133,13 @@ def run_agent():
                     print(f"   種類: {function_name}")
                     print(f"   指示: {instruction}")
                     
-                    # 処理開始を報告
-                    start_task(task_id)
+                    # 処理開始を報告（早い者勝ち: 別マシンが先なら取らない）
+                    claim_result = start_task(task_id)
+                    if claim_result == "already_claimed":
+                        continue
+                    if claim_result == "error":
+                        print(f"   ⚠️ 開始報告に失敗 → スキップ")
+                        continue
 
                     # 日報入力: Looker Studio・b-dash のブラウザ操作が必要なためCursor専用
                     if function_name == "input_daily_report":
