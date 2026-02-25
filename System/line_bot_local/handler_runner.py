@@ -99,6 +99,8 @@ class HandlerRunner:
                 return self._run_file_read(tool_def, arguments)
             elif handler_type == "action":
                 return self._run_action(tool_def, arguments)
+            elif handler_type == "claude_search":
+                return self._run_claude_search(arguments)
             elif handler_type == "api_call":
                 return self._run_api_call(tool_def, arguments)
             elif handler_type == "workflow_endpoint":
@@ -257,6 +259,50 @@ class HandlerRunner:
             )
 
         return f"アクション '{tool_name}' は確認が必要です。引数: {json.dumps(arguments, ensure_ascii=False)}"
+
+    # ------------------------------------------------------------------
+    # claude_search: Claude API の web_search ツールで検索
+    # ------------------------------------------------------------------
+    def _run_claude_search(self, arguments: dict) -> str:
+        """Claude API の web_search ツールを使ってWeb検索する"""
+        import anthropic
+
+        query = arguments.get("query", "")
+        if not query:
+            return "検索クエリが指定されていません"
+
+        # APIキー取得（環境変数 → config.json）
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            config_path = Path(__file__).parent / "config.json"
+            if config_path.exists():
+                try:
+                    cfg = json.loads(config_path.read_text(encoding="utf-8"))
+                    api_key = cfg.get("anthropic_api_key", "")
+                except Exception:
+                    pass
+        if not api_key:
+            return "ANTHROPIC_API_KEY が未設定です"
+
+        try:
+            client = anthropic.Anthropic(api_key=api_key)
+            response = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=1024,
+                tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
+                messages=[{"role": "user", "content": query}],
+            )
+        except anthropic.APIError as e:
+            return f"Claude Web検索でエラーが発生しました: {e}"
+        except Exception as e:
+            return f"Web検索中に予期しないエラーが発生しました: {e}"
+
+        # レスポンスからテキスト部分を抽出
+        results = []
+        for block in response.content:
+            if hasattr(block, "text"):
+                results.append(block.text)
+        return "\n".join(results) if results else "検索結果が取得できませんでした"
 
     # ------------------------------------------------------------------
     # api_call: profiles.json の preferred_agent に基づく外部API呼び出し
