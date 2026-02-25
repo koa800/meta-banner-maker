@@ -6813,6 +6813,7 @@
         "method": "api_call",
         "config": {
           "provider": "perplexity",
+          "model": "llama-3.1-sonar-large-128k-online",
           "api_key_env": "PERPLEXITY_API_KEY",
           "endpoint": "https://api.perplexity.ai/chat/completions"
         }

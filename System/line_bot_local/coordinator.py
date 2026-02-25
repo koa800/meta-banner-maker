@@ -12,6 +12,7 @@ handler_runner.py を通じてハンドラに委任する。
 """
 
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -223,6 +224,8 @@ def execute_goal(
         (success: bool, result_text: str)
     """
     # --- 初期化 ---
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return False, "ANTHROPIC_API_KEY が未設定です。環境変数を確認してください"
     try:
         client = anthropic.Anthropic()
     except Exception as e:
