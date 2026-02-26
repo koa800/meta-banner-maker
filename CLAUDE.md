@@ -119,11 +119,10 @@ Python スクリプトからのパス解決は `Path(__file__).resolve().parent`
 
 ```
 System/hinata/
-├── hinata_agent.py      # メインループ（ブラウザ維持 + タスクキュー監視 + サイクル実行）
-├── claude_executor.py   # Claude Code CLI 呼び出し + プロンプト構築
+├── hinata_agent.py      # メインループ（タスクキュー監視 + サイクル実行）
+├── claude_executor.py   # Claude Code CLI 呼び出し + プロンプト構築（MCP ツール指示）
 ├── slack_comm.py        # Slack送信専用（Webhook送信のみ。受信はOrchestratorが担当）
-├── addness_browser.py   # Playwright永続コンテキスト + CDP + Addnessログイン
-├── addness_cli.py       # CLI ユーティリティ（手動ログイン等）
+├── addness_browser.py   # （レガシー）Playwright版。現在はClaude in Chrome MCPを使用
 ├── self_restart.sh      # 自己再起動（git pull → launchctl reload）
 ├── config.json          # 設定（ゴールURL・サイクル間隔・稼働時間）
 ├── state.json           # 実行状態（サイクル数・最終アクション・paused）
@@ -160,10 +159,10 @@ Orchestrator の `slack_dispatch` が書き込み、日向が読む。同一マ�
 | エラー | 原因 | 修正方法 |
 |--------|------|----------|
 | `Slack送信失敗` | Webhook URL 未設定 or 期限切れ | `slack_comm.py` の `_SLACK_WEBHOOK_URL` を確認 |
-| `CDP接続失敗` | ブラウザが再起動された | `hinata_agent.py` が自動復旧するので待つ |
-| `context.close() でブラウザ終了` | `browser.close()` と間違えた | CDP接続は `browser.close()` で切断。`context.close()` は絶対に使わない |
+| `MCP ツール接続失敗` | Chrome or Claude in Chrome 拡張が停止 | Chrome を再起動（`com.hinata.chrome` LaunchAgent） |
+| `tabs_context_mcp エラー` | タブグループが存在しない | `createIfEmpty: true` で新規作成 |
 | `Claude Code タイムアウト` | プロンプトが重すぎる or ネットワーク遅延 | `claude_executor.py` の `timeout_seconds` を調整 |
-| `Addnessログイン失敗` | セッション切れ | ブラウザプロファイルにセッションが残っていれば自動復旧。なければ手動ログイン必要 |
+| `Addnessログイン失敗` | セッション切れ | Chrome で再ログインが必要（Google認証情報は `credentials/hinata_google.json`） |
 | `コマンド分類ミス` | `_classify_slack_command` のキーワードが不適切 | `scheduler.py` の `_classify_slack_command` を修正（Orchestrator側） |
 | `タスクが届かない` | Orchestratorの `slack_dispatch` が停止 | config.yaml で `slack_dispatch.enabled: true` を確認 |
 
@@ -177,7 +176,8 @@ Orchestrator の `slack_dispatch` が書き込み、日向が読む。同一マ�
 - `~/agents/System/hinata` は `~/agents/_repo/System/hinata` へのシンボリックリンク
 - git push すれば Mac Mini の `git_pull_sync`（5分ごと）で自動反映
 - 即時反映が必要なら `self_restart.sh` を使う
-- ブラウザは `launch_persistent_context` で永続プロファイルを使用（`System/data/hinata_chrome_profile/`）
+- ブラウザは Chrome + Claude in Chrome MCP で操作（Playwright は不要）
+- Chrome 自動起動: `com.hinata.chrome` LaunchAgent（`--no-sandbox --disable-gpu --remote-debugging-port=9223`）
 
 ### launchd 設定
 

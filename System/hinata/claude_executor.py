@@ -1,7 +1,8 @@
 """
 Claude Code 実行モジュール（日向エージェント用）
 
-常駐ブラウザにCDP接続して、Addness操作もアクション実行も全てClaude Codeが行う。
+Claude in Chrome MCP ツールでブラウザを直接操作。
+Addness操作もアクション実行も全てClaude Codeが行う。
 """
 
 import json
@@ -17,11 +18,7 @@ logger = logging.getLogger("hinata.claude")
 _agents_dir = Path.home() / "agents" / "_repo"
 WORK_DIR = _agents_dir if _agents_dir.exists() else Path.home() / "Cursor"
 CLAUDE_CMD = "/opt/homebrew/bin/claude"
-_venv_python = Path.home() / "hinata-venv" / "bin" / "python"
-PYTHON_CMD = str(_venv_python) if _venv_python.exists() else "python3"
-ADDNESS_CLI = str(Path(__file__).parent / "addness_cli.py")
 SELF_RESTART_SH = str(Path(__file__).parent / "self_restart.sh")
-CDP_URL = "http://localhost:9222"
 
 # 学習ファイルのパス
 _learning_dir = WORK_DIR / "Master" / "learning"
@@ -74,7 +71,7 @@ def execute_full_cycle(
 ) -> Optional[str]:
     """
     Claude Codeにフルサイクルを実行させる。
-    常駐ブラウザにCDP接続して、Addness操作→実行→蓄積まで全部やる。
+    Claude in Chrome MCP でブラウザ操作→Addness操作→蓄積まで全部やる。
     """
     now = datetime.now().strftime("%Y/%m/%d %H:%M")
     last_action = (state or {}).get("last_action", "なし（初回）")
@@ -104,53 +101,53 @@ def execute_full_cycle(
     prompt = f"""あなたは「日向」というAIエージェントです。
 現在: {now} / サイクル: #{cycle_num} / 前回のアクション: {last_action}
 {instruction_section}{learning_section}
-## 常駐ブラウザへの接続
+## ブラウザ操作（Claude in Chrome MCP）
 
-Addnessにログイン済みのブラウザが常時起動しています。
-以下のPythonコードで接続してください（**閉じないこと**）:
+Chrome が常時起動しており、Claude in Chrome 拡張経由で MCP ツールを使ってブラウザを操作できます。
+**Playwright は使わないこと。全て MCP ツールで操作する。**
 
-```python
-from playwright.sync_api import sync_playwright
-pw = sync_playwright().start()
-browser = pw.chromium.connect_over_cdp("{CDP_URL}")
-page = browser.contexts[0].pages[0]
+### 基本操作
 
-# 操作が終わったら接続だけ切断（ブラウザは閉じない）
-browser.close()  # これは接続を切るだけ。ブラウザは残る
-pw.stop()
-```
+1. **タブ確認**: `mcp__claude-in-chrome__tabs_context_mcp` で現在のタブを確認
+2. **新規タブ作成**: `mcp__claude-in-chrome__tabs_create_mcp` で新しいタブを作成
+3. **ページ遷移**: `mcp__claude-in-chrome__navigate` で URL に遷移
+4. **ページ読み取り**: `mcp__claude-in-chrome__read_page` でページの要素を取得
+5. **クリック/入力**: `mcp__claude-in-chrome__find` で要素を探してクリック・入力
+6. **フォーム入力**: `mcp__claude-in-chrome__form_input` でフォームに値を入力
+7. **JavaScript実行**: `mcp__claude-in-chrome__javascript_tool` でJS実行
+8. **テキスト取得**: `mcp__claude-in-chrome__get_page_text` でページ全文取得
 
-- Python: {PYTHON_CMD}
-- **browser.close() は「接続切断」であり「ブラウザを閉じる」ではない**。必ず呼ぶこと
-- context.close() は **絶対に呼ばないこと**（ブラウザが閉じてしまう）
+### 操作の流れ
+
+1. まず `tabs_context_mcp` でタブ情報を取得（tabId が必要）
+2. 必要に応じて `tabs_create_mcp` で新しいタブを作る
+3. `navigate` で目的のURLに遷移
+4. `read_page` でページ内容を確認
+5. `find` や `form_input` で要素を操作
 
 ## Addness UI操作リファレンス
 
 詳細は `Master/addness/ui_operations.md` を参照。主要な操作:
 
-- **ゴールページ遷移**: `page.goto("{goal_url}")`
-- **アクション新規追加**: `page.locator('input[placeholder*="タイトルを"]').scroll_into_view_if_needed()` → fill → Enter
-- **アクション完了**: 行の✓アイコンをクリック（x=1135, 各行y=289+66*行番号）
-- **アクション「...」メニュー**: x=1209 をクリック → 完了/アサイン/期日設定/削除等
-- **ゴール「...」メニュー**: x=1204, y=125 → KPI設定/期日設定/完了等
-- **期日設定**: メニュー→「期日を設定」→ YYYY/MM/DD入力 → 保存
-- **KPI設定**: ゴール「...」→「KPIを設定する」→ タイトル・単位・目標数値 → 完了
-- **AIと相談**: `page.locator('text=AIと相談').click()` → 右パネル
-- **コメント投稿**: `textarea[placeholder*="@でメンション"]` に入力 → Meta+Enter
+- **ゴールページ遷移**: `navigate` で `{goal_url}` に遷移
+- **アクション新規追加**: `find` でタイトル入力欄を探して入力 → Enter
+- **アクション完了**: `find` で✓アイコンをクリック
+- **AIと相談**: `find` で「AIと相談」ボタンをクリック → 右パネル
+- **コメント投稿**: `find` でコメント入力欄を探して入力 → `form_input` で送信
 
 ## 実行手順
 
 ### ステップ1: Addnessでゴールとアクションを確認
-1. ブラウザに接続する
-2. ゴールページに遷移: `page.goto("{goal_url}")`
-3. ゴールの内容、現在のアクション、コメントを確認する
-4. 「AIと相談」を開いてアクションについて相談する
+1. `tabs_context_mcp` でタブを確認
+2. ゴールページに遷移: `navigate` で `{goal_url}` へ
+3. `read_page` でゴールの内容、現在のアクション、コメントを確認
+4. 「AIと相談」を開いてアクションについて相談
 5. 甲原さんからのコメント指示があればそれも踏まえる
 
 ### ステップ2: アクションを実行
 - AIと相談で決まったアクションを実行する
-- Addness上の操作（アクション完了・期限設定・新規作成等）もこのブラウザで行う
-- Web調査やファイル作成が必要なら自分で判断して実行
+- Addness上の操作（アクション完了・期限設定・新規作成等）もMCPツールで行う
+- Web調査が必要なら `tabs_create_mcp` で別タブを開いて調査
 - 甲原さんへの確認が必要なら、Addnessでコメント（@甲原海人をつける）
 
 ### ステップ3: ナレッジを蓄積
@@ -242,7 +239,7 @@ def execute_self_repair(
 ## 重要
 - **修正は最小限に**。壊れていない部分は触らない
 - 修正に自信がなければ、修正せずに「修復不可: 理由」と報告してください
-- ブラウザ関連（CDP/Playwright）のエラーは再起動で直ることが多い
+- ブラウザ関連（Claude in Chrome MCP）のエラーはChrome再起動で直ることが多い
 
 修復結果を報告してください。
 """

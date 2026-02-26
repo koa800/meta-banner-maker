@@ -2,14 +2,14 @@
 """
 日向（ひなた） — 自律型AIエージェント
 
-ブラウザを常時開いた状態で稼働。
-Addnessの操作もアクション実行も全てClaude Codeが行う。
-hinata_agent.py はブラウザの維持とタスクキュー監視だけ。
+Chrome + Claude in Chrome MCP でブラウザ操作。
+Claude Code が MCP ツール経由でブラウザを直接制御する。
+hinata_agent.py はタスクキュー監視とサイクル管理のみ。
 
 フロー:
   秘書(Orchestrator)がSlack監視 → hinata_tasks.json に書き込み
     → 日向がタスクを拾う → Claude Code起動
-    → 常駐ブラウザ(CDP)でAddness操作（AI相談・完了・期限設定等）
+    → Claude in Chrome MCP でAddness操作（AI相談・完了・期限設定等）
     → アクション実行
     → ナレッジ蓄積
     → Slack報告
@@ -23,9 +23,6 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from playwright.sync_api import sync_playwright
-
-from addness_browser import launch_browser, setup_page, login, find_my_goal
 from claude_executor import execute_full_cycle, execute_self_repair
 from slack_comm import send_message, send_report
 
@@ -290,106 +287,80 @@ def main():
     state = load_state()
 
     logger.info("=" * 60)
-    logger.info("日向エージェント起動")
+    logger.info("日向エージェント起動（Claude in Chrome MCP モード）")
     logger.info(f"サイクル間隔: {config.get('cycle_interval_minutes', 30)}分")
     logger.info(f"タスク確認間隔: {TASK_POLL_INTERVAL}秒")
     logger.info("=" * 60)
 
-    send_message("🌅 日向エージェント起動しました！")
+    send_message("🌅 日向エージェント起動しました！（Claude in Chrome MCP モード）")
 
     # 起動時に paused をリセット
     state["paused"] = False
     save_state(state)
 
-    with sync_playwright() as playwright:
-        headless = config.get("headless", False)
-        context = launch_browser(playwright, headless=headless)
-        page = setup_page(context)
+    next_cycle_time = time.time() + get_interval(config)
+    consecutive_errors = 0
+    last_error_summary = ""
 
-        start_url = config.get("addness_start_url", "https://www.addness.com")
-        if not login(page, start_url):
-            logger.error("Addnessログインに失敗。終了します。")
-            send_message("❌ Addnessログインに失敗しました。")
-            context.close()
-            sys.exit(1)
+    try:
+        while True:
+            # ---- タスクキュー確認 ----
+            try:
+                # state.json を再読み込み（秘書が paused を変更する可能性）
+                state = load_state()
 
-        logger.info("Addnessログイン完了。ブラウザ常駐開始。（CDP: localhost:9222）")
+                task = check_task_queue()
+                if task:
+                    command_type = task.get("command_type", "instruction")
 
-        # ゴールページに遷移して待機
-        my_goal_url = config.get("my_goal_url")
-        if my_goal_url:
-            find_my_goal(page, my_goal_url=my_goal_url)
+                    if command_type == "stop":
+                        handle_task(task, config, state)
+                    elif command_type == "resume":
+                        handle_task(task, config, state)
+                        next_cycle_time = time.time() + get_interval(config)
+                    else:
+                        state = handle_task(task, config, state)
+                        next_cycle_time = time.time() + get_interval(config)
+                        consecutive_errors = 0
+            except Exception as e:
+                logger.error(f"タスク処理エラー: {e}")
 
-        next_cycle_time = time.time() + get_interval(config)
-        consecutive_errors = 0
-        last_error_summary = ""
-
-        try:
-            while True:
-                # ---- タスクキュー確認 ----
+            # ---- 定期サイクル ----
+            state = load_state()  # paused 状態を再確認
+            if not state.get("paused") and time.time() >= next_cycle_time:
                 try:
-                    # state.json を再読み込み（秘書が paused を変更する可能性）
-                    state = load_state()
-
-                    task = check_task_queue()
-                    if task:
-                        command_type = task.get("command_type", "instruction")
-
-                        if command_type == "stop":
-                            handle_task(task, config, state)
-                        elif command_type == "resume":
-                            handle_task(task, config, state)
-                            next_cycle_time = time.time() + get_interval(config)
-                        else:
-                            state = handle_task(task, config, state)
-                            next_cycle_time = time.time() + get_interval(config)
-                            consecutive_errors = 0
+                    state = run_cycle(config, state)
+                    consecutive_errors = 0
                 except Exception as e:
-                    logger.error(f"タスク処理エラー: {e}")
+                    logger.exception(f"サイクル実行エラー: {e}")
+                    send_message(f"⚠️ サイクル実行エラー: {str(e)[:200]}")
+                    consecutive_errors += 1
+                    last_error_summary = str(e)[:500]
 
-                # ---- 定期サイクル ----
-                state = load_state()  # paused 状態を再確認
-                if not state.get("paused") and time.time() >= next_cycle_time:
-                    try:
-                        state = run_cycle(config, state)
-                        consecutive_errors = 0
-                    except Exception as e:
-                        logger.exception(f"サイクル実行エラー: {e}")
-                        send_message(f"⚠️ サイクル実行エラー: {str(e)[:200]}")
-                        consecutive_errors += 1
-                        last_error_summary = str(e)[:500]
+                # ---- 連続エラー時の自己修復 ----
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                    logger.warning(
+                        f"連続エラー {consecutive_errors}回。自己修復を試みます。"
+                    )
+                    repaired = attempt_self_repair(last_error_summary, state)
+                    consecutive_errors = 0
+                    if repaired:
+                        logger.info("自己修復完了。次のサイクルで再試行します。")
 
-                    # ---- 連続エラー時の自己修復 ----
-                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
-                        logger.warning(
-                            f"連続エラー {consecutive_errors}回。自己修復を試みます。"
-                        )
-                        repaired = attempt_self_repair(last_error_summary, state)
-                        consecutive_errors = 0
-                        if repaired:
-                            logger.info("自己修復完了。次のサイクルで再試行します。")
+                interval = get_interval(config)
+                next_cycle_time = time.time() + interval
+                next_str = datetime.fromtimestamp(next_cycle_time).strftime("%H:%M")
+                logger.info(f"次のサイクル: {next_str}（{interval // 60}分後）")
 
-                    interval = get_interval(config)
-                    next_cycle_time = time.time() + interval
-                    next_str = datetime.fromtimestamp(next_cycle_time).strftime("%H:%M")
-                    logger.info(f"次のサイクル: {next_str}（{interval // 60}分後）")
+            # ---- 古いタスクのクリーンアップ（たまに） ----
+            cleanup_old_tasks()
 
-                # ---- 古いタスクのクリーンアップ（たまに） ----
-                cleanup_old_tasks()
+            time.sleep(TASK_POLL_INTERVAL)
 
-                time.sleep(TASK_POLL_INTERVAL)
-
-        except KeyboardInterrupt:
-            logger.info("日向エージェント停止（手動停止）")
-            send_message("👋 日向エージェント停止しました。")
-        finally:
-            context.close()
+    except KeyboardInterrupt:
+        logger.info("日向エージェント停止（手動停止）")
+        send_message("👋 日向エージェント停止しました。")
 
 
 if __name__ == "__main__":
-    if "--login" in sys.argv:
-        PYTHON_CMD = str(Path.home() / "hinata-venv" / "bin" / "python")
-        ADDNESS_CLI = str(SCRIPT_DIR / "addness_cli.py")
-        subprocess.run([PYTHON_CMD, ADDNESS_CLI, "login"])
-    else:
-        main()
+    main()
