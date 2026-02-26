@@ -96,8 +96,10 @@ SHEET_CONFIGS = {
     },
 }
 
-# 状態ファイル
-STATE_FILE = Path(__file__).parent / "qa_monitor_state.json"
+# 状態ファイル（コードと分離 — rsync --delete でも消えない場所に配置）
+_STATE_DIR = Path.home() / "agents" / "data"
+_STATE_DIR.mkdir(parents=True, exist_ok=True)
+STATE_FILE = _STATE_DIR / "qa_monitor_state.json"
 
 
 def load_state() -> dict:

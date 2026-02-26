@@ -567,7 +567,7 @@ def os_sync_session() -> ToolResult:
     sent = send_line_notify(os_report)
     if sent:
         # OS sync state を保存（local_agent が応答を検知するため）
-        os_sync_state_path = os.path.expanduser("~/agents/System/data/os_sync_state.json")
+        os_sync_state_path = os.path.expanduser("~/agents/data/os_sync_state.json")
         os.makedirs(os.path.dirname(os_sync_state_path), exist_ok=True)
         sync_state = {
             "status": "pending",

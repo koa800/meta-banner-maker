@@ -81,7 +81,10 @@ EXECUTION_RULES_FILE = _tcc_safe_path(
     _PROJECT_ROOT / "Master" / "learning" / "execution_rules.json", "execution_rules.json")
 BRAIN_OS_MD = _tcc_safe_path(
     _PROJECT_ROOT / "Master" / "self_clone" / "kohara" / "BRAIN_OS.md", "BRAIN_OS.md")
-OS_SYNC_STATE_FILE = Path(os.path.expanduser("~/agents/System/data/os_sync_state.json"))
+# 状態ファイルはコードと分離: ~/agents/data/ に集約（rsync --delete で消えない）
+_RUNTIME_DATA_DIR = Path.home() / "agents" / "data"
+_RUNTIME_DATA_DIR.mkdir(parents=True, exist_ok=True)
+OS_SYNC_STATE_FILE = _RUNTIME_DATA_DIR / "os_sync_state.json"
 _SKILLS_DIR = _SYSTEM_DIR / "line_bot" / "skills"
 
 # Claude Code CLI（AI秘書の自律モード）
@@ -851,8 +854,8 @@ try:
 except ImportError:
     QA_MONITOR_AVAILABLE = False
 
-# 設定
-CONFIG_FILE = Path(__file__).parent / "config.json"
+# 設定（状態ファイルはコードと分離: ~/agents/data/ に集約）
+CONFIG_FILE = _RUNTIME_DATA_DIR / "config.json"
 DEFAULT_CONFIG = {
     "server_url": "https://line-ai-secretary.onrender.com",
     "poll_interval": 30,  # 秒
@@ -2013,7 +2016,7 @@ def call_claude_api(instruction: str, task: dict):
             conversation_history_section = ""
             if sender_name:
                 try:
-                    _cs_path = Path(__file__).parent / "contact_state.json"
+                    _cs_path = _RUNTIME_DATA_DIR / "contact_state.json"
                     if _cs_path.exists():
                         _cs = json.loads(_cs_path.read_text(encoding="utf-8"))
                         _person = _cs.get(sender_name)
@@ -2181,7 +2184,7 @@ def call_claude_api(instruction: str, task: dict):
             )
             # 接触記録を更新（フォローアップ追跡用 + 会話記憶）
             if sender_name:
-                _contact_state_path = Path(__file__).parent / "contact_state.json"
+                _contact_state_path = _RUNTIME_DATA_DIR / "contact_state.json"
                 try:
                     contact_state = {}
                     if _contact_state_path.exists():
@@ -2359,7 +2362,7 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
 
         # ===== Q&A状況確認タスク =====
         if function_name == "qa_status":
-            qa_state_path = _AGENT_DIR / "qa_monitor_state.json"
+            qa_state_path = _RUNTIME_DATA_DIR / "qa_monitor_state.json"
             if not qa_state_path.exists():
                 return False, "qa_monitor_state.jsonが見つかりません\n（qa_monitorがまだ実行されていないか無効です）"
             try:

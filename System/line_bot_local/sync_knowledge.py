@@ -25,10 +25,13 @@ DOCS_TO_SYNC = [
 
 SKILLS_DIR = Path(__file__).parent.parent / "line_bot" / "skills"
 LOCAL_SKILLS_DIR = Path(__file__).parent.parent.parent / "Skills"
-STATE_FILE = Path(__file__).parent / "sync_state.json"
+# 状態ファイル（コードと分離 — rsync --delete でも消えない場所に配置）
+_STATE_DIR = Path.home() / "agents" / "data"
+_STATE_DIR.mkdir(parents=True, exist_ok=True)
+STATE_FILE = _STATE_DIR / "sync_state.json"
 
-# config.json読み込み
-CONFIG_FILE = Path(__file__).parent / "config.json"
+# config.json読み込み（状態ファイルと同じ場所に集約）
+CONFIG_FILE = _STATE_DIR / "config.json"
 config = {}
 if CONFIG_FILE.exists():
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
