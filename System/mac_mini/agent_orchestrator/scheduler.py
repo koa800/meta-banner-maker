@@ -20,6 +20,48 @@ logger = get_logger("scheduler")
 
 _repair_agent_ref = None
 
+# ---- execution_rules.json 読み込み（簡潔フォーマット・キャッシュ付き） ----
+_execution_rules_compact_cache: str | None = None
+
+
+def _build_execution_rules_compact() -> str:
+    """システムプロンプト注入用の簡潔な行動ルール文字列を生成（キャッシュ付き）。"""
+    global _execution_rules_compact_cache
+    if _execution_rules_compact_cache is not None:
+        return _execution_rules_compact_cache
+
+    import json as _json
+
+    # Mac Mini 上のパスを複数フォールバック
+    candidates = [
+        Path.home() / "agents" / "Master" / "learning" / "execution_rules.json",
+        Path.home() / "agents" / "_repo" / "Master" / "learning" / "execution_rules.json",
+        Path(__file__).resolve().parent.parent.parent.parent / "Master" / "learning" / "execution_rules.json",
+    ]
+    rules = []
+    for p in candidates:
+        try:
+            if p.exists():
+                rules = _json.loads(p.read_text(encoding="utf-8"))
+                break
+        except Exception:
+            continue
+
+    if not rules:
+        _execution_rules_compact_cache = ""
+        return ""
+
+    lines = []
+    for r in rules:
+        situation = r.get("situation", "")
+        action = r.get("action", r.get("rule", ""))
+        if situation:
+            lines.append(f"- 【{situation}】→ {action}")
+        else:
+            lines.append(f"- {action}")
+    _execution_rules_compact_cache = "\n### 甲原さんの行動ルール\n" + "\n".join(lines) + "\n"
+    return _execution_rules_compact_cache
+
 
 def set_repair_agent(agent):
     """Set the RepairAgent reference for the scheduler to use."""
@@ -902,11 +944,12 @@ class TaskScheduler:
             return
 
         try:
+            _content_exec_rules = _build_execution_rules_compact()
             client = _anthropic.Anthropic()
             response = client.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=500,
-                system="あなたはスキルプラス（AI副業教育コース）のコンテンツディレクターです。",
+                system="あなたはスキルプラス（AI副業教育コース）のコンテンツディレクターです。" + _content_exec_rules,
                 messages=[{"role": "user", "content": f"""以下の最新AIニュースを踏まえて、スキルプラスのカリキュラム・教材の更新提案をしてください。
 
 【最新AIニュース（直近）】
@@ -1734,6 +1777,7 @@ JSON以外の文字は出力しないでください。"""}],
         except Exception:
             pass
 
+        exec_rules = _build_execution_rules_compact()
         system_prompt = (
             "あなたは甲原海人のAI秘書です。Slackの#ai-teamチャンネルで甲原さんに話しかけられました。\n"
             "秘書として簡潔に回答してください。\n\n"
@@ -1747,6 +1791,7 @@ JSON以外の文字は出力しないでください。"""}],
             "- マークダウンの太字（**）は使わない\n"
             "- 「かしこまりました」「承知いたしました」は使わない。「了解です！」「分かりました！」を使う\n"
         )
+        system_prompt += exec_rules
 
         try:
             client = anthropic.Anthropic()
@@ -2056,11 +2101,12 @@ JSON以外の文字は出力しないでください。"""}],
 
         # Claude API で返答生成
         try:
+            _hinata_exec_rules = _build_execution_rules_compact()
             client = anthropic.Anthropic()
             response = client.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=800,
-                system=self._HINATA_REPLY_SYSTEM,
+                system=self._HINATA_REPLY_SYSTEM + _hinata_exec_rules,
                 messages=merged,
             )
             reply_text = response.content[0].text

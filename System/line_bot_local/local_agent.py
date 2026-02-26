@@ -759,6 +759,33 @@ def build_execution_rules_section() -> str:
     )
 
 
+_execution_rules_compact_cache: str | None = None
+
+
+def build_execution_rules_compact() -> str:
+    """システムプロンプト注入用の簡潔な行動ルール文字列を生成（キャッシュ付き）。
+
+    situation → action の1行形式で、判断・応答生成系のClaude API呼び出しに注入する。
+    """
+    global _execution_rules_compact_cache
+    if _execution_rules_compact_cache is not None:
+        return _execution_rules_compact_cache
+    rules = load_execution_rules()
+    if not rules:
+        _execution_rules_compact_cache = ""
+        return ""
+    lines = []
+    for r in rules:
+        situation = r.get("situation", "")
+        action = r.get("action", r.get("rule", ""))
+        if situation:
+            lines.append(f"- 【{situation}】→ {action}")
+        else:
+            lines.append(f"- {action}")
+    _execution_rules_compact_cache = "\n### 甲原さんの行動ルール\n" + "\n".join(lines) + "\n"
+    return _execution_rules_compact_cache
+
+
 def build_feedback_prompt_section(sender_name: str = "", sender_category: str = "") -> str:
     """プロンプトに注入するフィードバックセクションを生成"""
     examples = load_feedback_examples()
@@ -1361,6 +1388,7 @@ def _build_coordinator_handlers() -> dict:
         sender_context = build_sender_context(recipient)
         feedback_section = build_feedback_prompt_section(recipient)
 
+        exec_rules = build_execution_rules_compact()
         system_prompt = f"""あなたは甲原海人です。以下の口調ガイドに従って返信を書いてください。
 
 {identity_style}
@@ -1371,7 +1399,8 @@ def _build_coordinator_handlers() -> dict:
 【ルール】
 - {channel}で送るメッセージとして自然な長さ・口調で
 - マークダウン記法は使わない
-- 甲原海人として書く。「甲原さんは…」のような第三者視点にしない"""
+- 甲原海人として書く。「甲原さんは…」のような第三者視点にしない
+{exec_rules}"""
 
         try:
             client = anthropic.Anthropic()
@@ -1410,12 +1439,13 @@ def _build_coordinator_handlers() -> dict:
         context_text = "\n\n".join(parts) if parts else "（データなし）"
         today_str = datetime.now().strftime("%Y/%m/%d (%A)")
 
+        exec_rules = build_execution_rules_compact()
         try:
             client = anthropic.Anthropic()
             response = client.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=600,
-                system="あなたは甲原海人のAI秘書です。簡潔で実用的な分析を返してください。マークダウン記法は使わず、【】や★で強調。",
+                system="あなたは甲原海人のAI秘書です。簡潔で実用的な分析を返してください。マークダウン記法は使わず、【】や★で強調。" + exec_rules,
                 messages=[{"role": "user", "content": f"今日: {today_str}\n\n{context_text}\n\n質問: {query}"}]
             )
             return response.content[0].text.strip()
@@ -2088,12 +2118,13 @@ def call_claude_api(instruction: str, task: dict):
                 if _CLAUDE_CODE_ENABLED:
                     print(f"   ⚠️ Claude Code フォールバック → API直接呼び出し")
 
+                _exec_rules_compact = build_execution_rules_compact()
                 prompt = f"""あなたは甲原海人本人として返信を書きます。
 以下の全情報を統合し、甲原海人が実際に送るようなメッセージを生成してください。
 
 {_disclosure_note}【言語スタイル定義】
 {identity_style}
-{self_profile_section}{feedback_section}
+{self_profile_section}{feedback_section}{_exec_rules_compact}
 ---
 
 【送信者: {sender_name}】{category_line}
@@ -2247,10 +2278,11 @@ def call_claude_api(instruction: str, task: dict):
 
 実践的なコピーを出力してください。"""
 
+            _lp_exec_rules = build_execution_rules_compact()
             response = client.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=700,
-                system="あなたはROAS・CVR改善実績のあるLPコピーライターです。具体的で変換率の高いコピーを作成してください。マークダウン記法（**太字**等）は使わず、プレーンテキストで出力すること。",
+                system="あなたはROAS・CVR改善実績のあるLPコピーライターです。具体的で変換率の高いコピーを作成してください。マークダウン記法（**太字**等）は使わず、プレーンテキストで出力すること。" + _lp_exec_rules,
                 messages=[{"role": "user", "content": lp_prompt}]
             )
             draft = _strip_markdown_for_line(response.content[0].text.strip())
@@ -2293,10 +2325,11 @@ def call_claude_api(instruction: str, task: dict):
 
 TikTok/Instagram向けの引きの強い台本を作成してください。"""
 
+            _vid_exec_rules = build_execution_rules_compact()
             response = client.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=700,
-                system="あなたは短尺動画広告の台本クリエイターです。視聴者が思わず止まるフックと行動喚起を作成してください。マークダウン記法（**太字**等）は使わず、プレーンテキストで出力すること。",
+                system="あなたは短尺動画広告の台本クリエイターです。視聴者が思わず止まるフックと行動喚起を作成してください。マークダウン記法（**太字**等）は使わず、プレーンテキストで出力すること。" + _vid_exec_rules,
                 messages=[{"role": "user", "content": script_prompt}]
             )
             script = _strip_markdown_for_line(response.content[0].text.strip())
@@ -2328,10 +2361,11 @@ TikTok/Instagram向けの引きの強い台本を作成してください。"""
 多様な訴求軸（実績数字・感情・ベネフィット・緊急性など）でバリエーションを出してください。
 LINEで読める形式で、合計600文字以内に収めてください。"""
 
+            _banner_exec_rules = build_execution_rules_compact()
             response = client.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=800,
-                system="あなたはROAS・CTR改善実績のある広告クリエイティブディレクターです。具体的で成果の出るバナー案を作成してください。マークダウン記法（**太字**等）は使わず、プレーンテキストで出力すること。",
+                system="あなたはROAS・CTR改善実績のある広告クリエイティブディレクターです。具体的で成果の出るバナー案を作成してください。マークダウン記法（**太字**等）は使わず、プレーンテキストで出力すること。" + _banner_exec_rules,
                 messages=[{"role": "user", "content": banner_prompt}]
             )
             concepts = _strip_markdown_for_line(response.content[0].text.strip())
@@ -2550,10 +2584,11 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
 - 媒体別の比較がある場合はそれにも言及する
 - マークダウン記法（**太字**等）は使わない。強調は【】や★で
 """
+            _kpi_exec_rules = build_execution_rules_compact()
             response = client.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=800,
-                system="あなたは広告運用の専門家としてKPIデータを分析し、簡潔で実用的な回答をするAI秘書です。与えられたデータは社内システムから取得した実データです。必ずデータを引用して回答してください。Addnessゴールの目標KPIが提示されている場合は必ず目標対比で評価すること。マークダウン記法（**太字**等）は使わず、プレーンテキストで回答すること。",
+                system="あなたは広告運用の専門家としてKPIデータを分析し、簡潔で実用的な回答をするAI秘書です。与えられたデータは社内システムから取得した実データです。必ずデータを引用して回答してください。Addnessゴールの目標KPIが提示されている場合は必ず目標対比で評価すること。マークダウン記法（**太字**等）は使わず、プレーンテキストで回答すること。" + _kpi_exec_rules,
                 messages=[{"role": "user", "content": kpi_prompt}]
             )
             return True, _strip_markdown_for_line(response.content[0].text.strip())
@@ -2630,6 +2665,7 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
 - 「かしこまりました」「承知いたしました」は使わない
 - ！は自然に使う。、、は溜めや気遣い
 """
+            _ctx_exec_rules = build_execution_rules_compact()
             response = client.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=600,
@@ -2638,6 +2674,7 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
                     "人間の秘書が口頭で報告するようなトーンで。機械的な箇条書きだけにならず、"
                     "冒頭に一言添えてから本題に入る。例: 「今の状況まとめますね！」「確認してきました！」"
                     "マークダウン記法は使わず、プレーンテキストで回答すること。"
+                    + _ctx_exec_rules
                 ),
                 messages=[{"role": "user", "content": context_prompt}]
             )
@@ -2684,6 +2721,7 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
 
         # フォールバック: 従来のAPI直接呼び出し
         sender_context = build_sender_context(sender_name)
+        _fb_exec_rules = build_execution_rules_compact()
         system_prompt = """あなたはLINE経由で指示を受けるAI秘書です。
 ユーザーからの指示に対して、簡潔で実用的な回答を返してください。
 回答はLINEで送信されるため、以下に注意してください：
@@ -2695,6 +2733,7 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
 """
         if sender_context:
             system_prompt += sender_context
+        system_prompt += _fb_exec_rules
 
         user_message = f"""指示: {instruction}
 
