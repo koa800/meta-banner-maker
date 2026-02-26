@@ -90,6 +90,7 @@ class TaskScheduler:
             "render_health_check": self._run_render_health_check,
             "weekly_content_suggestions": self._run_weekly_content_suggestions,
             "daily_report_input": self._run_daily_report_input,
+            "daily_report_verify": self._run_daily_report_verify,
             "looker_csv_download": self._run_looker_csv_download,
             "kpi_daily_import": self._run_kpi_daily_import,
             "sheets_sync": self._run_sheets_sync,
@@ -302,6 +303,16 @@ class TaskScheduler:
 
         return True, claude_cmd, secretary_config, project_root, ""
 
+    @staticmethod
+    def _col_idx_to_letter(idx):
+        """0-based index → Excel列文字 (A=0, B=1, ..., Z=25, AA=26, ...)"""
+        result = ""
+        idx += 1
+        while idx > 0:
+            idx, remainder = divmod(idx - 1, 26)
+            result = chr(65 + remainder) + result
+        return result
+
     def _classify_claude_error(self, stderr: str, stdout: str = "") -> str:
         """Claude Code 実行エラーの原因を分類し、対処を含むメッセージを返す。"""
         combined = (stderr + " " + stdout).lower()
@@ -371,7 +382,7 @@ class TaskScheduler:
 
     async def _run_daily_report_input(self):
         """日報自動入力: 秘書がClaude Code経由でLooker Studioからデータ取得→日報シート書き込み→LINE報告。"""
-        from .notifier import send_line_notify
+        from .notifier import notify_ai_team
         from datetime import date, timedelta
 
         logger.info("日報自動入力: 開始")
@@ -380,7 +391,7 @@ class TaskScheduler:
         ok, claude_cmd, secretary_config, project_root, preflight_err = self._ensure_claude_chrome_ready()
         if not ok:
             logger.error(f"日報自動入力: プリフライト失敗 - {preflight_err}")
-            send_line_notify(f"⚠️ 日報自動入力失敗\n{preflight_err}")
+            notify_ai_team(f"⚠️ 日報自動入力失敗\n{preflight_err}")
             return
 
         target_date = date.today() - timedelta(days=1)
@@ -496,16 +507,126 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
         )
 
         if success:
+            self.memory.set_state("last_success_daily_report_input", datetime.now().isoformat())
             if "===RESULT_START===" in output and "===RESULT_END===" in output:
                 report = output.split("===RESULT_START===")[1].split("===RESULT_END===")[0].strip()
                 logger.info(f"日報自動入力: 完了 - {report[:300]}")
-                # Claude Code が成功しても中身がエラー報告の場合はLINE通知
                 if "エラー" in report:
-                    send_line_notify(f"⚠️ 日報自動入力: {report[:300]}")
+                    notify_ai_team(f"⚠️ 日報自動入力: {report[:300]}")
             else:
                 logger.info(f"日報自動入力: 完了（マーカーなし）- {output[-300:]}")
         else:
-            send_line_notify(f"⚠️ 日報自動入力失敗（リトライ後）\n{error}")
+            notify_ai_team(f"⚠️ 日報自動入力失敗（リトライ後）\n{error}")
+
+    async def _run_daily_report_verify(self):
+        """09:20: 日報自動入力の完了検証。実データを確認して未入力なら LINE+Slack 通知。"""
+        import subprocess
+        import ast
+        import re
+        from datetime import date, timedelta
+        from .notifier import notify_ai_team
+
+        target_date = date.today() - timedelta(days=1)
+        target_md = f"{target_date.month}/{target_date.day}"
+        project_root = Path(self.config.get("paths", {}).get("repo_root", "~/agents")).expanduser()
+
+        logger.info(f"日報検証: {target_md} のデータ確認開始")
+
+        # タスク実行記録を確認
+        last_success = self.memory.get_state("last_success_daily_report_input")
+        task_ran_today = False
+        if last_success:
+            try:
+                last_dt = datetime.fromisoformat(last_success)
+                task_ran_today = last_dt.date() == date.today()
+            except (ValueError, TypeError):
+                pass
+
+        try:
+            # 1. ヘッダー行を読み取り → 対象列を特定
+            header_result = subprocess.run(
+                ["python3", "System/sheets_manager.py", "read",
+                 "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk", "日報", "A1:JZ1"],
+                capture_output=True, text=True, timeout=30,
+                cwd=str(project_root),
+            )
+            if header_result.returncode != 0:
+                logger.error(f"日報検証: ヘッダー読み取り失敗: {header_result.stderr[:200]}")
+                return
+
+            match = re.search(r'行1:\s*(\[.*\])', header_result.stdout)
+            if not match:
+                logger.error("日報検証: ヘッダー行のパースに失敗")
+                return
+
+            headers = ast.literal_eval(match.group(1))
+            target_col_idx = None
+            for i, h in enumerate(headers):
+                if str(h).strip() == target_md:
+                    target_col_idx = i
+                    break
+
+            if target_col_idx is None:
+                logger.warning(f"日報検証: {target_md} の列が見つかりません（ヘッダー未登録の可能性）")
+                return
+
+            col = self._col_idx_to_letter(target_col_idx)
+
+            # 2. データ行を読み取り（行5〜行15）
+            data_result = subprocess.run(
+                ["python3", "System/sheets_manager.py", "read",
+                 "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk", "日報",
+                 f"{col}5:{col}15"],
+                capture_output=True, text=True, timeout=30,
+                cwd=str(project_root),
+            )
+            if data_result.returncode != 0:
+                logger.error(f"日報検証: データ読み取り失敗: {data_result.stderr[:200]}")
+                return
+
+            # 各行のデータを抽出（行1=row5, 行3=row7, 行5=row9, 行9=row13, 行10=row14, 行11=row15）
+            data_lines = {}
+            for m in re.finditer(r'行(\d+):\s*(\[.*?\])', data_result.stdout):
+                row_num = int(m.group(1))
+                row_data = ast.literal_eval(m.group(2))
+                data_lines[row_num] = row_data
+
+            # 3. チェック対象セルの値を確認
+            check_items = {
+                "着金売上(行5)": 1,
+                "集客数(行7)": 3,
+                "個別予約数(行9)": 5,
+                "会員数(行13)": 9,
+                "解約数(行14)": 10,
+                "サブスク新規(行15)": 11,
+            }
+
+            missing = []
+            for label, row_key in check_items.items():
+                row = data_lines.get(row_key, [])
+                value = str(row[0]).strip() if row else ""
+                if not value:
+                    missing.append(label)
+
+            # 4. 結果に基づいて通知
+            if missing:
+                msg = (
+                    f"\n⚠️ 日報検証: {target_md} のデータ未入力\n"
+                    f"━━━━━━━━━━━━\n"
+                    f"未入力: {', '.join(missing)}\n"
+                )
+                if not task_ran_today:
+                    msg += "日報入力タスクが実行されていない可能性があります\n"
+                else:
+                    msg += "タスクは実行されましたが、書き込みに失敗した可能性があります\n"
+                msg += "━━━━━━━━━━━━"
+                notify_ai_team(msg)
+                logger.warning(f"日報検証: 未入力 - {missing}")
+            else:
+                logger.info(f"日報検証: {target_md} の全データ入力確認OK")
+
+        except Exception as e:
+            logger.error(f"日報検証: エラー - {e}")
 
     async def _run_daily_report(self):
         from .notifier import send_line_notify
@@ -1329,7 +1450,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
         """毎日11:30: Looker Studio CSVダウンロード（前々日分）。秘書がClaude Code + Chrome MCPで実行。"""
         from pathlib import Path
         from datetime import date, timedelta
-        from .notifier import send_line_notify
+        from .notifier import notify_ai_team
 
         logger.info("Looker CSV ダウンロード: 開始")
 
@@ -1337,7 +1458,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
         ok, claude_cmd, secretary_config, project_root, preflight_err = self._ensure_claude_chrome_ready()
         if not ok:
             logger.error(f"Looker CSV ダウンロード: プリフライト失敗 - {preflight_err}")
-            send_line_notify(f"⚠️ Looker CSVダウンロード失敗\n{preflight_err}")
+            notify_ai_team(f"⚠️ Looker CSVダウンロード失敗\n{preflight_err}")
             return
 
         target_date = date.today() - timedelta(days=2)
@@ -1420,15 +1541,16 @@ head -3 "{csv_dir}/{csv_filename}"
         )
 
         if success:
+            self.memory.set_state("last_success_looker_csv_download", datetime.now().isoformat())
             if "===RESULT_START===" in output and "===RESULT_END===" in output:
                 report = output.split("===RESULT_START===")[1].split("===RESULT_END===")[0].strip()
                 logger.info(f"Looker CSV ダウンロード: 完了 - {report[:300]}")
                 if "エラー" in report:
-                    send_line_notify(f"⚠️ Looker CSVダウンロード: {report[:300]}")
+                    notify_ai_team(f"⚠️ Looker CSVダウンロード: {report[:300]}")
             else:
                 logger.info(f"Looker CSV ダウンロード: 完了（マーカーなし）- {output[-300:]}")
         else:
-            send_line_notify(f"⚠️ Looker CSVダウンロード失敗（リトライ後）\n{error}")
+            notify_ai_team(f"⚠️ Looker CSVダウンロード失敗（リトライ後）\n{error}")
 
     async def _run_kpi_daily_import(self):
         """毎日12:00: 元データの完了チェック → 投入 or リマインド"""

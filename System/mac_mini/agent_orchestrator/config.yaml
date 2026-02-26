@@ -41,6 +41,9 @@ schedule:
   daily_report_input:
     cron: "40 8 * * *"           # 08:40  日報自動入力（秘書がClaude Codeで実行）
     enabled: true
+  daily_report_verify:
+    cron: "20 9 * * *"           # 09:20  日報入力の完了検証（シートの実データ確認）
+    enabled: true
 
   # === 日中 ===
   looker_csv_download:
