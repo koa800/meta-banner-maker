@@ -189,6 +189,8 @@ def send_to_slack(message: str, config: dict) -> bool:
     """
     webhook_url = config.get("slack_webhook_url", "").strip()
     if not webhook_url:
+        webhook_url = os.environ.get("SLACK_AI_TEAM_WEBHOOK_URL", "").strip()
+    if not webhook_url:
         print("Slack Webhook URL 未設定 → Slack通知スキップ")
         return False
     
