@@ -2375,6 +2375,102 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
             )
             return True, _strip_markdown_for_line(response.content[0].text.strip())
 
+        # ===== OSすり合わせセッション =====
+        if function_name == "os_sync":
+            print(f"   🧠 OSすり合わせセッション開始")
+            # 現在のOS情報を全て読み込む
+            os_sections = []
+
+            # 1. SELF_PROFILE.md（価値観・判断軸）
+            try:
+                if SELF_PROFILE_MD.exists():
+                    content = SELF_PROFILE_MD.read_text(encoding="utf-8")
+                    if content.strip() and "↓ ここに記入 ↓" not in content:
+                        os_sections.append(("価値観・判断軸", content))
+            except Exception as e:
+                print(f"   ⚠️ SELF_PROFILE.md読み込みエラー: {e}")
+
+            # 2. IDENTITY.md（言語スタイル）
+            try:
+                if SELF_IDENTITY_MD.exists():
+                    content = SELF_IDENTITY_MD.read_text(encoding="utf-8")
+                    if content.strip():
+                        os_sections.append(("言語スタイル", content))
+            except Exception as e:
+                print(f"   ⚠️ IDENTITY.md読み込みエラー: {e}")
+
+            # 3. execution_rules.json（行動ルール）
+            exec_rules = load_execution_rules()
+            if exec_rules:
+                rules_text = json.dumps(exec_rules, ensure_ascii=False, indent=2)
+                os_sections.append(("行動ルール", rules_text))
+
+            # 4. style_rules.json（返信スタイルルール）
+            style_rules_path = _tcc_safe_path(
+                _PROJECT_ROOT / "Master" / "learning" / "style_rules.json", "style_rules.json")
+            try:
+                if style_rules_path.exists():
+                    style_content = style_rules_path.read_text(encoding="utf-8")
+                    style_rules = json.loads(style_content)
+                    if style_rules:
+                        os_sections.append(("返信スタイルルール", style_content))
+            except Exception as e:
+                print(f"   ⚠️ style_rules.json読み込みエラー: {e}")
+
+            # Claude APIでOSサマリを生成
+            os_context = ""
+            for label, content in os_sections:
+                os_context += f"\n\n### {label}\n{content[:2000]}"
+
+            os_prompt = f"""あなたは甲原海人のAI秘書です。「OSすり合わせセッション」を始めます。
+
+以下は、あなたが現在インストールしている「甲原海人の脳のOS」です。
+これを整理して、甲原さんに「今の自分の理解」を報告してください。
+
+{os_context}
+
+## 出力形式（LINEで送信されます）
+
+以下の構成で、甲原さんに語りかける形で出力してください。
+甲原さんと話すときのスタイル（フランク、！多め、、、溜め）で書くこと。
+
+━━━━━━━━━━━━━━━━
+🧠 OSすり合わせ
+━━━━━━━━━━━━━━━━
+
+【今の僕の理解】
+（価値観・判断軸・優先事項を3-5行で要約）
+
+【意思決定のOS】
+（判断フローを簡潔に）
+
+【人との関わり方】
+（関係性ごとの接し方を簡潔に）
+
+【学習済みルール】{len(exec_rules)}件
+（特に重要なルールを2-3件ピックアップ）
+
+【ここが薄いかも、、？】
+（情報が足りない・古い・曖昧だと思う部分を2-3個、質問形式で）
+
+━━━━━━━━━━━━━━━━
+気になるところがあれば教えて！
+修正・追加したい部分を言ってもらえれば即反映するよ！
+
+## ルール
+- 500文字以内
+- マークダウン記法（**太字**等）は使わない。【】や★で強調
+- 甲原さんらしい口調で（ロボットみたいにならない）
+- 「ここが薄い」の質問は、答えてもらえたら学習に使える具体的な質問にする
+"""
+            response = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=800,
+                system="あなたは甲原海人のAI秘書で、甲原さんのクローンを目指しています。OSすり合わせセッションでは、自分の現在の理解を正直に報告し、足りない部分を特定してください。",
+                messages=[{"role": "user", "content": os_prompt}]
+            )
+            return True, _strip_markdown_for_line(response.content[0].text.strip())
+
         # ===== ゴール実行 → Claude Code 自律実行 =====
         if function_name == "execute_goal":
             goal_text = arguments.get("goal", instruction)
