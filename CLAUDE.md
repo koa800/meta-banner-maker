@@ -119,8 +119,9 @@ Python スクリプトからのパス解決は `Path(__file__).resolve().parent`
 
 ```
 System/hinata/
-├── hinata_agent.py      # メインループ（タスクキュー監視 + サイクル実行）
+├── hinata_agent.py      # メインループ（タスクキュー監視 + サイクル実行 + アクション記録）
 ├── claude_executor.py   # Claude Code CLI 呼び出し + プロンプト構築（MCP ツール指示）
+├── learning.py          # 学習エンジン（記録・フィードバック検出・記憶統合・コンテキスト構築）
 ├── slack_comm.py        # Slack送信専用（Webhook送信のみ。受信はOrchestratorが担当）
 ├── addness_browser.py   # （レガシー）Playwright版。現在はClaude in Chrome MCPを使用
 ├── self_restart.sh      # 自己再起動（git pull → launchctl reload）
@@ -128,7 +129,29 @@ System/hinata/
 ├── state.json           # 実行状態（サイクル数・最終アクション・paused）
 ├── hinata_tasks.json    # タスクキュー（Orchestratorが書き込み、日向が読む）
 └── logs/                # ログ出力先
+
+Master/learning/
+├── action_log.json      # アクション履歴（親プロセスが自動記録、最大50件）
+├── feedback_log.json    # フィードバック履歴（甲原の修正/承認を自動検出、最大50件）
+├── hinata_memory.md     # 日向の成長する記憶（フィードバックから学んだパターン）
+└── insights.md          # 業務の知見（Claude Codeが追記）
 ```
+
+### 学習ループ
+
+```
+甲原「Xをして」→ 日向が実行 → 結果を action_log に自動記録
+                                         ↓
+甲原「違う、Yだよ」→ フィードバック自動検出 → feedback_log に記録
+                                         ↓
+                        次回プロンプトに反映 → 日向が同じ失敗を繰り返さない
+                                         ↓
+                    週次で記憶を統合 → hinata_memory.md に蓄積 → 長期記憶化
+```
+
+- **アクション記録**: hinata_agent.py（親プロセス）が確実に書く。Claude Code に任せない
+- **フィードバック検出**: 指示のテキストから感情を自動判定（positive/negative）
+- **コンテキスト注入**: learning.py が直近アクション+フィードバック+記憶+知見をプロンプトに注入
 
 ### タスクキュー（hinata_tasks.json）
 
