@@ -174,16 +174,14 @@ def check_for_commands(after_ts: str) -> Optional[dict]:
 
 def _classify_command(text: str) -> str:
     """メッセージからコマンド種別を判定する。"""
-    action_keywords = ["進めて", "やって", "実行", "アクション", "次", "動いて", "頑張"]
-    status_keywords = ["状況", "どうなってる", "教えて", "報告", "今何"]
     stop_keywords = ["止まって", "ストップ", "止めて", "待って", "やめて"]
+    # statusは「状況だけ聞いている」明示的なケースのみ
+    status_keywords = ["状況は", "どうなってる", "今何してる", "ステータス"]
 
     lower = text.lower()
     if any(kw in lower for kw in stop_keywords):
         return "stop"
     if any(kw in lower for kw in status_keywords):
         return "status"
-    if any(kw in lower for kw in action_keywords):
-        return "run_action"
-    # 上記に当てはまらない場合は具体的な指示として扱う
+    # それ以外は全て「指示」として Claude Code サイクルを実行
     return "instruction"
