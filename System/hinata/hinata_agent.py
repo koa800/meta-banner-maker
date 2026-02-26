@@ -23,6 +23,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import subprocess as _subprocess
+
 from claude_executor import execute_full_cycle, execute_self_repair
 from learning import record_action, detect_and_record_feedback
 from slack_comm import send_message, send_report
@@ -87,6 +89,53 @@ def get_interval(config: dict) -> int:
         return config.get("cycle_interval_minutes", 30) * 60
     else:
         return config.get("night_interval_minutes", 120) * 60
+
+
+# ====================================================================
+# Chrome 死活監視
+# ====================================================================
+
+CHROME_PROFILE_DIR = Path.home() / "agents" / "System" / "data" / "hinata_chrome_profile"
+
+
+def is_chrome_running() -> bool:
+    """Chrome プロセスが起動しているか確認する。"""
+    try:
+        result = _subprocess.run(
+            ["pgrep", "-f", "Google Chrome"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def ensure_chrome_running() -> bool:
+    """Chrome が起動していなければ起動する。戻り値: 起動済みか。"""
+    if is_chrome_running():
+        return True
+    logger.warning("Chrome が起動していません。起動を試みます...")
+    try:
+        _subprocess.Popen(
+            ["open", "-a", "Google Chrome", "--args",
+             f"--user-data-dir={CHROME_PROFILE_DIR}",
+             "--remote-debugging-port=9222"],
+            stdout=_subprocess.DEVNULL,
+            stderr=_subprocess.DEVNULL,
+        )
+        # Chrome 起動待ち
+        time.sleep(5)
+        if is_chrome_running():
+            logger.info("Chrome 起動成功")
+            send_message("Chrome が落ちていたので再起動しました。")
+            return True
+        else:
+            logger.error("Chrome 起動失敗")
+            send_message("⚠️ Chrome の起動に失敗しました。手動確認が必要です。")
+            return False
+    except Exception as e:
+        logger.error(f"Chrome 起動エラー: {e}")
+        return False
 
 
 # ====================================================================
@@ -294,6 +343,11 @@ def handle_task(task: dict, config: dict, state: dict) -> dict:
 
     elif command_type == "instruction":
         claim_task(task_id)
+        # Chrome が起動していなければ起動
+        if not ensure_chrome_running():
+            complete_task(task_id, False, "Chrome が起動できませんでした")
+            send_message("⚠️ Chrome が起動できないため、タスクを実行できませんでした。")
+            return state
         send_message(f"了解です！「{text[:50]}」に取り組みます。")
         try:
             state = run_cycle(config, state, instruction=text)
@@ -322,9 +376,9 @@ def main():
 
     send_message("🌅 日向エージェント起動しました！（Claude in Chrome MCP モード）")
 
-    # 起動時に paused をリセット
-    state["paused"] = False
-    save_state(state)
+    # paused 状態を維持（停止指示後の再起動で勝手に動き出さない）
+    if state.get("paused"):
+        logger.info("paused=True のため、タスクキュー監視のみ（定期サイクルは停止中）")
 
     next_cycle_time = time.time() + get_interval(config)
     consecutive_errors = 0
@@ -356,6 +410,12 @@ def main():
             # ---- 定期サイクル ----
             state = load_state()  # paused 状態を再確認
             if not state.get("paused") and time.time() >= next_cycle_time:
+                # Chrome が起動しているか確認（落ちていたら再起動）
+                if not ensure_chrome_running():
+                    logger.error("Chrome が起動できないためサイクルをスキップ")
+                    next_cycle_time = time.time() + 300  # 5分後にリトライ
+                    time.sleep(TASK_POLL_INTERVAL)
+                    continue
                 try:
                     state = run_cycle(config, state)
                     consecutive_errors = 0

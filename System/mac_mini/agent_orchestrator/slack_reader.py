@@ -106,6 +106,9 @@ def fetch_channel_messages(
     for msg in reversed(data["messages"]):  # oldest first
         if msg.get("subtype") in ("channel_join", "channel_leave", "bot_add", "bot_message"):
             continue  # skip system/bot messages (bot_message = Webhook投稿)
+        # bot_id があるメッセージも除外（Webhook投稿でsubtypeが欠落するケース対策）
+        if msg.get("bot_id"):
+            continue
 
         user_id = msg.get("user", "")
         user_name = _resolve_user(user_id) if user_id else msg.get("username", "bot")

@@ -1702,8 +1702,16 @@ JSON以外の文字は出力しないでください。"""}],
         self.memory.set_state(state_key, latest_ts)
 
         # 甲原からのメッセージだけ抽出
-        # bot / Webhook / 秘書自身の投稿を除外
-        _SELF_PATTERNS = ("日向に伝えました", "了解です！日向", "日向を再開", "日向を一旦止め")
+        # bot / Webhook / 秘書・日向自身の投稿を全て除外
+        _SELF_PATTERNS = (
+            # 秘書の応答パターン
+            "日向に伝えました", "了解です！日向", "日向を再開", "日向を一旦止め",
+            # 日向の応答パターン（Webhook経由でbot_idが欠落するケース対策）
+            "🌅 日向エージェント", "了解です！「", "📊 *", "⚠️ サイクル",
+            "⚠️ *自己修復", "🔧 *自己修復", "✅ *自己修復", "❌ *自己修復",
+            "再開します！", "🙋 *甲原さんに確認", "👋 日向エージェント停止",
+        )
+        KOHARA_USER_ID = "U07T5V9J6AM"  # 甲原のSlack user_id
         human_msgs = []
         for m in new_msgs:
             uid = m.get("user_id", "")
@@ -1711,7 +1719,10 @@ JSON以外の文字は出力しないでください。"""}],
             # bot投稿を除外（user_idがBで始まる or 空）
             if uid.startswith("B") or not uid:
                 continue
-            # 秘書自身の投稿パターンを除外（Webhook経由でuser_idが付く場合の対策）
+            # 甲原以外のユーザーは無視（他メンバーの投稿に反応しない）
+            if uid != KOHARA_USER_ID:
+                continue
+            # 秘書・日向自身の投稿パターンを除外（Webhook経由でuser_idが付く場合の対策）
             if any(text_preview.startswith(p) for p in _SELF_PATTERNS):
                 continue
             human_msgs.append(m)

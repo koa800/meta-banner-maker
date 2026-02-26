@@ -6,6 +6,8 @@ Addness操作もアクション実行も全てClaude Codeが行う。
 """
 
 import logging
+import os
+import signal
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -116,28 +118,47 @@ Chrome が常時起動しており、Claude in Chrome 拡張経由で MCP ツー
 
     try:
         logger.info(f"Claude Code フルサイクル開始 (#{cycle_num})")
-        result = subprocess.run(
+        # start_new_session=True でプロセスグループを分離し、
+        # タイムアウト時に子プロセスごと確実に終了させる
+        proc = subprocess.Popen(
             [CLAUDE_CMD, "-p", prompt],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout_seconds,
             cwd=str(WORK_DIR),
+            start_new_session=True,
         )
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            # プロセスグループ全体を SIGTERM → 少し待って SIGKILL
+            pgid = os.getpgid(proc.pid)
+            logger.error(f"Claude Code タイムアウト（{timeout_seconds}秒）— pgid={pgid} を終了")
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except OSError:
+                    pass
+                proc.wait(timeout=5)
+            return None
 
-        if result.returncode == 0:
-            output = result.stdout.strip()
+        if proc.returncode == 0:
+            output = stdout.strip()
             logger.info(f"Claude Code完了（{len(output)}文字）")
             return output
         else:
             logger.error(
-                f"Claude Code エラー (code={result.returncode}): "
-                f"{result.stderr[:300]}"
+                f"Claude Code エラー (code={proc.returncode}): "
+                f"{stderr[:300]}"
             )
             return None
 
-    except subprocess.TimeoutExpired:
-        logger.error(f"Claude Code タイムアウト（{timeout_seconds}秒）")
-        return None
     except FileNotFoundError:
         logger.error("claude コマンドが見つかりません。")
         return None
@@ -193,25 +214,41 @@ def execute_self_repair(
 
     try:
         logger.info("自己修復サイクル開始")
-        result = subprocess.run(
+        proc = subprocess.Popen(
             [CLAUDE_CMD, "-p", prompt],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout_seconds,
             cwd=str(WORK_DIR),
+            start_new_session=True,
         )
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            pgid = os.getpgid(proc.pid)
+            logger.error(f"自己修復タイムアウト（{timeout_seconds}秒）— pgid={pgid} を終了")
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except OSError:
+                    pass
+                proc.wait(timeout=5)
+            return None
 
-        if result.returncode == 0:
-            output = result.stdout.strip()
+        if proc.returncode == 0:
+            output = stdout.strip()
             logger.info(f"自己修復完了（{len(output)}文字）")
             return output
         else:
-            logger.error(f"自己修復失敗 (code={result.returncode}): {result.stderr[:300]}")
+            logger.error(f"自己修復失敗 (code={proc.returncode}): {stderr[:300]}")
             return None
 
-    except subprocess.TimeoutExpired:
-        logger.error(f"自己修復タイムアウト（{timeout_seconds}秒）")
-        return None
     except Exception as e:
         logger.error(f"自己修復実行失敗: {e}")
         return None
