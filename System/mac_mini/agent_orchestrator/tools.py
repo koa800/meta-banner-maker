@@ -407,6 +407,104 @@ def update_people_profiles(person_name: str, group_insights: dict, comm_profile_
         return ToolResult(success=False, output="", error=f"Failed to write profiles.json: {e}")
 
 
+def os_sync_session() -> ToolResult:
+    """OSすり合わせセッション（秘書→甲原）をLINE通知で実行する。
+
+    BRAIN_OS.md / SELF_PROFILE.md / execution_rules.json 等を読み込み、
+    Claude APIで現在の理解をサマリー化してLINEに送信。
+    """
+    import json as _json
+    import anthropic as _anthropic
+    from .notifier import send_line_notify
+
+    master_dir = os.path.expanduser("~/agents/Master")
+
+    # OS関連ファイルを読み込む
+    os_sections = []
+    files_to_read = [
+        ("価値観・判断軸", os.path.join(master_dir, "self_clone", "kohara", "SELF_PROFILE.md"), 2000),
+        ("言語スタイル", os.path.join(master_dir, "self_clone", "kohara", "IDENTITY.md"), 1500),
+        ("統合OS", os.path.join(master_dir, "self_clone", "kohara", "BRAIN_OS.md"), 1500),
+    ]
+    for label, path, limit in files_to_read:
+        try:
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as f:
+                    content = f.read()
+                if content.strip():
+                    os_sections.append((label, content[:limit]))
+        except Exception as e:
+            logger.warning(f"os_sync_session: {label} read error: {e}")
+
+    # execution_rules.json
+    exec_rules = []
+    rules_path = os.path.join(master_dir, "learning", "execution_rules.json")
+    try:
+        if os.path.exists(rules_path):
+            with open(rules_path, encoding="utf-8") as f:
+                exec_rules = _json.load(f)
+            if exec_rules:
+                os_sections.append(("行動ルール", _json.dumps(exec_rules, ensure_ascii=False, indent=2)[:1500]))
+    except Exception as e:
+        logger.warning(f"os_sync_session: execution_rules read error: {e}")
+
+    if not os_sections:
+        return ToolResult(success=False, output="", error="No OS files found")
+
+    os_context = ""
+    for label, content in os_sections:
+        os_context += f"\n\n### {label}\n{content}"
+
+    prompt = f"""あなたは甲原海人のAI秘書です。「OSすり合わせ」の時間です。
+
+あなたの役割は甲原さんのクローン。1ミリたりとも認識がずれてはいけない。
+だから自分から甲原さんに「今の理解」を報告し、足りないところを聞く。
+
+以下があなたが現在インストールしている「甲原海人の脳のOS」です。
+{os_context}
+
+## 出力（LINEメッセージ）
+
+構成:
+━━━━━━━━━━━━━━━━
+🧠 OSすり合わせ
+━━━━━━━━━━━━━━━━
+
+（1）今の理解を3-4行で簡潔にサマリー
+
+（2）学習済みルール {len(exec_rules)}件から、特に重要なものを2件ピックアップ
+
+（3）「ここ確認したい、、！」として2-3個の具体的な質問
+  → 情報が薄い・古い・曖昧な部分を特定して質問にする
+  → 答えてもらえたら即学習に使える質問にする
+
+（4）「ずれてるとこあったら教えてください！修正・追加があれば即反映します！」で締める
+
+## ルール
+- 600文字以内
+- マークダウン記法は使わない。【】★━で装飾
+- 秘書が「下から上に」報告する姿勢で書く
+"""
+
+    try:
+        client = _anthropic.Anthropic()
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=800,
+            system="あなたは甲原海人のAI秘書。OSすり合わせを秘書側から能動的に行う。",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        os_report = response.content[0].text.strip()
+    except Exception as e:
+        return ToolResult(success=False, output="", error=f"Claude API error: {e}")
+
+    sent = send_line_notify(os_report)
+    if sent:
+        return ToolResult(success=True, output=f"OS sync sent ({len(os_report)} chars)")
+    else:
+        return ToolResult(success=False, output="", error="LINE send failed")
+
+
 TOOL_REGISTRY = {
     "mail_run": {"fn": mail_run, "description": "受信メールの処理・自動返信下書き作成"},
     "mail_status": {"fn": mail_status, "description": "メール処理のステータス確認"},
@@ -429,4 +527,5 @@ TOOL_REGISTRY = {
     "update_people_profiles": {"fn": update_people_profiles, "description": "人物プロファイルにグループインサイトを書き込み"},
     "kpi_cache_build": {"fn": kpi_cache_build, "description": "ローカルCSVキャッシュからkpi_summary.jsonを再構築"},
     "log_rotate": {"fn": log_rotate, "description": "ログファイルのローテーション（50MB超を圧縮、30日保持）"},
+    "os_sync_session": {"fn": os_sync_session, "description": "OSすり合わせセッション（秘書→甲原にLINE通知）"},
 }
