@@ -24,31 +24,6 @@ WORK_DIR = _agents_dir if _agents_dir.exists() else Path.home() / "Cursor"
 CLAUDE_CMD = "/opt/homebrew/bin/claude"
 SELF_RESTART_SH = str(Path(__file__).parent / "self_restart.sh")
 
-# 行動ルール（OS: 共通ルール基盤）— 秘書・日向・Claude Code 共通
-_EXECUTION_RULES_FILE = _agents_dir / "Master" / "learning" / "execution_rules.json"
-
-
-def _build_execution_rules_section() -> str:
-    """execution_rules.json から行動ルールを読み込み、プロンプト注入用テキストを生成"""
-    try:
-        if _EXECUTION_RULES_FILE.exists():
-            rules = json.loads(_EXECUTION_RULES_FILE.read_text(encoding="utf-8"))
-            if not rules:
-                return ""
-            lines = ["## 甲原さんの行動ルール（OS: 共通ルール基盤）\nこれはすべての判断に適用する普遍的なルールです。"]
-            for r in rules:
-                situation = r.get("situation", "")
-                action = r.get("action", "")
-                if situation:
-                    lines.append(f"- 【{situation}】→ {action}")
-                else:
-                    lines.append(f"- {action}")
-            return "\n".join(lines) + "\n"
-    except Exception as e:
-        logger.warning(f"行動ルール読み込みエラー: {e}")
-    return ""
-
-
 def execute_full_cycle(
     instruction: str = None,
     cycle_num: int = 0,
@@ -70,11 +45,8 @@ def execute_full_cycle(
             f"「{instruction}」\n"
         )
 
-    # learning.py が構築する学習コンテキスト（アクション履歴・フィードバック・記憶・知見）
+    # learning.py が構築する学習コンテキスト（行動ルール・アクション履歴・フィードバック・記憶・知見）
     learning_section = build_learning_context()
-
-    # 行動ルール（OS）— 秘書・日向・Claude Code 共通
-    execution_rules_section = _build_execution_rules_section()
 
     # config.json の mode（自律サイクルの制御に使う。直接指示には影響しない）
     mode = (state or {}).get("_config_mode", "report")
@@ -116,7 +88,7 @@ def execute_full_cycle(
 ## 現在の状態
 
 現在: {now} / サイクル: #{cycle_num} / 前回のアクション: {last_action}
-{instruction_section}{execution_rules_section}{learning_section}
+{instruction_section}{learning_section}
 ## やるべきこと
 
 {"### 甲原さんからの指示があるとき" if has_instruction else "### 定期サイクル（指示なし）"}

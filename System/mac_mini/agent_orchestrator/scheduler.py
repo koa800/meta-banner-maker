@@ -2170,6 +2170,7 @@ JSON以外の文字は出力しないでください。"""}],
         HINATA_DIR = Path(os.path.expanduser("~/agents/System/hinata"))
         HINATA_TASKS = HINATA_DIR / "hinata_tasks.json"
         HINATA_STATE = HINATA_DIR / "state.json"
+        HINATA_CONFIG = HINATA_DIR / "config.json"
 
         last_ts = self.memory.get_state(state_key)
 
@@ -2240,6 +2241,39 @@ JSON以外の文字は出力しないでください。"""}],
                 send_slack_ai_team("日向を再開します！")
                 logger.info("slack_dispatch: resume command → hinata resumed")
 
+            elif command_type == "mode_change":
+                new_mode = self._parse_mode_from_text(text)
+                if new_mode is None and "レベルアップ" in text:
+                    # 現在のモードの次へ自動昇格
+                    import json as _json
+                    _cur = {}
+                    try:
+                        with open(HINATA_CONFIG, "r", encoding="utf-8") as _f:
+                            _cur = _json.load(_f)
+                    except Exception:
+                        pass
+                    _mode_order = ["report", "propose", "execute"]
+                    _cur_mode = _cur.get("mode", "report")
+                    _idx = _mode_order.index(_cur_mode) if _cur_mode in _mode_order else 0
+                    if _idx < len(_mode_order) - 1:
+                        new_mode = _mode_order[_idx + 1]
+                    else:
+                        send_slack_ai_team("日向は既に最高レベル（Lv.3 共同経営者型）です！")
+                        logger.info("slack_dispatch: mode_change → already max level")
+                if new_mode:
+                    old_mode = self._set_hinata_mode(HINATA_CONFIG, new_mode)
+                    mode_labels = {"report": "Lv.1 従業員型", "propose": "Lv.2 右腕型", "execute": "Lv.3 共同経営者型"}
+                    send_slack_ai_team(
+                        f"日向のモードを変更しました！\n"
+                        f"{mode_labels.get(old_mode, old_mode)} → {mode_labels.get(new_mode, new_mode)}"
+                    )
+                    logger.info(f"slack_dispatch: mode change {old_mode} → {new_mode}")
+                else:
+                    send_slack_ai_team(
+                        "モード変更: 対象のレベルを指定してください。\n"
+                        "例: 「日向 Lv.2」「日向 レベル2」「日向 mode propose」"
+                    )
+
             else:
                 # メンションベースのルーティング
                 # 日向宛て → 日向タスクキュー、秘書宛て → 秘書が直接応答、なし → スキップ
@@ -2308,6 +2342,9 @@ JSON以外の文字は出力しないでください。"""}],
         stop_keywords = ["止まって", "ストップ", "止めて", "待って", "やめて"]
         status_keywords = ["状況は", "どうなってる", "今何してる", "ステータス"]
         resume_keywords = ["再開", "動いて", "始めて", "起きて"]
+        mode_keywords = ["レベルアップ", "レベル2", "レベル3", "lv.2", "lv.3", "lv2", "lv3",
+                         "mode report", "mode propose", "mode execute",
+                         "モード変更", "レベル変更"]
 
         lower = text.lower()
         if any(kw in lower for kw in stop_keywords):
@@ -2316,7 +2353,44 @@ JSON以外の文字は出力しないでください。"""}],
             return "status"
         if any(kw in lower for kw in resume_keywords):
             return "resume"
+        if any(kw in lower for kw in mode_keywords):
+            return "mode_change"
         return "instruction"
+
+    @staticmethod
+    def _parse_mode_from_text(text: str) -> str | None:
+        """テキストから変更先のモードを推定する。"""
+        lower = text.lower()
+        # 明示的なモード指定
+        if "mode report" in lower or "lv.1" in lower or "lv1" in lower or "レベル1" in lower:
+            return "report"
+        if "mode propose" in lower or "lv.2" in lower or "lv2" in lower or "レベル2" in lower:
+            return "propose"
+        if "mode execute" in lower or "lv.3" in lower or "lv3" in lower or "レベル3" in lower:
+            return "execute"
+        # 「レベルアップ」= 現在のモードの次
+        if "レベルアップ" in lower:
+            return None  # 現在のモードが分からないため、_set_hinata_mode で昇格処理
+        return None
+
+    @staticmethod
+    def _set_hinata_mode(config_path: Path, new_mode: str) -> str:
+        """日向の config.json の mode を変更する。戻り値は変更前のモード。"""
+        import json
+        config = {}
+        if config_path.exists():
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                pass
+        old_mode = config.get("mode", "report")
+        config["mode"] = new_mode
+        tmp = config_path.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        tmp.rename(config_path)
+        return old_mode
 
     @staticmethod
     def _set_hinata_paused(state_path: Path, paused: bool):
@@ -2621,21 +2695,164 @@ JSON以外の文字は出力しないでください。"""}],
     # ================================================================
 
     async def _run_weekly_hinata_memory(self):
-        """毎週日曜10:30: 日向の記憶統合（action_log + feedback_log → hinata_memory.md）"""
-        import sys as _sys
+        """毎週日曜10:30: 日向の記憶統合 + 週次成長レポート
+
+        1. action_log + feedback_log をLLMで分析→パターン抽出→hinata_memory.md更新
+        2. 成長レポートを生成→Slack投稿
+        """
+        import json as _json
+        import anthropic
+        from .notifier import send_slack_ai_team
+
         task_id = self.memory.log_task_start("weekly_hinata_memory")
+
+        learning_dir = self.repo_dir / "Master" / "learning"
+        action_log_path = learning_dir / "action_log.json"
+        feedback_log_path = learning_dir / "feedback_log.json"
+        memory_path = learning_dir / "hinata_memory.md"
+
         try:
-            # learning.py を直接 import して consolidate_memory() を呼ぶ
-            hinata_dir = self.repo_dir / "System" / "hinata"
-            if str(hinata_dir) not in _sys.path:
-                _sys.path.insert(0, str(hinata_dir))
-            from learning import consolidate_memory
-            result_text = consolidate_memory()
-            self.memory.log_task_end(task_id, True, result_text)
-            logger.info(f"日向メモリ統合完了: {result_text}")
+            # ---- データ読み込み ----
+            actions = []
+            feedbacks = []
+            existing_memory = ""
+            if action_log_path.exists():
+                try:
+                    actions = _json.loads(action_log_path.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+            if feedback_log_path.exists():
+                try:
+                    feedbacks = _json.loads(feedback_log_path.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+            if memory_path.exists():
+                try:
+                    existing_memory = memory_path.read_text(encoding="utf-8")
+                except Exception:
+                    pass
+
+            if not actions and not feedbacks:
+                self.memory.log_task_end(task_id, True, "データなし。スキップ。")
+                logger.info("weekly_hinata_memory: no data, skipping")
+                return
+
+            # ---- LLMで分析 ----
+            actions_text = ""
+            if actions:
+                for a in actions[-20:]:
+                    actions_text += f"- [{a.get('date','')}] 指示「{a.get('instruction','')[:80]}」→ 結果: {a.get('result','')[:100]}\n"
+
+            feedbacks_text = ""
+            if feedbacks:
+                for fb in feedbacks[-20:]:
+                    sentiment = fb.get("sentiment", "?")
+                    feedbacks_text += f"- [{sentiment}] 「{fb.get('previous_instruction','')[:60]}」→ 甲原「{fb.get('feedback','')[:80]}」\n"
+
+            total_actions = len(actions)
+            negative_count = sum(1 for f in feedbacks if f.get("sentiment") == "negative")
+            positive_count = sum(1 for f in feedbacks if f.get("sentiment") == "positive")
+
+            prompt = f"""あなたは日向（ひなた）AIエージェントの学習アシスタントです。
+日向の過去の行動記録とフィードバックを分析し、2つの出力を生成してください。
+
+## 入力データ
+
+### アクション履歴（直近20件）
+{actions_text if actions_text else "（なし）"}
+
+### フィードバック（直近20件）
+{feedbacks_text if feedbacks_text else "（なし）"}
+
+### 現在の記憶
+{existing_memory[:2000] if existing_memory else "（初回）"}
+
+## 出力1: hinata_memory.md の更新内容
+
+以下の構成でMarkdownを生成してください:
+- # 日向の記憶（最終更新日付を含める）
+- ## 甲原さんの傾向（フィードバックから読み取れるパターン。例:「○○を重視する」「△△は好まない」）
+- ## やってはいけないこと（negativeフィードバックから抽出）
+- ## うまくいったこと（positiveフィードバックから抽出）
+- ## 学んだ業務パターン（行動記録から繰り返し出てくるパターン）
+
+既存の記憶は維持しつつ、新しいデータで更新・上書きしてください。
+データが少ない場合は無理にパターンを作らず、事実だけ記述してください。
+
+## 出力2: 週次成長レポート（Slack投稿用）
+
+以下のフォーマットで生成してください:
+```
+【今週の成長レポート】
+・完了タスク: N件（内訳）
+・フィードバック: positive N件 / negative N件
+・成功率: X%（修正なしで完了した割合）
+・学んだこと: （今週の最大の学び）
+・来週の目標: （具体的に）
+```
+
+日向らしく明るく前向きなトーンで。
+
+## 出力形式
+
+JSON形式で返してください:
+{{"memory": "hinata_memory.mdの全文", "report": "Slack投稿テキスト"}}
+"""
+            try:
+                client = anthropic.Anthropic()
+                response = client.messages.create(
+                    model="claude-sonnet-4-6",
+                    max_tokens=2000,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                result_text = response.content[0].text.strip()
+
+                # JSON抽出（```json ... ``` で囲まれていたら剥がす）
+                if "```json" in result_text:
+                    result_text = result_text.split("```json", 1)[1].split("```", 1)[0].strip()
+                elif "```" in result_text:
+                    result_text = result_text.split("```", 1)[1].split("```", 1)[0].strip()
+
+                parsed = _json.loads(result_text)
+                new_memory = parsed.get("memory", "")
+                growth_report = parsed.get("report", "")
+
+            except (_json.JSONDecodeError, Exception) as e:
+                logger.warning(f"weekly_hinata_memory: LLM分析失敗、簡易版にフォールバック: {e}")
+                # フォールバック: 簡易統合
+                new_memory = f"# 日向の記憶\n\n最終更新: {datetime.now().strftime('%Y/%m/%d')}\n\n"
+                new_memory += f"## 統計\n- アクション: {total_actions}件\n- フィードバック: positive {positive_count}件 / negative {negative_count}件\n"
+                if feedbacks:
+                    new_memory += "\n## フィードバック\n"
+                    for fb in feedbacks[-10:]:
+                        new_memory += f"- [{fb.get('sentiment','')}] {fb.get('feedback','')[:80]}\n"
+                growth_report = (
+                    f"【今週の成長レポート】\n"
+                    f"・完了タスク: {total_actions}件\n"
+                    f"・フィードバック: positive {positive_count}件 / negative {negative_count}件\n"
+                    f"・来週も頑張ります！"
+                )
+
+            # ---- hinata_memory.md 更新 ----
+            if new_memory:
+                learning_dir.mkdir(parents=True, exist_ok=True)
+                tmp = memory_path.with_suffix(".tmp")
+                tmp.write_text(new_memory, encoding="utf-8")
+                tmp.rename(memory_path)
+                logger.info(f"weekly_hinata_memory: memory updated ({len(new_memory)} chars)")
+
+            # ---- Slack に成長レポート投稿 ----
+            if growth_report:
+                send_slack_ai_team(growth_report)
+                logger.info("weekly_hinata_memory: growth report sent to Slack")
+
+            summary = f"記憶更新: {total_actions}件のアクション、{len(feedbacks)}件のフィードバック反映。成長レポート投稿済み。"
+            self.memory.log_task_end(task_id, True, summary)
+            logger.info(f"weekly_hinata_memory完了: {summary}")
+
         except Exception as e:
             self.memory.log_task_end(task_id, False, str(e))
-            logger.error(f"日向メモリ統合エラー: {e}")
+            logger.error(f"weekly_hinata_memory エラー: {e}")
 
     # ================================================================
 
