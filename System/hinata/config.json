@@ -1,11 +1,7 @@
 {
   "addness_start_url": "https://www.addness.com",
   "my_goal_url": "https://www.addness.com/goals/2486eec7-95e3-4d5d-8a9f-d1c899c70f40",
-  "cycle_interval_minutes": 30,
-  "work_hours": {
-    "start": 8,
-    "end": 22
-  },
-  "night_interval_minutes": 120,
-  "headless": false
+  "cycle_interval_minutes": 60,
+  "headless": false,
+  "mode": "report"
 }

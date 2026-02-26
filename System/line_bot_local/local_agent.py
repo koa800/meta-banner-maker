@@ -2762,6 +2762,162 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
         return False, f"Claude APIエラー: {str(e)}"
 
 
+# ===== 画像生成（Claude Code CLI + Chrome MCP） =====
+
+_IMAGE_OUTPUT_DIR = Path.home() / "agents" / "data" / "generated_images"
+_IMAGE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+_CLAUDE_CMD = "/opt/homebrew/bin/claude"
+_CLAUDE_WORK_DIR = Path.home() / "agents" / "_repo"
+
+
+def execute_image_generation(task: dict):
+    """画像生成タスクを実行する。
+    Claude Code CLI + Chrome MCP で生成AIツールを操作し、画像を生成・ダウンロード。
+    Returns: (success, message_or_error, extra_dict)
+    """
+    arguments = task.get("arguments", {})
+    user_prompt = arguments.get("prompt", arguments.get("goal", ""))
+    if not user_prompt:
+        return False, "画像生成の指示が空です", {}
+
+    print(f"   🎨 プロンプト: {user_prompt[:80]}")
+
+    # 出力先パスを事前に決定（Claude Code に保存先を指示）
+    import uuid as _uuid
+    image_filename = f"{_uuid.uuid4().hex[:12]}.png"
+    image_path = _IMAGE_OUTPUT_DIR / image_filename
+
+    # Claude Code CLI に渡すプロンプト
+    claude_prompt = f"""あなたはAI秘書のアシスタントです。甲原海人さんから画像生成の指示を受けました。
+
+## 指示内容
+「{user_prompt}」
+
+## やること
+
+1. Chrome のタブを確認: `mcp__claude-in-chrome__tabs_context_mcp`
+2. 新しいタブを作成: `mcp__claude-in-chrome__tabs_create_mcp`
+3. Gemini（https://gemini.google.com/）に遷移: `mcp__claude-in-chrome__navigate`
+   - ログインアカウント: kohara.kaito@team.addness.co.jp
+   - もしログインが必要ならログインフローを実行
+4. Geminiのチャット入力欄に画像生成プロンプトを入力して送信
+   - プロンプト例: 「{user_prompt}」を画像にしてください
+   - Geminiが画像を生成するまで待つ
+5. 生成された画像をダウンロード
+   - 画像を右クリック → 保存、またはJavaScriptで画像URLを取得してダウンロード
+   - 保存先: {image_path}
+6. 画像ファイルが保存されたか確認
+
+## 重要ルール
+- 画像ファイルは必ず `{image_path}` に保存すること
+- Geminiで画像が生成できない場合は、その旨を報告すること
+- ログインが必要な場合、kohara.kaito@team.addness.co.jp のGoogleアカウントでログイン
+- 操作が完了したら、結果を簡潔に報告（1-2行）
+
+## 出力
+最後に、以下のいずれかを報告:
+- 成功: 「画像を保存しました: {image_path}」
+- 失敗: 「画像生成に失敗しました: 理由」
+"""
+
+    try:
+        work_dir = str(_CLAUDE_WORK_DIR) if _CLAUDE_WORK_DIR.exists() else str(Path.home())
+        print(f"   🤖 Claude Code CLI 起動中... (timeout: 300s)")
+        proc = subprocess.Popen(
+            [_CLAUDE_CMD, "-p", claude_prompt],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=work_dir,
+            start_new_session=True,
+        )
+        try:
+            stdout, stderr = proc.communicate(timeout=300)
+        except subprocess.TimeoutExpired:
+            import os as _os
+            import signal as _signal
+            pgid = _os.getpgid(proc.pid)
+            try:
+                _os.killpg(pgid, _signal.SIGTERM)
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    _os.killpg(pgid, _signal.SIGKILL)
+                except OSError:
+                    pass
+            return False, "画像生成がタイムアウトしました（5分超過）", {}
+
+        if proc.returncode != 0:
+            print(f"   ❌ Claude Code エラー: {stderr[:200]}")
+            return False, f"Claude Code エラー: {stderr[:200]}", {}
+
+        claude_result = stdout.strip()
+        print(f"   📝 Claude Code結果: {claude_result[:100]}")
+
+        # 画像ファイルが生成されたか確認
+        if image_path.exists() and image_path.stat().st_size > 0:
+            print(f"   📸 画像ファイル確認OK: {image_path} ({image_path.stat().st_size} bytes)")
+            # Render にアップロード
+            image_url = _upload_image_to_render(image_path, image_filename)
+            if image_url:
+                return True, "画像できましたよ！", {"image_url": image_url, "preview_url": image_url}
+            else:
+                return False, "画像は生成しましたが、アップロードに失敗しました", {}
+        else:
+            # 画像ファイルが見つからない場合、ディレクトリ内を探す
+            found = _find_recent_image(_IMAGE_OUTPUT_DIR)
+            if found:
+                image_url = _upload_image_to_render(found, found.name)
+                if image_url:
+                    return True, "画像できましたよ！", {"image_url": image_url, "preview_url": image_url}
+
+            # Claude Code の結果をテキストとして返す
+            return False, f"画像ファイルが見つかりませんでした。\n{claude_result[:300]}", {}
+
+    except FileNotFoundError:
+        return False, "claude コマンドが見つかりません（Mac Mini にインストールが必要です）", {}
+    except Exception as e:
+        return False, f"画像生成エラー: {str(e)}", {}
+
+
+def _upload_image_to_render(image_path: Path, filename: str) -> str:
+    """画像をRenderサーバーにアップロードしてURLを返す"""
+    try:
+        url = f"{config['server_url']}/api/upload_image"
+        with open(image_path, "rb") as f:
+            resp = requests.post(
+                url,
+                files={"file": (filename, f, "image/png")},
+                headers={"Authorization": f"Bearer {config['agent_token']}"},
+                timeout=30,
+            )
+        if resp.status_code == 200:
+            data = resp.json()
+            image_url = data.get("image_url", "")
+            print(f"   📤 アップロード成功: {image_url}")
+            return image_url
+        else:
+            print(f"   ❌ アップロード失敗: {resp.status_code} {resp.text[:100]}")
+            return ""
+    except Exception as e:
+        print(f"   ❌ アップロードエラー: {e}")
+        return ""
+
+
+def _find_recent_image(directory: Path, max_age_seconds: int = 120) -> Path:
+    """ディレクトリ内で直近に作成された画像ファイルを探す"""
+    import time
+    now = time.time()
+    for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
+        for f in directory.glob(ext):
+            if now - f.stat().st_mtime < max_age_seconds:
+                return f
+    return None
+
+
 def execute_task_with_claude(task: dict):
     """タスクをClaude APIで自動実行"""
     instruction = format_task_for_cursor(task)
@@ -3037,6 +3193,18 @@ def run_agent():
                         complete_task(task_id, True,
                                       "📊 日報入力はLooker Studio・b-dashのブラウザ操作が必要なため、LINEからは実行できません。\nCursorを開いて「日報報告して」と入力してください。")
                         print(f"   ℹ️ 日報入力はCursor専用 → 案内メッセージをLINEに送信")
+                        continue
+
+                    # 画像生成: Claude Code CLI + Chrome MCPで生成AIツールを操作
+                    if function_name == "generate_image":
+                        print(f"   🎨 画像生成タスク開始")
+                        success, result, extra = execute_image_generation(task)
+                        if success:
+                            complete_task(task_id, True, result, None, extra)
+                            print(f"   ✅ 画像生成完了")
+                        else:
+                            complete_task(task_id, False, "画像生成に失敗しました", result)
+                            print(f"   ❌ 画像生成エラー: {result}")
                         continue
 
                     # Claude APIが使えない場合はCursorで処理

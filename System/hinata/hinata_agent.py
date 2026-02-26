@@ -78,17 +78,9 @@ def save_state(state: dict):
     tmp.rename(STATE_PATH)
 
 
-def is_work_hours(config: dict) -> bool:
-    now = datetime.now().hour
-    work = config.get("work_hours", {"start": 8, "end": 22})
-    return work["start"] <= now < work["end"]
-
-
 def get_interval(config: dict) -> int:
-    if is_work_hours(config):
-        return config.get("cycle_interval_minutes", 30) * 60
-    else:
-        return config.get("night_interval_minutes", 120) * 60
+    """サイクル間隔を返す（24時間稼働）"""
+    return config.get("cycle_interval_minutes", 60) * 60
 
 
 # ====================================================================
@@ -243,6 +235,8 @@ def run_cycle(config: dict, state: dict, instruction: str = None) -> dict:
             logger.info(f"フィードバック検出: [{sentiment}] {instruction[:50]}")
 
     my_goal_url = config.get("my_goal_url", "")
+    # config の mode を state 経由で claude_executor に渡す
+    state["_config_mode"] = config.get("mode", "report")
     result = execute_full_cycle(
         instruction=instruction,
         cycle_num=cycle_num,
