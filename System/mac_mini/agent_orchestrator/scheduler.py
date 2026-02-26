@@ -1724,17 +1724,36 @@ JSON以外の文字は出力しないでください。"""}],
     async def _reply_as_secretary(self, user_text: str, send_fn):
         """秘書がSlack上で甲原のメッセージに直接応答する。"""
         import anthropic
+
+        # IDENTITY.md を読み込んで甲原さんらしさを注入
+        identity_context = ""
+        identity_path = Path.home() / "agents" / "Master" / "self_clone" / "kohara" / "IDENTITY.md"
+        try:
+            if identity_path.exists():
+                identity_context = identity_path.read_text(encoding="utf-8")[:2000]
+        except Exception:
+            pass
+
+        system_prompt = (
+            "あなたは甲原海人のAI秘書です。Slackの#ai-teamチャンネルで甲原さんに話しかけられました。\n"
+            "秘書として簡潔に回答してください。\n\n"
+        )
+        if identity_context:
+            system_prompt += f"## 甲原海人の言語スタイル定義（必ず従うこと）\n{identity_context}\n\n"
+        system_prompt += (
+            "## Slack応答ルール\n"
+            "- 秘書としての応答。甲原さん本人になりきるのではなく、秘書が甲原さんに返す形\n"
+            "- 簡潔に。長くても3-4行\n"
+            "- マークダウンの太字（**）は使わない\n"
+            "- 「かしこまりました」「承知いたしました」は使わない。「了解です！」「分かりました！」を使う\n"
+        )
+
         try:
             client = anthropic.Anthropic()
             response = client.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=600,
-                system=(
-                    "あなたは甲原海人のAI秘書です。Slackの#ai-teamチャンネルで甲原さんに話しかけられました。"
-                    "秘書として簡潔に回答してください。"
-                    "甲原さんとの会話スタイル: フランク、！多め、、、溜め。"
-                    "マークダウンの太字（**）は使わない。"
-                ),
+                system=system_prompt,
                 messages=[{"role": "user", "content": user_text}],
             )
             reply = response.content[0].text.strip()
