@@ -102,21 +102,70 @@ _STATE_DIR.mkdir(parents=True, exist_ok=True)
 STATE_FILE = _STATE_DIR / "qa_monitor_state.json"
 
 
+_STATE_BACKUP = STATE_FILE.with_suffix(".json.bak")
+_STATE_MIN_SENT_IDS = 100  # この件数以下でバックアップにフォールバック
+
+
 def load_state() -> dict:
-    """監視状態を読み込む"""
-    if STATE_FILE.exists():
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+    """監視状態を読み込む（破損・消失時はバックアップから自動復元）"""
+    state = _try_load_json(STATE_FILE)
+
+    # 整合性チェック: sent_ids が不自然に少ない場合はバックアップから復元
+    if state and len(state.get("sent_ids", [])) >= _STATE_MIN_SENT_IDS:
+        return state
+
+    # メインファイルが破損 or sent_ids が空 → バックアップを試す
+    backup = _try_load_json(_STATE_BACKUP)
+    if backup and len(backup.get("sent_ids", [])) >= _STATE_MIN_SENT_IDS:
+        print(f"  ⚠️ qa_monitor_state.json が破損または消失 → バックアップから復元（{len(backup.get('sent_ids', []))}件）")
+        # バックアップからメインファイルを復元
+        _atomic_write(STATE_FILE, backup)
+        return backup
+
+    # 両方ない場合（初回起動）
+    if state:
+        return state
     return {
         "last_check": None,
-        "sent_ids": [],  # サーバーに送信済みの質問ID（重複送信防止用）
+        "sent_ids": [],
     }
 
 
+def _try_load_json(path: Path) -> dict | None:
+    """JSONファイルを安全に読み込む"""
+    if not path.exists():
+        return None
+    try:
+        content = path.read_text(encoding="utf-8")
+        if not content.strip():
+            return None
+        return json.loads(content)
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        return None
+
+
 def save_state(state: dict):
-    """監視状態を保存"""
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+    """監視状態をアトミックに保存（tmp→rename + バックアップ）"""
+    # メインファイルが存在し、十分なsent_idsがあればバックアップ
+    if STATE_FILE.exists():
+        existing = _try_load_json(STATE_FILE)
+        if existing and len(existing.get("sent_ids", [])) >= _STATE_MIN_SENT_IDS:
+            _atomic_write(_STATE_BACKUP, existing)
+    _atomic_write(STATE_FILE, state)
+
+
+def _atomic_write(path: Path, data: dict):
+    """アトミック書き込み（tmp→rename で中間状態を防ぐ）"""
+    tmp = path.with_suffix(".tmp")
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.rename(path)
+    except Exception as e:
+        print(f"  ⚠️ {path.name} 保存エラー: {e}")
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def get_sheets_service():
