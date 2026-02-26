@@ -194,8 +194,11 @@ def _generate_reply_with_claude_code(
 {'- 会話文脈を踏まえた流れのある返信にすること' if context_messages else ''}
 {'- 返信先はChatwork（LINEではない）。Chatworkの文体に合わせる' if platform == 'chatwork' else ''}
 
-## 制約
-- **ファイルの読み取りのみ**。書き込み・編集・コマンド実行は一切行わないこと
+## 使えるツール・リソース
+- `python3 System/sheets_manager.py read "シートID" "タブ名"` でスプレッドシートのデータを取得できる
+- `System/` 内のPythonスクリプトを実行して情報収集できる
+- Webからの情報取得（curl等）も可能
+- ただし **返信案の生成が目的**。返信に必要な情報収集のみ行い、ファイルの書き込み・削除・git操作は行わないこと
 - 情報収集は最小限に。返信に必要な情報だけ取得する
 
 ## 出力形式
