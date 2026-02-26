@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Optional
 
 from claude_executor import execute_full_cycle, execute_self_repair
+from learning import record_action, detect_and_record_feedback
 from slack_comm import send_message, send_report
 
 # ---- 設定 ----
@@ -169,6 +170,13 @@ def run_cycle(config: dict, state: dict, instruction: str = None) -> dict:
     cycle_num = state.get("cycle_count", 0) + 1
     logger.info(f"===== サイクル #{cycle_num} 開始 =====")
 
+    # フィードバック検出（指示が直前アクションへの修正かを判定）
+    if instruction:
+        feedback = detect_and_record_feedback(instruction)
+        if feedback:
+            sentiment = feedback["sentiment"]
+            logger.info(f"フィードバック検出: [{sentiment}] {instruction[:50]}")
+
     my_goal_url = config.get("my_goal_url", "")
     result = execute_full_cycle(
         instruction=instruction,
@@ -182,12 +190,16 @@ def run_cycle(config: dict, state: dict, instruction: str = None) -> dict:
 
     if result:
         logger.info(f"サイクル #{cycle_num} 完了")
+        # 親プロセスが確実にアクション記録（Claude Code に任せない）
+        record_action(cycle_num, instruction, result, goal_url=my_goal_url)
         send_report(f"サイクル #{cycle_num} 完了", result[:500])
         state["last_action"] = result[:200]
         save_state(state)
         return state
     else:
         logger.warning(f"サイクル #{cycle_num} 失敗")
+        # 失敗もアクション記録（何が失敗したか追跡するため）
+        record_action(cycle_num, instruction, "失敗: Claude Codeが結果を返さなかった")
         send_message(f"⚠️ サイクル #{cycle_num} の実行に失敗しました。")
         save_state(state)
         raise RuntimeError(f"サイクル #{cycle_num} でClaude Codeが結果を返しませんでした")

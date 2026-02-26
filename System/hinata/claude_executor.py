@@ -5,12 +5,13 @@ Claude in Chrome MCP ツールでブラウザを直接操作。
 Addness操作もアクション実行も全てClaude Codeが行う。
 """
 
-import json
 import logging
 import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+from learning import build_learning_context
 
 logger = logging.getLogger("hinata.claude")
 
@@ -19,47 +20,6 @@ _agents_dir = Path.home() / "agents" / "_repo"
 WORK_DIR = _agents_dir if _agents_dir.exists() else Path.home() / "Cursor"
 CLAUDE_CMD = "/opt/homebrew/bin/claude"
 SELF_RESTART_SH = str(Path(__file__).parent / "self_restart.sh")
-
-# 学習ファイルのパス
-_learning_dir = WORK_DIR / "Master" / "learning"
-ACTION_LOG_PATH = _learning_dir / "action_log.json"
-INSIGHTS_PATH = _learning_dir / "insights.md"
-
-
-def _load_recent_actions(n: int = 5) -> str:
-    """action_log.json から直近N件のアクション履歴を読み込む。"""
-    try:
-        if not ACTION_LOG_PATH.exists():
-            return ""
-        with open(ACTION_LOG_PATH, "r", encoding="utf-8") as f:
-            logs = json.load(f)
-        if not logs:
-            return ""
-        recent = logs[-n:]
-        lines = []
-        for entry in recent:
-            lines.append(
-                f"- [{entry.get('date', '?')}] #{entry.get('cycle', '?')}: "
-                f"{entry.get('action', '?')} → {entry.get('result', '?')[:100]}"
-            )
-        return "\n".join(lines)
-    except Exception as e:
-        logger.warning(f"アクションログ読み込み失敗: {e}")
-        return ""
-
-
-def _load_insights() -> str:
-    """insights.md の内容を読み込む。"""
-    try:
-        if not INSIGHTS_PATH.exists():
-            return ""
-        text = INSIGHTS_PATH.read_text(encoding="utf-8").strip()
-        if len(text) > 1500:
-            text = text[:1500] + "\n... (省略)"
-        return text
-    except Exception as e:
-        logger.warning(f"インサイト読み込み失敗: {e}")
-        return ""
 
 
 def execute_full_cycle(
@@ -83,20 +43,8 @@ def execute_full_cycle(
             f"「{instruction}」\n"
         )
 
-    # 学習コンテキストを構築
-    learning_section = ""
-    recent_actions = _load_recent_actions(5)
-    insights = _load_insights()
-    if recent_actions or insights:
-        learning_section = "\n## 過去の学習コンテキスト\n"
-        if recent_actions:
-            learning_section += f"\n### 直近のアクション履歴\n{recent_actions}\n"
-        if insights:
-            learning_section += f"\n### 蓄積された知見\n{insights}\n"
-        learning_section += (
-            "\n上記の履歴・知見を踏まえて行動してください。"
-            "同じ失敗を繰り返さず、過去の成功パターンを活用すること。\n"
-        )
+    # learning.py が構築する学習コンテキスト（アクション履歴・フィードバック・記憶・知見）
+    learning_section = build_learning_context()
 
     prompt = f"""あなたは「日向」というAIエージェントです。
 現在: {now} / サイクル: #{cycle_num} / 前回のアクション: {last_action}
@@ -150,14 +98,13 @@ Chrome が常時起動しており、Claude in Chrome 拡張経由で MCP ツー
 - Web調査が必要なら `tabs_create_mcp` で別タブを開いて調査
 - 甲原さんへの確認が必要なら、Addnessでコメント（@甲原海人をつける）
 
-### ステップ3: ナレッジを蓄積
-- `Master/learning/action_log.json` — 配列にアクション履歴を追記
-  フォーマット: {{"date": "YYYY/MM/DD HH:MM", "cycle": N, "action": "...", "result": "...", "instruction": "..."}}
-- `Master/learning/insights.md` — 得られた知見があれば追記
-- 新しいスキルやナレッジは `Skills/` や `Master/knowledge/` に適切に保存
+### ステップ3: ナレッジを蓄積（任意）
+- `Master/learning/insights.md` — 新しい知見があれば追記（既存の内容と重複しないこと）
+- ※ action_log.json は自動記録されるので書かなくてよい
 
 ### ステップ4: 結果を報告
 実行結果を簡潔に（3行以内で）報告してください。
+**何をしたか・何が分かったか・次に何が必要か** を含めること。
 
 ## 自己修復（エラー修正が必要な場合のみ）
 
