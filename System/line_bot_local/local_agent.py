@@ -439,11 +439,9 @@ def save_execution_rule(rule: dict):
 def _load_os_sync_state() -> dict:
     """OS syncの状態を読み込む。なければ空dictを返す。"""
     try:
-        if OS_SYNC_STATE_FILE.exists():
-            return json.loads(OS_SYNC_STATE_FILE.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, IOError):
-        pass
-    return {}
+        return json.loads(OS_SYNC_STATE_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, IOError, FileNotFoundError, OSError):
+        return {}
 
 
 def _save_os_sync_state(state: dict):
@@ -590,7 +588,8 @@ def _handle_os_sync_intercept(client, os_sync_state: dict, instruction: str,
                 messages=[{"role": "user", "content": check_prompt}]
             )
             is_os_response = "yes" in check_resp.content[0].text.strip().lower()
-        except Exception:
+        except Exception as e:
+            print(f"⚠️ OS sync応答チェック失敗: {e}（通常処理にフォールバック）")
             return None
 
         if not is_os_response:
@@ -642,7 +641,8 @@ JSONのみ出力してください。"""
             proposed_updates = json.loads(extract_text)
         except (json.JSONDecodeError, Exception) as e:
             print(f"⚠️ OS sync 情報抽出エラー: {e}")
-            return None
+            _clear_os_sync_state()
+            return True, "ちょっと情報の整理に失敗しちゃった、、！\nもう一度教えてもらえると助かります！"
 
         if not proposed_updates:
             _clear_os_sync_state()

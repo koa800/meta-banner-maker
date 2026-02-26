@@ -202,8 +202,13 @@ Orchestrator の `slack_dispatch` が書き込み、日向が読む。同一マ�
 - ブラウザは Chrome + Claude in Chrome MCP で操作（Playwright は不要）
 - Chrome 自動起動: `com.hinata.chrome` LaunchAgent（`--no-sandbox --disable-gpu --remote-debugging-port=9223`）
 
-### launchd 設定
+### launchd 設定（Mac Mini 全サービス）
 
-- ラベル: `com.hinata.agent`
-- plist: `~/Library/LaunchAgents/com.hinata.agent.plist`
-- RunAtLoad=true, KeepAlive（異常終了時のみ自動再起動）, ThrottleInterval=60秒
+| サービス | ラベル | plist |
+|----------|--------|-------|
+| 日向エージェント | `com.hinata.agent` | `~/Library/LaunchAgents/com.hinata.agent.plist` |
+| Orchestrator | `com.addness.agent-orchestrator` | `~/Library/LaunchAgents/com.addness.agent-orchestrator.plist` |
+| ローカルエージェント | `com.linebot.localagent` | `~/Library/LaunchAgents/com.linebot.localagent.plist` |
+| Chrome（日向用） | `com.hinata.chrome` | `~/Library/LaunchAgents/com.hinata.chrome.plist` |
+
+全サービス共通: RunAtLoad=true, KeepAlive（異常終了時のみ自動再起動）
