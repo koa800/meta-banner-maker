@@ -104,8 +104,8 @@ def fetch_channel_messages(
 
     messages = []
     for msg in reversed(data["messages"]):  # oldest first
-        if msg.get("subtype") in ("channel_join", "channel_leave", "bot_add"):
-            continue  # skip system messages
+        if msg.get("subtype") in ("channel_join", "channel_leave", "bot_add", "bot_message"):
+            continue  # skip system/bot messages (bot_message = Webhook投稿)
 
         user_id = msg.get("user", "")
         user_name = _resolve_user(user_id) if user_id else msg.get("username", "bot")

@@ -1645,8 +1645,20 @@ JSON以外の文字は出力しないでください。"""}],
         latest_ts = new_msgs[-1]["ts"]
         self.memory.set_state(state_key, latest_ts)
 
-        # 甲原からのメッセージだけ抽出（bot は除外）
-        human_msgs = [m for m in new_msgs if not m.get("user_id", "").startswith("B")]
+        # 甲原からのメッセージだけ抽出
+        # bot / Webhook / 秘書自身の投稿を除外
+        _SELF_PATTERNS = ("日向に伝えました", "了解です！日向", "日向を再開", "日向を一旦止め")
+        human_msgs = []
+        for m in new_msgs:
+            uid = m.get("user_id", "")
+            text_preview = m.get("text", "")[:30]
+            # bot投稿を除外（user_idがBで始まる or 空）
+            if uid.startswith("B") or not uid:
+                continue
+            # 秘書自身の投稿パターンを除外（Webhook経由でuser_idが付く場合の対策）
+            if any(text_preview.startswith(p) for p in _SELF_PATTERNS):
+                continue
+            human_msgs.append(m)
         if not human_msgs:
             return
 
