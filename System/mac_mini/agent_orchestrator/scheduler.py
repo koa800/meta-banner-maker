@@ -105,6 +105,7 @@ class TaskScheduler:
             "slack_hinata_auto_reply": self._run_slack_hinata_auto_reply,
             "os_sync_session": self._run_os_sync_session,
             "secretary_proactive_work": self._run_secretary_proactive_work,
+            "weekly_hinata_memory": self._run_weekly_hinata_memory,
         }
 
     def setup(self):
@@ -2617,6 +2618,25 @@ JSON以外の文字は出力しないでください。"""}],
 
     # ================================================================
     # OSすり合わせセッション（秘書→甲原 / 金曜20:00）
+    # ================================================================
+
+    async def _run_weekly_hinata_memory(self):
+        """毎週日曜10:30: 日向の記憶統合（action_log + feedback_log → hinata_memory.md）"""
+        import sys as _sys
+        task_id = self.memory.log_task_start("weekly_hinata_memory")
+        try:
+            # learning.py を直接 import して consolidate_memory() を呼ぶ
+            hinata_dir = self.repo_dir / "System" / "hinata"
+            if str(hinata_dir) not in _sys.path:
+                _sys.path.insert(0, str(hinata_dir))
+            from learning import consolidate_memory
+            result_text = consolidate_memory()
+            self.memory.log_task_end(task_id, True, result_text)
+            logger.info(f"日向メモリ統合完了: {result_text}")
+        except Exception as e:
+            self.memory.log_task_end(task_id, False, str(e))
+            logger.error(f"日向メモリ統合エラー: {e}")
+
     # ================================================================
 
     async def _run_os_sync_session(self):

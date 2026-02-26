@@ -91,6 +91,9 @@ schedule:
   os_sync_session:
     cron: "0 20 * * 5"           # 金曜 20:00  OSすり合わせ（秘書→甲原）
     enabled: true
+  weekly_hinata_memory:
+    cron: "30 10 * * 0"          # 日曜 10:30  日向の記憶統合（profile_learningの後）
+    enabled: true
 
   # === 常時監視（軽量・ローカル処理） ===
   health_check:
