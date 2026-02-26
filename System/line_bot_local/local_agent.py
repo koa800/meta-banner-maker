@@ -3004,7 +3004,7 @@ def _generate_with_gemini(prompt: str, output_path: Path, api_key: str) -> bool:
     try:
         client = genai.Client(api_key=api_key)
         response = client.models.generate_content(
-            model="nano-banana-pro-preview",
+            model="gemini-2.5-flash-image",
             contents=prompt,
             config=genai.types.GenerateContentConfig(
                 response_modalities=["image", "text"],
@@ -3026,7 +3026,7 @@ def _generate_with_gemini_rest(prompt: str, output_path: Path, api_key: str) -> 
     """Gemini REST API で画像を生成する（SDK不要のフォールバック）。"""
     import base64 as _b64
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/nano-banana-pro-preview:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key={api_key}"
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"responseModalities": ["image", "text"]},
