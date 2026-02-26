@@ -247,6 +247,102 @@ def _generate_reply_with_claude_code(
         return None
 
 
+def _execute_with_claude_code(
+    instruction: str,
+    sender_name: str = "",
+    timeout_seconds: int = 300,
+) -> tuple[bool, str]:
+    """Claude Code CLIで汎用タスクを実行する。
+
+    LINEで受けた指示をClaude Codeが自律的に実行し、結果を返す。
+    Mac Mini上の全リソース（スクリプト、API、ファイル）にアクセス可能。
+    """
+    if not _CLAUDE_CODE_ENABLED:
+        return False, "Claude Code が利用できません"
+
+    prompt = f"""あなたは甲原海人のAI秘書です。以下の指示を実行してください。
+
+## 指示
+{instruction}
+
+## 依頼者
+{sender_name or '甲原海人'}
+
+## あなたが使えるリソース
+
+### データ・ファイル
+- `Master/people/profiles.json` — 社内メンバーのプロファイル（58名）
+- `Master/addness/goal-tree.md` — ゴール・タスク一覧（巨大ファイル。Grepで検索して該当部分だけ読むこと）
+- `Master/self_clone/kohara/` — 甲原海人の情報
+- `System/line_bot/skills/` — マーケティング・ビジネスの専門知識
+- `System/line_bot_local/contact_state.json` — 各メンバーとの過去の会話記録
+
+### 実行可能なスクリプト
+- `python3 System/sheets_manager.py read "シートID" "タブ名"` — Google スプレッドシート読み取り
+- `python3 System/sheets_manager.py write "シートID" "タブ名" "セル" "値"` — スプレッドシート書き込み
+- `python3 System/mail_manager.py` — Gmail操作
+- `python3 System/mac_mini/agent_orchestrator/tools/` 内の各種ツール
+- その他 `System/` 内のPythonスクリプト全般
+
+### Web・API
+- curl等でWeb情報を取得可能
+- Google API（OAuth認証済み）: Sheets, Gmail, Calendar
+
+## 実行ルール
+- 指示を正確に実行すること
+- 実行中に判断に迷ったら、安全な方を選ぶ
+- ファイルの削除・git操作は行わない
+- 実行結果は簡潔にまとめる（LINEで送信されるため500文字以内推奨）
+- マークダウン記法（**太字**等）は使わず、【】や★で強調、━で区切り
+
+## 出力形式
+実行結果を以下のマーカーで囲んでください:
+===RESULT_START===
+（ここに実行結果のみ。LINEで読みやすい形式で）
+===RESULT_END==="""
+
+    try:
+        print(f"   🤖 Claude Code でタスク実行中...")
+        env = os.environ.copy()
+        env["CLAUDE_CONFIG_DIR"] = str(_CLAUDE_SECRETARY_CONFIG)
+        result = subprocess.run(
+            [str(_CLAUDE_CMD), "-p", "--model", "claude-sonnet-4-6",
+             "--max-turns", "15", prompt],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            cwd=str(_PROJECT_ROOT),
+            env=env,
+        )
+
+        if result.returncode != 0:
+            print(f"   ⚠️ Claude Code エラー (code={result.returncode}): {result.stderr[:200]}")
+            return False, f"実行エラー: {result.stderr[:200]}"
+
+        output = result.stdout.strip()
+
+        # マーカーから結果を抽出
+        if "===RESULT_START===" in output and "===RESULT_END===" in output:
+            report = output.split("===RESULT_START===")[1].split("===RESULT_END===")[0].strip()
+            if report:
+                print(f"   ✅ Claude Code タスク完了（{len(report)}文字）")
+                return True, report
+
+        # マーカーなし → 出力全体を結果として扱う（末尾1000文字）
+        if output:
+            print(f"   ✅ Claude Code タスク完了（マーカーなし、{len(output)}文字）")
+            return True, output[-1000:]
+
+        return False, "Claude Code から出力がありませんでした"
+
+    except subprocess.TimeoutExpired:
+        print(f"   ⚠️ Claude Code タイムアウト（{timeout_seconds}秒）")
+        return False, f"タイムアウト（{timeout_seconds}秒）。タスクが大きすぎる可能性があります"
+    except Exception as e:
+        print(f"   ⚠️ Claude Code 実行失敗: {e}")
+        return False, f"実行失敗: {e}"
+
+
 def _load_self_profile() -> str:
     """甲原海人のコアプロファイル（価値観・判断軸・哲学）を読み込む"""
     try:
@@ -2106,28 +2202,47 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
             )
             return True, _strip_markdown_for_line(response.content[0].text.strip())
 
-        # ===== ゴール実行（Coordinator） =====
+        # ===== ゴール実行 → Claude Code 自律実行 =====
         if function_name == "execute_goal":
-            if not _COORDINATOR_AVAILABLE:
-                return False, "Coordinator モジュールが利用できません"
             goal_text = arguments.get("goal", instruction)
-            print(f"   🎯 Coordinator 起動: {goal_text[:60]}...")
-            handlers = _build_coordinator_handlers()
-            success, result = _coordinator_execute_goal(
-                goal=goal_text,
+            print(f"   🎯 Claude Code でゴール実行: {goal_text[:60]}...")
+            if _CLAUDE_CODE_ENABLED:
+                success, result = _execute_with_claude_code(
+                    instruction=goal_text,
+                    sender_name=sender_name,
+                    timeout_seconds=300,
+                )
+                if success:
+                    return True, result
+                print(f"   ⚠️ Claude Code 失敗、Coordinator にフォールバック")
+            # フォールバック: Coordinator
+            if _COORDINATOR_AVAILABLE:
+                handlers = _build_coordinator_handlers()
+                success, result = _coordinator_execute_goal(
+                    goal=goal_text,
+                    sender_name=sender_name,
+                    system_dir=_SYSTEM_DIR,
+                    project_root=_PROJECT_ROOT,
+                    function_handlers=handlers,
+                )
+                return success, result
+            return False, "実行エンジンが利用できません"
+
+        # ===== その他タスク → Claude Code 自律実行 =====
+        if _CLAUDE_CODE_ENABLED:
+            task_description = f"{instruction}\n\nタスク種別: {function_name}\nパラメータ: {json.dumps(arguments, ensure_ascii=False)}"
+            print(f"   🤖 Claude Code で汎用タスク実行: {function_name}")
+            success, result = _execute_with_claude_code(
+                instruction=task_description,
                 sender_name=sender_name,
-                system_dir=_SYSTEM_DIR,
-                project_root=_PROJECT_ROOT,
-                function_handlers=handlers,
+                timeout_seconds=180,
             )
             if success:
                 return True, result
-            return False, result
+            print(f"   ⚠️ Claude Code 失敗、API直接呼び出しにフォールバック")
 
-        # ===== その他タスクの汎用処理 =====
+        # フォールバック: 従来のAPI直接呼び出し
         sender_context = build_sender_context(sender_name)
-
-        # システムプロンプト
         system_prompt = """あなたはLINE経由で指示を受けるAI秘書です。
 ユーザーからの指示に対して、簡潔で実用的な回答を返してください。
 回答はLINEで送信されるため、以下に注意してください：
