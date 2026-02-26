@@ -22,6 +22,18 @@ SCRIPT_DIR = Path(__file__).parent
 SYSTEM_DIR = SCRIPT_DIR.parent
 CHROME_PROFILE_DIR = SYSTEM_DIR / "data" / "hinata_chrome_profile"
 SESSION_PATH = SYSTEM_DIR / "data" / "hinata_session.json"
+GOOGLE_CREDS_PATH = SYSTEM_DIR / "credentials" / "hinata_google.json"
+
+
+def _load_google_creds() -> dict:
+    """Google認証情報を読み込む。"""
+    if not GOOGLE_CREDS_PATH.exists():
+        return {}
+    try:
+        return json.load(open(GOOGLE_CREDS_PATH, "r", encoding="utf-8"))
+    except Exception as e:
+        logger.error(f"Google認証情報の読み込み失敗: {e}")
+        return {}
 
 
 def launch_browser(playwright, headless: bool = True) -> BrowserContext:
@@ -59,11 +71,64 @@ def is_logged_in(page: Page) -> bool:
     return "sign-in" not in url and "sign-up" not in url and "addness.com" in url
 
 
+def _auto_google_login(page: Page) -> bool:
+    """
+    Googleログイン画面を自動で通過する。
+    認証情報ファイルからメール・パスワードを読み込んで入力する。
+    """
+    creds = _load_google_creds()
+    if not creds.get("email") or not creds.get("password"):
+        logger.warning("Google認証情報が不足。自動ログイン不可")
+        return False
+
+    try:
+        # メールアドレス入力
+        email_input = page.locator('input[type="email"]')
+        if email_input.count() > 0:
+            logger.info("Googleメールアドレスを入力中...")
+            email_input.fill(creds["email"])
+            time.sleep(1)
+            page.locator('button:has-text("次へ"), #identifierNext').first.click()
+            time.sleep(5)
+
+        # パスワード入力
+        pw_input = page.locator('input[type="password"]')
+        if pw_input.count() > 0:
+            logger.info("Googleパスワードを入力中...")
+            pw_input.fill(creds["password"])
+            time.sleep(1)
+            page.locator('button:has-text("次へ"), #passwordNext').first.click()
+            time.sleep(5)
+
+        # TOTP入力（2段階認証が有効な場合）
+        totp_input = page.locator('input[type="tel"]#totpPin, input[name="totpPin"]')
+        if totp_input.count() > 0 and creds.get("totp_secret"):
+            try:
+                import pyotp
+                totp = pyotp.TOTP(creds["totp_secret"])
+                code = totp.now()
+                logger.info("TOTP コードを入力中...")
+                totp_input.fill(code)
+                time.sleep(1)
+                page.locator('button:has-text("次へ")').first.click()
+                time.sleep(5)
+            except ImportError:
+                logger.error("pyotp がインストールされていません")
+                return False
+
+        logger.info("Google自動ログイン完了")
+        return True
+
+    except Exception as e:
+        logger.error(f"Google自動ログイン失敗: {e}")
+        return False
+
+
 def login(page: Page, start_url: str, timeout_ms: int = 300_000) -> bool:
     """
     Addnessにログインする。
     セッションが残っていれば自動ログイン。
-    初回は手動でGoogleログインが必要。
+    Google認証情報があれば自動でGoogleログインを通過する。
     """
     logger.info("Addnessにアクセス中...")
     page.goto(start_url, wait_until="networkidle", timeout=60_000)
@@ -73,11 +138,43 @@ def login(page: Page, start_url: str, timeout_ms: int = 300_000) -> bool:
         logger.info("ログイン済み")
         return True
 
-    logger.info("ログインが必要です。ブラウザでGoogleログインしてください...")
+    logger.info("ログインが必要です。自動ログインを試みます...")
+
+    # Googleログインボタンを探してクリック
+    google_btn = page.locator(
+        'button:has-text("Google"), a:has-text("Google"), '
+        '[data-provider="google"], [class*="google"]'
+    )
+    if google_btn.count() > 0:
+        google_btn.first.click()
+        time.sleep(5)
+    else:
+        # Addnessが直接Googleログインにリダイレクトする場合もある
+        logger.info("Googleボタンが見つからない。リダイレクトを待機...")
+        time.sleep(3)
+
+    # Googleログイン画面かどうか確認
+    if "accounts.google.com" in page.url:
+        if _auto_google_login(page):
+            # ログイン後、Addnessにリダイレクトされるのを待つ
+            try:
+                page.wait_for_url("**/goals/**", timeout=60_000)
+                time.sleep(3)
+                logger.info("自動ログイン成功")
+                return True
+            except PlaywrightTimeoutError:
+                # リダイレクトがgoals以外の場合
+                if is_logged_in(page):
+                    logger.info("自動ログイン成功（ゴール以外のページ）")
+                    return True
+                logger.warning("自動ログイン後のリダイレクト待ちタイムアウト")
+
+    # 自動ログイン失敗時はフォールバック（手動待機）
+    logger.info("自動ログイン失敗。手動ログインを待機します...")
     try:
         page.wait_for_url("**/goals/**", timeout=timeout_ms)
         time.sleep(3)
-        logger.info("ログイン成功")
+        logger.info("手動ログイン成功")
         return True
     except PlaywrightTimeoutError:
         logger.error("ログインタイムアウト")
