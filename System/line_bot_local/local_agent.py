@@ -917,6 +917,7 @@ def load_config():
         "server_url": os.environ.get("LINE_BOT_SERVER_URL"),
         "agent_token": os.environ.get("AGENT_TOKEN") or os.environ.get("LOCAL_AGENT_TOKEN"),
         "anthropic_api_key": os.environ.get("ANTHROPIC_API_KEY"),
+        "gemini_api_key": os.environ.get("GEMINI_API_KEY"),
     }
     patched = False
     for key, env_val in env_overrides.items():
@@ -2763,12 +2764,10 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
 
 
 # ===== 画像生成 =====
-# メイン: Lovart（Playwright直接操作）→ フォールバック: Pollinations.ai（API）
+# メイン: Gemini API（Nano Banana Pro）→ フォールバック: Pollinations.ai（API）
 
 _IMAGE_OUTPUT_DIR = Path.home() / "agents" / "data" / "generated_images"
 _IMAGE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-_LOVART_URL = "https://www.lovart.ai/ja/home"
-_LOVART_COOKIES_PATH = Path.home() / "agents" / "data" / "lovart_cookies.json"
 
 
 def _analyze_reference_image(image_url: str) -> str:
@@ -2850,10 +2849,11 @@ def execute_image_generation(task: dict):
     image_filename = f"{_uuid.uuid4().hex[:12]}.png"
     image_path = _IMAGE_OUTPUT_DIR / image_filename
 
-    # 方法①: Lovart（Playwright直接操作）
-    if _LOVART_COOKIES_PATH.exists():
-        print(f"   🌐 Lovart で画像生成中...")
-        success = _generate_with_lovart(optimized, image_path)
+    # 方法①: Gemini API（Nano Banana Pro）
+    gemini_key = config.get("gemini_api_key", "")
+    if gemini_key:
+        print(f"   🎨 Gemini API（Nano Banana Pro）で生成中...")
+        success = _generate_with_gemini(optimized, image_path, gemini_key)
         if success:
             url = _upload_image_to_render(image_path, image_filename)
             if url:
@@ -2861,7 +2861,7 @@ def execute_image_generation(task: dict):
                     "image_url": url, "preview_url": url,
                     "original_prompt": user_prompt, "optimized_prompt": optimized,
                 }
-        print(f"   ⚠️ Lovart 生成失敗、フォールバックへ")
+        print(f"   ⚠️ Gemini 生成失敗、フォールバックへ")
 
     # 方法②: Pollinations.ai（APIフォールバック）
     print(f"   🌸 Pollinations.ai フォールバック...")
@@ -2939,216 +2939,63 @@ def _optimize_image_prompt(
     return fallback
 
 
-_LOVART_PROFILE_DIR = Path.home() / "agents" / "data" / "lovart_chrome_profile"
-_LOVART_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def _load_lovart_cookies() -> list:
-    """lovart_cookies.json からPlaywright形式のクッキーを読み込む。"""
-    if not _LOVART_COOKIES_PATH.exists():
-        return []
-    try:
-        with open(_LOVART_COOKIES_PATH, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-        cookies = []
-        for c in raw:
-            cookie = {
-                "name": c["name"],
-                "value": c["value"],
-                "domain": c["domain"],
-                "path": c["path"],
-                "secure": bool(c["secure"]),
-                "httpOnly": bool(c.get("httpOnly", False)),
-                "sameSite": "Lax",
-            }
-            if c.get("expires") and c["expires"] > 0:
-                cookie["expires"] = c["expires"]
-            cookies.append(cookie)
-        return cookies
-    except Exception as e:
-        print(f"   ⚠️ Lovart クッキー読み込み失敗: {e}")
-        return []
-
-
-def _generate_with_lovart(prompt: str, output_path: Path, timeout_sec: int = 180) -> bool:
-    """Playwright で Lovart を直接操作して画像を生成する。
-
-    headed モード（Cloudflare回避）+ クッキー注入でログイン維持。
-    """
-    import time as _time
+def _generate_with_gemini(prompt: str, output_path: Path, api_key: str) -> bool:
+    """Gemini API（Nano Banana Pro）で画像を生成する。"""
+    import base64 as _b64
 
     try:
-        from playwright.sync_api import sync_playwright as _sync_pw
+        from google import genai
     except ImportError:
-        print("   ⚠️ Playwright がインストールされていません")
-        return False
+        # google-genai が未インストールの場合、REST API で直接叩く
+        return _generate_with_gemini_rest(prompt, output_path, api_key)
 
-    cookies = _load_lovart_cookies()
-    if not cookies:
-        print("   ⚠️ Lovart クッキーが見つかりません（lovart_cookies.json）")
-        return False
-
-    browser = None
     try:
-        pw = _sync_pw().start()
-        browser = pw.chromium.launch_persistent_context(
-            str(_LOVART_PROFILE_DIR),
-            headless=False,
-            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
-            viewport={"width": 1920, "height": 1080},
-            user_agent=(
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/131.0.0.0 Safari/537.36"
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model="nano-banana-pro-preview",
+            contents=prompt,
+            config=genai.types.GenerateContentConfig(
+                response_modalities=["image", "text"],
             ),
-            accept_downloads=True,
-            locale="ja-JP",
         )
-        browser.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
-        )
-        browser.add_cookies(cookies)
-        page = browser.pages[0] if browser.pages else browser.new_page()
-
-        # Step 1: Lovart ホームに遷移
-        print("   🌐 Lovart に遷移中...")
-        page.goto(_LOVART_URL, wait_until="domcontentloaded", timeout=30000)
-        _time.sleep(2)
-
-        # ログイン確認
-        btns = page.evaluate(
-            '() => Array.from(document.querySelectorAll("button"))'
-            '.map(b => b.textContent.trim()).filter(t => t.length > 0 && t.length < 30)'
-        )
-        if any(b == "はじめる" for b in btns[:5]):
-            print("   ⚠️ Lovart 未ログイン（クッキー期限切れ？）")
-            browser.close()
-            pw.stop()
-            return False
-        print("   ✅ ログイン済み")
-
-        # Step 2: 新規プロジェクト作成
-        print("   📝 新規プロジェクト作成...")
-        try:
-            page.locator("text='新規プロジェクト'").first.click()
-        except Exception:
-            page.evaluate("""() => {
-                const btns = document.querySelectorAll('button, a');
-                for (const b of btns) {
-                    if (b.textContent.includes('新規プロジェクト')) { b.click(); return; }
-                }
-            }""")
-        _time.sleep(12)
-
-        # Step 3: プロンプト入力
-        print(f"   💬 プロンプト入力: {prompt[:60]}...")
-        input_ok = False
-        # contenteditable（チャット入力欄）を探す
-        try:
-            editable = page.locator("[contenteditable='true']").first
-            if editable.is_visible(timeout=5000):
-                editable.click()
-                _time.sleep(0.5)
-                editable.type(prompt, delay=30)
-                input_ok = True
-        except Exception:
-            pass
-        if not input_ok:
-            try:
-                textarea = page.locator("textarea").first
-                if textarea.is_visible(timeout=3000):
-                    textarea.fill(prompt)
-                    input_ok = True
-            except Exception:
-                pass
-        if not input_ok:
-            print("   ⚠️ プロンプト入力欄が見つかりません")
-            browser.close()
-            pw.stop()
-            return False
-
-        # Step 4: 送信（Enter）
-        print("   🚀 生成開始...")
-        page.keyboard.press("Enter")
-        _time.sleep(3)
-
-        # Cloudflare チェック
-        page_text = page.evaluate("() => document.body.innerText")
-        if "ブラウザ検証" in page_text or "検証を完了" in page_text:
-            print("   ⚠️ Cloudflare チャレンジが表示されました")
-            browser.close()
-            pw.stop()
-            return False
-
-        # Step 5: 画像生成待ち
-        print("   ⏳ 画像生成待ち...")
-        start = _time.time()
-        image_url = None
-        while _time.time() - start < timeout_sec:
-            images = page.evaluate("""() => {
-                const imgs = document.querySelectorAll('img');
-                return Array.from(imgs).filter(img => {
-                    const w = img.naturalWidth || 0;
-                    const h = img.naturalHeight || 0;
-                    const src = img.src || '';
-                    return w > 200 && h > 200 && src.startsWith('http')
-                        && !src.includes('avatar') && !src.includes('google')
-                        && !src.includes('icon') && !src.includes('logo');
-                }).map(img => img.src);
-            }""")
-            if images:
-                image_url = images[0]
-                break
-            elapsed = int(_time.time() - start)
-            if elapsed % 15 == 0 and elapsed > 0:
-                print(f"   ⏳ {elapsed}秒経過...")
-            _time.sleep(5)
-
-        if not image_url:
-            print(f"   ⚠️ {timeout_sec}秒以内に画像が生成されませんでした")
-            browser.close()
-            pw.stop()
-            return False
-
-        # Step 6: 画像ダウンロード
-        # オリジナル解像度のURLを取得（リサイズパラメータを除去）
-        original_url = image_url.split("?")[0]
-        print(f"   📥 画像ダウンロード: {original_url[:80]}...")
-        try:
-            resp = page.request.get(original_url)
-            if resp.ok and len(resp.body()) > 1000:
-                output_path.write_bytes(resp.body())
-                print(f"   ✅ Lovart 画像保存: {output_path} ({len(resp.body())} bytes)")
-                browser.close()
-                pw.stop()
+        for part in response.candidates[0].content.parts:
+            if part.inline_data and part.inline_data.mime_type.startswith("image/"):
+                output_path.write_bytes(part.inline_data.data)
+                print(f"   ✅ Gemini 画像生成成功: {output_path} ({len(part.inline_data.data)} bytes)")
                 return True
-            else:
-                print(f"   ⚠️ ダウンロード失敗 (status={resp.status})")
-        except Exception as e:
-            print(f"   ⚠️ ダウンロードエラー: {e}")
-            # リサイズ付きURLでリトライ
-            try:
-                resp2 = page.request.get(image_url)
-                if resp2.ok and len(resp2.body()) > 1000:
-                    output_path.write_bytes(resp2.body())
-                    print(f"   ✅ Lovart 画像保存（リサイズ版）: {output_path}")
-                    browser.close()
-                    pw.stop()
-                    return True
-            except Exception:
-                pass
-
-        browser.close()
-        pw.stop()
+        print("   ⚠️ Gemini: 画像パートが見つかりません")
         return False
-
     except Exception as e:
-        print(f"   ⚠️ Lovart Playwright エラー: {e}")
-        if browser:
-            try:
-                browser.close()
-            except Exception:
-                pass
+        print(f"   ⚠️ Gemini SDK エラー: {e}")
+        return _generate_with_gemini_rest(prompt, output_path, api_key)
+
+
+def _generate_with_gemini_rest(prompt: str, output_path: Path, api_key: str) -> bool:
+    """Gemini REST API で画像を生成する（SDK不要のフォールバック）。"""
+    import base64 as _b64
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/nano-banana-pro-preview:generateContent?key={api_key}"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseModalities": ["image", "text"]},
+    }
+    try:
+        resp = requests.post(url, json=payload, timeout=120)
+        if resp.status_code != 200:
+            print(f"   ⚠️ Gemini REST エラー: {resp.status_code} {resp.text[:200]}")
+            return False
+        data = resp.json()
+        for part in data.get("candidates", [{}])[0].get("content", {}).get("parts", []):
+            inline = part.get("inlineData", {})
+            if inline.get("mimeType", "").startswith("image/"):
+                img_bytes = _b64.b64decode(inline["data"])
+                output_path.write_bytes(img_bytes)
+                print(f"   ✅ Gemini REST 画像生成成功: {output_path} ({len(img_bytes)} bytes)")
+                return True
+        print("   ⚠️ Gemini REST: 画像パートが見つかりません")
+        return False
+    except Exception as e:
+        print(f"   ⚠️ Gemini REST エラー: {e}")
         return False
 
 
