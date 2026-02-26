@@ -45,6 +45,11 @@ schedule:
     cron: "20 9 * * *"           # 09:20  日報入力の完了検証（シートの実データ確認）
     enabled: true
 
+  # === 秘書自律ワーク ===
+  secretary_proactive_work:
+    cron: "0 10,14,17 * * 1-5"   # 平日 10:00/14:00/17:00  Addnessタスクを自律的に進める
+    enabled: true
+
   # === 日中 ===
   looker_csv_download:
     cron: "30 11 * * *"          # 11:30  Looker Studio CSVダウンロード（前々日分。12:00のkpi_daily_importの前に実行）

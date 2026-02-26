@@ -104,6 +104,7 @@ class TaskScheduler:
             "hinata_activity_check": self._run_hinata_activity_check,
             "slack_hinata_auto_reply": self._run_slack_hinata_auto_reply,
             "os_sync_session": self._run_os_sync_session,
+            "secretary_proactive_work": self._run_secretary_proactive_work,
         }
 
     def setup(self):
@@ -2636,3 +2637,169 @@ JSON以外の文字は出力しないでください。"""}],
         except Exception as e:
             self.memory.log_task_end(task_id, "error", error_message=str(e)[:500])
             logger.exception(f"os_sync_session failed: {e}")
+
+    # ------------------------------------------------------------------ #
+    #  秘書自律ワーク — 定常業務がない時間帯にAddnessタスクを自律的に進める
+    # ------------------------------------------------------------------ #
+
+    async def _run_secretary_proactive_work(self):
+        """秘書自律ワーク: Addnessのタスクを自律的に進める。
+
+        定常業務がない時間帯に、actionable-tasks.md を読んで
+        秘書が実質的に進められるタスクを1つ選び、実行する。
+        成果物は Master/addness/proactive_output/ に保存、LINE報告。
+        """
+        from .notifier import notify_ai_team
+        from pathlib import Path
+        from datetime import datetime
+        import json
+
+        logger.info("秘書自律ワーク: 開始")
+
+        # --- プリフライト ---
+        claude_cmd = self._find_claude_cmd()
+        if not claude_cmd:
+            logger.warning("秘書自律ワーク: Claude Code CLI なし → スキップ")
+            return
+
+        secretary_config = Path.home() / ".claude-secretary"
+        if not secretary_config.exists():
+            logger.warning("秘書自律ワーク: 秘書設定なし → スキップ")
+            return
+
+        project_root = Path(
+            self.config.get("paths", {}).get("repo_root", "~/agents")
+        ).expanduser()
+        master_dir = Path(
+            self.config.get("paths", {}).get("master_dir", "~/agents/Master")
+        ).expanduser()
+
+        # --- actionable-tasks.md を読む ---
+        actionable_path = master_dir / "addness" / "actionable-tasks.md"
+        if not actionable_path.exists():
+            logger.warning("秘書自律ワーク: actionable-tasks.md なし → スキップ")
+            return
+        tasks_content = actionable_path.read_text(encoding="utf-8")
+
+        # --- 成果物出力先を確保 ---
+        output_dir = master_dir / "addness" / "proactive_output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # --- 直近の作業履歴（重複回避） ---
+        state_dir = Path(
+            self.config.get("paths", {}).get("db_path", "~/agents/System/mac_mini/agent_orchestrator/agent.db")
+        ).expanduser().parent
+        state_path = state_dir / "proactive_work_state.json"
+        recent_work = []
+        if state_path.exists():
+            try:
+                recent_work = json.loads(state_path.read_text(encoding="utf-8"))
+            except Exception:
+                recent_work = []
+
+        recent_summary = (
+            "\n".join([f"- {w['date']}: {w['task']}" for w in recent_work[-10:]])
+            if recent_work else "（なし）"
+        )
+
+        today_str = datetime.now().strftime("%Y-%m-%d")
+
+        prompt = f"""あなたは甲原海人のAI秘書です。今は定常業務がない時間帯なので、Addnessのタスクを自律的に進めてください。
+
+## あなたの役割
+甲原さんが普段やっている仕事を代わりに進める。「やれることからどんどんやる」精神で、具体的な成果物を作ること。
+
+## Addnessの実行可能タスク一覧
+{tasks_content}
+
+## 直近の作業履歴（重複回避 — 同じタスクは選ばない）
+{recent_summary}
+
+## タスク選定の優先順位
+1. 🔴 期限超過タスク（最優先）
+2. 🔍 検討中タスクで、あなたが実質的に進められるもの
+3. ⚠️ 委任先超過タスクのフォローアップ下書き
+
+## あなたが実行できること
+- コンテンツ作成（広告コピー、メール文面、販売シナリオ、LP構成案）
+- リサーチ・情報収集（Web検索、競合分析、ベストプラクティス調査）
+- ドキュメント整理・分析（フロー図、現状分析、改善提案）
+- 画像生成（Geminiでバナーやクリエイティブ素材）
+- スプレッドシートの読み取り・データ分析
+- チームメンバーへのフォローアップ文面の下書き
+
+## やらないこと
+- 物理的な作業（撮影、対面MTG等）は選ばない
+- 甲原さんの承認なしにメッセージを外部に送信しない
+- ブラウザを使う必要のあるタスクは今回はスキップ
+- 直近の作業履歴にあるタスクは選ばない
+
+## 実行手順
+1. タスク一覧から、今あなたが最も価値を出せるタスクを1つ選ぶ
+2. 選んだ理由を簡潔に述べる
+3. 実際に作業を実行する（リサーチ、ドラフト作成、分析等）
+4. 成果物をファイルに保存する
+   - 保存先: {output_dir}/
+   - ファイル名: {today_str}_[タスク名の要約].md
+5. 最後に、以下のフォーマットで結果を出力する
+
+## 重要な注意
+- 中途半端な分析ではなく、そのまま使える成果物を作ること
+- 「〇〇を検討する必要がある」で終わらせず、「具体的にこうする」まで踏み込む
+- 甲原さんが成果物を見て「これ使える」と思えるクオリティを目指す
+
+## 出力フォーマット（最後に必ずこの形式で出力）
+PROACTIVE_RESULT:
+タスク: [選んだタスク名]
+成果: [具体的に何を作ったか — ファイルパス含む]
+次のステップ: [甲原さんに確認してもらうこと or 次にやるべきこと]
+"""
+
+        success, output, error = self._execute_claude_code_task(
+            "秘書自律ワーク", claude_cmd, secretary_config,
+            project_root, prompt, max_turns=30, timeout=600,
+        )
+
+        if success:
+            # PROACTIVE_RESULT を抽出
+            result_section = ""
+            if "PROACTIVE_RESULT:" in output:
+                result_section = output.split("PROACTIVE_RESULT:")[-1].strip()
+
+            # 作業履歴を更新
+            task_name = ""
+            for line in result_section.split("\n"):
+                if line.startswith("タスク:"):
+                    task_name = line.replace("タスク:", "").strip()
+                    break
+
+            if task_name:
+                recent_work.append({
+                    "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "task": task_name,
+                })
+                recent_work = recent_work[-20:]  # 最新20件を保持
+                try:
+                    tmp = state_path.with_suffix(".tmp")
+                    tmp.write_text(
+                        json.dumps(recent_work, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    tmp.rename(state_path)
+                except Exception as e:
+                    logger.warning(f"秘書自律ワーク: 履歴保存エラー: {e}")
+
+            # LINE 報告
+            now_str = datetime.now().strftime("%H:%M")
+            report = (
+                f"🤖 秘書自律ワーク完了\n"
+                f"━━━━━━━━━━━━\n"
+                f"{result_section[:500]}\n"
+                f"━━━━━━━━━━━━\n"
+                f"完了時刻: {now_str}"
+            )
+            notify_ai_team(report)
+            logger.info(f"秘書自律ワーク: 完了 - {task_name}")
+        else:
+            # 自律ワークの失敗は静かにログのみ（定常業務ではないため通知しない）
+            logger.error(f"秘書自律ワーク: 失敗 - {error}")
