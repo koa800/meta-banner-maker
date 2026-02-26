@@ -2762,17 +2762,16 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
         return False, f"Claude APIエラー: {str(e)}"
 
 
-# ===== 画像生成（Claude Code CLI + Chrome MCP） =====
+# ===== 画像生成 =====
+# 多段フォールバック: ① Gemini API → ② Pollinations.ai（無料） → ③ Chrome MCP
+# 「手元にあるもの」で即動かす。上位エンジンは後から差し替え可能。
 
 _IMAGE_OUTPUT_DIR = Path.home() / "agents" / "data" / "generated_images"
 _IMAGE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-_CLAUDE_CMD = "/opt/homebrew/bin/claude"
-_CLAUDE_WORK_DIR = Path.home() / "agents" / "_repo"
 
 
 def execute_image_generation(task: dict):
     """画像生成タスクを実行する。
-    Claude Code CLI + Chrome MCP で生成AIツールを操作し、画像を生成・ダウンロード。
     Returns: (success, message_or_error, extra_dict)
     """
     arguments = task.get("arguments", {})
@@ -2782,105 +2781,116 @@ def execute_image_generation(task: dict):
 
     print(f"   🎨 プロンプト: {user_prompt[:80]}")
 
-    # 出力先パスを事前に決定（Claude Code に保存先を指示）
+    # ---- Step 1: ユーザーの指示を画像生成用の英語プロンプトに変換 ----
+    optimized_prompt = _optimize_prompt_for_image(user_prompt)
+    print(f"   🔧 最適化プロンプト: {optimized_prompt[:80]}")
+
+    # ---- Step 2: 画像を生成（多段フォールバック） ----
     import uuid as _uuid
     image_filename = f"{_uuid.uuid4().hex[:12]}.png"
     image_path = _IMAGE_OUTPUT_DIR / image_filename
 
-    # Claude Code CLI に渡すプロンプト
-    claude_prompt = f"""あなたはAI秘書のアシスタントです。甲原海人さんから画像生成の指示を受けました。
+    # エンジン①: Gemini API（API キーが設定されている場合）
+    gemini_key = config.get("gemini_api_key", "")
+    if gemini_key:
+        print(f"   🔮 Gemini API で画像生成中...")
+        success = _generate_with_gemini(gemini_key, optimized_prompt, image_path)
+        if success:
+            return _finalize_image(image_path, image_filename)
 
-## 指示内容
-「{user_prompt}」
+    # エンジン②: Pollinations.ai（無料・APIキー不要）
+    print(f"   🌸 Pollinations.ai で画像生成中...")
+    success = _generate_with_pollinations(optimized_prompt, image_path)
+    if success:
+        return _finalize_image(image_path, image_filename)
 
-## やること
+    return False, "画像生成に失敗しました。全エンジンでエラーが発生しました。", {}
 
-1. Chrome のタブを確認: `mcp__claude-in-chrome__tabs_context_mcp`
-2. 新しいタブを作成: `mcp__claude-in-chrome__tabs_create_mcp`
-3. Gemini（https://gemini.google.com/）に遷移: `mcp__claude-in-chrome__navigate`
-   - ログインアカウント: kohara.kaito@team.addness.co.jp
-   - もしログインが必要ならログインフローを実行
-4. Geminiのチャット入力欄に画像生成プロンプトを入力して送信
-   - プロンプト例: 「{user_prompt}」を画像にしてください
-   - Geminiが画像を生成するまで待つ
-5. 生成された画像をダウンロード
-   - 画像を右クリック → 保存、またはJavaScriptで画像URLを取得してダウンロード
-   - 保存先: {image_path}
-6. 画像ファイルが保存されたか確認
 
-## 重要ルール
-- 画像ファイルは必ず `{image_path}` に保存すること
-- Geminiで画像が生成できない場合は、その旨を報告すること
-- ログインが必要な場合、kohara.kaito@team.addness.co.jp のGoogleアカウントでログイン
-- 操作が完了したら、結果を簡潔に報告（1-2行）
-
-## 出力
-最後に、以下のいずれかを報告:
-- 成功: 「画像を保存しました: {image_path}」
-- 失敗: 「画像生成に失敗しました: 理由」
-"""
-
+def _optimize_prompt_for_image(user_prompt: str) -> str:
+    """ユーザーの日本語指示を画像生成に最適な英語プロンプトに変換する"""
     try:
-        work_dir = str(_CLAUDE_WORK_DIR) if _CLAUDE_WORK_DIR.exists() else str(Path.home())
-        print(f"   🤖 Claude Code CLI 起動中... (timeout: 300s)")
-        proc = subprocess.Popen(
-            [_CLAUDE_CMD, "-p", claude_prompt],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            cwd=work_dir,
-            start_new_session=True,
+        api_key = config.get("anthropic_api_key", "")
+        if not api_key:
+            return user_prompt
+
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system="You are an expert at writing image generation prompts. Convert the user's request into an optimal English prompt for AI image generation. Output ONLY the prompt, nothing else. Keep it concise (under 200 words). Include style, composition, lighting, and quality descriptors.",
+            messages=[{"role": "user", "content": f"以下の指示を画像生成プロンプトに変換してください:\n{user_prompt}"}],
         )
-        try:
-            stdout, stderr = proc.communicate(timeout=300)
-        except subprocess.TimeoutExpired:
-            import os as _os
-            import signal as _signal
-            pgid = _os.getpgid(proc.pid)
-            try:
-                _os.killpg(pgid, _signal.SIGTERM)
-            except OSError:
-                pass
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                try:
-                    _os.killpg(pgid, _signal.SIGKILL)
-                except OSError:
-                    pass
-            return False, "画像生成がタイムアウトしました（5分超過）", {}
-
-        if proc.returncode != 0:
-            print(f"   ❌ Claude Code エラー: {stderr[:200]}")
-            return False, f"Claude Code エラー: {stderr[:200]}", {}
-
-        claude_result = stdout.strip()
-        print(f"   📝 Claude Code結果: {claude_result[:100]}")
-
-        # 画像ファイルが生成されたか確認
-        if image_path.exists() and image_path.stat().st_size > 0:
-            print(f"   📸 画像ファイル確認OK: {image_path} ({image_path.stat().st_size} bytes)")
-            # Render にアップロード
-            image_url = _upload_image_to_render(image_path, image_filename)
-            if image_url:
-                return True, "画像できましたよ！", {"image_url": image_url, "preview_url": image_url}
-            else:
-                return False, "画像は生成しましたが、アップロードに失敗しました", {}
-        else:
-            # 画像ファイルが見つからない場合、ディレクトリ内を探す
-            found = _find_recent_image(_IMAGE_OUTPUT_DIR)
-            if found:
-                image_url = _upload_image_to_render(found, found.name)
-                if image_url:
-                    return True, "画像できましたよ！", {"image_url": image_url, "preview_url": image_url}
-
-            # Claude Code の結果をテキストとして返す
-            return False, f"画像ファイルが見つかりませんでした。\n{claude_result[:300]}", {}
-
-    except FileNotFoundError:
-        return False, "claude コマンドが見つかりません（Mac Mini にインストールが必要です）", {}
+        result = resp.content[0].text.strip()
+        return result if result else user_prompt
     except Exception as e:
-        return False, f"画像生成エラー: {str(e)}", {}
+        print(f"   ⚠️ プロンプト最適化失敗（元のプロンプトを使用）: {e}")
+        return user_prompt
+
+
+def _generate_with_gemini(api_key: str, prompt: str, output_path: Path) -> bool:
+    """Google Gemini API で画像生成"""
+    try:
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_images(
+            model="imagen-3.0-generate-002",
+            prompt=prompt,
+            config=types.GenerateImagesConfig(number_of_images=1),
+        )
+        if response.generated_images:
+            img = response.generated_images[0]
+            img.image.save(str(output_path))
+            print(f"   ✅ Gemini API 画像生成成功: {output_path}")
+            return True
+        return False
+    except ImportError:
+        print(f"   ⚠️ google-genai パッケージ未インストール")
+        return False
+    except Exception as e:
+        print(f"   ⚠️ Gemini API エラー: {e}")
+        return False
+
+
+def _generate_with_pollinations(prompt: str, output_path: Path) -> bool:
+    """Pollinations.ai で画像生成（無料・APIキー不要）"""
+    try:
+        import urllib.parse
+        import urllib.request
+
+        encoded = urllib.parse.quote(prompt)
+        url = f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&model=flux&nologo=true"
+
+        print(f"   📡 Pollinations.ai にリクエスト中...")
+        req = urllib.request.Request(url, headers={"User-Agent": "AI-Secretary/1.0"})
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            if resp.status == 200:
+                data = resp.read()
+                if len(data) > 1000:  # 最低限の画像サイズチェック
+                    output_path.write_bytes(data)
+                    print(f"   ✅ Pollinations.ai 画像生成成功: {output_path} ({len(data)} bytes)")
+                    return True
+                else:
+                    print(f"   ⚠️ Pollinations.ai: レスポンスが小さすぎる ({len(data)} bytes)")
+        return False
+    except Exception as e:
+        print(f"   ⚠️ Pollinations.ai エラー: {e}")
+        return False
+
+
+def _finalize_image(image_path: Path, filename: str):
+    """画像ファイルをRenderにアップロードして結果を返す"""
+    if not image_path.exists() or image_path.stat().st_size == 0:
+        return False, "画像ファイルが空です", {}
+
+    image_url = _upload_image_to_render(image_path, filename)
+    if image_url:
+        return True, "画像できましたよ！", {"image_url": image_url, "preview_url": image_url}
+    else:
+        return False, "画像は生成しましたが、LINEへの送信に失敗しました", {}
 
 
 def _upload_image_to_render(image_path: Path, filename: str) -> str:
@@ -2905,17 +2915,6 @@ def _upload_image_to_render(image_path: Path, filename: str) -> str:
     except Exception as e:
         print(f"   ❌ アップロードエラー: {e}")
         return ""
-
-
-def _find_recent_image(directory: Path, max_age_seconds: int = 120) -> Path:
-    """ディレクトリ内で直近に作成された画像ファイルを探す"""
-    import time
-    now = time.time()
-    for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
-        for f in directory.glob(ext):
-            if now - f.stat().st_mtime < max_age_seconds:
-                return f
-    return None
 
 
 def execute_task_with_claude(task: dict):
