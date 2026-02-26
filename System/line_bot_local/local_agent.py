@@ -232,6 +232,7 @@ def _generate_reply_with_claude_code(
         if "===REPLY_START===" in output and "===REPLY_END===" in output:
             reply = output.split("===REPLY_START===")[1].split("===REPLY_END===")[0].strip()
             if reply:
+                reply = _strip_markdown_for_line(reply)
                 print(f"   ✅ Claude Code 返信生成完了（{len(reply)}文字）")
                 return reply
 
@@ -291,7 +292,7 @@ def _execute_with_claude_code(
 ## 実行ルール
 - 指示を正確に実行すること
 - 実行中に判断に迷ったら、安全な方を選ぶ
-- ファイルの削除・git操作は行わない
+- 【禁止事項】ファイルの削除、git操作（add/commit/push）、デプロイ、プロセスのkill、環境変数の変更。これらは甲原本人が手動で行う
 - 実行結果は簡潔にまとめる（LINEで送信されるため500文字以内推奨）
 - マークダウン記法（**太字**等）は使わず、【】や★で強調、━で区切り
 
@@ -323,7 +324,7 @@ def _execute_with_claude_code(
 
         # マーカーから結果を抽出
         if "===RESULT_START===" in output and "===RESULT_END===" in output:
-            report = output.split("===RESULT_START===")[1].split("===RESULT_END===")[0].strip()
+            report = _strip_markdown_for_line(output.split("===RESULT_START===")[1].split("===RESULT_END===")[0].strip())
             if report:
                 print(f"   ✅ Claude Code タスク完了（{len(report)}文字）")
                 return True, report
@@ -331,7 +332,7 @@ def _execute_with_claude_code(
         # マーカーなし → 出力全体を結果として扱う（末尾1000文字）
         if output:
             print(f"   ✅ Claude Code タスク完了（マーカーなし、{len(output)}文字）")
-            return True, output[-1000:]
+            return True, _strip_markdown_for_line(output[-1000:])
 
         return False, "Claude Code から出力がありませんでした"
 
