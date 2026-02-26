@@ -449,12 +449,72 @@ def os_sync_session() -> ToolResult:
     except Exception as e:
         logger.warning(f"os_sync_session: execution_rules read error: {e}")
 
+    # action_log.json（直近1週間のアクション履歴）
+    action_log_text = ""
+    action_log_path = os.path.join(master_dir, "learning", "action_log.json")
+    try:
+        if os.path.exists(action_log_path):
+            with open(action_log_path, encoding="utf-8") as f:
+                action_log = _json.load(f)
+            if action_log:
+                # 直近20件に絞る（プロンプト肥大防止）
+                recent_actions = action_log[-20:]
+                action_lines = []
+                for a in recent_actions:
+                    action_lines.append(
+                        f"- [{a.get('date', '?')}] 指示「{a.get('instruction', '?')[:80]}」→ 結果: {a.get('result', '?')[:100]}"
+                    )
+                action_log_text = "\n".join(action_lines)
+    except Exception as e:
+        logger.warning(f"os_sync_session: action_log read error: {e}")
+
+    # feedback_log.json（フィードバック履歴）
+    feedback_log_text = ""
+    feedback_log_path = os.path.join(master_dir, "learning", "feedback_log.json")
+    try:
+        if os.path.exists(feedback_log_path):
+            with open(feedback_log_path, encoding="utf-8") as f:
+                feedback_log = _json.load(f)
+            if feedback_log:
+                recent_fb = feedback_log[-10:]
+                fb_lines = []
+                for fb in recent_fb:
+                    icon = "+" if fb.get("sentiment") == "positive" else "-"
+                    fb_lines.append(
+                        f"- [{icon}] 「{fb.get('previous_instruction', '?')[:60]}」→ 甲原さん「{fb.get('feedback', '?')[:80]}」"
+                    )
+                feedback_log_text = "\n".join(fb_lines)
+    except Exception as e:
+        logger.warning(f"os_sync_session: feedback_log read error: {e}")
+
     if not os_sections:
         return ToolResult(success=False, output="", error="No OS files found")
 
     os_context = ""
     for label, content in os_sections:
         os_context += f"\n\n### {label}\n{content}"
+
+    # ギャップ照合セクション（アクション履歴がある場合のみ追加）
+    gap_section = ""
+    if action_log_text:
+        gap_section = f"""
+
+## 今週のアクション履歴（OS照合用）
+
+以下は秘書が今週実行したアクションの履歴です。
+{action_log_text}
+"""
+        if feedback_log_text:
+            gap_section += f"""
+### 甲原さんからのフィードバック
+{feedback_log_text}
+"""
+        gap_section += """
+★ 上記のアクション履歴をOSのルール・判断軸と照合し、以下を特定してください:
+- OSに書かれたルールに反する判断をしていないか
+- OSに記載がない判断パターン（=OSの抜け漏れ）がないか
+- フィードバックで指摘された内容がOSに反映されていない箇所はないか
+"""
 
     prompt = f"""あなたは甲原海人のAI秘書です。「OSすり合わせ」の時間です。
 
@@ -463,7 +523,7 @@ def os_sync_session() -> ToolResult:
 
 以下があなたが現在インストールしている「甲原海人の脳のOS」です。
 {os_context}
-
+{gap_section}
 ## 出力（LINEメッセージ）
 
 構成:
@@ -475,16 +535,21 @@ def os_sync_session() -> ToolResult:
 
 （2）学習済みルール {len(exec_rules)}件から、特に重要なものを2件ピックアップ
 
-（3）「ここ確認したい、、！」として2-3個の具体的な質問
+（3）今週のアクション×OS照合の結果（ギャップがあれば報告、なければ「照合OK」と1行で）
+  → 「今週こういう判断をしたが、OSに該当ルールがなかった」等を具体的に
+  → ギャップがあれば「ルール追加すべきですか？」と確認
+
+（4）「ここ確認したい、、！」として1-2個の具体的な質問
   → 情報が薄い・古い・曖昧な部分を特定して質問にする
   → 答えてもらえたら即学習に使える質問にする
 
-（4）「ずれてるとこあったら教えてください！修正・追加があれば即反映します！」で締める
+（5）「ずれてるとこあったら教えてください！修正・追加があれば即反映します！」で締める
 
 ## ルール
-- 600文字以内
+- 800文字以内
 - マークダウン記法は使わない。【】★━で装飾
 - 秘書が「下から上に」報告する姿勢で書く
+- ギャップ報告は具体的に。「〇〇の判断をしたとき、OSには該当ルールがなかった」等
 """
 
     try:
