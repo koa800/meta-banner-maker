@@ -170,15 +170,16 @@ def _generate_reply_with_claude_code(
 
 ## 能動的な情報収集（必要に応じて実行）
 
-返信内容をより正確にするために、以下のファイルを**必要に応じて**読んでください。
-全てを読む必要はありません。メッセージの内容に関連するものだけ読んでください。
+返信内容をより正確にするために、以下を**必要に応じて**参照してください。
+全てを読む必要はありません。メッセージの内容に関連するものだけ。
+【重要】大きいファイルは絶対にcatで全件読み込みしないこと。Grepで必要な部分だけ検索する。
 
-1. **スタイルルール**: `Master/learning/style_rules.json` — 自動学習されたスタイルルール
-2. **返信修正例**: `Master/learning/reply_feedback.json` — {sender_name} 宛の過去修正例
-3. **会話記憶**: `System/line_bot_local/contact_state.json` — {sender_name} との過去のやり取り
+1. **スタイルルール**: `Master/learning/style_rules.json`（小さいファイル、読み込みOK）
+2. **返信修正例**: `Master/learning/reply_feedback.json` で {sender_name} をGrep
+3. **会話記憶**: `System/line_bot_local/contact_state.json` で {sender_name} をGrep
 4. **専門知識**: `System/line_bot/skills/` 内の .md ファイル
-5. **ゴール・タスク情報**: `Master/addness/goal-tree.md` は巨大ファイル（540KB）。Grepで送信者名やキーワードを検索して該当部分だけ読んでください。全件読み込み禁止。
-6. **チームメンバー確認**: 人名を出す場合は `Master/people/profiles.json` でGrepして実在確認すること
+5. **ゴール・タスク情報**: `Master/addness/goal-tree.md`（540KB）→ Grepでキーワード検索のみ
+6. **チームメンバー確認**: `Master/people/profiles.json`（324KB）→ Grepで人名検索のみ。全件読み込み禁止
 
 ## 出力ルール（厳守）
 
@@ -214,10 +215,10 @@ def _generate_reply_with_claude_code(
         env["CLAUDE_CONFIG_DIR"] = str(_CLAUDE_SECRETARY_CONFIG)
         result = subprocess.run(
             [str(_CLAUDE_CMD), "-p", "--model", "claude-sonnet-4-6",
-             "--max-turns", "6", prompt],
+             "--max-turns", "12", prompt],
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=180,
             cwd=str(_PROJECT_ROOT),
             env=env,
         )
