@@ -90,6 +90,7 @@ class TaskScheduler:
             "render_health_check": self._run_render_health_check,
             "weekly_content_suggestions": self._run_weekly_content_suggestions,
             "daily_report_input": self._run_daily_report_input,
+            "looker_csv_download": self._run_looker_csv_download,
             "kpi_daily_import": self._run_kpi_daily_import,
             "sheets_sync": self._run_sheets_sync,
             "git_pull_sync": self._run_git_pull_sync,
@@ -1206,6 +1207,110 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力
             )
             if ok:
                 logger.info(f"Special reminder sent: {label} in {delta} days")
+
+    async def _run_looker_csv_download(self):
+        """毎日11:30: Looker Studio CSVダウンロード（前々日分）。秘書がClaude Code + Chrome MCPで実行。"""
+        import subprocess
+        from pathlib import Path
+        from datetime import date, timedelta
+        from .notifier import send_line_notify
+
+        logger.info("Looker CSV ダウンロード: 開始")
+
+        claude_cmd = Path("/opt/homebrew/bin/claude")
+        secretary_config = Path.home() / ".claude-secretary"
+        project_root = Path(self.config.get("paths", {}).get("repo_root", "~/agents")).expanduser()
+
+        if not claude_cmd.exists() or not secretary_config.exists():
+            logger.error("Looker CSV ダウンロード: Claude Code or secretary config not found")
+            send_line_notify("⚠️ Looker CSVダウンロード失敗: Claude Code環境が見つかりません")
+            return
+
+        target_date = date.today() - timedelta(days=2)
+        target_str = target_date.strftime("%Y-%m-%d")
+        csv_filename = f"{target_str}_アドネス全体数値_媒体・ファネル別データ_表.csv"
+        csv_dir = Path.home() / "Desktop" / "Looker Studio CSV"
+
+        prompt = f"""あなたは甲原海人のAI秘書です。Looker StudioからCSVをダウンロードしてください。
+
+## タスク
+{target_date.strftime('%Y年%m月%d日')}（前々日）のLooker Studio CSVをダウンロードする。
+
+## 手順
+
+### Step 1: Looker Studio を開く
+- URL: https://lookerstudio.google.com/u/2/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_dsqvinv6zd
+- ページ名: 媒体・ファネル別データ
+- ブラウザで開いて読み込み完了を待つ
+
+### Step 2: 日付フィルターを変更
+- ページ上部の日付フィルターをクリック
+- 詳細設定で開始日・終了日を両方「{target_str}」に設定
+- 適用をクリック
+
+### Step 3: CSVエクスポート
+- テーブルを右クリック → 「グラフをエクスポート」または「データのエクスポート」を選択
+- CSV形式を選択
+- 「エクスポート」をクリック
+- ダウンロード完了を待つ
+
+### Step 4: ファイル移動・リネーム
+- ダウンロードされたファイル（~/Downloads/ に保存される）を以下に移動:
+```bash
+mkdir -p "{csv_dir}"
+# ダウンロードされたCSVファイルを特定して移動
+latest_csv=$(ls -t ~/Downloads/*.csv 2>/dev/null | head -1)
+if [ -n "$latest_csv" ]; then
+    mv "$latest_csv" "{csv_dir}/{csv_filename}"
+    echo "移動完了: {csv_dir}/{csv_filename}"
+else
+    echo "CSVファイルが見つかりません"
+fi
+```
+
+### Step 5: 確認
+```bash
+ls -la "{csv_dir}/{csv_filename}"
+head -3 "{csv_dir}/{csv_filename}"
+```
+
+## 出力形式
+===RESULT_START===
+（ダウンロード結果: ファイルパス、行数等）
+===RESULT_END==="""
+
+        try:
+            import os
+            env = os.environ.copy()
+            env["CLAUDE_CONFIG_DIR"] = str(secretary_config)
+            result = subprocess.run(
+                [str(claude_cmd), "-p", "--model", "claude-sonnet-4-6",
+                 "--max-turns", "20", prompt],
+                capture_output=True,
+                text=True,
+                timeout=480,  # 8分タイムアウト
+                cwd=str(project_root),
+                env=env,
+            )
+
+            if result.returncode != 0:
+                logger.error(f"Looker CSV ダウンロード: Claude Code エラー (code={result.returncode}): {result.stderr[:300]}")
+                send_line_notify(f"⚠️ Looker CSVダウンロード失敗\n{result.stderr[:200]}")
+                return
+
+            output = result.stdout.strip()
+            if "===RESULT_START===" in output and "===RESULT_END===" in output:
+                report = output.split("===RESULT_START===")[1].split("===RESULT_END===")[0].strip()
+                logger.info(f"Looker CSV ダウンロード: 完了 - {report[:200]}")
+            else:
+                logger.info(f"Looker CSV ダウンロード: 完了（マーカーなし）- {output[-300:]}")
+
+        except subprocess.TimeoutExpired:
+            logger.error("Looker CSV ダウンロード: タイムアウト（8分）")
+            send_line_notify("⚠️ Looker CSVダウンロード: タイムアウト。手動で確認してください。")
+        except Exception as e:
+            logger.error(f"Looker CSV ダウンロード: 例外 - {e}")
+            send_line_notify(f"⚠️ Looker CSVダウンロード失敗: {str(e)[:200]}")
 
     async def _run_kpi_daily_import(self):
         """毎日12:00: 元データの完了チェック → 投入 or リマインド"""
