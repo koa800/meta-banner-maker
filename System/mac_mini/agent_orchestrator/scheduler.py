@@ -262,22 +262,125 @@ class TaskScheduler:
                 return p
         return None
 
+    def _ensure_claude_chrome_ready(self):
+        """Claude Code + Chrome の事前チェック。Chrome 未起動なら自動起動を試みる。
+        Returns: (ok, claude_cmd, secretary_config, project_root, error_msg)
+        """
+        import subprocess
+        import time as _time
+        from pathlib import Path
+
+        claude_cmd = self._find_claude_cmd()
+        if not claude_cmd:
+            return False, None, None, None, "Claude Code CLIが見つかりません"
+
+        secretary_config = Path.home() / ".claude-secretary"
+        if not secretary_config.exists():
+            return False, None, None, None, (
+                f"秘書設定ディレクトリが見つかりません: {secretary_config}\n"
+                "Mac Mini で ~/.claude-secretary/ のセットアップが必要です"
+            )
+
+        project_root = Path(self.config.get("paths", {}).get("repo_root", "~/agents")).expanduser()
+
+        # Chrome 起動確認 + 自動起動
+        try:
+            r = subprocess.run(["pgrep", "-f", "Google Chrome"],
+                               capture_output=True, text=True, timeout=5)
+            if r.returncode != 0:
+                logger.warning("Chrome 未起動 → 自動起動を試みます")
+                subprocess.Popen(["open", "-a", "Google Chrome"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                _time.sleep(10)  # Chrome + 拡張機能の初期化待ち
+                r2 = subprocess.run(["pgrep", "-f", "Google Chrome"],
+                                    capture_output=True, text=True, timeout=5)
+                if r2.returncode != 0:
+                    return False, None, None, None, "Chrome 自動起動失敗。Mac Mini で手動起動が必要です"
+                logger.info("Chrome 自動起動成功")
+        except Exception as e:
+            return False, None, None, None, f"Chrome チェックエラー: {e}"
+
+        return True, claude_cmd, secretary_config, project_root, ""
+
+    def _classify_claude_error(self, stderr: str, stdout: str = "") -> str:
+        """Claude Code 実行エラーの原因を分類し、対処を含むメッセージを返す。"""
+        combined = (stderr + " " + stdout).lower()
+        if any(k in combined for k in ["auth", "credential", "api key", "unauthorized", "401"]):
+            return "認証エラー（~/.claude-secretary の credentials を確認）"
+        if any(k in combined for k in ["mcp", "extension", "tabs_context", "connection refused"]):
+            return "Chrome MCP 接続エラー（Chrome / Claude in Chrome 拡張を確認）"
+        if any(k in combined for k in ["rate limit", "429", "too many requests"]):
+            return "APIレート制限（しばらく待ってリトライ）"
+        if any(k in combined for k in ["ログイン", "login", "sign in", "アカウント選択"]):
+            return "Googleログイン切れ（Chrome で再ログインが必要）"
+        return stderr[:200] if stderr.strip() else stdout[-200:]
+
+    def _execute_claude_code_task(self, task_label, claude_cmd, secretary_config,
+                                  project_root, prompt, max_turns=25, timeout=600):
+        """Claude Code CLI 実行ヘルパー（1回リトライ・エラー分類付き）。
+        Returns: (success: bool, output: str, error_msg: str)
+        """
+        import subprocess
+        import os
+        import time as _time
+
+        env = os.environ.copy()
+        env["CLAUDE_CONFIG_DIR"] = str(secretary_config)
+        cmd = [str(claude_cmd), "-p", "--model", "claude-sonnet-4-6",
+               "--max-turns", str(max_turns), prompt]
+
+        for attempt in range(2):  # 最大2回（初回 + リトライ1回）
+            try:
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True,
+                    timeout=timeout, cwd=str(project_root), env=env,
+                )
+                if result.returncode == 0:
+                    output = result.stdout.strip()
+                    logger.info(f"{task_label}: Claude Code 完了 ({len(output)} chars)")
+                    return True, output, ""
+
+                # 失敗 → 全文をログに記録（LINE には分類済み要約のみ送信）
+                error_detail = self._classify_claude_error(result.stderr, result.stdout)
+                logger.error(
+                    f"{task_label}: Claude Code 失敗 (attempt {attempt+1}, code={result.returncode})\n"
+                    f"  stderr: {result.stderr[:500]}\n"
+                    f"  stdout(末尾): {result.stdout[-300:]}"
+                )
+                if attempt == 0:
+                    logger.info(f"{task_label}: 60秒後にリトライ...")
+                    _time.sleep(60)
+                    continue
+                return False, result.stdout, error_detail
+
+            except subprocess.TimeoutExpired:
+                logger.error(f"{task_label}: タイムアウト ({timeout}秒, attempt {attempt+1})")
+                if attempt == 0:
+                    _time.sleep(60)
+                    continue
+                return False, "", f"タイムアウト（{timeout // 60}分超過 × 2回）"
+
+            except Exception as e:
+                logger.error(f"{task_label}: 例外 (attempt {attempt+1}) - {e}")
+                if attempt == 0:
+                    _time.sleep(60)
+                    continue
+                return False, "", str(e)
+
+        return False, "", "リトライ上限到達"
+
     async def _run_daily_report_input(self):
         """日報自動入力: 秘書がClaude Code経由でLooker Studioからデータ取得→日報シート書き込み→LINE報告。"""
-        import subprocess
-        from pathlib import Path
-        from datetime import date, timedelta
         from .notifier import send_line_notify
+        from datetime import date, timedelta
 
         logger.info("日報自動入力: 開始")
 
-        claude_cmd = self._find_claude_cmd()
-        secretary_config = Path.home() / ".claude-secretary"
-        project_root = Path(self.config.get("paths", {}).get("repo_root", "~/agents")).expanduser()
-
-        if not claude_cmd or not secretary_config.exists():
-            logger.error("日報自動入力: Claude Code or secretary config not found")
-            send_line_notify("⚠️ 日報自動入力失敗: Claude Code環境が見つかりません")
+        # プリフライトチェック（Chrome 自動起動含む）
+        ok, claude_cmd, secretary_config, project_root, preflight_err = self._ensure_claude_chrome_ready()
+        if not ok:
+            logger.error(f"日報自動入力: プリフライト失敗 - {preflight_err}")
+            send_line_notify(f"⚠️ 日報自動入力失敗\n{preflight_err}")
             return
 
         target_date = date.today() - timedelta(days=1)
@@ -356,49 +459,53 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
 ```
 ※ XXX 部分は Step 1〜3 で取得した実際の数値に置き換えること。
 
+## エラー時の対応
+
+### ブラウザ接続エラー
+- ブラウザツール（tabs_context_mcp, navigate等）が使えない・タイムアウトする場合:
+  → ===RESULT_START===
+  エラー: Chrome MCP に接続できません。Chrome + Claude in Chrome 拡張を確認してください
+  ===RESULT_END===
+  と出力して終了
+
+### Googleログイン切れ
+- Looker Studio にアクセスした際、ログイン画面やアカウント選択画面が表示された場合:
+  → ===RESULT_START===
+  エラー: Looker Studio のGoogleログインが切れています。Chrome で再ログインが必要です
+  ===RESULT_END===
+  と出力して終了
+
+### 数値の検証
+- 全ての数値がゼロの場合は異常（データ更新遅延の可能性）。LINE報告に「⚠️ 全数値ゼロ: データ更新遅延の可能性」を追記
+- スクショの数値が不鮮明な場合、追加でズームインして再確認（最大2回）
+- 着金売上・集客数が 0 の場合は「⚠️ 異常値検出」フラグをLINE報告に追記
+
 ## 重要ルール
 - 行4（粗利益）と行6（広告費）は絶対に書き込まない
 - Looker Studioのスクショは必ずズームイン再確認して数値を正確に読む
 - 書き込み前に取得した全数値を確認用にログ出力する
-- 数値が明らかに異常（集客数0、着金売上0等）の場合はLINEで「⚠️ 異常値検出」と報告し、書き込みは実行する
 
 ## 出力形式
 ===RESULT_START===
-（日報入力の結果サマリー）
+（日報入力の結果サマリー。成功なら数値一覧、エラーならエラー内容を明記）
 ===RESULT_END==="""
 
-        try:
-            import os
-            env = os.environ.copy()
-            env["CLAUDE_CONFIG_DIR"] = str(secretary_config)
-            result = subprocess.run(
-                [str(claude_cmd), "-p", "--model", "claude-sonnet-4-6",
-                 "--max-turns", "25", prompt],
-                capture_output=True,
-                text=True,
-                timeout=600,  # 10分タイムアウト（ブラウザ操作があるため長め）
-                cwd=str(project_root),
-                env=env,
-            )
+        success, output, error = self._execute_claude_code_task(
+            "日報自動入力", claude_cmd, secretary_config, project_root,
+            prompt, max_turns=25, timeout=600,
+        )
 
-            if result.returncode != 0:
-                logger.error(f"日報自動入力: Claude Code エラー (code={result.returncode}): {result.stderr[:300]}")
-                send_line_notify(f"⚠️ 日報自動入力失敗: Claude Codeエラー\n{result.stderr[:200]}")
-                return
-
-            output = result.stdout.strip()
+        if success:
             if "===RESULT_START===" in output and "===RESULT_END===" in output:
                 report = output.split("===RESULT_START===")[1].split("===RESULT_END===")[0].strip()
-                logger.info(f"日報自動入力: 完了 - {report[:200]}")
+                logger.info(f"日報自動入力: 完了 - {report[:300]}")
+                # Claude Code が成功しても中身がエラー報告の場合はLINE通知
+                if "エラー" in report:
+                    send_line_notify(f"⚠️ 日報自動入力: {report[:300]}")
             else:
                 logger.info(f"日報自動入力: 完了（マーカーなし）- {output[-300:]}")
-
-        except subprocess.TimeoutExpired:
-            logger.error("日報自動入力: タイムアウト（10分）")
-            send_line_notify("⚠️ 日報自動入力: タイムアウト（10分超過）。手動で確認してください。")
-        except Exception as e:
-            logger.error(f"日報自動入力: 例外 - {e}")
-            send_line_notify(f"⚠️ 日報自動入力失敗: {str(e)[:200]}")
+        else:
+            send_line_notify(f"⚠️ 日報自動入力失敗（リトライ後）\n{error}")
 
     async def _run_daily_report(self):
         from .notifier import send_line_notify
@@ -1220,20 +1327,17 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
 
     async def _run_looker_csv_download(self):
         """毎日11:30: Looker Studio CSVダウンロード（前々日分）。秘書がClaude Code + Chrome MCPで実行。"""
-        import subprocess
         from pathlib import Path
         from datetime import date, timedelta
         from .notifier import send_line_notify
 
         logger.info("Looker CSV ダウンロード: 開始")
 
-        claude_cmd = self._find_claude_cmd()
-        secretary_config = Path.home() / ".claude-secretary"
-        project_root = Path(self.config.get("paths", {}).get("repo_root", "~/agents")).expanduser()
-
-        if not claude_cmd or not secretary_config.exists():
-            logger.error("Looker CSV ダウンロード: Claude Code or secretary config not found")
-            send_line_notify("⚠️ Looker CSVダウンロード失敗: Claude Code環境が見つかりません")
+        # プリフライトチェック（Chrome 自動起動含む）
+        ok, claude_cmd, secretary_config, project_root, preflight_err = self._ensure_claude_chrome_ready()
+        if not ok:
+            logger.error(f"Looker CSV ダウンロード: プリフライト失敗 - {preflight_err}")
+            send_line_notify(f"⚠️ Looker CSVダウンロード失敗\n{preflight_err}")
             return
 
         target_date = date.today() - timedelta(days=2)
@@ -1284,43 +1388,47 @@ ls -la "{csv_dir}/{csv_filename}"
 head -3 "{csv_dir}/{csv_filename}"
 ```
 
+## エラー時の対応
+
+### ブラウザ接続エラー
+- ブラウザツール（tabs_context_mcp, navigate等）が使えない場合:
+  → ===RESULT_START===
+  エラー: Chrome MCP に接続できません
+  ===RESULT_END===
+  と出力して終了
+
+### Googleログイン切れ
+- Looker Studio にアクセスした際、ログイン画面が表示された場合:
+  → ===RESULT_START===
+  エラー: Looker Studio のGoogleログインが切れています
+  ===RESULT_END===
+  と出力して終了
+
+### ダウンロード失敗
+- CSVエクスポートボタンが見つからない場合:
+  → スクショを撮影して画面状態をログに記録
+  → テーブル上のメニューアイコンやShift+右クリックなど代替手段を試す
+
 ## 出力形式
 ===RESULT_START===
-（ダウンロード結果: ファイルパス、行数等）
+（ダウンロード結果: ファイルパス・行数。エラーならエラー内容を明記）
 ===RESULT_END==="""
 
-        try:
-            import os
-            env = os.environ.copy()
-            env["CLAUDE_CONFIG_DIR"] = str(secretary_config)
-            result = subprocess.run(
-                [str(claude_cmd), "-p", "--model", "claude-sonnet-4-6",
-                 "--max-turns", "20", prompt],
-                capture_output=True,
-                text=True,
-                timeout=480,  # 8分タイムアウト
-                cwd=str(project_root),
-                env=env,
-            )
+        success, output, error = self._execute_claude_code_task(
+            "Looker CSVダウンロード", claude_cmd, secretary_config, project_root,
+            prompt, max_turns=20, timeout=480,
+        )
 
-            if result.returncode != 0:
-                logger.error(f"Looker CSV ダウンロード: Claude Code エラー (code={result.returncode}): {result.stderr[:300]}")
-                send_line_notify(f"⚠️ Looker CSVダウンロード失敗\n{result.stderr[:200]}")
-                return
-
-            output = result.stdout.strip()
+        if success:
             if "===RESULT_START===" in output and "===RESULT_END===" in output:
                 report = output.split("===RESULT_START===")[1].split("===RESULT_END===")[0].strip()
-                logger.info(f"Looker CSV ダウンロード: 完了 - {report[:200]}")
+                logger.info(f"Looker CSV ダウンロード: 完了 - {report[:300]}")
+                if "エラー" in report:
+                    send_line_notify(f"⚠️ Looker CSVダウンロード: {report[:300]}")
             else:
                 logger.info(f"Looker CSV ダウンロード: 完了（マーカーなし）- {output[-300:]}")
-
-        except subprocess.TimeoutExpired:
-            logger.error("Looker CSV ダウンロード: タイムアウト（8分）")
-            send_line_notify("⚠️ Looker CSVダウンロード: タイムアウト。手動で確認してください。")
-        except Exception as e:
-            logger.error(f"Looker CSV ダウンロード: 例外 - {e}")
-            send_line_notify(f"⚠️ Looker CSVダウンロード失敗: {str(e)[:200]}")
+        else:
+            send_line_notify(f"⚠️ Looker CSVダウンロード失敗（リトライ後）\n{error}")
 
     async def _run_kpi_daily_import(self):
         """毎日12:00: 元データの完了チェック → 投入 or リマインド"""
@@ -1369,7 +1477,7 @@ head -3 "{csv_dir}/{csv_filename}"
                 f"━━━━━━━━━━━━\n"
                 f"対象日: {target_date}\n"
                 f"ステータス: {status}\n"
-                f"\nLooker StudioからCSVエクスポートをお願いします\n"
+                f"\n11:30のCSV自動ダウンロードが失敗した可能性があります。ログを確認してください\n"
                 f"━━━━━━━━━━━━"
             )
             logger.warning(f"KPI data not ready for {target_date}: {status}")
