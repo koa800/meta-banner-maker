@@ -2769,6 +2769,57 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
 _IMAGE_OUTPUT_DIR = Path.home() / "agents" / "data" / "generated_images"
 _IMAGE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+# ---- Gemini API 使用量制限 ----
+_GEMINI_USAGE_PATH = Path.home() / "agents" / "data" / "gemini_usage.json"
+_GEMINI_MONTHLY_LIMIT_JPY = 2000  # 月額上限（円）
+_GEMINI_COST_PER_IMAGE_JPY = 20   # 1枚あたり約20円（$0.134 ≒ 20円）
+
+
+def _check_gemini_budget() -> bool:
+    """月間予算内かチェック。超過していたら False を返す。"""
+    now = datetime.now()
+    month_key = now.strftime("%Y-%m")
+    usage = _load_gemini_usage()
+    monthly = usage.get(month_key, {"count": 0, "cost_jpy": 0})
+    if monthly["cost_jpy"] >= _GEMINI_MONTHLY_LIMIT_JPY:
+        print(f"   ⛔ Gemini月間予算超過: {monthly['cost_jpy']}円 / {_GEMINI_MONTHLY_LIMIT_JPY}円（{monthly['count']}枚）")
+        return False
+    remaining = _GEMINI_MONTHLY_LIMIT_JPY - monthly["cost_jpy"]
+    print(f"   💰 Gemini予算: {monthly['cost_jpy']}円使用 / {_GEMINI_MONTHLY_LIMIT_JPY}円上限（残{remaining}円, {monthly['count']}枚生成済）")
+    return True
+
+
+def _record_gemini_usage():
+    """Gemini画像生成1回分の使用量を記録する。"""
+    now = datetime.now()
+    month_key = now.strftime("%Y-%m")
+    usage = _load_gemini_usage()
+    monthly = usage.get(month_key, {"count": 0, "cost_jpy": 0})
+    monthly["count"] += 1
+    monthly["cost_jpy"] += _GEMINI_COST_PER_IMAGE_JPY
+    monthly["last_used"] = now.isoformat()
+    usage[month_key] = monthly
+    # 古い月のデータはクリーンアップ（直近3ヶ月のみ保持）
+    keys = sorted(usage.keys())
+    while len(keys) > 3:
+        del usage[keys.pop(0)]
+    _save_gemini_usage(usage)
+
+
+def _load_gemini_usage() -> dict:
+    if _GEMINI_USAGE_PATH.exists():
+        try:
+            return json.loads(_GEMINI_USAGE_PATH.read_text())
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_gemini_usage(usage: dict):
+    tmp = _GEMINI_USAGE_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(usage, ensure_ascii=False, indent=2))
+    tmp.rename(_GEMINI_USAGE_PATH)
+
 
 def _analyze_reference_image(image_url: str) -> str:
     """参照画像をClaude Vision APIで分析し、スタイル・構図・色彩を抽出する"""
@@ -2849,12 +2900,13 @@ def execute_image_generation(task: dict):
     image_filename = f"{_uuid.uuid4().hex[:12]}.png"
     image_path = _IMAGE_OUTPUT_DIR / image_filename
 
-    # 方法①: Gemini API（Nano Banana Pro）
+    # 方法①: Gemini API（Nano Banana Pro）※月間予算チェック付き
     gemini_key = config.get("gemini_api_key", "")
-    if gemini_key:
+    if gemini_key and _check_gemini_budget():
         print(f"   🎨 Gemini API（Nano Banana Pro）で生成中...")
         success = _generate_with_gemini(optimized, image_path, gemini_key)
         if success:
+            _record_gemini_usage()
             url = _upload_image_to_render(image_path, image_filename)
             if url:
                 return True, "画像できましたよ！修正したい場合はそのまま指示してください！", {
