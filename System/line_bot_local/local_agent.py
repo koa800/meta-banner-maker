@@ -423,15 +423,88 @@ def save_execution_rule(rule: dict):
         print(f"⚠️ 実行ルール保存エラー: {e} (path={EXECUTION_RULES_FILE})")
 
 
+def _extract_intent(raw_feedback: str, context: str = "") -> dict:
+    """甲原さんのフィードバックから意図を構造化抽出する。
+
+    「AのときにBをする」だけでなく、「なぜBなのか」という意図まで分析し、
+    類似状況にも応用できる形で返す。
+    """
+    try:
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            api_key = config.get("anthropic_api_key", "")
+        if not api_key:
+            return {"situation": "", "action": raw_feedback, "intent": "", "raw": raw_feedback}
+
+        client = anthropic.Anthropic(api_key=api_key)
+        prompt = f"""以下は、AI秘書のオーナー（甲原海人）からのフィードバックです。
+このフィードバックを分析して、3つの要素に分解してください。
+
+【フィードバック】
+{raw_feedback}
+{"【タスク結果への文脈】" + chr(10) + context if context else ""}
+
+以下のJSON形式で出力してください。他のテキストは不要です:
+{{
+  "situation": "どういう状況・場面で適用するか（1文）",
+  "action": "具体的に何をするか（1-2文）",
+  "intent": "なぜそうするのか。甲原さんの判断基準・価値観・目的は何か（1-2文）"
+}}
+
+【分析のコツ】
+- フィードバックに理由が明示されていなくても、文脈から意図を推測すること
+- 「人物の状況を報告して」→ 意図はおそらく「マネジメント判断のため」
+- 「数字も一緒に出して」→ 意図はおそらく「感覚ではなくデータで判断したい」
+- 具体的な指示の背後にある甲原さんの行動原則を読み取ること"""
+
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        text = response.content[0].text.strip()
+        # JSON部分を抽出
+        if "{" in text:
+            json_str = text[text.index("{"):text.rindex("}") + 1]
+            parsed = json.loads(json_str)
+            parsed["raw"] = raw_feedback
+            return parsed
+    except Exception as e:
+        print(f"⚠️ 意図抽出失敗（フォールバック）: {e}")
+
+    return {"situation": "", "action": raw_feedback, "intent": "", "raw": raw_feedback}
+
+
 def build_execution_rules_section() -> str:
-    """タスク実行プロンプトに注入する行動ルールセクションを生成"""
+    """タスク実行プロンプトに注入する行動ルールセクションを生成。
+
+    ルールだけでなく意図も含めて注入し、
+    類似状況にも応用できるようにする。
+    """
     rules = load_execution_rules()
     if not rules:
         return ""
     rule_lines = []
-    for r in rules:
-        rule_lines.append(f"- {r.get('rule', '')}")
-    return "\n## 甲原さんからの行動ルール（必ず従うこと）\n" + "\n".join(rule_lines) + "\n"
+    for i, r in enumerate(rules, 1):
+        situation = r.get("situation", "")
+        action = r.get("action", r.get("rule", ""))
+        intent = r.get("intent", "")
+        if situation and intent:
+            rule_lines.append(
+                f"[{i}] 状況: {situation}\n"
+                f"    行動: {action}\n"
+                f"    意図: {intent}"
+            )
+        elif intent:
+            rule_lines.append(f"[{i}] {action}（意図: {intent}）")
+        else:
+            rule_lines.append(f"[{i}] {action}")
+    return (
+        "\n## 甲原さんの行動ルール（意図を理解して応用すること）\n"
+        "以下は甲原さんが直接教えてくれたルールです。\n"
+        "完全一致の状況でなくても、意図が当てはまる類似状況には同じ判断基準を適用してください。\n\n"
+        + "\n\n".join(rule_lines) + "\n"
+    )
 
 
 def build_feedback_prompt_section(sender_name: str = "", sender_category: str = "") -> str:
@@ -1477,17 +1550,51 @@ def call_claude_api(instruction: str, task: dict):
         if function_name == "capture_feedback":
             fb_type = arguments.get("type", "note")
 
-            # タスク実行ルール（行動ルール学習）
+            # タスク実行ルール（行動ルール学習 — 意図抽出付き）
             if fb_type == "execution_rule":
                 rule_text = arguments.get("rule", "")
+                context = arguments.get("context", "")
                 if rule_text:
-                    save_execution_rule({
-                        "rule": rule_text,
-                        "timestamp": datetime.now().isoformat(),
-                    })
-                    print(f"   📝 行動ルール保存: 「{rule_text[:40]}」")
+                    print(f"   🧠 意図を分析中: 「{rule_text[:40]}」")
+                    structured = _extract_intent(rule_text, context)
+                    structured["timestamp"] = datetime.now().isoformat()
+                    structured["source"] = arguments.get("source", "manual")
+                    save_execution_rule(structured)
+                    intent_preview = structured.get("intent", "")[:60]
+                    print(f"   📝 行動ルール保存: 意図=「{intent_preview}」")
                     return True, f"📝 行動ルール保存済み"
                 return False, "ルール内容が空です"
+
+            # タスク結果へのフィードバック（👍/👎）
+            if fb_type == "task_feedback":
+                rating = arguments.get("rating", "")
+                feedback_text = arguments.get("feedback", "")
+                task_result = arguments.get("task_result", "")
+                task_instruction = arguments.get("task_instruction", "")
+                if feedback_text or rating:
+                    context = ""
+                    if task_instruction:
+                        context += f"指示: {task_instruction}\n"
+                    if task_result:
+                        context += f"秘書の回答: {task_result[:300]}\n"
+                    if feedback_text:
+                        context += f"甲原さんの評価: {feedback_text}"
+                    elif rating == "good":
+                        context += "甲原さんの評価: 良い結果だった"
+                    elif rating == "bad":
+                        context += "甲原さんの評価: 改善が必要"
+                    print(f"   🧠 タスクフィードバックから意図を分析中...")
+                    structured = _extract_intent(
+                        feedback_text or f"タスク結果が{rating}だった",
+                        context
+                    )
+                    structured["timestamp"] = datetime.now().isoformat()
+                    structured["source"] = "task_feedback"
+                    structured["rating"] = rating
+                    save_execution_rule(structured)
+                    print(f"   📝 タスクフィードバック学習完了")
+                    return True, f"📝 フィードバックを学習しました"
+                return False, "フィードバック内容が空です"
 
             fb_data = {
                 **{k: v for k, v in arguments.items() if k != "type"},
