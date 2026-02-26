@@ -22,8 +22,8 @@ CONFIG_PATH = Path(__file__).parent / "config" / "ai_news.json"
 def load_config():
     """設定ファイルを読み込む"""
     if not CONFIG_PATH.exists():
-        print(f"Error: 設定ファイルが見つかりません: {CONFIG_PATH}")
-        print("config/ai_news.json を作成してください")
+        print(f"Error: 設定ファイルが見つかりません: {CONFIG_PATH}", file=sys.stderr)
+        print("config/ai_news.json を作成してください", file=sys.stderr)
         sys.exit(1)
     
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:

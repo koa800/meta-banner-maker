@@ -44,25 +44,29 @@ def _run_script(script_path: str, args: list = None, timeout: int = 300, cwd: st
             cwd=work_dir,
             env={**os.environ, "PYTHONUNBUFFERED": "1"}
         )
+        stderr = result.stderr.strip()
+        stdout = result.stdout.strip()
+        # stderrが空でスクリプト失敗時はstdoutをエラーメッセージとして使う
+        error_msg = stderr if stderr else (stdout if result.returncode != 0 else "")
         if result.returncode != 0:
-            stderr_lines = result.stderr.strip().split("\n")
+            error_lines = (stderr or stdout).strip().split("\n")
             logger.error(
                 f"Script failed: {script_name}",
                 extra={
                     "script": script_path,
                     "return_code": result.returncode,
-                    "stderr_tail": "\n".join(stderr_lines[-10:]),
+                    "stderr_tail": "\n".join(error_lines[-10:]),
                     "error": {
                         "type": "ScriptError",
-                        "message": stderr_lines[-1] if stderr_lines else "unknown",
-                        "traceback": stderr_lines[-15:],
+                        "message": error_lines[-1] if error_lines else "unknown",
+                        "traceback": error_lines[-15:],
                     },
                 },
             )
         return ToolResult(
             success=result.returncode == 0,
-            output=result.stdout.strip(),
-            error=result.stderr.strip(),
+            output=stdout,
+            error=error_msg,
             return_code=result.returncode
         )
     except subprocess.TimeoutExpired:

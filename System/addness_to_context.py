@@ -78,8 +78,8 @@ def load_config() -> dict:
 
 def load_latest_json() -> dict:
     if not DATA_PATH.exists():
-        print(f"エラー: {DATA_PATH} が見つかりません")
-        print("先に addness_fetcher.py を実行してください")
+        print(f"エラー: {DATA_PATH} が見つかりません", file=sys.stderr)
+        print("先に addness_fetcher.py を実行してください", file=sys.stderr)
         sys.exit(1)
     with open(DATA_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
