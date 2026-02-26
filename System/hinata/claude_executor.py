@@ -12,9 +12,12 @@ from typing import Optional
 
 logger = logging.getLogger("hinata.claude")
 
-WORK_DIR = Path.home() / "Cursor"
+# claude -p の作業ディレクトリ（CLAUDE.md がある場所）
+_agents_dir = Path.home() / "agents" / "_repo"
+WORK_DIR = _agents_dir if _agents_dir.exists() else Path.home() / "Cursor"
 CLAUDE_CMD = "/opt/homebrew/bin/claude"
-PYTHON_CMD = str(Path.home() / "hinata-venv" / "bin" / "python")
+_venv_python = Path.home() / "hinata-venv" / "bin" / "python"
+PYTHON_CMD = str(_venv_python) if _venv_python.exists() else "python3"
 ADDNESS_CLI = str(Path(__file__).parent / "addness_cli.py")
 CDP_URL = "http://localhost:9222"
 
