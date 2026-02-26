@@ -426,7 +426,7 @@ def load_execution_rules() -> list:
 
 
 def save_execution_rule(rule: dict):
-    """タスク実行ルールを保存（最大50件）"""
+    """タスク実行ルールを保存（最大50件）→ Render に自動同期"""
     try:
         rules = load_execution_rules()
         rules.append(rule)
@@ -436,6 +436,8 @@ def save_execution_rule(rule: dict):
             json.dumps(rules, ensure_ascii=False, indent=2),
             encoding="utf-8"
         )
+        # ルール更新時に Render にも即時同期
+        _sync_execution_rules_to_render()
     except Exception as e:
         print(f"⚠️ 実行ルール保存エラー: {e} (path={EXECUTION_RULES_FILE})")
 
@@ -524,6 +526,8 @@ def _handle_os_sync_intercept(client, os_sync_state: dict, instruction: str,
                     EXECUTION_RULES_FILE.write_text(
                         json.dumps(rules, ensure_ascii=False, indent=2), encoding="utf-8"
                     )
+                    # OS更新時に Render にも即時同期
+                    _sync_execution_rules_to_render()
                 except Exception as e:
                     print(f"⚠️ execution_rules.json 更新エラー: {e}")
 
@@ -784,6 +788,22 @@ def build_execution_rules_compact() -> str:
             lines.append(f"- {action}")
     _execution_rules_compact_cache = "\n### 甲原さんの行動ルール\n" + "\n".join(lines) + "\n"
     return _execution_rules_compact_cache
+
+
+def _sync_execution_rules_to_render():
+    """execution_rules.json を Render サーバーに同期（起動時 + ルール更新時）"""
+    rules = load_execution_rules()
+    if not rules:
+        return
+    try:
+        url = f"{config['server_url']}/api/sync_execution_rules"
+        resp = requests.post(url, json={"rules": rules}, headers=get_headers(), timeout=15)
+        if resp.status_code == 200:
+            print(f"✅ 行動ルール（OS）を Render に同期完了: {len(rules)}件")
+        else:
+            print(f"⚠️ ルール同期失敗: HTTP {resp.status_code}")
+    except Exception as e:
+        print(f"⚠️ ルール同期エラー（次回起動時にリトライ）: {e}")
 
 
 def build_feedback_prompt_section(sender_name: str = "", sender_category: str = "") -> str:
@@ -3329,7 +3349,10 @@ def run_agent():
     # 起動通知
     mode_text = "Claude API" if auto_mode == "claude" else "Cursor"
     show_notification("LINE AI秘書", f"ローカルエージェント起動（{mode_text}モード）", sound=False)
-    
+
+    # 行動ルール（OS）を Render サーバーに同期
+    _sync_execution_rules_to_render()
+
     # Q&A監視用のGoogle Sheets接続
     sheets_service = None
     if qa_enabled:
