@@ -17,11 +17,11 @@ hinata_agent.py はタスクキュー監視とサイクル管理のみ。
 
 import json
 import logging
-import subprocess
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from claude_executor import execute_full_cycle, execute_self_repair
 from slack_comm import send_message, send_report
@@ -108,7 +108,7 @@ def _save_tasks(tasks: list):
     tmp.rename(TASKS_PATH)
 
 
-def check_task_queue() -> dict | None:
+def check_task_queue() -> Optional[dict]:
     """次のpendingタスクを取得する。"""
     tasks = _load_tasks()
     for task in tasks:
