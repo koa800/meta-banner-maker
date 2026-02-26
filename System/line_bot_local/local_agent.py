@@ -558,10 +558,13 @@ def _handle_os_sync_intercept(client, os_sync_state: dict, instruction: str,
 
     # ===== 状態1: pending → ユーザーの応答を分析 =====
     if status == "pending" or os_sync_state.get("status") == "pending":
-        # 明らかにOS syncと無関係なコマンドはスキップ
+        # 明らかにOS syncと無関係なタスクはスキップ（不要なAPI判定コール防止）
         skip_functions = {
             "input_daily_report", "kpi_query", "mail_check", "restart_agent",
             "orchestrator_status", "qa_status", "addness_sync",
+            "generate_reply_suggestion", "save_person_memo", "capture_feedback",
+            "generate_lp_draft", "generate_video_script", "generate_banner_concepts",
+            "who_to_ask",
         }
         if function_name in skip_functions:
             return None

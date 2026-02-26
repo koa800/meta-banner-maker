@@ -1709,14 +1709,14 @@ JSON以外の文字は出力しないでください。"""}],
                 is_hinata = ("日向" in text or f"<@{HINATA_SLACK_UID}>" in text)
                 is_secretary = ("秘書" in text)
 
-                if is_hinata:
+                # 秘書優先: 「秘書、日向の状況教えて」→ 秘書に聞いている
+                if is_secretary:
+                    await self._reply_as_secretary(text, send_slack_ai_team)
+                    logger.info(f"slack_dispatch: secretary mention → direct reply")
+                elif is_hinata:
                     self._add_hinata_task(HINATA_TASKS, text, msg["ts"], "instruction")
                     send_slack_ai_team(f"日向に伝えました！「{text[:50]}」")
                     logger.info(f"slack_dispatch: instruction → hinata task added")
-                elif is_secretary:
-                    # 秘書が直接応答（Claude API）
-                    await self._reply_as_secretary(text, send_slack_ai_team)
-                    logger.info(f"slack_dispatch: secretary mention → direct reply")
                 else:
                     # メンションなし → 無視（ユーザーは宛先を明示する運用）
                     logger.debug(f"slack_dispatch: no mention target, skipping: {text[:30]}")
