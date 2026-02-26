@@ -80,9 +80,11 @@ FEEDBACK_FILE = _tcc_safe_path(
 _SKILLS_DIR = _SYSTEM_DIR / "line_bot" / "skills"
 
 # Claude Code CLI（AI秘書の自律モード）
-# 日向エージェントと同じMAX契約アカウント（koa800sea.nifs@gmail.com）を共有
+# 甲原さんのクローンとして甲原アカウント（koa800sea.nifs@gmail.com）を使用
+# 日向エージェントとは完全分離（別ディレクトリ・別認証）
 _CLAUDE_CMD = Path("/opt/homebrew/bin/claude")
-_CLAUDE_CODE_ENABLED = _CLAUDE_CMD.exists()
+_CLAUDE_SECRETARY_CONFIG = Path.home() / ".claude-secretary"
+_CLAUDE_CODE_ENABLED = _CLAUDE_CMD.exists() and _CLAUDE_SECRETARY_CONFIG.exists()
 
 _skills_cache: str = ""
 _skills_cache_mtime: float = 0
@@ -204,6 +206,9 @@ def _generate_reply_with_claude_code(
 
     try:
         print(f"   🤖 Claude Code で返信生成中（自律モード）...")
+        # 日向とは完全分離（秘書専用の設定ディレクトリを使用）
+        env = os.environ.copy()
+        env["CLAUDE_CONFIG_DIR"] = str(_CLAUDE_SECRETARY_CONFIG)
         result = subprocess.run(
             [str(_CLAUDE_CMD), "-p", "--model", "claude-sonnet-4-6",
              "--max-turns", "6", prompt],
@@ -211,6 +216,7 @@ def _generate_reply_with_claude_code(
             text=True,
             timeout=120,
             cwd=str(_PROJECT_ROOT),
+            env=env,
         )
 
         if result.returncode != 0:
