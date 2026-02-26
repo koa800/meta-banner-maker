@@ -24,6 +24,7 @@ LEARNING_DIR = REPO_DIR / "Master" / "learning"
 
 ACTION_LOG_PATH = LEARNING_DIR / "action_log.json"
 FEEDBACK_LOG_PATH = LEARNING_DIR / "feedback_log.json"
+EXECUTION_RULES_PATH = LEARNING_DIR / "execution_rules.json"
 MEMORY_PATH = LEARNING_DIR / "hinata_memory.md"
 INSIGHTS_PATH = LEARNING_DIR / "insights.md"
 
@@ -146,12 +147,26 @@ def _classify_sentiment(text: str) -> str:
 def build_learning_context() -> str:
     """
     Claude Code のプロンプトに注入する学習コンテキストを構築する。
+    - 甲原さんの行動ルール（execution_rules.json）
     - 直近のアクション履歴（5件）
     - 直近のフィードバック（5件）
     - 蓄積された記憶（hinata_memory.md）
     - insights.md の知見
     """
     sections = []
+
+    # 0. 甲原さんの行動ルール（最上位 — 全ての判断に適用）
+    rules = _load_json(EXECUTION_RULES_PATH, [])
+    if rules:
+        rules_lines = []
+        for r in rules:
+            rules_lines.append(
+                f"- 【{r.get('situation', '?')}】→ {r.get('action', '?')}"
+            )
+        sections.append(
+            "### 甲原さんの行動ルール（全ての判断に適用すること）\n"
+            + "\n".join(rules_lines)
+        )
 
     # 1. 直近のアクション履歴
     actions_text = _format_recent_actions(5)
@@ -180,7 +195,7 @@ def build_learning_context() -> str:
 
     header = (
         "\n## 過去の学習コンテキスト\n\n"
-        "以下はあなたの過去の経験です。同じ失敗を繰り返さず、"
+        "以下はあなたの過去の経験です。行動ルールに従い、同じ失敗を繰り返さず、"
         "フィードバックを必ず反映してください。\n\n"
     )
     return header + "\n\n".join(sections) + "\n"
