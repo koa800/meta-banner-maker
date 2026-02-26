@@ -2763,11 +2763,12 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
 
 
 # ===== 画像生成 =====
-# 多段フォールバック: ① Gemini API → ② Pollinations.ai（無料） → ③ Chrome MCP
-# 「手元にあるもの」で即動かす。上位エンジンは後から差し替え可能。
+# メイン: Lovart（ブラウザ操作）→ フォールバック: Pollinations.ai（API）
+# Claude Code CLI + Chrome MCP で Lovart を操作して画像を生成する。
 
 _IMAGE_OUTPUT_DIR = Path.home() / "agents" / "data" / "generated_images"
 _IMAGE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+_LOVART_URL = "https://www.lovart.ai/ja/home"
 
 
 def _analyze_reference_image(image_url: str) -> str:
@@ -2818,11 +2819,10 @@ def _analyze_reference_image(image_url: str) -> str:
 
 
 def execute_image_generation(task: dict):
-    """画像生成タスクを実行する（3パターン並行生成）。
+    """画像生成タスク: Lovart（ブラウザ操作）→ Pollinations（APIフォールバック）。
     Returns: (success, message_or_error, extra_dict)
     """
     import uuid as _uuid
-    import concurrent.futures
 
     arguments = task.get("arguments", {})
     user_prompt = arguments.get("prompt", arguments.get("goal", ""))
@@ -2833,10 +2833,6 @@ def execute_image_generation(task: dict):
     previous_context = arguments.get("previous_context")
 
     print(f"   🎨 プロンプト: {user_prompt[:80]}")
-    if reference_url:
-        print(f"   📎 参照画像あり: {reference_url[:60]}")
-    if previous_context:
-        print(f"   🔄 修正ループ: 前回「{previous_context.get('original_prompt', '')[:40]}」")
 
     # ---- Step 1: 参照画像の分析（あれば） ----
     reference_analysis = ""
@@ -2844,77 +2840,57 @@ def execute_image_generation(task: dict):
         print(f"   🔍 参照画像を分析中...")
         reference_analysis = _analyze_reference_image(reference_url)
 
-    # ---- Step 2: 3段階プロンプト最適化（意図理解→スタイル→3バリエーション） ----
-    prompt_data = _deep_optimize_prompt(user_prompt, reference_analysis, previous_context)
+    # ---- Step 2: プロンプト最適化 ----
+    prompt_data = _optimize_image_prompt(user_prompt, reference_analysis, previous_context)
+    optimized = prompt_data["main"]
     print(f"   💡 意図: {prompt_data['intent'][:60]}")
-    for i, v in enumerate(prompt_data["variations"]):
-        print(f"   📝 パターン{i+1}: {v[:50]}...")
+    print(f"   📝 最適化: {optimized[:80]}...")
 
-    # ---- Step 3: 3パターン並行生成 ----
-    gemini_key = config.get("gemini_api_key", "")
+    # ---- Step 3: 画像生成 ----
+    image_filename = f"{_uuid.uuid4().hex[:12]}.png"
+    image_path = _IMAGE_OUTPUT_DIR / image_filename
 
-    def _gen_one(idx, prompt):
-        """1パターン生成+アップロード。成功時はURLを返す。"""
-        fname = f"{_uuid.uuid4().hex[:12]}.png"
-        fpath = _IMAGE_OUTPUT_DIR / fname
-        ok = False
-        if gemini_key:
-            ok = _generate_with_gemini(gemini_key, prompt, fpath)
-        if not ok:
-            ok = _generate_with_pollinations(prompt, fpath)
-        if ok:
-            url = _upload_image_to_render(fpath, fname)
+    # 方法①: Lovart（Claude Code CLI + Chrome MCP でブラウザ操作）
+    if _CLAUDE_CODE_ENABLED:
+        print(f"   🌐 Lovart でブラウザ生成中...")
+        success = _generate_with_lovart(optimized, image_path)
+        if success:
+            url = _upload_image_to_render(image_path, image_filename)
             if url:
-                print(f"   ✅ パターン{idx+1} 完了")
-                return url
-        print(f"   ⚠️ パターン{idx+1} 失敗")
-        return None
+                return True, "画像できましたよ！修正したい場合はそのまま指示してください！", {
+                    "image_url": url, "preview_url": url,
+                    "original_prompt": user_prompt, "optimized_prompt": optimized,
+                }
+        print(f"   ⚠️ Lovart 生成失敗、フォールバックへ")
 
-    generated_urls = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-        futures = {
-            pool.submit(_gen_one, i, p): i
-            for i, p in enumerate(prompt_data["variations"])
-        }
-        for fut in concurrent.futures.as_completed(futures):
-            url = fut.result()
-            if url:
-                generated_urls.append(url)
+    # 方法②: Pollinations.ai（APIフォールバック）
+    print(f"   🌸 Pollinations.ai フォールバック...")
+    success = _generate_with_pollinations(optimized, image_path)
+    if success:
+        url = _upload_image_to_render(image_path, image_filename)
+        if url:
+            return True, "画像できましたよ！修正したい場合はそのまま指示してください！", {
+                "image_url": url, "preview_url": url,
+                "original_prompt": user_prompt, "optimized_prompt": optimized,
+            }
 
-    if not generated_urls:
-        return False, "画像生成に失敗しました。全パターンでエラーが発生しました。", {}
-
-    # ---- Step 4: 結果を返す ----
-    count = len(generated_urls)
-    if count == 1:
-        msg = "画像できましたよ！修正したい場合はそのまま指示してください！"
-    else:
-        msg = f"{count}パターン作りました！気に入ったのがあれば教えてくださいね。修正したい場合はそのまま指示してください！"
-
-    return True, msg, {
-        "image_urls": generated_urls,
-        "image_url": generated_urls[0],
-        "preview_url": generated_urls[0],
-        "original_prompt": user_prompt,
-        "optimized_prompt": prompt_data["main"],
-    }
+    return False, "画像生成に失敗しました。", {}
 
 
-def _deep_optimize_prompt(
+def _optimize_image_prompt(
     user_prompt: str,
     reference_analysis: str = "",
     previous_context: dict = None,
 ) -> dict:
-    """3段階プロンプト最適化: 意図理解→スタイル決定→3バリエーション生成。
+    """プロンプト最適化: ユーザー意図を深く理解して最適な英語プロンプトを生成。
 
-    Returns: {"main": str, "variations": [str, str, str], "intent": str}
+    Returns: {"main": str, "intent": str}
     """
-    fallback = {"main": user_prompt, "variations": [user_prompt] * 3, "intent": user_prompt}
+    fallback = {"main": user_prompt, "intent": user_prompt}
     api_key = config.get("anthropic_api_key", "")
     if not api_key:
         return fallback
 
-    # コンテキスト構築
     ctx = ""
     if reference_analysis:
         ctx += f"\n## Reference image analysis\n{reference_analysis}\n"
@@ -2923,26 +2899,21 @@ def _deep_optimize_prompt(
             f"\n## Previous generation (modification request)\n"
             f"Original request: {previous_context.get('original_prompt', '')}\n"
             f"Optimized prompt: {previous_context.get('optimized_prompt', '')}\n"
-            f"User now wants to MODIFY the previous result. Preserve core concept, apply changes.\n"
+            f"User wants to MODIFY the previous result. Preserve core concept, apply changes.\n"
         )
 
     system_prompt = (
-        "You are an expert AI image prompt engineer. Deeply understand the user's intent "
-        "and create 3 distinct prompt variations for AI image generation (Flux model).\n\n"
+        "You are an expert AI image prompt engineer for Lovart.ai.\n"
+        "Convert the user's request into an optimal English prompt.\n\n"
         "Output ONLY valid JSON:\n"
         '{"intent":"what the user wants (Japanese, 1 sentence)",'
-        '"main":"primary English prompt with style/lighting/composition (80-120 words)",'
-        '"variation_a":"faithful to intent, photorealistic/clean style",'
-        '"variation_b":"creative/artistic interpretation, unique angle",'
-        '"variation_c":"professional/minimalist, business-appropriate"}\n\n'
+        '"main":"detailed English prompt (80-150 words)"}\n\n'
         "Rules:\n"
-        "- Each prompt: 80-120 words, include lighting, composition, color palette, mood\n"
-        "- variation_a: most faithful to user intent\n"
-        "- variation_b: explore creative/artistic direction\n"
-        "- variation_c: clean, professional, suitable for business\n"
-        "- If reference image analysis is provided, incorporate those visual elements\n"
-        "- If this is a modification, adjust previous prompt based on the new instruction\n"
-        "- Add quality boosters: 'highly detailed, professional quality, 8k resolution'"
+        "- Include: subject, style, lighting, composition, color palette, mood, quality\n"
+        "- Add quality boosters: 'highly detailed, professional quality, 8k'\n"
+        "- If reference image analysis given, incorporate those visual elements\n"
+        "- If modification request, adjust previous prompt per the new instruction\n"
+        "- Lovart understands conversational English, be specific and descriptive"
     )
 
     try:
@@ -2950,24 +2921,17 @@ def _deep_optimize_prompt(
         client = _anth.Anthropic(api_key=api_key)
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=1000,
+            max_tokens=500,
             system=system_prompt,
             messages=[{"role": "user", "content": f"画像生成指示:\n{user_prompt}{ctx}"}],
         )
         text = resp.content[0].text.strip()
-        # JSON を抽出
         import re as _re
         m = _re.search(r"\{[\s\S]*\}", text)
         if m:
             data = json.loads(m.group())
-            main = data.get("main", user_prompt)
             return {
-                "main": main,
-                "variations": [
-                    data.get("variation_a", main),
-                    data.get("variation_b", main),
-                    data.get("variation_c", main),
-                ],
+                "main": data.get("main", user_prompt),
                 "intent": data.get("intent", user_prompt),
             }
     except Exception as e:
@@ -2975,34 +2939,105 @@ def _deep_optimize_prompt(
     return fallback
 
 
-def _generate_with_gemini(api_key: str, prompt: str, output_path: Path) -> bool:
-    """Google Gemini API で画像生成"""
-    try:
-        from google import genai
-        from google.genai import types
+def _generate_with_lovart(prompt: str, output_path: Path, timeout_sec: int = 300) -> bool:
+    """Claude Code CLI + Chrome MCP で Lovart を操作して画像を生成する。
 
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_images(
-            model="imagen-3.0-generate-002",
-            prompt=prompt,
-            config=types.GenerateImagesConfig(number_of_images=1),
+    フロー: Lovart にアクセス → 単発プロジェクト作成 → プロンプト入力 →
+            生成待ち → 画像ダウンロード → output_path に保存
+    """
+    import os as _os
+    import signal as _sig
+
+    browser_prompt = f"""あなたはAI秘書です。Chrome ブラウザの MCP ツールを使って Lovart で画像を生成してください。
+
+## 生成する画像のプロンプト
+{prompt}
+
+## 手順（必ずこの順番で）
+
+1. **タブ確認**: `mcp__claude-in-chrome__tabs_context_mcp` で現在のタブを確認
+2. **新しいタブ**: `mcp__claude-in-chrome__tabs_create_mcp` で新しいタブを作成
+3. **Lovart にアクセス**: `mcp__claude-in-chrome__navigate` で `{_LOVART_URL}` に遷移
+4. **ログイン確認**: `mcp__claude-in-chrome__read_page` でページを読み取り、ログイン状態を確認
+   - 未ログインなら Google ログイン（koa800sea.nifs@gmail.com）
+5. **新規プロジェクト作成**: 「新しいプロジェクト」「New Project」「Create」等のボタンを `find` で探してクリック
+   - プロジェクトタイプは画像生成向けのもの（Text to Image 等）を選択
+6. **プロンプト入力**: テキスト入力欄を `find` で探し、上記プロンプトを入力
+7. **生成開始**: 生成ボタン（Generate / Create / 生成 等）をクリック
+8. **完了待ち**: 生成が完了するまで `read_page` で確認を繰り返す（最大90秒待つ）
+   - ローディング表示が消えて画像が表示されたら完了
+9. **画像取得**: 以下のいずれかの方法で画像を取得:
+   a. ダウンロードボタンがあればクリック → ~/Downloads/ から取得
+   b. `mcp__claude-in-chrome__javascript_tool` で生成画像の img 要素の src URL を取得
+   c. 右クリックメニューから「画像を保存」
+10. **画像を保存**: 取得した画像URLを bash の curl でダウンロード:
+    ```
+    curl -L -o "{output_path}" "取得した画像URL"
+    ```
+    または ~/Downloads/ にダウンロードされた場合:
+    ```
+    mv ~/Downloads/最新の画像ファイル "{output_path}"
+    ```
+
+## 重要ルール
+- ダウンロード先は必ず `{output_path}` に保存すること
+- UIが想定と違う場合は `read_page` で確認して臨機応変に対応
+- Googleログイン: koa800sea.nifs@gmail.com
+- 最後に必ず以下のどちらかを出力:
+  - 成功: `IMAGE_SAVED: {output_path}`
+  - 失敗: `IMAGE_FAILED: 具体的な理由`
+"""
+
+    try:
+        print(f"   🚀 Claude Code CLI 起動（Lovart ブラウザ操作）")
+        proc = subprocess.Popen(
+            [str(_CLAUDE_CMD), "-p", browser_prompt],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=str(_PROJECT_ROOT),
+            start_new_session=True,
         )
-        if response.generated_images:
-            img = response.generated_images[0]
-            img.image.save(str(output_path))
-            print(f"   ✅ Gemini API 画像生成成功: {output_path}")
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout_sec)
+        except subprocess.TimeoutExpired:
+            pgid = _os.getpgid(proc.pid)
+            print(f"   ⚠️ Lovart タイムアウト（{timeout_sec}秒）— 終了中")
+            try:
+                _os.killpg(pgid, _sig.SIGTERM)
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    _os.killpg(pgid, _sig.SIGKILL)
+                except OSError:
+                    pass
+                proc.wait(timeout=5)
+            return False
+
+        if proc.returncode == 0 and output_path.exists() and output_path.stat().st_size > 1000:
+            print(f"   ✅ Lovart 画像生成成功: {output_path} ({output_path.stat().st_size} bytes)")
             return True
-        return False
-    except ImportError:
-        print(f"   ⚠️ google-genai パッケージ未インストール")
+        else:
+            # stdout から失敗理由を抽出
+            reason = ""
+            if stdout and "IMAGE_FAILED:" in stdout:
+                reason = stdout.split("IMAGE_FAILED:")[-1].strip()[:200]
+            print(f"   ⚠️ Lovart 生成失敗: {reason or stderr[:200]}")
+            return False
+
+    except FileNotFoundError:
+        print(f"   ⚠️ Claude Code CLI が見つかりません")
         return False
     except Exception as e:
-        print(f"   ⚠️ Gemini API エラー: {e}")
+        print(f"   ⚠️ Lovart ブラウザ操作エラー: {e}")
         return False
 
 
 def _generate_with_pollinations(prompt: str, output_path: Path) -> bool:
-    """Pollinations.ai で画像生成（無料・APIキー不要）"""
+    """Pollinations.ai で画像生成（無料・APIキー不要・フォールバック用）"""
     try:
         import urllib.parse
         import urllib.request
@@ -3015,7 +3050,7 @@ def _generate_with_pollinations(prompt: str, output_path: Path) -> bool:
         with urllib.request.urlopen(req, timeout=120) as resp:
             if resp.status == 200:
                 data = resp.read()
-                if len(data) > 1000:  # 最低限の画像サイズチェック
+                if len(data) > 1000:
                     output_path.write_bytes(data)
                     print(f"   ✅ Pollinations.ai 画像生成成功: {output_path} ({len(data)} bytes)")
                     return True
@@ -3025,18 +3060,6 @@ def _generate_with_pollinations(prompt: str, output_path: Path) -> bool:
     except Exception as e:
         print(f"   ⚠️ Pollinations.ai エラー: {e}")
         return False
-
-
-def _finalize_image(image_path: Path, filename: str):
-    """画像ファイルをRenderにアップロードして結果を返す"""
-    if not image_path.exists() or image_path.stat().st_size == 0:
-        return False, "画像ファイルが空です", {}
-
-    image_url = _upload_image_to_render(image_path, filename)
-    if image_url:
-        return True, "画像できましたよ！", {"image_url": image_url, "preview_url": image_url}
-    else:
-        return False, "画像は生成しましたが、LINEへの送信に失敗しました", {}
 
 
 def _upload_image_to_render(image_path: Path, filename: str) -> str:
