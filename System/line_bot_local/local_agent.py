@@ -302,7 +302,7 @@ def _execute_with_claude_code(
 
 ### 実行可能なスクリプト
 - `python3 System/sheets_manager.py read "シートID" "タブ名"` — Google スプレッドシート読み取り
-- `python3 System/sheets_manager.py write "シートID" "タブ名" "セル" "値"` — スプレッドシート書き込み
+- `python3 System/sheets_manager.py write "シートID" "セル" "値" "タブ名"` — スプレッドシート書き込み
 - `python3 System/mail_manager.py` — Gmail操作
 - `python3 System/mac_mini/agent_orchestrator/tools/` 内の各種ツール
 - その他 `System/` 内のPythonスクリプト全般

@@ -254,6 +254,14 @@ class TaskScheduler:
         if result.success:
             logger.info("Addness goal context updated for daily review")
 
+    def _find_claude_cmd(self):
+        """Claude Code CLIパスを検出（Apple Silicon / Intel Mac 両対応）"""
+        from pathlib import Path
+        for p in [Path("/opt/homebrew/bin/claude"), Path("/usr/local/bin/claude")]:
+            if p.exists():
+                return p
+        return None
+
     async def _run_daily_report_input(self):
         """日報自動入力: 秘書がClaude Code経由でLooker Studioからデータ取得→日報シート書き込み→LINE報告。"""
         import subprocess
@@ -263,11 +271,11 @@ class TaskScheduler:
 
         logger.info("日報自動入力: 開始")
 
-        claude_cmd = Path("/opt/homebrew/bin/claude")
+        claude_cmd = self._find_claude_cmd()
         secretary_config = Path.home() / ".claude-secretary"
         project_root = Path(self.config.get("paths", {}).get("repo_root", "~/agents")).expanduser()
 
-        if not claude_cmd.exists() or not secretary_config.exists():
+        if not claude_cmd or not secretary_config.exists():
             logger.error("日報自動入力: Claude Code or secretary config not found")
             send_line_notify("⚠️ 日報自動入力失敗: Claude Code環境が見つかりません")
             return
@@ -311,6 +319,17 @@ python3 System/sheets_manager.py read "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmU
 ヘッダーは M/D 形式。「{target_md}」に一致する列を見つける。
 
 ### Step 5: 日報シートに書き込み
+
+Step 4 で特定した列文字と、Step 1〜3 で取得した実際の数値を使って書き込む。
+writeコマンドの引数順: `write シートID セル 値 タブ名`
+
+例: 列が W、着金売上が 3943320 の場合:
+```bash
+cd {project_root}
+python3 System/sheets_manager.py write "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "W5" "3943320" "日報"
+```
+
+書き込み対象（列文字と値は実際のものに置き換えること）:
 - 行5: 着金売上（確定ベース）
 - 行7: 集客数
 - 行9: 個別予約数
@@ -318,33 +337,24 @@ python3 System/sheets_manager.py read "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmU
 - 行14: 解約数
 - 行15: サブスク新規会員数
 
-書き込みコマンド（列は Step 4 で特定した列文字）:
-```bash
-cd {project_root}
-python3 System/sheets_manager.py write "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "{{列}}5" "{{着金売上}}" "日報"
-python3 System/sheets_manager.py write "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "{{列}}7" "{{集客数}}" "日報"
-python3 System/sheets_manager.py write "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "{{列}}9" "{{個別予約数}}" "日報"
-python3 System/sheets_manager.py write "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "{{列}}13" "{{会員数}}" "日報"
-python3 System/sheets_manager.py write "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "{{列}}14" "{{解約数}}" "日報"
-python3 System/sheets_manager.py write "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "{{列}}15" "{{サブスク新規}}" "日報"
-```
-
 行4（粗利益）と行6（広告費）は計算式/別管理なので絶対に触らないこと。
 
 ### Step 6: LINE報告
+
+取得した数値を埋め込んで報告する:
 ```bash
 cd {project_root}
-current_time=$(date +%H:%M)
-python3 System/line_notify.py "✅ 定常業務完了: 日報入力
+python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
 ━━━━━━━━━━━━
-集客数: {{集客数}}人
-個別予約数: {{個別予約数}}件
-着金売上: ¥{{着金売上}}
-会員数: {{会員数}}人（解約: {{解約数}}人）
-サブスク新規: {{サブスク新規}}人
+集客数: XXX人
+個別予約数: XX件
+着金売上: ¥X,XXX,XXX
+会員数: XX人（解約: X人）
+サブスク新規: X人
 ━━━━━━━━━━━━
-完了時刻: ${{current_time}}"
+完了時刻: $(date +%H:%M)"
 ```
+※ XXX 部分は Step 1〜3 で取得した実際の数値に置き換えること。
 
 ## 重要ルール
 - 行4（粗利益）と行6（広告費）は絶対に書き込まない
@@ -1217,11 +1227,11 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力
 
         logger.info("Looker CSV ダウンロード: 開始")
 
-        claude_cmd = Path("/opt/homebrew/bin/claude")
+        claude_cmd = self._find_claude_cmd()
         secretary_config = Path.home() / ".claude-secretary"
         project_root = Path(self.config.get("paths", {}).get("repo_root", "~/agents")).expanduser()
 
-        if not claude_cmd.exists() or not secretary_config.exists():
+        if not claude_cmd or not secretary_config.exists():
             logger.error("Looker CSV ダウンロード: Claude Code or secretary config not found")
             send_line_notify("⚠️ Looker CSVダウンロード失敗: Claude Code環境が見つかりません")
             return
