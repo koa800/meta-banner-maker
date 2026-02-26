@@ -2770,63 +2770,209 @@ _IMAGE_OUTPUT_DIR = Path.home() / "agents" / "data" / "generated_images"
 _IMAGE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _analyze_reference_image(image_url: str) -> str:
+    """参照画像をClaude Vision APIで分析し、スタイル・構図・色彩を抽出する"""
+    api_key = config.get("anthropic_api_key", "")
+    if not api_key:
+        return ""
+    try:
+        import anthropic as _anth
+        import base64 as _b64
+
+        resp = requests.get(image_url, timeout=30)
+        if resp.status_code != 200:
+            print(f"   ⚠️ 参照画像ダウンロード失敗: {resp.status_code}")
+            return ""
+
+        image_data = _b64.b64encode(resp.content).decode()
+        content_type = resp.headers.get("content-type", "image/jpeg")
+
+        client = _anth.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": content_type,
+                            "data": image_data,
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": "Analyze this image concisely in English. Include: subject, composition, color palette, style (photo/illustration/etc), mood, and notable elements. Max 100 words.",
+                    },
+                ],
+            }],
+        )
+        analysis = response.content[0].text.strip()
+        print(f"   🔍 参照画像分析完了: {analysis[:80]}...")
+        return analysis
+    except Exception as e:
+        print(f"   ⚠️ 参照画像分析失敗: {e}")
+        return ""
+
+
 def execute_image_generation(task: dict):
-    """画像生成タスクを実行する。
+    """画像生成タスクを実行する（3パターン並行生成）。
     Returns: (success, message_or_error, extra_dict)
     """
+    import uuid as _uuid
+    import concurrent.futures
+
     arguments = task.get("arguments", {})
     user_prompt = arguments.get("prompt", arguments.get("goal", ""))
     if not user_prompt:
         return False, "画像生成の指示が空です", {}
 
+    reference_url = arguments.get("reference_image_url", "")
+    previous_context = arguments.get("previous_context")
+
     print(f"   🎨 プロンプト: {user_prompt[:80]}")
+    if reference_url:
+        print(f"   📎 参照画像あり: {reference_url[:60]}")
+    if previous_context:
+        print(f"   🔄 修正ループ: 前回「{previous_context.get('original_prompt', '')[:40]}」")
 
-    # ---- Step 1: ユーザーの指示を画像生成用の英語プロンプトに変換 ----
-    optimized_prompt = _optimize_prompt_for_image(user_prompt)
-    print(f"   🔧 最適化プロンプト: {optimized_prompt[:80]}")
+    # ---- Step 1: 参照画像の分析（あれば） ----
+    reference_analysis = ""
+    if reference_url:
+        print(f"   🔍 参照画像を分析中...")
+        reference_analysis = _analyze_reference_image(reference_url)
 
-    # ---- Step 2: 画像を生成（多段フォールバック） ----
-    import uuid as _uuid
-    image_filename = f"{_uuid.uuid4().hex[:12]}.png"
-    image_path = _IMAGE_OUTPUT_DIR / image_filename
+    # ---- Step 2: 3段階プロンプト最適化（意図理解→スタイル→3バリエーション） ----
+    prompt_data = _deep_optimize_prompt(user_prompt, reference_analysis, previous_context)
+    print(f"   💡 意図: {prompt_data['intent'][:60]}")
+    for i, v in enumerate(prompt_data["variations"]):
+        print(f"   📝 パターン{i+1}: {v[:50]}...")
 
-    # エンジン①: Gemini API（API キーが設定されている場合）
+    # ---- Step 3: 3パターン並行生成 ----
     gemini_key = config.get("gemini_api_key", "")
-    if gemini_key:
-        print(f"   🔮 Gemini API で画像生成中...")
-        success = _generate_with_gemini(gemini_key, optimized_prompt, image_path)
-        if success:
-            return _finalize_image(image_path, image_filename)
 
-    # エンジン②: Pollinations.ai（無料・APIキー不要）
-    print(f"   🌸 Pollinations.ai で画像生成中...")
-    success = _generate_with_pollinations(optimized_prompt, image_path)
-    if success:
-        return _finalize_image(image_path, image_filename)
+    def _gen_one(idx, prompt):
+        """1パターン生成+アップロード。成功時はURLを返す。"""
+        fname = f"{_uuid.uuid4().hex[:12]}.png"
+        fpath = _IMAGE_OUTPUT_DIR / fname
+        ok = False
+        if gemini_key:
+            ok = _generate_with_gemini(gemini_key, prompt, fpath)
+        if not ok:
+            ok = _generate_with_pollinations(prompt, fpath)
+        if ok:
+            url = _upload_image_to_render(fpath, fname)
+            if url:
+                print(f"   ✅ パターン{idx+1} 完了")
+                return url
+        print(f"   ⚠️ パターン{idx+1} 失敗")
+        return None
 
-    return False, "画像生成に失敗しました。全エンジンでエラーが発生しました。", {}
+    generated_urls = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        futures = {
+            pool.submit(_gen_one, i, p): i
+            for i, p in enumerate(prompt_data["variations"])
+        }
+        for fut in concurrent.futures.as_completed(futures):
+            url = fut.result()
+            if url:
+                generated_urls.append(url)
+
+    if not generated_urls:
+        return False, "画像生成に失敗しました。全パターンでエラーが発生しました。", {}
+
+    # ---- Step 4: 結果を返す ----
+    count = len(generated_urls)
+    if count == 1:
+        msg = "画像できましたよ！修正したい場合はそのまま指示してください！"
+    else:
+        msg = f"{count}パターン作りました！気に入ったのがあれば教えてくださいね。修正したい場合はそのまま指示してください！"
+
+    return True, msg, {
+        "image_urls": generated_urls,
+        "image_url": generated_urls[0],
+        "preview_url": generated_urls[0],
+        "original_prompt": user_prompt,
+        "optimized_prompt": prompt_data["main"],
+    }
 
 
-def _optimize_prompt_for_image(user_prompt: str) -> str:
-    """ユーザーの日本語指示を画像生成に最適な英語プロンプトに変換する"""
+def _deep_optimize_prompt(
+    user_prompt: str,
+    reference_analysis: str = "",
+    previous_context: dict = None,
+) -> dict:
+    """3段階プロンプト最適化: 意図理解→スタイル決定→3バリエーション生成。
+
+    Returns: {"main": str, "variations": [str, str, str], "intent": str}
+    """
+    fallback = {"main": user_prompt, "variations": [user_prompt] * 3, "intent": user_prompt}
+    api_key = config.get("anthropic_api_key", "")
+    if not api_key:
+        return fallback
+
+    # コンテキスト構築
+    ctx = ""
+    if reference_analysis:
+        ctx += f"\n## Reference image analysis\n{reference_analysis}\n"
+    if previous_context:
+        ctx += (
+            f"\n## Previous generation (modification request)\n"
+            f"Original request: {previous_context.get('original_prompt', '')}\n"
+            f"Optimized prompt: {previous_context.get('optimized_prompt', '')}\n"
+            f"User now wants to MODIFY the previous result. Preserve core concept, apply changes.\n"
+        )
+
+    system_prompt = (
+        "You are an expert AI image prompt engineer. Deeply understand the user's intent "
+        "and create 3 distinct prompt variations for AI image generation (Flux model).\n\n"
+        "Output ONLY valid JSON:\n"
+        '{"intent":"what the user wants (Japanese, 1 sentence)",'
+        '"main":"primary English prompt with style/lighting/composition (80-120 words)",'
+        '"variation_a":"faithful to intent, photorealistic/clean style",'
+        '"variation_b":"creative/artistic interpretation, unique angle",'
+        '"variation_c":"professional/minimalist, business-appropriate"}\n\n'
+        "Rules:\n"
+        "- Each prompt: 80-120 words, include lighting, composition, color palette, mood\n"
+        "- variation_a: most faithful to user intent\n"
+        "- variation_b: explore creative/artistic direction\n"
+        "- variation_c: clean, professional, suitable for business\n"
+        "- If reference image analysis is provided, incorporate those visual elements\n"
+        "- If this is a modification, adjust previous prompt based on the new instruction\n"
+        "- Add quality boosters: 'highly detailed, professional quality, 8k resolution'"
+    )
+
     try:
-        api_key = config.get("anthropic_api_key", "")
-        if not api_key:
-            return user_prompt
-
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
+        import anthropic as _anth
+        client = _anth.Anthropic(api_key=api_key)
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=300,
-            system="You are an expert at writing image generation prompts. Convert the user's request into an optimal English prompt for AI image generation. Output ONLY the prompt, nothing else. Keep it concise (under 200 words). Include style, composition, lighting, and quality descriptors.",
-            messages=[{"role": "user", "content": f"以下の指示を画像生成プロンプトに変換してください:\n{user_prompt}"}],
+            max_tokens=1000,
+            system=system_prompt,
+            messages=[{"role": "user", "content": f"画像生成指示:\n{user_prompt}{ctx}"}],
         )
-        result = resp.content[0].text.strip()
-        return result if result else user_prompt
+        text = resp.content[0].text.strip()
+        # JSON を抽出
+        import re as _re
+        m = _re.search(r"\{[\s\S]*\}", text)
+        if m:
+            data = json.loads(m.group())
+            main = data.get("main", user_prompt)
+            return {
+                "main": main,
+                "variations": [
+                    data.get("variation_a", main),
+                    data.get("variation_b", main),
+                    data.get("variation_c", main),
+                ],
+                "intent": data.get("intent", user_prompt),
+            }
     except Exception as e:
-        print(f"   ⚠️ プロンプト最適化失敗（元のプロンプトを使用）: {e}")
-        return user_prompt
+        print(f"   ⚠️ プロンプト最適化失敗: {e}")
+    return fallback
 
 
 def _generate_with_gemini(api_key: str, prompt: str, output_path: Path) -> bool:
