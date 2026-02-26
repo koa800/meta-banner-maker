@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月26日（深掘り質問過多の修正・番号選択バグ修正・ai_news Anthropic切替） |
+| 最終更新 | 2026年2月26日（Claude Code自律モード統合・bypassPermissions設定・credentials/data/configシンボリックリンク整備） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -31,21 +31,21 @@
                                │  Mac Mini 常駐エージェント      │
                                │  ~/agents/line_bot_local/      │
                                │  local_agent.py                │
-                               │  - Claude Sonnet で返信案生成  │
-                               │  - フィードバック学習          │
-                               │  - people-profiles.json参照   │
-                               │  - スプレッドシート文脈参照     │
-                               │  - Addness KPI自動参照         │
-                               │    (kpi_summary.json優先      │
-                               │     → Sheets APIフォールバック)  │
-                               │    ※外部パートナーには非開示    │
+                               │                                │
+                               │  【v3】Claude Code 自律モード   │
+                               │  - claude -p (CLI) で自律実行   │
+                               │  - 返信案: プロファイル自動検索  │
+                               │  - タスク: スクリプト実行・Web検索│
+                               │  - Bash/WebSearch/Read/Grep 全解放│
+                               │  - ~/.claude-secretary/ で認証分離│
+                               │  - 失敗時: 既存API/Coordinator │
+                               │    にフォールバック              │
                                │                                │
                                │  【v2】Coordinator（司令塔）    │
                                │  - coordinator.py              │
                                │  - handler_runner.py           │
                                │  - tool_registry.json (13ツール)│
                                │  - ゴール→分解→委任→統合→報告  │
-                               │  - LINE→execute_goal接続完了   │
                                │  → 詳細: Project/ゴール実行     │
                                │    エンジン設計.md              │
                                └──────────────────────────────┘
@@ -146,6 +146,14 @@
 27. **自動再起動改善**: `git_pull_sync.sh`が`line_bot_local/`配下の`.py`ファイル変更を検知すると自動で`local_agent`を再起動し、LINEに通知（変更ファイル名・コミットハッシュ・時刻を含む）
 28. **plistパス自動修正**: `git_pull_sync.sh`が毎回実行時にlaunchctl plistのパス整合性をチェック。Library版（`~/Library/LineBot/`）など古いパスを参照していた場合、正しいデプロイ先（`~/agents/line_bot_local/`）に自動修正＆再起動。config.jsonも旧パスから自動マイグレーション
 
+### Phase 8: Claude Code 自律モード（完了）
+33. **Claude Code CLI統合**: `claude -p`（非対話モード）で返信案生成・タスク実行を自律的に実行。ファイル読み取り・Grep検索・スクリプト実行・Web検索を自分で判断して使用
+34. **返信案のハイブリッド生成**: Pythonが事前に送信者プロファイル・学習データを計算 → Claude Codeが自律的にprofiles.json検索・goal-tree.md参照で追加文脈を取得 → マーカー（`===REPLY_START===`/`===REPLY_END===`）で返信文を抽出。失敗時は既存Claude API直接呼び出しにフォールバック
+35. **汎用タスク実行**: LINEからの自然言語指示をClaude Codeが自律実行。sheets_manager.py/mail_manager.py/Google API等のスクリプトをBashで実行可能。破壊的操作（ファイル削除・git操作・デプロイ・プロセスkill・環境変数変更）は明示的に禁止
+36. **認証分離**: `~/.claude-secretary/`（甲原アカウント MAX）で日向エージェント（`~/.claude/`）と完全分離。`CLAUDE_CONFIG_DIR`環境変数でsubprocess起動時に切り替え
+37. **bypassPermissions**: `~/.claude-secretary/settings.json`でBash/WebSearch/Read等の全ツール解放。rm/sudo/kill/force-push等の破壊的操作のみask制限
+38. **人名ハルシネーション防止**: profiles.jsonから全メンバー名を抽出し「社内メンバー一覧」としてプロンプトに注入。「人名ルール: profiles.jsonに存在する正確な名前のみ使用」を出力ルールに追加
+
 ### Phase 7: 積み上がる学習（完了）
 29. **人ごとの会話記憶**: 返信案生成のたびに `contact_state.json` へ会話要約を保存（1人最大20件）。次回の返信プロンプトに直近5件の過去会話を注入し、文脈の連続性を向上。旧形式（タイムスタンプ文字列）からの自動マイグレーション対応
 30. **Q&A回答スタイル学習**: Q&A承認時にAI案と異なる修正があれば `qa_feedback.json`（Render永続ディスク）に自動保存（最大30件）。次のQ&A回答生成時に直近5件の修正例をプロンプトに注入し、回答スタイルを学習
@@ -238,10 +246,19 @@
 | `System/kpi_summary.json` | KPIキャッシュ（`fetch_addness_kpi()`が参照、自動生成） |
 | `System/looker_csv_downloader.py` | Looker Studio CSVダウンローダー（Cursor連携） |
 
+### Claude Code 認証（Mac Mini）
+| パス | 説明 |
+|------|------|
+| `~/.claude-secretary/settings.json` | 秘書用Claude Code権限設定（bypassPermissions + 破壊的操作ask制限） |
+| `~/.claude-secretary/.credentials.json` | 秘書用OAuth認証情報（甲原アカウント MAX） |
+| `~/agents/_repo/System/credentials/` → `~/agents/System/credentials/` | シンボリックリンク（client_secret.json等） |
+| `~/agents/_repo/System/data/` → `~/agents/System/data/` | シンボリックリンク（kpi_summary.json等） |
+| `~/agents/_repo/System/config/` → `~/agents/System/config/` | シンボリックリンク（ai_news.json等） |
+
 ### 知識ベース（Master/）
 | パス | 説明 |
 |------|------|
-| `Master/people/profiles.json` | 56名のプロファイル（comm_profile + group_insights含む） |
+| `Master/people/profiles.json` | 58名のプロファイル（comm_profile + group_insights含む） |
 | `Master/people/identities.json` | 人物識別データ |
 | `Master/learning/reply_feedback.json` | フィードバック学習データ（修正例・スタイルノート） |
 | `Master/self_clone/kohara/IDENTITY.md` | 甲原海人の言語スタイル定義 |
@@ -737,6 +754,11 @@ MacBook (どこからでも)
 - [x] 深掘り質問の制限: データ取得系は即実行、確認は最大1回に制限（質問より行動を優先）
 - [x] 番号選択バグ修正: AI秘書が提示した番号リストに「2」「3」で回答するとメッセージ送信コマンドと誤認されていた問題を修正（メンション/Q&A文脈のみコマンド扱い）
 - [x] ai_news Anthropic API切替: OpenAI→Anthropic（claude-haiku-4-5）、Slack送信はSLACK_AI_TEAM_WEBHOOK_URL環境変数にフォールバック
+- [x] Claude Code自律モード統合（Phase 8）: 返信案生成・タスク実行でClaude Code CLIを優先使用。プロファイル自動検索・スクリプト実行・Web検索が可能に。失敗時は既存API/Coordinatorにフォールバック
+- [x] Claude Code認証分離: `~/.claude-secretary/`（甲原アカウント koa800sea.nifs@gmail.com MAX）で日向エージェント（`~/.claude/`）と完全分離
+- [x] Claude Code bypassPermissions設定: Bash/WebSearch/Read等の全ツール解放。破壊的操作（rm/sudo/kill/force-push等）のみask制限
+- [x] Mac Mini _repo シンボリックリンク整備: `credentials/` `data/` `config/` を `~/agents/System/` にリンク。Claude Codeからsheets_manager.py等が正常動作
+- [x] 人名ハルシネーション防止: 返信案プロンプトに社内メンバー一覧を注入 + 人名ルール（profiles.jsonに存在する正確な名前のみ使用）を追加
 
 ---
 
