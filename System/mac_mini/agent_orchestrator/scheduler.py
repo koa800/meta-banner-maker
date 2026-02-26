@@ -1703,10 +1703,45 @@ JSON以外の文字は出力しないでください。"""}],
                 logger.info("slack_dispatch: resume command → hinata resumed")
 
             else:
-                # instruction → 日向のタスクキューに追加
-                self._add_hinata_task(HINATA_TASKS, text, msg["ts"], "instruction")
-                send_slack_ai_team(f"日向に伝えました！「{text[:50]}」")
-                logger.info(f"slack_dispatch: instruction → hinata task added")
+                # メンションベースのルーティング
+                # 日向宛て → 日向タスクキュー、秘書宛て → 秘書が直接応答、なし → スキップ
+                HINATA_SLACK_UID = "U0AHJGVDRBJ"
+                is_hinata = ("日向" in text or f"<@{HINATA_SLACK_UID}>" in text)
+                is_secretary = ("秘書" in text)
+
+                if is_hinata:
+                    self._add_hinata_task(HINATA_TASKS, text, msg["ts"], "instruction")
+                    send_slack_ai_team(f"日向に伝えました！「{text[:50]}」")
+                    logger.info(f"slack_dispatch: instruction → hinata task added")
+                elif is_secretary:
+                    # 秘書が直接応答（Claude API）
+                    await self._reply_as_secretary(text, send_slack_ai_team)
+                    logger.info(f"slack_dispatch: secretary mention → direct reply")
+                else:
+                    # メンションなし → 無視（ユーザーは宛先を明示する運用）
+                    logger.debug(f"slack_dispatch: no mention target, skipping: {text[:30]}")
+
+    async def _reply_as_secretary(self, user_text: str, send_fn):
+        """秘書がSlack上で甲原のメッセージに直接応答する。"""
+        import anthropic
+        try:
+            client = anthropic.Anthropic()
+            response = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=600,
+                system=(
+                    "あなたは甲原海人のAI秘書です。Slackの#ai-teamチャンネルで甲原さんに話しかけられました。"
+                    "秘書として簡潔に回答してください。"
+                    "甲原さんとの会話スタイル: フランク、！多め、、、溜め。"
+                    "マークダウンの太字（**）は使わない。"
+                ),
+                messages=[{"role": "user", "content": user_text}],
+            )
+            reply = response.content[0].text.strip()
+            send_fn(reply)
+        except Exception as e:
+            logger.exception(f"_reply_as_secretary error: {e}")
+            send_fn("すみません、、！ちょっとエラーが出てしまいました。もう一度試してもらえますか？")
 
     @staticmethod
     def _classify_slack_command(text: str) -> str:

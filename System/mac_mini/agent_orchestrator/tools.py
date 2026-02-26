@@ -500,6 +500,19 @@ def os_sync_session() -> ToolResult:
 
     sent = send_line_notify(os_report)
     if sent:
+        # OS sync state を保存（local_agent が応答を検知するため）
+        os_sync_state_path = os.path.expanduser("~/agents/System/data/os_sync_state.json")
+        os.makedirs(os.path.dirname(os_sync_state_path), exist_ok=True)
+        sync_state = {
+            "status": "pending",
+            "sent_at": datetime.now().isoformat(),
+            "report": os_report,
+        }
+        tmp = os_sync_state_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            _json.dump(sync_state, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, os_sync_state_path)
+        logger.info("os_sync_session: state saved (pending)")
         return ToolResult(success=True, output=f"OS sync sent ({len(os_report)} chars)")
     else:
         return ToolResult(success=False, output="", error="LINE send failed")

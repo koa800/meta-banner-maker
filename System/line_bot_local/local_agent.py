@@ -79,6 +79,9 @@ FEEDBACK_FILE = _tcc_safe_path(
     _PROJECT_ROOT / "Master" / "learning" / "reply_feedback.json", "reply_feedback.json")
 EXECUTION_RULES_FILE = _tcc_safe_path(
     _PROJECT_ROOT / "Master" / "learning" / "execution_rules.json", "execution_rules.json")
+BRAIN_OS_MD = _tcc_safe_path(
+    _PROJECT_ROOT / "Master" / "self_clone" / "kohara" / "BRAIN_OS.md", "BRAIN_OS.md")
+OS_SYNC_STATE_FILE = Path(os.path.expanduser("~/agents/System/data/os_sync_state.json"))
 _SKILLS_DIR = _SYSTEM_DIR / "line_bot" / "skills"
 
 # Claude Code CLI（AI秘書の自律モード）
@@ -431,6 +434,238 @@ def save_execution_rule(rule: dict):
         )
     except Exception as e:
         print(f"⚠️ 実行ルール保存エラー: {e} (path={EXECUTION_RULES_FILE})")
+
+
+def _load_os_sync_state() -> dict:
+    """OS syncの状態を読み込む。なければ空dictを返す。"""
+    try:
+        if OS_SYNC_STATE_FILE.exists():
+            return json.loads(OS_SYNC_STATE_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, IOError):
+        pass
+    return {}
+
+
+def _save_os_sync_state(state: dict):
+    """OS sync状態をアトミックに保存する。"""
+    OS_SYNC_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = OS_SYNC_STATE_FILE.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+    tmp.rename(OS_SYNC_STATE_FILE)
+
+
+def _clear_os_sync_state():
+    """OS sync状態をクリアする。"""
+    try:
+        if OS_SYNC_STATE_FILE.exists():
+            OS_SYNC_STATE_FILE.unlink()
+    except OSError:
+        pass
+
+
+def _handle_os_sync_intercept(client, os_sync_state: dict, instruction: str,
+                              function_name: str, arguments: dict):
+    """OSすり合わせの往復ループを処理する。
+
+    状態遷移:
+    1. pending → ユーザーの応答を分析 → 新情報を抽出 → 確認を求める → awaiting_confirmation
+    2. awaiting_confirmation → ユーザーが承認 → OS更新 → 完了（state削除）
+
+    Returns:
+        tuple(bool, str) if intercepted, None if not an OS sync response
+    """
+    from datetime import datetime, timedelta
+
+    sent_at_str = os_sync_state.get("sent_at", "")
+    try:
+        sent_at = datetime.fromisoformat(sent_at_str)
+    except (ValueError, TypeError):
+        _clear_os_sync_state()
+        return None
+
+    # 48時間を超えたら期限切れ
+    if datetime.now() - sent_at > timedelta(hours=48):
+        _clear_os_sync_state()
+        return None
+
+    status = os_sync_state.get("status")
+
+    # ===== 状態2: awaiting_confirmation → 承認/却下を処理 =====
+    if status == "awaiting_confirmation":
+        text_lower = instruction.strip().lower()
+        # 承認パターン
+        approve_patterns = ["更新して", "更新", "うん", "はい", "お願い", "ok", "おけ", "いいよ", "反映して"]
+        # 却下パターン
+        reject_patterns = ["やめて", "いらない", "却下", "やめ", "no", "違う", "ちがう"]
+
+        if any(p in text_lower for p in approve_patterns):
+            # OS更新を実行
+            proposed = os_sync_state.get("proposed_updates", [])
+            if proposed:
+                rules = load_execution_rules()
+                added_count = 0
+                for update in proposed:
+                    new_rule = {
+                        "situation": update.get("situation", ""),
+                        "action": update.get("action", ""),
+                        "intent": update.get("intent", ""),
+                        "timestamp": datetime.now().isoformat(),
+                        "source": "os_sync",
+                        "priority": update.get("priority", "normal"),
+                    }
+                    rules.append(new_rule)
+                    added_count += 1
+                rules = rules[-50:]  # 最大50件
+                try:
+                    EXECUTION_RULES_FILE.parent.mkdir(parents=True, exist_ok=True)
+                    EXECUTION_RULES_FILE.write_text(
+                        json.dumps(rules, ensure_ascii=False, indent=2), encoding="utf-8"
+                    )
+                except Exception as e:
+                    print(f"⚠️ execution_rules.json 更新エラー: {e}")
+
+                # BRAIN_OS.md も更新（OS同期履歴に追記）
+                try:
+                    if BRAIN_OS_MD.exists():
+                        brain_os = BRAIN_OS_MD.read_text(encoding="utf-8")
+                        summary = os_sync_state.get("response_summary", "")
+                        date_str = datetime.now().strftime("%Y-%m-%d")
+                        new_entry = f"\n- {date_str}: {summary[:200]}"
+                        if "## OS同期履歴" in brain_os:
+                            brain_os = brain_os.replace(
+                                "## OS同期履歴",
+                                f"## OS同期履歴{new_entry}",
+                            )
+                        else:
+                            brain_os += f"\n\n## OS同期履歴{new_entry}"
+                        BRAIN_OS_MD.write_text(brain_os, encoding="utf-8")
+                except Exception as e:
+                    print(f"⚠️ BRAIN_OS.md 更新エラー: {e}")
+
+                _clear_os_sync_state()
+                return True, f"了解！{added_count}件のルールを更新したよ、、！\n次のすり合わせで反映を確認するね！"
+
+            _clear_os_sync_state()
+            return True, "更新する内容がなかったみたい、、！また次回のすり合わせで確認するね！"
+
+        elif any(p in text_lower for p in reject_patterns):
+            _clear_os_sync_state()
+            return True, "了解！今回は更新しないでおくね、、！\nまた次のすり合わせで確認する！"
+
+        # 承認でも却下でもない → OS syncの追加回答として処理を続行
+        # （状態を維持したまま、次の分析に回す）
+        os_sync_state["status"] = "pending"
+        _save_os_sync_state(os_sync_state)
+
+    # ===== 状態1: pending → ユーザーの応答を分析 =====
+    if status == "pending" or os_sync_state.get("status") == "pending":
+        # 明らかにOS syncと無関係なコマンドはスキップ
+        skip_functions = {
+            "input_daily_report", "kpi_query", "mail_check", "restart_agent",
+            "orchestrator_status", "qa_status", "addness_sync",
+        }
+        if function_name in skip_functions:
+            return None
+
+        # Claude に「OS sync への応答かどうか」を判定させる
+        report = os_sync_state.get("report", "")[:500]
+        check_prompt = f"""以下の2つのメッセージを見て判断してください。
+
+【秘書が送ったOSすり合わせメッセージ（質問付き）】
+{report}
+
+【甲原さんの返答】
+{instruction}
+
+質問: 甲原さんの返答は、上記のOSすり合わせの質問に対する回答ですか？
+（単なる別の指示や無関係な会話ではなく、OSの認識に関する回答かどうか）
+
+「yes」か「no」の1語だけで回答してください。"""
+
+        try:
+            check_resp = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=5,
+                messages=[{"role": "user", "content": check_prompt}]
+            )
+            is_os_response = "yes" in check_resp.content[0].text.strip().lower()
+        except Exception:
+            return None
+
+        if not is_os_response:
+            return None  # OS sync応答ではない → 通常処理に戻す
+
+        # OS sync応答として処理 — 新情報を抽出
+        current_rules = load_execution_rules()
+        rules_text = json.dumps(current_rules, ensure_ascii=False, indent=2)[:1500] if current_rules else "（まだルールなし）"
+
+        extract_prompt = f"""あなたは甲原海人のAI秘書です。OSすり合わせで甲原さんから回答をもらいました。
+
+【現在のOS（行動ルール）】
+{rules_text}
+
+【甲原さんの回答】
+{instruction}
+
+## 作業
+甲原さんの回答から「新しい情報」を抽出してください。
+既存のルールと重複するものは除外してください。
+
+以下のJSON配列で出力してください。新情報がなければ空配列 [] を返してください。
+```json
+[
+  {{
+    "situation": "どういう場面で",
+    "action": "何をする/しない",
+    "intent": "なぜそうするのか（甲原さんの意図）",
+    "priority": "core または normal",
+    "summary": "1行の要約"
+  }}
+]
+```
+
+JSONのみ出力してください。"""
+
+        try:
+            extract_resp = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=600,
+                messages=[{"role": "user", "content": extract_prompt}]
+            )
+            extract_text = extract_resp.content[0].text.strip()
+            # JSON部分を抽出
+            if "```json" in extract_text:
+                extract_text = extract_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in extract_text:
+                extract_text = extract_text.split("```")[1].split("```")[0].strip()
+            proposed_updates = json.loads(extract_text)
+        except (json.JSONDecodeError, Exception) as e:
+            print(f"⚠️ OS sync 情報抽出エラー: {e}")
+            return None
+
+        if not proposed_updates:
+            _clear_os_sync_state()
+            return True, "ありがとう、、！\n今回は新しい更新はなさそうだったけど、しっかり理解できてると思う！\nずれてるとこあったらまた教えてね！"
+
+        # 確認メッセージを生成
+        summaries = [u.get("summary", u.get("action", ""))[:60] for u in proposed_updates]
+        summary_text = "\n".join(f"  ★ {s}" for s in summaries)
+        response_summary = "; ".join(s[:40] for s in summaries)
+
+        # 状態を awaiting_confirmation に更新
+        os_sync_state["status"] = "awaiting_confirmation"
+        os_sync_state["proposed_updates"] = proposed_updates
+        os_sync_state["response_summary"] = response_summary
+        _save_os_sync_state(os_sync_state)
+
+        return True, (
+            f"なるほど、、！新しい情報をキャッチしました！\n\n"
+            f"【更新候補 {len(proposed_updates)}件】\n{summary_text}\n\n"
+            f"これらをOSに反映していい？\n「更新して」で反映、「やめて」でキャンセルできます！"
+        )
+
+    return None
 
 
 def _extract_intent(raw_feedback: str, context: str = "") -> dict:
@@ -1516,6 +1751,16 @@ def call_claude_api(instruction: str, task: dict):
             or task.get("user_name")
             or ""
         )
+
+        # ===== OSすり合わせ応答インターセプト =====
+        # OS syncが送信済みの場合、ユーザーの返答をOS学習に回す
+        os_sync_state = _load_os_sync_state()
+        if os_sync_state.get("status") in ("pending", "awaiting_confirmation"):
+            os_sync_result = _handle_os_sync_intercept(
+                client, os_sync_state, instruction, function_name, arguments
+            )
+            if os_sync_result is not None:
+                return os_sync_result
 
         # ===== 人物メモ保存タスク =====
         if function_name == "save_person_memo":
