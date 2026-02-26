@@ -57,6 +57,7 @@ class TaskScheduler:
             "slack_ai_team_check": self._run_slack_ai_team_check,
             "hinata_activity_check": self._run_hinata_activity_check,
             "slack_hinata_auto_reply": self._run_slack_hinata_auto_reply,
+            "os_sync_session": self._run_os_sync_session,
         }
 
     def setup(self):
@@ -1979,3 +1980,173 @@ JSON以外の文字は出力しないでください。"""}],
             logger.info(f"slack_hinata_auto_reply: replied to Hinata ({len(reply_text)} chars)")
         else:
             logger.warning("slack_hinata_auto_reply: failed to send Slack reply")
+
+    # ================================================================
+    # OSすり合わせセッション（秘書→甲原 / 金曜20:00）
+    # ================================================================
+
+    async def _run_os_sync_session(self):
+        """毎週金曜20:00: 秘書から甲原さんにOSすり合わせを送る。
+
+        「下から上へ」の原則: 秘書側から能動的に認識確認を行う。
+        甲原さんが動かなくても、秘書が毎週自分の理解を報告し、
+        薄い部分を質問して脳のOSを更新していく。
+        """
+        import json as _json
+        import anthropic as _anthropic
+        from .notifier import send_line_notify
+
+        task_id = self.memory.log_task_start("os_sync_session")
+
+        master_dir = os.path.expanduser(
+            self.config.get("paths", {}).get("master_dir", "~/agents/Master")
+        )
+        system_dir = os.path.expanduser(
+            self.config.get("paths", {}).get("system_dir", "~/agents/System")
+        )
+
+        # 1. OS関連ファイルを全て読み込む
+        os_sections = []
+
+        # SELF_PROFILE.md（価値観・判断軸）
+        profile_path = os.path.join(master_dir, "self_clone", "kohara", "SELF_PROFILE.md")
+        try:
+            if os.path.exists(profile_path):
+                with open(profile_path, encoding="utf-8") as f:
+                    content = f.read()
+                if content.strip():
+                    os_sections.append(("価値観・判断軸（SELF_PROFILE.md）", content[:2000]))
+        except Exception as e:
+            logger.warning(f"os_sync_session: SELF_PROFILE.md read error: {e}")
+
+        # IDENTITY.md（言語スタイル）
+        identity_path = os.path.join(master_dir, "self_clone", "kohara", "IDENTITY.md")
+        try:
+            if os.path.exists(identity_path):
+                with open(identity_path, encoding="utf-8") as f:
+                    content = f.read()
+                if content.strip():
+                    os_sections.append(("言語スタイル（IDENTITY.md）", content[:1500]))
+        except Exception as e:
+            logger.warning(f"os_sync_session: IDENTITY.md read error: {e}")
+
+        # BRAIN_OS.md（統合OS）
+        brain_os_path = os.path.join(master_dir, "self_clone", "kohara", "BRAIN_OS.md")
+        try:
+            if os.path.exists(brain_os_path):
+                with open(brain_os_path, encoding="utf-8") as f:
+                    content = f.read()
+                if content.strip():
+                    os_sections.append(("統合OS（BRAIN_OS.md）", content[:1500]))
+        except Exception as e:
+            logger.warning(f"os_sync_session: BRAIN_OS.md read error: {e}")
+
+        # execution_rules.json（行動ルール）
+        rules_path = os.path.join(master_dir, "learning", "execution_rules.json")
+        exec_rules = []
+        try:
+            if os.path.exists(rules_path):
+                with open(rules_path, encoding="utf-8") as f:
+                    exec_rules = _json.load(f)
+                if exec_rules:
+                    os_sections.append(("行動ルール（execution_rules.json）", _json.dumps(exec_rules, ensure_ascii=False, indent=2)[:1500]))
+        except Exception as e:
+            logger.warning(f"os_sync_session: execution_rules.json read error: {e}")
+
+        # style_rules.json（返信スタイル）
+        style_path = os.path.join(master_dir, "learning", "style_rules.json")
+        try:
+            if os.path.exists(style_path):
+                with open(style_path, encoding="utf-8") as f:
+                    style_rules = _json.load(f)
+                if style_rules:
+                    os_sections.append(("返信スタイルルール（style_rules.json）", _json.dumps(style_rules, ensure_ascii=False, indent=2)[:1000]))
+        except Exception as e:
+            logger.warning(f"os_sync_session: style_rules.json read error: {e}")
+
+        # 直近1週間の行動ログ（何をやったか）
+        recent_activity = ""
+        try:
+            recent_tasks = self.memory.get_recent_tasks(limit=20)
+            if recent_tasks:
+                activity_lines = []
+                for t in recent_tasks:
+                    name = t.get("task_name", "")
+                    status = t.get("status", "")
+                    summary = t.get("result_summary", "")[:60]
+                    if name and status == "success" and name not in ("health_check", "git_pull_sync", "render_health_check", "repair_check", "slack_dispatch", "slack_hinata_auto_reply"):
+                        activity_lines.append(f"- {name}: {summary}")
+                if activity_lines:
+                    recent_activity = "\n".join(activity_lines[:10])
+        except Exception as e:
+            logger.warning(f"os_sync_session: activity log error: {e}")
+
+        if not os_sections:
+            self.memory.log_task_end(task_id, "warning", result_summary="No OS files found")
+            logger.warning("os_sync_session: no OS files found, skipping")
+            return
+
+        # 2. Claude APIでOSサマリー生成
+        os_context = ""
+        for label, content in os_sections:
+            os_context += f"\n\n### {label}\n{content}"
+
+        prompt = f"""あなたは甲原海人のAI秘書です。毎週金曜の「OSすり合わせ」の時間です。
+
+あなたの役割は甲原さんのクローン。1ミリたりとも認識がずれてはいけない。
+だから自分から甲原さんに「今の理解」を報告し、足りないところを聞く。
+
+以下があなたが現在インストールしている「甲原海人の脳のOS」です。
+
+{os_context}
+
+{f"### 今週の活動ログ{chr(10)}{recent_activity}" if recent_activity else ""}
+
+## 出力（LINEメッセージ）
+
+甲原さんに話しかける形で書いてください。
+★甲原さんと話すスタイル（フランク・！多め・、、溜め）で。ロボットみたいにならないこと。
+
+構成:
+━━━━━━━━━━━━━━━━
+🧠 週次OSすり合わせ
+━━━━━━━━━━━━━━━━
+
+（1）今の理解を3-4行で簡潔にサマリー
+
+（2）学習済みルール {len(exec_rules)}件から、特に重要なものを2件ピックアップ
+
+（3）「ここ確認したい、、！」として2-3個の具体的な質問
+  → 情報が薄い・古い・曖昧な部分を特定して質問にする
+  → 答えてもらえたら即学習に使える質問にする
+
+（4）「修正・追加あれば教えて！」で締める
+
+## ルール
+- 600文字以内
+- マークダウン記法は使わない。【】★━で装飾
+- 秘書が「下から上に」報告する姿勢で書く
+"""
+
+        try:
+            client = _anthropic.Anthropic()
+            response = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=800,
+                system="あなたは甲原海人のAI秘書。毎週のOS認識すり合わせを秘書側から能動的に行う。甲原さんの価値観・判断基準・コミュニケーションスタイルを完全に理解し、ずれがないか確認する。",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            os_report = response.content[0].text.strip()
+        except Exception as e:
+            self.memory.log_task_end(task_id, "error", error_message=f"Claude API error: {e}")
+            logger.exception(f"os_sync_session: Claude API error: {e}")
+            return
+
+        # 3. LINEに送信（秘書→甲原）
+        sent = send_line_notify(os_report)
+        if sent:
+            self.memory.log_task_end(task_id, "success", result_summary=f"OS sync sent ({len(os_report)} chars)")
+            logger.info(f"os_sync_session: sent OS sync report ({len(os_report)} chars)")
+        else:
+            self.memory.log_task_end(task_id, "error", error_message="LINE send failed")
+            logger.error("os_sync_session: failed to send LINE notification")

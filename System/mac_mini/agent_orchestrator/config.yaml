@@ -72,6 +72,9 @@ schedule:
   weekly_profile_learning:
     cron: "0 10 * * 0"           # 日曜 10:00  プロファイル学習
     enabled: true
+  os_sync_session:
+    cron: "0 20 * * 5"           # 金曜 20:00  OSすり合わせ（秘書→甲原）
+    enabled: true
 
   # === 常時監視（軽量・ローカル処理） ===
   health_check:
