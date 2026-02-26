@@ -25,7 +25,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 from addness_browser import launch_browser, setup_page, login, find_my_goal
-from claude_executor import execute_full_cycle
+from claude_executor import execute_full_cycle, execute_self_repair
 from slack_comm import (
     send_message,
     send_report,
@@ -38,6 +38,7 @@ CONFIG_PATH = SCRIPT_DIR / "config.json"
 STATE_PATH = SCRIPT_DIR / "state.json"
 LOG_DIR = SCRIPT_DIR / "logs"
 SLACK_POLL_INTERVAL = 15
+MAX_CONSECUTIVE_ERRORS = 3  # この回数連続エラーで自己修復サイクル発動
 
 # ---- ロギング ----
 LOG_DIR.mkdir(exist_ok=True)
@@ -94,7 +95,7 @@ def get_interval(config: dict) -> int:
 # ====================================================================
 
 def run_cycle(config: dict, state: dict, instruction: str = None) -> dict:
-    """Claude Codeにフルサイクルを任せる。"""
+    """Claude Codeにフルサイクルを任せる。失敗時はExceptionをraiseする。"""
     cycle_num = state.get("cycle_count", 0) + 1
     logger.info(f"===== サイクル #{cycle_num} 開始 =====")
 
@@ -106,18 +107,72 @@ def run_cycle(config: dict, state: dict, instruction: str = None) -> dict:
         goal_url=my_goal_url,
     )
 
+    state["cycle_count"] = cycle_num
+    state["last_cycle"] = datetime.now().isoformat()
+
     if result:
         logger.info(f"サイクル #{cycle_num} 完了")
         send_report(f"サイクル #{cycle_num} 完了", result[:500])
         state["last_action"] = result[:200]
+        save_state(state)
+        return state
     else:
         logger.warning(f"サイクル #{cycle_num} 失敗")
         send_message(f"⚠️ サイクル #{cycle_num} の実行に失敗しました。")
+        save_state(state)
+        raise RuntimeError(f"サイクル #{cycle_num} でClaude Codeが結果を返しませんでした")
 
-    state["cycle_count"] = cycle_num
-    state["last_cycle"] = datetime.now().isoformat()
-    save_state(state)
-    return state
+
+# ====================================================================
+# エラー自動修復
+# ====================================================================
+
+def _read_recent_logs(n_lines: int = 50) -> str:
+    """hinata.log の直近N行を読み込む。"""
+    log_file = LOG_DIR / "hinata.log"
+    if not log_file.exists():
+        return ""
+    try:
+        lines = log_file.read_text(encoding="utf-8").splitlines()
+        return "\n".join(lines[-n_lines:])
+    except Exception:
+        return ""
+
+
+def attempt_self_repair(error_summary: str, state: dict) -> bool:
+    """
+    自己修復サイクルを実行する。
+
+    Returns:
+        True: 修復を試みた（成功かどうかは結果次第）
+        False: 修復不可能
+    """
+    logger.warning(f"自己修復サイクル開始: {error_summary}")
+    send_message(
+        f"🔧 *自己修復モード起動*\n\n"
+        f"連続エラーが{MAX_CONSECUTIVE_ERRORS}回発生したため、自動でバグ修正を試みます。\n"
+        f"エラー: {error_summary[:200]}"
+    )
+
+    recent_logs = _read_recent_logs(80)
+    result = execute_self_repair(error_summary, recent_logs)
+
+    if result:
+        if "修復不可" in result:
+            send_message(
+                f"⚠️ *自己修復断念*\n\n{result[:500]}\n\n"
+                f"甲原さんの確認が必要です。"
+            )
+            return False
+        else:
+            send_message(f"✅ *自己修復完了*\n\n{result[:500]}")
+            return True
+    else:
+        send_message(
+            "❌ *自己修復失敗*\n\n"
+            "Claude Code による修復が失敗しました。甲原さんの確認が必要です。"
+        )
+        return False
 
 
 # ====================================================================
@@ -147,11 +202,19 @@ def handle_command(command: dict, config: dict, state: dict) -> dict:
 
     elif cmd_type == "run_action":
         send_message("はい！アクションを進めます。")
-        return run_cycle(config, state)
+        try:
+            return run_cycle(config, state)
+        except Exception as e:
+            logger.error(f"run_action サイクルエラー: {e}")
+            return state
 
     elif cmd_type == "instruction":
         send_message(f"了解です！「{text[:50]}」に取り組みます。")
-        return run_cycle(config, state, instruction=text)
+        try:
+            return run_cycle(config, state, instruction=text)
+        except Exception as e:
+            logger.error(f"instruction サイクルエラー: {e}")
+            return state
 
     return state
 
@@ -197,6 +260,8 @@ def main():
 
         next_cycle_time = time.time() + get_interval(config)
         paused = False
+        consecutive_errors = 0
+        last_error_summary = ""
 
         try:
             while True:
@@ -215,6 +280,8 @@ def main():
                                 paused = False
                             state = handle_command(command, config, state)
                             next_cycle_time = time.time() + get_interval(config)
+                            # 指示実行が成功したらエラーカウントリセット
+                            consecutive_errors = 0
                 except Exception as e:
                     logger.error(f"Slackコマンド処理エラー: {e}")
 
@@ -222,9 +289,24 @@ def main():
                 if not paused and time.time() >= next_cycle_time:
                     try:
                         state = run_cycle(config, state)
+                        consecutive_errors = 0  # 成功したらリセット
                     except Exception as e:
                         logger.exception(f"サイクル実行エラー: {e}")
                         send_message(f"⚠️ サイクル実行エラー: {str(e)[:200]}")
+                        consecutive_errors += 1
+                        last_error_summary = str(e)[:500]
+
+                    # ---- 連続エラー時の自己修復 ----
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                        logger.warning(
+                            f"連続エラー {consecutive_errors}回。自己修復を試みます。"
+                        )
+                        repaired = attempt_self_repair(last_error_summary, state)
+                        consecutive_errors = 0  # リセット（修復成否問わず無限ループ防止）
+                        if repaired:
+                            # self_restart.sh で再起動されるため、ここには戻らない可能性がある
+                            # 戻った場合は次のサイクルで再試行
+                            logger.info("自己修復完了。次のサイクルで再試行します。")
 
                     interval = get_interval(config)
                     next_cycle_time = time.time() + interval

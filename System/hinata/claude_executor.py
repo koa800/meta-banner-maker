@@ -4,6 +4,7 @@ Claude Code 実行モジュール（日向エージェント用）
 常駐ブラウザにCDP接続して、Addness操作もアクション実行も全てClaude Codeが行う。
 """
 
+import json
 import logging
 import subprocess
 from datetime import datetime
@@ -19,7 +20,49 @@ CLAUDE_CMD = "/opt/homebrew/bin/claude"
 _venv_python = Path.home() / "hinata-venv" / "bin" / "python"
 PYTHON_CMD = str(_venv_python) if _venv_python.exists() else "python3"
 ADDNESS_CLI = str(Path(__file__).parent / "addness_cli.py")
+SELF_RESTART_SH = str(Path(__file__).parent / "self_restart.sh")
 CDP_URL = "http://localhost:9222"
+
+# 学習ファイルのパス
+_learning_dir = WORK_DIR / "Master" / "learning"
+ACTION_LOG_PATH = _learning_dir / "action_log.json"
+INSIGHTS_PATH = _learning_dir / "insights.md"
+
+
+def _load_recent_actions(n: int = 5) -> str:
+    """action_log.json から直近N件のアクション履歴を読み込む。"""
+    try:
+        if not ACTION_LOG_PATH.exists():
+            return ""
+        with open(ACTION_LOG_PATH, "r", encoding="utf-8") as f:
+            logs = json.load(f)
+        if not logs:
+            return ""
+        recent = logs[-n:]
+        lines = []
+        for entry in recent:
+            lines.append(
+                f"- [{entry.get('date', '?')}] #{entry.get('cycle', '?')}: "
+                f"{entry.get('action', '?')} → {entry.get('result', '?')[:100]}"
+            )
+        return "\n".join(lines)
+    except Exception as e:
+        logger.warning(f"アクションログ読み込み失敗: {e}")
+        return ""
+
+
+def _load_insights() -> str:
+    """insights.md の内容を読み込む。"""
+    try:
+        if not INSIGHTS_PATH.exists():
+            return ""
+        text = INSIGHTS_PATH.read_text(encoding="utf-8").strip()
+        if len(text) > 1500:
+            text = text[:1500] + "\n... (省略)"
+        return text
+    except Exception as e:
+        logger.warning(f"インサイト読み込み失敗: {e}")
+        return ""
 
 
 def execute_full_cycle(
@@ -43,9 +86,24 @@ def execute_full_cycle(
             f"「{instruction}」\n"
         )
 
+    # 学習コンテキストを構築
+    learning_section = ""
+    recent_actions = _load_recent_actions(5)
+    insights = _load_insights()
+    if recent_actions or insights:
+        learning_section = "\n## 過去の学習コンテキスト\n"
+        if recent_actions:
+            learning_section += f"\n### 直近のアクション履歴\n{recent_actions}\n"
+        if insights:
+            learning_section += f"\n### 蓄積された知見\n{insights}\n"
+        learning_section += (
+            "\n上記の履歴・知見を踏まえて行動してください。"
+            "同じ失敗を繰り返さず、過去の成功パターンを活用すること。\n"
+        )
+
     prompt = f"""あなたは「日向」というAIエージェントです。
 現在: {now} / サイクル: #{cycle_num} / 前回のアクション: {last_action}
-{instruction_section}
+{instruction_section}{learning_section}
 ## 常駐ブラウザへの接続
 
 Addnessにログイン済みのブラウザが常時起動しています。
@@ -103,6 +161,13 @@ pw.stop()
 
 ### ステップ4: 結果を報告
 実行結果を簡潔に（3行以内で）報告してください。
+
+## 自己修復（エラー修正が必要な場合のみ）
+
+自分のコード（`System/hinata/`）にバグを発見した場合:
+1. CLAUDE.md の「日向エージェント」セクションを参照してコード構成を理解
+2. バグを修正 → `git add` → `git commit -m "fix: 修正内容"` → `git push`
+3. `bash {SELF_RESTART_SH} "修正内容の説明"` で自分を再起動
 """
 
     try:
@@ -134,4 +199,75 @@ pw.stop()
         return None
     except Exception as e:
         logger.error(f"Claude Code 実行失敗: {e}")
+        return None
+
+
+def execute_self_repair(
+    error_summary: str,
+    recent_logs: str = "",
+    timeout_seconds: int = 600,
+) -> Optional[str]:
+    """
+    Claude Code に自分自身のバグ修正をさせる。
+
+    Args:
+        error_summary: 発生したエラーの要約
+        recent_logs: 直近のログ出力
+        timeout_seconds: タイムアウト
+    Returns:
+        修復結果のテキスト。失敗ならNone。
+    """
+    prompt = f"""あなたは「日向」AIエージェントの自己修復モードです。
+
+## 発生したエラー
+{error_summary}
+
+## 直近のログ
+{recent_logs[-2000:] if recent_logs else "なし"}
+
+## 修復手順
+
+1. CLAUDE.md の「日向エージェント」セクションを読んで、コード構成を把握してください
+2. `System/hinata/` 内のコードを読んで、エラーの原因を特定してください
+3. 修正が必要なファイルを編集してください
+4. 修正後、以下のコマンドで変更をコミット＆プッシュしてください:
+   ```bash
+   cd {WORK_DIR} && git add System/hinata/ && git commit -m "fix: エラー修正の内容" && git push
+   ```
+5. 最後に自己再起動:
+   ```bash
+   bash {SELF_RESTART_SH} "自己修復: エラーの要約"
+   ```
+
+## 重要
+- **修正は最小限に**。壊れていない部分は触らない
+- 修正に自信がなければ、修正せずに「修復不可: 理由」と報告してください
+- ブラウザ関連（CDP/Playwright）のエラーは再起動で直ることが多い
+
+修復結果を報告してください。
+"""
+
+    try:
+        logger.info("自己修復サイクル開始")
+        result = subprocess.run(
+            [CLAUDE_CMD, "-p", prompt],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            cwd=str(WORK_DIR),
+        )
+
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            logger.info(f"自己修復完了（{len(output)}文字）")
+            return output
+        else:
+            logger.error(f"自己修復失敗 (code={result.returncode}): {result.stderr[:300]}")
+            return None
+
+    except subprocess.TimeoutExpired:
+        logger.error(f"自己修復タイムアウト（{timeout_seconds}秒）")
+        return None
+    except Exception as e:
+        logger.error(f"自己修復実行失敗: {e}")
         return None

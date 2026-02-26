@@ -85,3 +85,58 @@ Python スクリプトからのパス解決は `Path(__file__).resolve().parent`
 2. **スケーラビリティ** — マシンやメンバーが増えても設定変更が最小限で済むか
 3. **シンプルさ** — 可動部品（依存サービス・認証・ネットワーク要件）が少ないほど良い
 4. **可逆性** — 失敗しても元に戻せるか。段階的に移行できるか
+
+---
+
+## 日向エージェント（Mac Mini 常駐 AI）
+
+### 概要
+
+日向（ひなた）は Mac Mini で常時稼働する自律型AIエージェント。
+Slack で甲原からの指示を受け取り、Claude Code を起動して Addness 操作やタスク実行を行う。
+
+### コード構成
+
+```
+System/hinata/
+├── hinata_agent.py      # メインループ（ブラウザ維持 + Slack監視 + サイクル実行）
+├── claude_executor.py   # Claude Code CLI 呼び出し + プロンプト構築
+├── slack_comm.py        # Slack通信（Webhook送信 + API読み取り + コマンド分類）
+├── addness_browser.py   # Playwright永続コンテキスト + CDP + Addnessログイン
+├── addness_cli.py       # CLI ユーティリティ（手動ログイン等）
+├── self_restart.sh      # 自己再起動（git pull → launchctl reload）
+├── config.json          # 設定（ゴールURL・サイクル間隔・稼働時間）
+├── state.json           # 実行状態（サイクル数・最終アクション・Slack ts）
+└── logs/                # ログ出力先
+```
+
+### 自己修復ガイド（Claude Code がバグ修正するとき用）
+
+**よくあるエラーと修正方法:**
+
+| エラー | 原因 | 修正方法 |
+|--------|------|----------|
+| `Slack送信失敗` | Webhook URL 未設定 or 期限切れ | `slack_comm.py` の `_SLACK_WEBHOOK_URL` を確認 |
+| `CDP接続失敗` | ブラウザが再起動された | `hinata_agent.py` が自動復旧するので待つ |
+| `context.close() でブラウザ終了` | `browser.close()` と間違えた | CDP接続は `browser.close()` で切断。`context.close()` は絶対に使わない |
+| `Claude Code タイムアウト` | プロンプトが重すぎる or ネットワーク遅延 | `claude_executor.py` の `timeout_seconds` を調整 |
+| `Addnessログイン失敗` | セッション切れ | ブラウザプロファイルにセッションが残っていれば自動復旧。なければ手動ログイン必要 |
+| `コマンド分類ミス` | `_classify_command` のキーワードが不適切 | `slack_comm.py` の `status_keywords` / `stop_keywords` を修正 |
+
+**修正後の再起動手順:**
+
+1. コード修正 → `git add` → `git commit` → `git push`
+2. `bash System/hinata/self_restart.sh "修正内容の説明"`
+3. Mac Mini 上で `launchctl unload` → `load` が自動実行される
+
+**重要な注意事項:**
+- `~/agents/System/hinata` は `~/agents/_repo/System/hinata` へのシンボリックリンク
+- git push すれば Mac Mini の `git_pull_sync`（5分ごと）で自動反映
+- 即時反映が必要なら `self_restart.sh` を使う
+- ブラウザは `launch_persistent_context` で永続プロファイルを使用（`System/data/hinata_chrome_profile/`）
+
+### launchd 設定
+
+- ラベル: `com.hinata.agent`
+- plist: `~/Library/LaunchAgents/com.hinata.agent.plist`
+- RunAtLoad=true, KeepAlive（異常終了時のみ自動再起動）, ThrottleInterval=60秒
