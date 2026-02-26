@@ -39,6 +39,7 @@ System/sns_analyzer_cache/
 # 日向エージェント（機密情報・ランタイム）
 System/hinata/*.plist
 System/hinata/state.json
+System/hinata/hinata_tasks.json
 System/hinata/logs/
 
 # 再生成可能なキャッシュデータ

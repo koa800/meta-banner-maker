@@ -93,22 +93,65 @@ Python スクリプトからのパス解決は `Path(__file__).resolve().parent`
 ### 概要
 
 日向（ひなた）は Mac Mini で常時稼働する自律型AIエージェント。
-Slack で甲原からの指示を受け取り、Claude Code を起動して Addness 操作やタスク実行を行う。
+「自分で考えて動く」が役割。Addnessのゴール推進、調査、コード修正を担当。
+
+### 役割分担（B. 役割ベース）
+
+| 担当 | 役割 | Slack監視 |
+|------|------|-----------|
+| **AI秘書** | 人とのやり取り（LINE・Slack監視・返信・Q&A） | 秘書が #ai-team を監視 |
+| **日向** | 自分で考えて動く（Addness・調査・コード修正） | 秘書から指示を受ける側 |
+| **Orchestrator** | 決まった仕事を決まった時間に（同期・監視・レポート） | `slack_dispatch` で秘書→日向の橋渡し |
+
+### 指示フロー
+
+```
+甲原 → Slack #ai-team に書き込み
+  → Orchestrator の slack_dispatch（15秒ごと）が監視
+    → stop/status → 秘書が直接 Slack に応答
+    → instruction → hinata_tasks.json にタスク追加
+      → 日向が15秒ごとにタスクキューを確認
+      → Claude Code で実行 → Slack に結果報告
+        → 秘書（slack_hinata_auto_reply）が報告に返答
+```
 
 ### コード構成
 
 ```
 System/hinata/
-├── hinata_agent.py      # メインループ（ブラウザ維持 + Slack監視 + サイクル実行）
+├── hinata_agent.py      # メインループ（ブラウザ維持 + タスクキュー監視 + サイクル実行）
 ├── claude_executor.py   # Claude Code CLI 呼び出し + プロンプト構築
-├── slack_comm.py        # Slack通信（Webhook送信 + API読み取り + コマンド分類）
+├── slack_comm.py        # Slack送信専用（Webhook送信のみ。受信はOrchestratorが担当）
 ├── addness_browser.py   # Playwright永続コンテキスト + CDP + Addnessログイン
 ├── addness_cli.py       # CLI ユーティリティ（手動ログイン等）
 ├── self_restart.sh      # 自己再起動（git pull → launchctl reload）
 ├── config.json          # 設定（ゴールURL・サイクル間隔・稼働時間）
-├── state.json           # 実行状態（サイクル数・最終アクション・Slack ts）
+├── state.json           # 実行状態（サイクル数・最終アクション・paused）
+├── hinata_tasks.json    # タスクキュー（Orchestratorが書き込み、日向が読む）
 └── logs/                # ログ出力先
 ```
+
+### タスクキュー（hinata_tasks.json）
+
+Orchestrator の `slack_dispatch` が書き込み、日向が読む。同一マシン上のファイルベースキュー。
+
+```json
+[
+  {
+    "id": "abc12345",
+    "instruction": "甲原のメッセージ",
+    "command_type": "instruction",
+    "source": "slack",
+    "slack_ts": "1234567890.123456",
+    "status": "pending",
+    "created_at": "2026-02-26T10:30:00"
+  }
+]
+```
+
+- status: `pending` → `processing` → `completed` / `failed`
+- command_type: `instruction` / `stop` / `resume`
+- 完了から1時間で自動クリーンアップ
 
 ### 自己修復ガイド（Claude Code がバグ修正するとき用）
 
@@ -121,7 +164,8 @@ System/hinata/
 | `context.close() でブラウザ終了` | `browser.close()` と間違えた | CDP接続は `browser.close()` で切断。`context.close()` は絶対に使わない |
 | `Claude Code タイムアウト` | プロンプトが重すぎる or ネットワーク遅延 | `claude_executor.py` の `timeout_seconds` を調整 |
 | `Addnessログイン失敗` | セッション切れ | ブラウザプロファイルにセッションが残っていれば自動復旧。なければ手動ログイン必要 |
-| `コマンド分類ミス` | `_classify_command` のキーワードが不適切 | `slack_comm.py` の `status_keywords` / `stop_keywords` を修正 |
+| `コマンド分類ミス` | `_classify_slack_command` のキーワードが不適切 | `scheduler.py` の `_classify_slack_command` を修正（Orchestrator側） |
+| `タスクが届かない` | Orchestratorの `slack_dispatch` が停止 | config.yaml で `slack_dispatch.enabled: true` を確認 |
 
 **修正後の再起動手順:**
 

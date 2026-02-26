@@ -92,16 +92,21 @@ schedule:
     cron: "0 3 * * *"            # 03:00  ログ圧縮
     enabled: true
 
+  # === Slack連携（秘書が監視・日向に指示を渡す） ===
+  slack_dispatch:
+    interval_seconds: 15         # Slack #ai-team 監視 → 日向タスクキューへ
+    enabled: true
+  slack_hinata_auto_reply:
+    interval_seconds: 15         # 日向のSlack報告に秘書が返答
+    enabled: true
+
   # === 無効化済み ===
   slack_ai_team_check:
     interval_minutes: 30
-    enabled: false               # 2026-02-24 廃止: Slack監視不要
+    enabled: false               # slack_dispatch に統合
   hinata_activity_check:
     cron: "0 21 * * *"
-    enabled: false               # 2026-02-24 廃止: Slack監視不要
-  slack_hinata_auto_reply:
-    interval_seconds: 15
-    enabled: false               # 2026-02-24 廃止: Slack監視不要
+    enabled: false               # slack_dispatch + slack_hinata_auto_reply で代替
 
 webhook:
   host: "0.0.0.0"

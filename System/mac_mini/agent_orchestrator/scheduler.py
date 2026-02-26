@@ -53,6 +53,7 @@ class TaskScheduler:
             "weekly_profile_learning": self._run_weekly_profile_learning,
             "kpi_nightly_cache": self._run_kpi_nightly_cache,
             "log_rotate": self._run_log_rotate,
+            "slack_dispatch": self._run_slack_dispatch,
             "slack_ai_team_check": self._run_slack_ai_team_check,
             "hinata_activity_check": self._run_hinata_activity_check,
             "slack_hinata_auto_reply": self._run_slack_hinata_auto_reply,
@@ -1603,6 +1604,171 @@ JSON以外の文字は出力しないでください。"""}],
         except Exception as e:
             self.memory.log_task_end(task_id, "error", error_message=str(e))
             logger.exception("Repair check failed")
+
+    # ------------------------------------------------------------------ #
+    #  Slack #ai-team 監視 → 日向タスクキューへディスパッチ
+    # ------------------------------------------------------------------ #
+
+    async def _run_slack_dispatch(self):
+        """Slack #ai-team を監視し、甲原の指示を日向のタスクキューに書き込む。
+
+        秘書（Orchestrator）がSlackを見張り、日向は呼ばれたら動く構造。
+        - stop/resume → 日向の state.json を直接変更 + Slack応答
+        - status → 日向の state.json を読んで秘書がSlack応答
+        - instruction → hinata_tasks.json にタスク追加
+        """
+        import uuid
+        from pathlib import Path
+        from .slack_reader import fetch_channel_messages
+        from .notifier import send_slack_ai_team
+
+        AI_TEAM_CHANNEL = "C0AGLRJ8N3G"
+        state_key = "slack_dispatch_last_ts"
+
+        HINATA_DIR = Path(os.path.expanduser("~/agents/System/hinata"))
+        HINATA_TASKS = HINATA_DIR / "hinata_tasks.json"
+        HINATA_STATE = HINATA_DIR / "state.json"
+
+        last_ts = self.memory.get_state(state_key)
+
+        messages = fetch_channel_messages(AI_TEAM_CHANNEL, oldest=last_ts, limit=30)
+        if not messages:
+            return
+
+        new_msgs = [m for m in messages if m["ts"] != last_ts]
+        if not new_msgs:
+            return
+
+        # 最新のタイムスタンプを保存
+        latest_ts = new_msgs[-1]["ts"]
+        self.memory.set_state(state_key, latest_ts)
+
+        # 甲原からのメッセージだけ抽出（bot は除外）
+        human_msgs = [m for m in new_msgs if not m.get("user_id", "").startswith("B")]
+        if not human_msgs:
+            return
+
+        for msg in human_msgs:
+            text = msg.get("text", "").strip()
+            if not text:
+                continue
+
+            command_type = self._classify_slack_command(text)
+
+            if command_type == "stop":
+                # 秘書が直接対応: 日向の state.json に paused=True を書き込む
+                self._set_hinata_paused(HINATA_STATE, True)
+                # 日向のタスクキューにも stop を入れる（日向側でも認識できるように）
+                self._add_hinata_task(HINATA_TASKS, text, msg["ts"], "stop")
+                send_slack_ai_team("了解です！日向を一旦止めます。")
+                logger.info("slack_dispatch: stop command → hinata paused")
+
+            elif command_type == "status":
+                # 秘書が直接対応: 日向の state.json を読んで報告
+                status_text = self._read_hinata_status(HINATA_STATE)
+                send_slack_ai_team(status_text)
+                logger.info("slack_dispatch: status query → replied")
+
+            elif command_type == "resume":
+                self._set_hinata_paused(HINATA_STATE, False)
+                self._add_hinata_task(HINATA_TASKS, text, msg["ts"], "resume")
+                send_slack_ai_team("日向を再開します！")
+                logger.info("slack_dispatch: resume command → hinata resumed")
+
+            else:
+                # instruction → 日向のタスクキューに追加
+                self._add_hinata_task(HINATA_TASKS, text, msg["ts"], "instruction")
+                send_slack_ai_team(f"日向に伝えました！「{text[:50]}」")
+                logger.info(f"slack_dispatch: instruction → hinata task added")
+
+    @staticmethod
+    def _classify_slack_command(text: str) -> str:
+        """甲原のメッセージからコマンド種別を判定する。"""
+        stop_keywords = ["止まって", "ストップ", "止めて", "待って", "やめて"]
+        status_keywords = ["状況は", "どうなってる", "今何してる", "ステータス"]
+        resume_keywords = ["再開", "動いて", "始めて", "起きて"]
+
+        lower = text.lower()
+        if any(kw in lower for kw in stop_keywords):
+            return "stop"
+        if any(kw in lower for kw in status_keywords):
+            return "status"
+        if any(kw in lower for kw in resume_keywords):
+            return "resume"
+        return "instruction"
+
+    @staticmethod
+    def _set_hinata_paused(state_path: Path, paused: bool):
+        """日向の state.json の paused フラグを変更する。"""
+        import json
+        state = {}
+        if state_path.exists():
+            try:
+                with open(state_path, "r", encoding="utf-8") as f:
+                    state = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                pass
+        state["paused"] = paused
+        tmp = state_path.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+        tmp.rename(state_path)
+
+    @staticmethod
+    def _read_hinata_status(state_path: Path) -> str:
+        """日向の state.json を読んで状況テキストを返す。"""
+        import json
+        if not state_path.exists():
+            return "*日向の状況*\nstate.json が見つかりません。エージェントが起動していない可能性があります。"
+        try:
+            with open(state_path, "r", encoding="utf-8") as f:
+                state = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return "*日向の状況*\nstate.json の読み込みに失敗しました。"
+
+        cycle = state.get("cycle_count", 0)
+        last_action = state.get("last_action", "まだ実行していません")
+        last_cycle = state.get("last_cycle", "なし")
+        paused = state.get("paused", False)
+        status_emoji = "⏸️ 一時停止中" if paused else "▶️ 稼働中"
+
+        return (
+            f"*日向の状況報告*\n\n"
+            f"状態: {status_emoji}\n"
+            f"サイクル数: {cycle}\n"
+            f"最後のアクション: {last_action}\n"
+            f"最終実行: {last_cycle}"
+        )
+
+    @staticmethod
+    def _add_hinata_task(tasks_path: Path, instruction: str, slack_ts: str, command_type: str):
+        """日向のタスクキューにタスクを追加する。"""
+        import json
+        import uuid
+
+        tasks = []
+        if tasks_path.exists():
+            try:
+                with open(tasks_path, "r", encoding="utf-8") as f:
+                    tasks = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                tasks = []
+
+        task = {
+            "id": str(uuid.uuid4())[:8],
+            "instruction": instruction,
+            "command_type": command_type,
+            "source": "slack",
+            "slack_ts": slack_ts,
+            "status": "pending",
+            "created_at": datetime.now().isoformat(),
+        }
+        tasks.append(task)
+
+        tmp = tasks_path.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(tasks, f, ensure_ascii=False, indent=2)
+        tmp.rename(tasks_path)
 
     async def _run_slack_ai_team_check(self):
         """定期チェック: Slack #ai-team の新着メッセージを読み取り→LINEに転送"""

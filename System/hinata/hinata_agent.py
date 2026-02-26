@@ -4,10 +4,11 @@
 
 ブラウザを常時開いた状態で稼働。
 Addnessの操作もアクション実行も全てClaude Codeが行う。
-hinata_agent.py はブラウザの維持とSlack監視だけ。
+hinata_agent.py はブラウザの維持とタスクキュー監視だけ。
 
 フロー:
-  Slack指示 → Claude Code起動
+  秘書(Orchestrator)がSlack監視 → hinata_tasks.json に書き込み
+    → 日向がタスクを拾う → Claude Code起動
     → 常駐ブラウザ(CDP)でAddness操作（AI相談・完了・期限設定等）
     → アクション実行
     → ナレッジ蓄積
@@ -26,18 +27,15 @@ from playwright.sync_api import sync_playwright
 
 from addness_browser import launch_browser, setup_page, login, find_my_goal
 from claude_executor import execute_full_cycle, execute_self_repair
-from slack_comm import (
-    send_message,
-    send_report,
-    check_for_commands,
-)
+from slack_comm import send_message, send_report
 
 # ---- 設定 ----
 SCRIPT_DIR = Path(__file__).parent
 CONFIG_PATH = SCRIPT_DIR / "config.json"
 STATE_PATH = SCRIPT_DIR / "state.json"
+TASKS_PATH = SCRIPT_DIR / "hinata_tasks.json"
 LOG_DIR = SCRIPT_DIR / "logs"
-SLACK_POLL_INTERVAL = 15
+TASK_POLL_INTERVAL = 15
 MAX_CONSECUTIVE_ERRORS = 3  # この回数連続エラーで自己修復サイクル発動
 
 # ---- ロギング ----
@@ -68,7 +66,7 @@ def load_state() -> dict:
         "cycle_count": 0,
         "last_action": None,
         "last_cycle": None,
-        "last_slack_ts": None,
+        "paused": False,
     }
 
 
@@ -88,6 +86,81 @@ def get_interval(config: dict) -> int:
         return config.get("cycle_interval_minutes", 30) * 60
     else:
         return config.get("night_interval_minutes", 120) * 60
+
+
+# ====================================================================
+# タスクキュー（hinata_tasks.json）
+# ====================================================================
+
+def _load_tasks() -> list:
+    """タスクキューを読み込む。"""
+    if not TASKS_PATH.exists():
+        return []
+    try:
+        with open(TASKS_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return []
+
+
+def _save_tasks(tasks: list):
+    """タスクキューをアトミックに書き込む。"""
+    tmp = TASKS_PATH.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(tasks, f, ensure_ascii=False, indent=2)
+    tmp.rename(TASKS_PATH)
+
+
+def check_task_queue() -> dict | None:
+    """次のpendingタスクを取得する。"""
+    tasks = _load_tasks()
+    for task in tasks:
+        if task.get("status") == "pending":
+            return task
+    return None
+
+
+def claim_task(task_id: str):
+    """タスクをprocessingに変更する。"""
+    tasks = _load_tasks()
+    for task in tasks:
+        if task.get("id") == task_id:
+            task["status"] = "processing"
+            task["started_at"] = datetime.now().isoformat()
+            break
+    _save_tasks(tasks)
+
+
+def complete_task(task_id: str, success: bool, result: str):
+    """タスクをcompleted/failedに変更する。"""
+    tasks = _load_tasks()
+    for task in tasks:
+        if task.get("id") == task_id:
+            task["status"] = "completed" if success else "failed"
+            task["completed_at"] = datetime.now().isoformat()
+            task["result"] = result[:500]
+            break
+    _save_tasks(tasks)
+
+
+def cleanup_old_tasks():
+    """完了から1時間以上経ったタスクを削除する。"""
+    tasks = _load_tasks()
+    now = datetime.now()
+    kept = []
+    for task in tasks:
+        if task.get("status") in ("completed", "failed"):
+            completed_at = task.get("completed_at", "")
+            if completed_at:
+                try:
+                    dt = datetime.fromisoformat(completed_at)
+                    if (now - dt).total_seconds() > 3600:
+                        continue  # 1時間超 → 削除
+                except ValueError:
+                    pass
+        kept.append(task)
+    if len(kept) != len(tasks):
+        _save_tasks(kept)
 
 
 # ====================================================================
@@ -140,13 +213,7 @@ def _read_recent_logs(n_lines: int = 50) -> str:
 
 
 def attempt_self_repair(error_summary: str, state: dict) -> bool:
-    """
-    自己修復サイクルを実行する。
-
-    Returns:
-        True: 修復を試みた（成功かどうかは結果次第）
-        False: 修復不可能
-    """
+    """自己修復サイクルを実行する。"""
     logger.warning(f"自己修復サイクル開始: {error_summary}")
     send_message(
         f"🔧 *自己修復モード起動*\n\n"
@@ -176,45 +243,40 @@ def attempt_self_repair(error_summary: str, state: dict) -> bool:
 
 
 # ====================================================================
-# Slackコマンド処理
+# タスク処理
 # ====================================================================
 
-def handle_command(command: dict, config: dict, state: dict) -> dict:
-    cmd_type = command["command_type"]
-    text = command["text"]
+def handle_task(task: dict, config: dict, state: dict) -> dict:
+    """タスクキューから取得したタスクを処理する。"""
+    task_id = task["id"]
+    command_type = task.get("command_type", "instruction")
+    text = task.get("instruction", "")
 
-    if cmd_type == "stop":
-        send_message("了解です！一旦止まります。次の指示をお待ちしています。")
-        logger.info("甲原からの停止指示")
+    if command_type == "stop":
+        logger.info("秘書からの停止指示")
+        state["paused"] = True
+        save_state(state)
+        complete_task(task_id, True, "停止しました")
         return state
 
-    elif cmd_type == "status":
-        last = state.get("last_action", "まだ実行していません")
-        cycle = state.get("cycle_count", 0)
-        last_time = state.get("last_cycle", "なし")
-        send_message(
-            f"*日向の状況報告*\n\n"
-            f"サイクル数: {cycle}\n"
-            f"最後のアクション: {last}\n"
-            f"最終実行: {last_time}"
-        )
+    elif command_type == "resume":
+        logger.info("秘書からの再開指示")
+        state["paused"] = False
+        save_state(state)
+        send_message("再開します！")
+        complete_task(task_id, True, "再開しました")
         return state
 
-    elif cmd_type == "run_action":
-        send_message("はい！アクションを進めます。")
-        try:
-            return run_cycle(config, state)
-        except Exception as e:
-            logger.error(f"run_action サイクルエラー: {e}")
-            return state
-
-    elif cmd_type == "instruction":
+    elif command_type == "instruction":
+        claim_task(task_id)
         send_message(f"了解です！「{text[:50]}」に取り組みます。")
         try:
-            return run_cycle(config, state, instruction=text)
+            state = run_cycle(config, state, instruction=text)
+            complete_task(task_id, True, state.get("last_action", ""))
         except Exception as e:
-            logger.error(f"instruction サイクルエラー: {e}")
-            return state
+            logger.error(f"instruction タスクエラー: {e}")
+            complete_task(task_id, False, str(e)[:500])
+        return state
 
     return state
 
@@ -230,13 +292,13 @@ def main():
     logger.info("=" * 60)
     logger.info("日向エージェント起動")
     logger.info(f"サイクル間隔: {config.get('cycle_interval_minutes', 30)}分")
-    logger.info(f"Slack確認間隔: {SLACK_POLL_INTERVAL}秒")
+    logger.info(f"タスク確認間隔: {TASK_POLL_INTERVAL}秒")
     logger.info("=" * 60)
 
-    send_message("🌅 日向エージェント起動しました！Slackで指示をくだされば動きます。")
+    send_message("🌅 日向エージェント起動しました！")
 
-    # 起動時は現在時刻にリセット
-    state["last_slack_ts"] = str(time.time())
+    # 起動時に paused をリセット
+    state["paused"] = False
     save_state(state)
 
     with sync_playwright() as playwright:
@@ -259,37 +321,38 @@ def main():
             find_my_goal(page, my_goal_url=my_goal_url)
 
         next_cycle_time = time.time() + get_interval(config)
-        paused = False
         consecutive_errors = 0
         last_error_summary = ""
 
         try:
             while True:
-                # ---- Slack コマンド確認 ----
+                # ---- タスクキュー確認 ----
                 try:
-                    command = check_for_commands(state.get("last_slack_ts", "0"))
-                    if command:
-                        state["last_slack_ts"] = command["ts"]
-                        save_state(state)
+                    # state.json を再読み込み（秘書が paused を変更する可能性）
+                    state = load_state()
 
-                        if command["command_type"] == "stop":
-                            handle_command(command, config, state)
-                            paused = True
-                        else:
-                            if command["command_type"] in ("run_action", "instruction"):
-                                paused = False
-                            state = handle_command(command, config, state)
+                    task = check_task_queue()
+                    if task:
+                        command_type = task.get("command_type", "instruction")
+
+                        if command_type == "stop":
+                            handle_task(task, config, state)
+                        elif command_type == "resume":
+                            handle_task(task, config, state)
                             next_cycle_time = time.time() + get_interval(config)
-                            # 指示実行が成功したらエラーカウントリセット
+                        else:
+                            state = handle_task(task, config, state)
+                            next_cycle_time = time.time() + get_interval(config)
                             consecutive_errors = 0
                 except Exception as e:
-                    logger.error(f"Slackコマンド処理エラー: {e}")
+                    logger.error(f"タスク処理エラー: {e}")
 
                 # ---- 定期サイクル ----
-                if not paused and time.time() >= next_cycle_time:
+                state = load_state()  # paused 状態を再確認
+                if not state.get("paused") and time.time() >= next_cycle_time:
                     try:
                         state = run_cycle(config, state)
-                        consecutive_errors = 0  # 成功したらリセット
+                        consecutive_errors = 0
                     except Exception as e:
                         logger.exception(f"サイクル実行エラー: {e}")
                         send_message(f"⚠️ サイクル実行エラー: {str(e)[:200]}")
@@ -302,10 +365,8 @@ def main():
                             f"連続エラー {consecutive_errors}回。自己修復を試みます。"
                         )
                         repaired = attempt_self_repair(last_error_summary, state)
-                        consecutive_errors = 0  # リセット（修復成否問わず無限ループ防止）
+                        consecutive_errors = 0
                         if repaired:
-                            # self_restart.sh で再起動されるため、ここには戻らない可能性がある
-                            # 戻った場合は次のサイクルで再試行
                             logger.info("自己修復完了。次のサイクルで再試行します。")
 
                     interval = get_interval(config)
@@ -313,7 +374,10 @@ def main():
                     next_str = datetime.fromtimestamp(next_cycle_time).strftime("%H:%M")
                     logger.info(f"次のサイクル: {next_str}（{interval // 60}分後）")
 
-                time.sleep(SLACK_POLL_INTERVAL)
+                # ---- 古いタスクのクリーンアップ（たまに） ----
+                cleanup_old_tasks()
+
+                time.sleep(TASK_POLL_INTERVAL)
 
         except KeyboardInterrupt:
             logger.info("日向エージェント停止（手動停止）")
