@@ -30,7 +30,6 @@ def launch_browser(playwright, headless: bool = True) -> BrowserContext:
 
     context = playwright.chromium.launch_persistent_context(
         user_data_dir=str(CHROME_PROFILE_DIR),
-        channel="chrome",
         headless=headless,
         viewport={"width": 1280, "height": 900},
         args=[

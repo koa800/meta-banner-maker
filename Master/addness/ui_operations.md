@@ -196,7 +196,7 @@ page.locator('text=AIと相談').click()
 
 ```python
 comment_box = page.locator('textarea[placeholder*="@でメンション"]')
-comment_box.fill("@甲原 コメント内容")
+comment_box.fill("@甲原海人 コメント内容")
 # Cmd+Enter で送信
 comment_box.press("Meta+Enter")
 ```
