@@ -1368,6 +1368,16 @@ def call_claude_api(instruction: str, task: dict):
                 except Exception as e:
                     print(f"⚠️ 会話記憶読み込みエラー: {e}")
 
+            # チームメンバー名リストを構築（人名ハルシネーション防止）
+            _member_names_section = ""
+            try:
+                _all_profiles = _load_json_safe(PEOPLE_PROFILES_JSON)
+                if _all_profiles:
+                    _names = sorted(_all_profiles.keys())
+                    _member_names_section = f"\n【社内メンバー一覧（人名参照用）】\n{', '.join(_names)}\n"
+            except Exception:
+                pass
+
             prompt = f"""あなたは甲原海人本人として返信を書きます。
 以下の全情報を統合し、甲原海人が実際に送るようなメッセージを生成してください。
 
@@ -1385,7 +1395,7 @@ def call_claude_api(instruction: str, task: dict):
 {f"避けるべき表現: {', '.join(comm_avoid)}" if comm_avoid else ''}
 {goals_context}{notes_text}{insights_text}{conversation_history_section}
 {profile_info}
-{context_section}{quoted_section}{sheet_section}
+{context_section}{quoted_section}{sheet_section}{_member_names_section}
 【受信メッセージ】
 グループ: {group_name}
 内容: {original_message}
@@ -1403,6 +1413,7 @@ def call_claude_api(instruction: str, task: dict):
 - 絶対に使わない絵文字: 😊 😄 😆 🥰 ☺️ 🤗 🔥（ニコニコ系・炎マーク全て禁止。使えるのは😭🙇‍♂️のみ）
 - 「お疲れ様」は今日その人との最初の会話でのみ使う。既に他のグループ等で会話済みなら省略する。判断できない場合は省略する
 - 相手のメッセージの温度感に合わせた返信量にする。報告・喜びの共有には短い共感（「ナイス！」等）で十分。聞かれていないことまで具体的に言いすぎない
+- 【人名ルール】返信で人名を出す場合は「社内メンバー一覧」に存在する正確な名前のみ使用する。一覧にない名前は絶対に使わない。確信が持てない場合は「担当者」「詳しい人」等で代替する
 {platform_note}{('- 会話文脈を踏まえた流れのある返信にすること' if context_messages else '')}{('- 引用元の内容を踏まえた返信にすること' if quoted_text else '')}
 返信文:"""
 
