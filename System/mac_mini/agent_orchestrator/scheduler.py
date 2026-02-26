@@ -89,6 +89,7 @@ class TaskScheduler:
             "oauth_health_check": self._run_oauth_health_check,
             "render_health_check": self._run_render_health_check,
             "weekly_content_suggestions": self._run_weekly_content_suggestions,
+            "daily_report_input": self._run_daily_report_input,
             "kpi_daily_import": self._run_kpi_daily_import,
             "sheets_sync": self._run_sheets_sync,
             "git_pull_sync": self._run_git_pull_sync,
@@ -251,6 +252,142 @@ class TaskScheduler:
         result = await self._execute_tool("addness_to_context", tools.addness_to_context)
         if result.success:
             logger.info("Addness goal context updated for daily review")
+
+    async def _run_daily_report_input(self):
+        """日報自動入力: 秘書がClaude Code経由でLooker Studioからデータ取得→日報シート書き込み→LINE報告。"""
+        import subprocess
+        from pathlib import Path
+        from datetime import date, timedelta
+        from .notifier import send_line_notify
+
+        logger.info("日報自動入力: 開始")
+
+        claude_cmd = Path("/opt/homebrew/bin/claude")
+        secretary_config = Path.home() / ".claude-secretary"
+        project_root = Path(self.config.get("paths", {}).get("repo_root", "~/agents")).expanduser()
+
+        if not claude_cmd.exists() or not secretary_config.exists():
+            logger.error("日報自動入力: Claude Code or secretary config not found")
+            send_line_notify("⚠️ 日報自動入力失敗: Claude Code環境が見つかりません")
+            return
+
+        target_date = date.today() - timedelta(days=1)
+        target_md = f"{target_date.month}/{target_date.day}"
+
+        prompt = f"""あなたは甲原海人のAI秘書です。日報を自動入力してください。
+
+## タスク
+{target_date.strftime('%Y年%m月%d日')}（{target_md}）の日報データを取得し、日報シートに書き込んでください。
+
+## 手順
+
+### Step 1: Looker Studio 日別データページからデータ取得
+- URL: https://lookerstudio.google.com/u/2/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_evmsc9twzd
+- ブラウザで開く → 幅1400px・高さ900pxにリサイズ → スクショ撮影
+- テーブル上部をズームイン撮影して先頭行（{target_md}分）の数字を再確認
+- 読み取る数値: 集客数、個別予約数、着金売上（確定ベース）
+
+### Step 2: Looker Studio 会員数ページからデータ取得
+- URL: https://lookerstudio.google.com/u/2/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_dfv0688m0d
+- ブラウザで開く → 幅1400px・高さ900pxにリサイズ → スクショ撮影
+- 読み取る数値: スキルプラス会員数（net change）、解約数
+
+### Step 3: サブスク新規会員数を Google Sheet API で取得
+- シートID: 1gOVSt0PDub3-W8fBglKnuUAIub3FOyv-1X8CdFEvm70
+- タブ「秘密の部屋（月額）」と「秘密の部屋（年額）」のA列に「{target_date.strftime('%Y-%m-%d')}」を含む行数を合算
+```bash
+cd {project_root}
+python3 System/sheets_manager.py read "1gOVSt0PDub3-W8fBglKnuUAIub3FOyv-1X8CdFEvm70" "秘密の部屋（月額）" "A1:A5000"
+python3 System/sheets_manager.py read "1gOVSt0PDub3-W8fBglKnuUAIub3FOyv-1X8CdFEvm70" "秘密の部屋（年額）" "A1:A5000"
+```
+それぞれの出力から「{target_date.strftime('%Y-%m-%d')}」を含む行数をカウントし合算。
+
+### Step 4: 日報シートのヘッダーから対象列を特定
+```bash
+cd {project_root}
+python3 System/sheets_manager.py read "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "日報" "A1:JZ1"
+```
+ヘッダーは M/D 形式。「{target_md}」に一致する列を見つける。
+
+### Step 5: 日報シートに書き込み
+- 行5: 着金売上（確定ベース）
+- 行7: 集客数
+- 行9: 個別予約数
+- 行13: スキルプラス会員数
+- 行14: 解約数
+- 行15: サブスク新規会員数
+
+書き込みコマンド（列は Step 4 で特定した列文字）:
+```bash
+cd {project_root}
+python3 System/sheets_manager.py write "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "{{列}}5" "{{着金売上}}" "日報"
+python3 System/sheets_manager.py write "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "{{列}}7" "{{集客数}}" "日報"
+python3 System/sheets_manager.py write "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "{{列}}9" "{{個別予約数}}" "日報"
+python3 System/sheets_manager.py write "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "{{列}}13" "{{会員数}}" "日報"
+python3 System/sheets_manager.py write "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "{{列}}14" "{{解約数}}" "日報"
+python3 System/sheets_manager.py write "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "{{列}}15" "{{サブスク新規}}" "日報"
+```
+
+行4（粗利益）と行6（広告費）は計算式/別管理なので絶対に触らないこと。
+
+### Step 6: LINE報告
+```bash
+cd {project_root}
+current_time=$(date +%H:%M)
+python3 System/line_notify.py "✅ 定常業務完了: 日報入力
+━━━━━━━━━━━━
+集客数: {{集客数}}人
+個別予約数: {{個別予約数}}件
+着金売上: ¥{{着金売上}}
+会員数: {{会員数}}人（解約: {{解約数}}人）
+サブスク新規: {{サブスク新規}}人
+━━━━━━━━━━━━
+完了時刻: ${{current_time}}"
+```
+
+## 重要ルール
+- 行4（粗利益）と行6（広告費）は絶対に書き込まない
+- Looker Studioのスクショは必ずズームイン再確認して数値を正確に読む
+- 書き込み前に取得した全数値を確認用にログ出力する
+- 数値が明らかに異常（集客数0、着金売上0等）の場合はLINEで「⚠️ 異常値検出」と報告し、書き込みは実行する
+
+## 出力形式
+===RESULT_START===
+（日報入力の結果サマリー）
+===RESULT_END==="""
+
+        try:
+            import os
+            env = os.environ.copy()
+            env["CLAUDE_CONFIG_DIR"] = str(secretary_config)
+            result = subprocess.run(
+                [str(claude_cmd), "-p", "--model", "claude-sonnet-4-6",
+                 "--max-turns", "25", prompt],
+                capture_output=True,
+                text=True,
+                timeout=600,  # 10分タイムアウト（ブラウザ操作があるため長め）
+                cwd=str(project_root),
+                env=env,
+            )
+
+            if result.returncode != 0:
+                logger.error(f"日報自動入力: Claude Code エラー (code={result.returncode}): {result.stderr[:300]}")
+                send_line_notify(f"⚠️ 日報自動入力失敗: Claude Codeエラー\n{result.stderr[:200]}")
+                return
+
+            output = result.stdout.strip()
+            if "===RESULT_START===" in output and "===RESULT_END===" in output:
+                report = output.split("===RESULT_START===")[1].split("===RESULT_END===")[0].strip()
+                logger.info(f"日報自動入力: 完了 - {report[:200]}")
+            else:
+                logger.info(f"日報自動入力: 完了（マーカーなし）- {output[-300:]}")
+
+        except subprocess.TimeoutExpired:
+            logger.error("日報自動入力: タイムアウト（10分）")
+            send_line_notify("⚠️ 日報自動入力: タイムアウト（10分超過）。手動で確認してください。")
+        except Exception as e:
+            logger.error(f"日報自動入力: 例外 - {e}")
+            send_line_notify(f"⚠️ 日報自動入力失敗: {str(e)[:200]}")
 
     async def _run_daily_report(self):
         from .notifier import send_line_notify

@@ -37,6 +37,11 @@ schedule:
     cron: "10 9 * * *"           # 09:10  Google認証チェック
     enabled: true
 
+  # === 朝の定常業務 ===
+  daily_report_input:
+    cron: "0 9 * * *"            # 09:00  日報自動入力（秘書がClaude Codeで実行）
+    enabled: true
+
   # === 日中 ===
   mail_inbox_personal:
     cron: "0 */3 * * *"          # 3時間ごと :00  個人メール確認
