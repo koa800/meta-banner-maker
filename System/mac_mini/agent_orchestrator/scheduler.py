@@ -1611,6 +1611,8 @@ JSON以外の文字は出力しないでください。"""}],
     #  Slack #ai-team 監視 → 日向タスクキューへディスパッチ
     # ------------------------------------------------------------------ #
 
+    _slack_dispatch_running = False  # 実行中ガード
+
     async def _run_slack_dispatch(self):
         """Slack #ai-team を監視し、甲原の指示を日向のタスクキューに書き込む。
 
@@ -1619,6 +1621,17 @@ JSON以外の文字は出力しないでください。"""}],
         - status → 日向の state.json を読んで秘書がSlack応答
         - instruction → hinata_tasks.json にタスク追加
         """
+        if self._slack_dispatch_running:
+            logger.debug("slack_dispatch: previous run still in progress, skipping")
+            return
+        self._slack_dispatch_running = True
+        try:
+            await self._run_slack_dispatch_inner()
+        finally:
+            self._slack_dispatch_running = False
+
+    async def _run_slack_dispatch_inner(self):
+        """slack_dispatch の実処理"""
         import uuid
         from pathlib import Path
         from .slack_reader import fetch_channel_messages
@@ -1911,8 +1924,22 @@ JSON以外の文字は出力しないでください。"""}],
 - セットアップ系の質問にも引き続き対応する（技術ガイド）
 - 相談・報告・タスク進捗・雑談、何でも対応する"""
 
+    _hinata_reply_running = False  # 実行中ガード（前回未完了なら skip）
+
     async def _run_slack_hinata_auto_reply(self):
         """日向のSlackメッセージに自動応答（15秒ごとポーリング）"""
+        # 実行中ガード: Claude API応答待ちで15秒超えることがあるため
+        if self._hinata_reply_running:
+            logger.debug("slack_hinata_auto_reply: previous run still in progress, skipping")
+            return
+        self._hinata_reply_running = True
+        try:
+            await self._run_slack_hinata_auto_reply_inner()
+        finally:
+            self._hinata_reply_running = False
+
+    async def _run_slack_hinata_auto_reply_inner(self):
+        """日向のSlackメッセージに自動応答（実処理）"""
         import anthropic
         from .slack_reader import fetch_channel_messages
         from .notifier import send_slack_ai_team

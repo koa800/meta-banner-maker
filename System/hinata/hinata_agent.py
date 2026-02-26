@@ -69,8 +69,11 @@ def load_state() -> dict:
 
 
 def save_state(state: dict):
-    with open(STATE_PATH, "w", encoding="utf-8") as f:
+    """状態をアトミックに保存（tmp → rename で中間状態を防ぐ）"""
+    tmp = STATE_PATH.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
+    tmp.rename(STATE_PATH)
 
 
 def is_work_hours(config: dict) -> bool:
@@ -142,18 +145,31 @@ def complete_task(task_id: str, success: bool, result: str):
 
 
 def cleanup_old_tasks():
-    """完了から1時間以上経ったタスクを削除する。"""
+    """完了から1時間以上経ったタスク + 24時間以上放置されたpending/processingタスクを削除する。"""
     tasks = _load_tasks()
     now = datetime.now()
     kept = []
     for task in tasks:
-        if task.get("status") in ("completed", "failed"):
+        status = task.get("status", "")
+        # 完了/失敗タスク → 1時間で削除
+        if status in ("completed", "failed"):
             completed_at = task.get("completed_at", "")
             if completed_at:
                 try:
                     dt = datetime.fromisoformat(completed_at)
                     if (now - dt).total_seconds() > 3600:
-                        continue  # 1時間超 → 削除
+                        continue
+                except ValueError:
+                    pass
+        # pending/processing が24時間以上 → 孤立タスクとして削除
+        elif status in ("pending", "processing"):
+            created_at = task.get("created_at", "") or task.get("started_at", "")
+            if created_at:
+                try:
+                    dt = datetime.fromisoformat(created_at)
+                    if (now - dt).total_seconds() > 86400:
+                        logger.warning(f"孤立タスク削除: {task.get('id')} ({task.get('instruction', '')[:30]})")
+                        continue
                 except ValueError:
                     pass
         kept.append(task)
