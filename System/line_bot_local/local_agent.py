@@ -273,11 +273,17 @@ def _execute_with_claude_code(
 ## あなたが使えるリソース
 
 ### データ・ファイル
-- `Master/people/profiles.json` — 社内メンバーのプロファイル（58名）
-- `Master/addness/goal-tree.md` — ゴール・タスク一覧（巨大ファイル。Grepで検索して該当部分だけ読むこと）
+- `Master/people/profiles.json` — 社内メンバーのプロファイル（58名。category, active_goals, comm_profile, group_insights含む）
+- `Master/addness/goal-tree.md` — ゴール・タスク一覧（巨大ファイル。Grepで人名検索して該当部分だけ読むこと）
 - `Master/self_clone/kohara/` — 甲原海人の情報
 - `System/line_bot/skills/` — マーケティング・ビジネスの専門知識
 - `System/line_bot_local/contact_state.json` — 各メンバーとの過去の会話記録
+
+### 人物の状況確認（「○○って今どんな感じ？」系）の場合
+以下を全てGrepで検索して総合的に報告すること:
+1. `profiles.json` でその人のプロファイルをGrep → category, active_goals, group_insights（activity_level, recent_topics, active_groups, message_count_7d）
+2. `goal-tree.md` でその人の名前をGrep → 担当しているゴール・アクションの進捗
+3. `contact_state.json` でその人の名前をGrep → 直近の会話内容
 
 ### 実行可能なスクリプト
 - `python3 System/sheets_manager.py read "シートID" "タブ名"` — Google スプレッドシート読み取り
