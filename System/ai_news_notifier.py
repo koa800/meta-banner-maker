@@ -5,6 +5,7 @@ AI関連ニュースをGoogle Newsで検索し、日本語要約してSlackに�
 
 import json
 import logging
+import os
 import re
 import sys
 import urllib.parse
@@ -112,23 +113,26 @@ def fetch_all_news(config: dict) -> list[dict]:
     return all_articles[:max_articles]
 
 
-def summarize_with_openai(articles: list[dict], config: dict) -> str:
-    """
-    OpenAI APIで記事を日本語で要約
-    
-    Returns:
-        str: 日本語の要約テキスト
-    """
-    api_key = config.get("openai_api_key")
-    if not api_key:
-        raise ValueError("OpenAI API Key が設定されていません")
-    
-    # 記事をテキストにまとめる
+def _get_anthropic_api_key(config: dict) -> str:
+    """config → 環境変数の順で Anthropic API Key を取得"""
+    key = config.get("anthropic_api_key", "").strip()
+    if key:
+        return key
+    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if key:
+        return key
+    raise ValueError("Anthropic API Key が設定されていません（config or 環境変数 ANTHROPIC_API_KEY）")
+
+
+def summarize_with_anthropic(articles: list[dict], config: dict) -> str:
+    """Anthropic Messages API で記事を日本語要約"""
+    api_key = _get_anthropic_api_key(config)
+
     articles_text = "\n".join([
         f"- {a['title']} ({a['source']})"
         for a in articles
     ])
-    
+
     prompt = f"""以下はGoogle Newsから収集したAI関連の最新ニュース見出しです。
 これらを日本語で要約し、重要なニュースや発表をまとめてください。
 
@@ -144,36 +148,36 @@ def summarize_with_openai(articles: list[dict], config: dict) -> str:
 ---"""
 
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
         "Content-Type": "application/json",
     }
-    
+
     payload = {
-        "model": config.get("openai_model", "gpt-4o"),
+        "model": config.get("anthropic_model", "claude-haiku-4-5-20251001"),
+        "max_tokens": 1500,
+        "system": "あなたはAI業界に詳しいテックライターです。英語のニュース見出しを日本語で分かりやすく要約します。専門用語は適切に解説してください。",
         "messages": [
-            {"role": "system", "content": "あなたはAI業界に詳しいテックライターです。英語のニュース見出しを日本語で分かりやすく要約します。専門用語は適切に解説してください。"},
             {"role": "user", "content": prompt},
         ],
-        "max_tokens": 1500,
-        "temperature": 0.3,
     }
-    
+
     response = requests.post(
-        "https://api.openai.com/v1/chat/completions",
+        "https://api.anthropic.com/v1/messages",
         headers=headers,
         json=payload,
         timeout=60,
     )
-    
+
     if response.status_code != 200:
-        logger.error("OpenAI APIエラー", extra={
+        logger.error("Anthropic APIエラー", extra={
             "status_code": response.status_code,
             "error": {"type": "APIError", "message": response.text[:500]},
         })
-        raise Exception(f"OpenAI API error: {response.status_code} - {response.text}")
-    
+        raise Exception(f"Anthropic API error: {response.status_code} - {response.text}")
+
     data = response.json()
-    return data["choices"][0]["message"]["content"]
+    return data["content"][0]["text"]
 
 
 def send_to_slack(message: str, config: dict) -> bool:
@@ -183,9 +187,10 @@ def send_to_slack(message: str, config: dict) -> bool:
     Returns:
         bool: 送信成功かどうか
     """
-    webhook_url = config.get("slack_webhook_url")
+    webhook_url = config.get("slack_webhook_url", "").strip()
     if not webhook_url:
-        raise ValueError("Slack Webhook URL が設定されていません")
+        print("Slack Webhook URL 未設定 → Slack通知スキップ")
+        return False
     
     payload = {
         "text": message,
@@ -233,19 +238,21 @@ def main():
             return
         
         # 要約
-        print("OpenAI APIで要約中...")
-        summary = summarize_with_openai(articles, config)
+        print("Anthropic APIで要約中...")
+        summary = summarize_with_anthropic(articles, config)
         print("  → 要約完了")
         
         # Slack送信
         print("Slackに送信中...")
-        success = send_to_slack(summary, config)
-        
-        if success:
-            print("✅ 送信完了！")
+        slack_ok = send_to_slack(summary, config)
+
+        if slack_ok:
+            print("✅ Slack送信完了！")
         else:
-            print("❌ 送信失敗")
-            sys.exit(1)
+            print("⚠️ Slack送信スキップ/失敗（要約自体は成功）")
+
+        # 要約結果を stdout に出力（orchestrator が output として取得）
+        print(f"\n{summary}")
             
     except Exception as e:
         logger.exception("AI News Notifier メイン処理エラー", extra={
