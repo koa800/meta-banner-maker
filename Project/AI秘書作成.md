@@ -154,11 +154,14 @@
 37. **bypassPermissions**: `~/.claude-secretary/settings.json`でBash/WebSearch/Read等の全ツール解放。rm/sudo/kill/force-push等の破壊的操作のみask制限
 38. **人名ハルシネーション防止**: profiles.jsonから全メンバー名を抽出し「社内メンバー一覧」としてプロンプトに注入。「人名ルール: profiles.jsonに存在する正確な名前のみ使用」を出力ルールに追加
 
-### Phase 9: 画像生成（開発中）
-39. **画像生成指示**: LINEで「〇〇の画像を作って」と指示→Gemini等のAIツールで画像生成→LINE ImageMessageで画像を返信
-40. **ブラウザ自動操作**: Claude Code CLI + Chrome MCPで生成AIツールのサイトを操作（プロンプト入力→生成→ダウンロード）
-41. **画像アップロードAPI**: Render `/api/upload_image` で画像受付、`/api/images/<filename>` で配信（HTTPS直リンク）
-42. **LINE画像送信**: `ImageMessage`（originalContentUrl + previewImageUrl）でグループに画像を直接表示
+### Phase 9: 画像生成（実装完了）
+39. **3パターン並行生成**: 1回の指示で3バリエーション（忠実/クリエイティブ/プロフェッショナル）を並行生成。ThreadPoolExecutor で同時リクエスト、全パターンをLINEに一括送信
+40. **3段階プロンプト最適化**: Claude Haiku で意図理解→スタイル決定→英語プロンプト3パターン生成。日本語の曖昧な指示から最適な画像生成プロンプトに変換
+41. **参照画像サポート**: LINEで画像を送信→5分以内に「この感じで〇〇作って」と指示→Claude Vision で画像分析→スタイル・構図を取り込んだプロンプト生成
+42. **修正ループ**: 生成後30分以内の「もう少し明るくして」「もっとシンプルに」等のフォローアップで、前回の生成コンテキスト（プロンプト・設定）を自動引き継ぎ
+43. **多段フォールバック**: Gemini API（設定時）→ Pollinations.ai（無料・常時利用可）のフォールバック構成
+44. **画像アップロードAPI**: Render `/api/upload_image` で画像受付、`/api/images/<filename>` で配信（HTTPS直リンク）
+45. **LINE複数画像送信**: `ImageMessage` × 最大3枚 + テキストメッセージを1回のpushで送信
 
 ### Phase 7: 積み上がる学習（完了）
 29. **人ごとの会話記憶**: 返信案生成のたびに `contact_state.json` へ会話要約を保存（1人最大20件）。次回の返信プロンプトに直近5件の過去会話を注入し、文脈の連続性を向上。旧形式（タイムスタンプ文字列）からの自動マイグレーション対応
@@ -229,7 +232,7 @@
 | 「日報入れて」 | 「Cursorで実行してください」と案内を返す（Looker Studio・b-dashのブラウザ操作が必要なためLINEから実行不可） |
 | 「広告数値の評価をして」「ROAS教えて」 | KPIデータ自動取得→Claudeが分析・トレンド評価・改善提案を返答（kpi_query） |
 | 「次何？」「次にやることは？」 | Addness+メール+KPIサマリをClaudeが分析→優先行動リスト返答（context_query） |
-| 「〇〇の画像を作って」「バナーを作って」 | Chrome MCP経由でGemini等の生成AIツールを操作→画像生成→LINE画像送信（generate_image） |
+| 「〇〇の画像を作って」「バナーを作って」 | 3段階プロンプト最適化→3パターン並行生成→LINE画像送信（generate_image）。参照画像送信後5分以内なら自動連携。修正指示で前回コンテキスト引き継ぎ |
 | 「LP作成: 商品名 ターゲット」 | LP構成案+キャッチコピー3案+CTA自動生成（generate_lp_draft） |
 | 「スクリプト作成: 商品名 [タイプ]」 | 広告動画台本自動生成・フック+問題提起+CTA構成（generate_video_script） |
 | 「バナー作成: 商品名 [プラットフォーム]」 | バナー広告コンセプト5案生成・ヘッドライン+ビジュアル+CTA（generate_banner_concepts） |
