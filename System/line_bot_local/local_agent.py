@@ -2763,12 +2763,12 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
 
 
 # ===== 画像生成 =====
-# メイン: Lovart（ブラウザ操作）→ フォールバック: Pollinations.ai（API）
-# Claude Code CLI + Chrome MCP で Lovart を操作して画像を生成する。
+# メイン: Lovart（Playwright直接操作）→ フォールバック: Pollinations.ai（API）
 
 _IMAGE_OUTPUT_DIR = Path.home() / "agents" / "data" / "generated_images"
 _IMAGE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 _LOVART_URL = "https://www.lovart.ai/ja/home"
+_LOVART_COOKIES_PATH = Path.home() / "agents" / "data" / "lovart_cookies.json"
 
 
 def _analyze_reference_image(image_url: str) -> str:
@@ -2850,9 +2850,9 @@ def execute_image_generation(task: dict):
     image_filename = f"{_uuid.uuid4().hex[:12]}.png"
     image_path = _IMAGE_OUTPUT_DIR / image_filename
 
-    # 方法①: Lovart（Claude Code CLI + Chrome MCP でブラウザ操作）
-    if _CLAUDE_CODE_ENABLED:
-        print(f"   🌐 Lovart でブラウザ生成中...")
+    # 方法①: Lovart（Playwright直接操作）
+    if _LOVART_COOKIES_PATH.exists():
+        print(f"   🌐 Lovart で画像生成中...")
         success = _generate_with_lovart(optimized, image_path)
         if success:
             url = _upload_image_to_render(image_path, image_filename)
@@ -2939,100 +2939,216 @@ def _optimize_image_prompt(
     return fallback
 
 
-def _generate_with_lovart(prompt: str, output_path: Path, timeout_sec: int = 300) -> bool:
-    """Claude Code CLI + Chrome MCP で Lovart を操作して画像を生成する。
+_LOVART_PROFILE_DIR = Path.home() / "agents" / "data" / "lovart_chrome_profile"
+_LOVART_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 
-    フロー: Lovart にアクセス → 単発プロジェクト作成 → プロンプト入力 →
-            生成待ち → 画像ダウンロード → output_path に保存
+
+def _load_lovart_cookies() -> list:
+    """lovart_cookies.json からPlaywright形式のクッキーを読み込む。"""
+    if not _LOVART_COOKIES_PATH.exists():
+        return []
+    try:
+        with open(_LOVART_COOKIES_PATH, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        cookies = []
+        for c in raw:
+            cookie = {
+                "name": c["name"],
+                "value": c["value"],
+                "domain": c["domain"],
+                "path": c["path"],
+                "secure": bool(c["secure"]),
+                "httpOnly": bool(c.get("httpOnly", False)),
+                "sameSite": "Lax",
+            }
+            if c.get("expires") and c["expires"] > 0:
+                cookie["expires"] = c["expires"]
+            cookies.append(cookie)
+        return cookies
+    except Exception as e:
+        print(f"   ⚠️ Lovart クッキー読み込み失敗: {e}")
+        return []
+
+
+def _generate_with_lovart(prompt: str, output_path: Path, timeout_sec: int = 180) -> bool:
+    """Playwright で Lovart を直接操作して画像を生成する。
+
+    headed モード（Cloudflare回避）+ クッキー注入でログイン維持。
     """
-    import os as _os
-    import signal as _sig
-
-    browser_prompt = f"""あなたはAI秘書です。Chrome ブラウザの MCP ツールを使って Lovart で画像を生成してください。
-
-## 生成する画像のプロンプト
-{prompt}
-
-## 手順（必ずこの順番で）
-
-1. **タブ確認**: `mcp__claude-in-chrome__tabs_context_mcp` で現在のタブを確認
-2. **新しいタブ**: `mcp__claude-in-chrome__tabs_create_mcp` で新しいタブを作成
-3. **Lovart にアクセス**: `mcp__claude-in-chrome__navigate` で `{_LOVART_URL}` に遷移
-4. **ログイン確認**: `mcp__claude-in-chrome__read_page` でページを読み取り、ログイン状態を確認
-   - 未ログインなら Google ログイン（koa800sea.nifs@gmail.com）
-5. **新規プロジェクト作成**: 「新しいプロジェクト」「New Project」「Create」等のボタンを `find` で探してクリック
-   - プロジェクトタイプは画像生成向けのもの（Text to Image 等）を選択
-6. **プロンプト入力**: テキスト入力欄を `find` で探し、上記プロンプトを入力
-7. **生成開始**: 生成ボタン（Generate / Create / 生成 等）をクリック
-8. **完了待ち**: 生成が完了するまで `read_page` で確認を繰り返す（最大90秒待つ）
-   - ローディング表示が消えて画像が表示されたら完了
-9. **画像取得**: 以下のいずれかの方法で画像を取得:
-   a. ダウンロードボタンがあればクリック → ~/Downloads/ から取得
-   b. `mcp__claude-in-chrome__javascript_tool` で生成画像の img 要素の src URL を取得
-   c. 右クリックメニューから「画像を保存」
-10. **画像を保存**: 取得した画像URLを bash の curl でダウンロード:
-    ```
-    curl -L -o "{output_path}" "取得した画像URL"
-    ```
-    または ~/Downloads/ にダウンロードされた場合:
-    ```
-    mv ~/Downloads/最新の画像ファイル "{output_path}"
-    ```
-
-## 重要ルール
-- ダウンロード先は必ず `{output_path}` に保存すること
-- UIが想定と違う場合は `read_page` で確認して臨機応変に対応
-- Googleログイン: koa800sea.nifs@gmail.com
-- 最後に必ず以下のどちらかを出力:
-  - 成功: `IMAGE_SAVED: {output_path}`
-  - 失敗: `IMAGE_FAILED: 具体的な理由`
-"""
+    import time as _time
 
     try:
-        print(f"   🚀 Claude Code CLI 起動（Lovart ブラウザ操作）")
-        proc = subprocess.Popen(
-            [str(_CLAUDE_CMD), "-p", browser_prompt],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            cwd=str(_PROJECT_ROOT),
-            start_new_session=True,
-        )
-        try:
-            stdout, stderr = proc.communicate(timeout=timeout_sec)
-        except subprocess.TimeoutExpired:
-            pgid = _os.getpgid(proc.pid)
-            print(f"   ⚠️ Lovart タイムアウト（{timeout_sec}秒）— 終了中")
-            try:
-                _os.killpg(pgid, _sig.SIGTERM)
-            except OSError:
-                pass
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                try:
-                    _os.killpg(pgid, _sig.SIGKILL)
-                except OSError:
-                    pass
-                proc.wait(timeout=5)
-            return False
-
-        if proc.returncode == 0 and output_path.exists() and output_path.stat().st_size > 1000:
-            print(f"   ✅ Lovart 画像生成成功: {output_path} ({output_path.stat().st_size} bytes)")
-            return True
-        else:
-            # stdout から失敗理由を抽出
-            reason = ""
-            if stdout and "IMAGE_FAILED:" in stdout:
-                reason = stdout.split("IMAGE_FAILED:")[-1].strip()[:200]
-            print(f"   ⚠️ Lovart 生成失敗: {reason or stderr[:200]}")
-            return False
-
-    except FileNotFoundError:
-        print(f"   ⚠️ Claude Code CLI が見つかりません")
+        from playwright.sync_api import sync_playwright as _sync_pw
+    except ImportError:
+        print("   ⚠️ Playwright がインストールされていません")
         return False
+
+    cookies = _load_lovart_cookies()
+    if not cookies:
+        print("   ⚠️ Lovart クッキーが見つかりません（lovart_cookies.json）")
+        return False
+
+    browser = None
+    try:
+        pw = _sync_pw().start()
+        browser = pw.chromium.launch_persistent_context(
+            str(_LOVART_PROFILE_DIR),
+            headless=False,
+            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+            viewport={"width": 1920, "height": 1080},
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            ),
+            accept_downloads=True,
+            locale="ja-JP",
+        )
+        browser.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
+        )
+        browser.add_cookies(cookies)
+        page = browser.pages[0] if browser.pages else browser.new_page()
+
+        # Step 1: Lovart ホームに遷移
+        print("   🌐 Lovart に遷移中...")
+        page.goto(_LOVART_URL, wait_until="domcontentloaded", timeout=30000)
+        _time.sleep(2)
+
+        # ログイン確認
+        btns = page.evaluate(
+            '() => Array.from(document.querySelectorAll("button"))'
+            '.map(b => b.textContent.trim()).filter(t => t.length > 0 && t.length < 30)'
+        )
+        if any(b == "はじめる" for b in btns[:5]):
+            print("   ⚠️ Lovart 未ログイン（クッキー期限切れ？）")
+            browser.close()
+            pw.stop()
+            return False
+        print("   ✅ ログイン済み")
+
+        # Step 2: 新規プロジェクト作成
+        print("   📝 新規プロジェクト作成...")
+        try:
+            page.locator("text='新規プロジェクト'").first.click()
+        except Exception:
+            page.evaluate("""() => {
+                const btns = document.querySelectorAll('button, a');
+                for (const b of btns) {
+                    if (b.textContent.includes('新規プロジェクト')) { b.click(); return; }
+                }
+            }""")
+        _time.sleep(12)
+
+        # Step 3: プロンプト入力
+        print(f"   💬 プロンプト入力: {prompt[:60]}...")
+        input_ok = False
+        # contenteditable（チャット入力欄）を探す
+        try:
+            editable = page.locator("[contenteditable='true']").first
+            if editable.is_visible(timeout=5000):
+                editable.click()
+                _time.sleep(0.5)
+                editable.type(prompt, delay=30)
+                input_ok = True
+        except Exception:
+            pass
+        if not input_ok:
+            try:
+                textarea = page.locator("textarea").first
+                if textarea.is_visible(timeout=3000):
+                    textarea.fill(prompt)
+                    input_ok = True
+            except Exception:
+                pass
+        if not input_ok:
+            print("   ⚠️ プロンプト入力欄が見つかりません")
+            browser.close()
+            pw.stop()
+            return False
+
+        # Step 4: 送信（Enter）
+        print("   🚀 生成開始...")
+        page.keyboard.press("Enter")
+        _time.sleep(3)
+
+        # Cloudflare チェック
+        page_text = page.evaluate("() => document.body.innerText")
+        if "ブラウザ検証" in page_text or "検証を完了" in page_text:
+            print("   ⚠️ Cloudflare チャレンジが表示されました")
+            browser.close()
+            pw.stop()
+            return False
+
+        # Step 5: 画像生成待ち
+        print("   ⏳ 画像生成待ち...")
+        start = _time.time()
+        image_url = None
+        while _time.time() - start < timeout_sec:
+            images = page.evaluate("""() => {
+                const imgs = document.querySelectorAll('img');
+                return Array.from(imgs).filter(img => {
+                    const w = img.naturalWidth || 0;
+                    const h = img.naturalHeight || 0;
+                    const src = img.src || '';
+                    return w > 200 && h > 200 && src.startsWith('http')
+                        && !src.includes('avatar') && !src.includes('google')
+                        && !src.includes('icon') && !src.includes('logo');
+                }).map(img => img.src);
+            }""")
+            if images:
+                image_url = images[0]
+                break
+            elapsed = int(_time.time() - start)
+            if elapsed % 15 == 0 and elapsed > 0:
+                print(f"   ⏳ {elapsed}秒経過...")
+            _time.sleep(5)
+
+        if not image_url:
+            print(f"   ⚠️ {timeout_sec}秒以内に画像が生成されませんでした")
+            browser.close()
+            pw.stop()
+            return False
+
+        # Step 6: 画像ダウンロード
+        # オリジナル解像度のURLを取得（リサイズパラメータを除去）
+        original_url = image_url.split("?")[0]
+        print(f"   📥 画像ダウンロード: {original_url[:80]}...")
+        try:
+            resp = page.request.get(original_url)
+            if resp.ok and len(resp.body()) > 1000:
+                output_path.write_bytes(resp.body())
+                print(f"   ✅ Lovart 画像保存: {output_path} ({len(resp.body())} bytes)")
+                browser.close()
+                pw.stop()
+                return True
+            else:
+                print(f"   ⚠️ ダウンロード失敗 (status={resp.status})")
+        except Exception as e:
+            print(f"   ⚠️ ダウンロードエラー: {e}")
+            # リサイズ付きURLでリトライ
+            try:
+                resp2 = page.request.get(image_url)
+                if resp2.ok and len(resp2.body()) > 1000:
+                    output_path.write_bytes(resp2.body())
+                    print(f"   ✅ Lovart 画像保存（リサイズ版）: {output_path}")
+                    browser.close()
+                    pw.stop()
+                    return True
+            except Exception:
+                pass
+
+        browser.close()
+        pw.stop()
+        return False
+
     except Exception as e:
-        print(f"   ⚠️ Lovart ブラウザ操作エラー: {e}")
+        print(f"   ⚠️ Lovart Playwright エラー: {e}")
+        if browser:
+            try:
+                browser.close()
+            except Exception:
+                pass
         return False
 
 
