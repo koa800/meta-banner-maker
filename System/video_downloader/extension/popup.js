@@ -8,7 +8,7 @@ const statusEl = document.getElementById("status");
 // Auto-fill with current tab URL if it looks like a video
 chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
   const tabUrl = tabs[0]?.url || "";
-  if (/instagram\.com\/reel|youtube\.com\/shorts|tiktok\.com/i.test(tabUrl)) {
+  if (/instagram\.com\/reel|youtube\.com\/(watch|shorts)|youtu\.be\/|tiktok\.com/i.test(tabUrl)) {
     urlInput.value = tabUrl;
   }
 });
