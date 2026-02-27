@@ -37,7 +37,7 @@ System/mac_mini/monitoring/*.log
 System/sns_analyzer_cache/
 
 # 日向エージェント（機密情報・ランタイム）
-System/hinata/*.plist
+System/hinata/com.hinata.agent.plist
 System/hinata/state.json
 System/hinata/hinata_tasks.json
 System/hinata/logs/

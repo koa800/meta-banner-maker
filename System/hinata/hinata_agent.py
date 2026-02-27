@@ -111,12 +111,14 @@ def ensure_chrome_running() -> bool:
         _subprocess.Popen(
             ["open", "-a", "Google Chrome", "--args",
              f"--user-data-dir={CHROME_PROFILE_DIR}",
-             "--remote-debugging-port=9222"],
+             "--remote-debugging-port=9223",
+             "--no-first-run",
+             "--no-default-browser-check"],
             stdout=_subprocess.DEVNULL,
             stderr=_subprocess.DEVNULL,
         )
-        # Chrome 起動待ち
-        time.sleep(5)
+        # Chrome 起動待ち（GUI アプリの起動は時間がかかる場合がある）
+        time.sleep(10)
         if is_chrome_running():
             logger.info("Chrome 起動成功")
             send_message("Chrome が落ちていたので再起動しました。")

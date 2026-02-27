@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hinata.chrome</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>open</string>
+        <string>-a</string>
+        <string>Google Chrome</string>
+        <string>--args</string>
+        <string>--user-data-dir=/Users/koa800/agents/System/data/hinata_chrome_profile</string>
+        <string>--remote-debugging-port=9223</string>
+        <string>--no-first-run</string>
+        <string>--no-default-browser-check</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/hinata-chrome-stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/hinata-chrome-stderr.log</string>
+</dict>
+</plist>
