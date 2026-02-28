@@ -285,6 +285,25 @@
       }
     },
     {
+      "name": "loom_reader",
+      "description": "Loom動画のURLからTranscript（文字起こし）とキーフレーム画像を自動抽出する。動画の内容理解・要約・学習に使う",
+      "confirmation_level": "L1",
+      "handler_type": "subprocess",
+      "handler_path": "loom_reader/loom_reader.py",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Loom共有URL（例: https://www.loom.com/share/xxxxx）"
+          }
+        },
+        "required": [
+          "url"
+        ]
+      }
+    },
+    {
       "name": "generate_image",
       "description": "画像・バナー・広告ビジュアルを生成する。プロンプトに基づいて画像を作成する",
       "confirmation_level": "L2",
