@@ -305,7 +305,7 @@
     },
     {
       "name": "save_video_learning",
-      "description": "動画から学んだ内容を保存する。ユーザーが理解を確認した後に呼ぶ",
+      "description": "動画から学んだ内容を保存する。video_readerの結果を受け取ったら同じツールループ内で即座に呼ぶこと。status='pending'で保存し、1時間後に自動確定される",
       "confirmation_level": "L1",
       "handler_type": "subprocess",
       "handler_path": "video_reader/video_knowledge.py",
@@ -328,9 +328,39 @@
             "type": "array",
             "items": { "type": "string" },
             "description": "学んだ手順・プロセスのリスト"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "confirmed"],
+            "description": "保存ステータス。通常は'pending'で保存し1時間後に自動確定"
           }
         },
         "required": ["url", "title", "summary"]
+      }
+    },
+    {
+      "name": "update_video_learning",
+      "description": "保存済みのpending状態の動画知識を修正する。ユーザーから修正指示があったときに使う",
+      "confirmation_level": "L1",
+      "handler_type": "subprocess",
+      "handler_path": "video_reader/video_knowledge.py",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string",
+            "description": "修正後の要約"
+          },
+          "key_processes": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "修正後の手順リスト"
+          },
+          "title": {
+            "type": "string",
+            "description": "修正後のタイトル"
+          }
+        }
       }
     },
     {

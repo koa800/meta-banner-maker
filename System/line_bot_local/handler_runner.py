@@ -177,6 +177,10 @@ class HandlerRunner:
             cmd.append("save")
             cmd.append(json.dumps(arguments, ensure_ascii=False))
 
+        elif tool_name == "update_video_learning":
+            cmd.append("update_pending")
+            cmd.append(json.dumps(arguments, ensure_ascii=False))
+
         # video_reader は動画DL+フレーム抽出で時間がかかる
         timeout = 600 if tool_name == "video_reader" else 120
 

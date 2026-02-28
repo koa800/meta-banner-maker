@@ -15,6 +15,7 @@ import json
 import os
 import re
 import time
+from datetime import datetime
 from pathlib import Path
 
 import anthropic
@@ -115,8 +116,9 @@ def _load_agent_summary(project_root: Path) -> str:
     return "\n".join(lines)
 
 
-def _load_video_knowledge(project_root: Path) -> str:
-    """過去に学んだ動画知識をプロンプト注入用テキストとして読み込む"""
+def _load_video_knowledge(project_root: Path, goal_text: str = "") -> str:
+    """ゴールテキストに関連する動画知識を検索して注入する。
+    auto_confirm も同時に実行する。"""
     knowledge_path = Path.home() / "agents" / "data" / "video_knowledge.json"
     if not knowledge_path.exists():
         return ""
@@ -127,8 +129,85 @@ def _load_video_knowledge(project_root: Path) -> str:
     if not entries:
         return ""
 
-    lines = ["【過去に学んだ動画の知識】"]
-    for i, e in enumerate(entries, 1):
+    # auto_confirm: pending → confirmed（1時間超）
+    now = datetime.now()
+    changed = False
+    for e in entries:
+        if e.get("status") != "pending":
+            continue
+        learned_at = e.get("learned_at", "")
+        if not learned_at:
+            continue
+        try:
+            dt = datetime.strptime(learned_at, "%Y-%m-%dT%H:%M:%S")
+        except ValueError:
+            continue
+        if (now - dt).total_seconds() > 3600:
+            e["status"] = "confirmed"
+            changed = True
+
+    confirmed = [e for e in entries if e.get("status", "confirmed") == "confirmed"]
+    if not confirmed:
+        if changed:
+            _save_video_knowledge(knowledge_path, entries)
+        return ""
+
+    # ゴールテキストがある場合: 関連性ベースで上位5件に絞る
+    if goal_text:
+        query_lower = goal_text.lower()
+        query_words = set(query_lower.split())
+
+        scored = []
+        for e in confirmed:
+            score = 0
+            title = (e.get("title") or "").lower()
+            summary = (e.get("summary") or "").lower()
+            url = (e.get("url") or "").lower()
+            procs = " ".join(e.get("key_processes", [])).lower()
+
+            # URL直接マッチは高スコア
+            if url and url in query_lower:
+                score += 100
+
+            # 単語マッチ
+            for word in query_words:
+                if len(word) < 2:
+                    continue
+                if word in title:
+                    score += 3
+                if word in summary:
+                    score += 2
+                if word in procs:
+                    score += 2
+
+            if score > 0:
+                scored.append((score, e))
+
+        if not scored:
+            if changed:
+                _save_video_knowledge(knowledge_path, entries)
+            return ""
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        selected = [e for _, e in scored[:5]]
+
+        # access_count / last_accessed を更新
+        now_str = now.strftime("%Y-%m-%dT%H:%M:%S")
+        selected_ids = {e.get("id") for e in selected}
+        for e in entries:
+            if e.get("id") in selected_ids:
+                e["access_count"] = e.get("access_count", 0) + 1
+                e["last_accessed"] = now_str
+        changed = True
+    else:
+        # ゴールテキストがない場合: 全件（最大10件、新しい順）
+        selected = confirmed[-10:]
+
+    if changed:
+        _save_video_knowledge(knowledge_path, entries)
+
+    lines = ["【関連する動画知識】"]
+    for i, e in enumerate(selected, 1):
         source_label = {"loom": "Loom", "youtube": "YouTube"}.get(e.get("source", ""), e.get("source", ""))
         date = e.get("learned_at", "")[:10]
         lines.append(f"[{i}] {e.get('title', '')} ({source_label}, {date})")
@@ -139,7 +218,14 @@ def _load_video_knowledge(project_root: Path) -> str:
     return "\n".join(lines)
 
 
-def _build_system_prompt(sender_name: str = "", project_root: Path = None) -> str:
+def _save_video_knowledge(path: Path, data: list):
+    """video_knowledge.json をアトミック書き込みで保存"""
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.rename(path)
+
+
+def _build_system_prompt(sender_name: str = "", project_root: Path = None, goal_text: str = "") -> str:
     """Coordinator 用のシステムプロンプトを構築する"""
     prompt = """あなたは甲原海人のAI秘書システムの Coordinator です。
 
@@ -201,9 +287,10 @@ profiles.json の transfer.transfer_status に応じて、ワークフローの�
 LoomやYouTubeのURLが送られて「見ておいて」「確認して」等の指示があったら:
 1. video_reader ツールで内容を取得
 2. transcript_summary（あれば優先）または transcript_text から内容を理解し、要約+手順を箇条書きで報告
-3. 「この理解で合っていますか？」と確認する
-4. ユーザーが「OK」「合ってる」「うん」等と確認したら save_video_learning で保存
-5. 保存完了を報告する（「覚えました。次回から活用します」等）
+3. 同じツールループ内で save_video_learning(status="pending") を呼んで即保存
+4. 報告 + 「修正があれば教えてください。なければそのまま覚えます」
+※ OKの返事は不要。修正がなければ1時間後に自動確定される
+※ 修正指示が来たら update_video_learning で更新する
 
 【禁止】
 - 認識確認なしに曖昧なゴールを実行すること
@@ -221,8 +308,8 @@ LoomやYouTubeのURLが送られて「見ておいて」「確認して」等の
             prompt += f"\n\n{agent_summary}"
             prompt += "\n\n上記エージェントの得意分野を踏まえてツールを選択すること。人間に依頼する場合は ask_human ツールを使う。"
 
-        # 過去の動画知識を注入
-        video_knowledge = _load_video_knowledge(project_root)
+        # 過去の動画知識を関連性ベースで注入
+        video_knowledge = _load_video_knowledge(project_root, goal_text)
         if video_knowledge:
             prompt += f"\n\n{video_knowledge}"
 
@@ -287,7 +374,7 @@ def execute_goal(
         return False, f"tool_registry.json の読み込みに失敗しました: {e}"
 
     claude_tools = _build_claude_tools(registry)
-    system_prompt = _build_system_prompt(sender_name, project_root)
+    system_prompt = _build_system_prompt(sender_name, project_root, goal_text=goal)
 
     # ハンドラランナー
     try:

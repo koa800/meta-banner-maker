@@ -94,6 +94,9 @@ schedule:
   weekly_hinata_memory:
     cron: "30 10 * * 0"          # 日曜 10:30  日向の記憶統合（profile_learningの後）
     enabled: true
+  video_knowledge_review:
+    cron: "0 11 * * 0"           # 日曜 11:00  動画知識ライフサイクルレビュー（hinata_memoryの後）
+    enabled: true
 
   # === 常時監視（軽量・ローカル処理） ===
   health_check:

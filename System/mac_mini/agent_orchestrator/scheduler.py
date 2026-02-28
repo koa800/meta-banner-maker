@@ -9,6 +9,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 import os
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -106,6 +107,7 @@ class TaskScheduler:
             "os_sync_session": self._run_os_sync_session,
             "secretary_proactive_work": self._run_secretary_proactive_work,
             "weekly_hinata_memory": self._run_weekly_hinata_memory,
+            "video_knowledge_review": self._run_video_knowledge_review,
         }
 
     def setup(self):
@@ -2853,6 +2855,80 @@ JSON形式で返してください:
         except Exception as e:
             self.memory.log_task_end(task_id, False, str(e))
             logger.error(f"weekly_hinata_memory エラー: {e}")
+
+    # ================================================================
+
+    async def _run_video_knowledge_review(self):
+        """毎週日曜11:00: 動画知識のライフサイクルレビュー
+
+        video_knowledge.py の review サブコマンドを呼び、
+        結果を Slack #ai-team に通知する。
+        """
+        import subprocess as _sp
+        from .notifier import send_slack_ai_team
+
+        task_id = self.memory.log_task_start("video_knowledge_review")
+
+        script_path = self.system_dir / "video_reader" / "video_knowledge.py"
+        if not script_path.exists():
+            self.memory.log_task_end(task_id, "error", error_message="video_knowledge.py not found")
+            logger.error("video_knowledge_review: script not found")
+            return
+
+        try:
+            result = _sp.run(
+                [sys.executable, str(script_path), "review"],
+                capture_output=True, text=True, timeout=60,
+            )
+            if result.returncode != 0:
+                error_msg = result.stderr.strip() or "unknown error"
+                self.memory.log_task_end(task_id, "error", error_message=error_msg[:500])
+                logger.error(f"video_knowledge_review: {error_msg}")
+                return
+
+            import json as _json
+            review = _json.loads(result.stdout.strip())
+            deleted = review.get("deleted", [])
+            needs_review = review.get("needs_review", [])
+            reconfirm = review.get("reconfirm", [])
+            total = review.get("total", 0)
+
+            # 何もなければ通知しない
+            if not deleted and not needs_review and not reconfirm:
+                summary = f"動画知識: {total}件。問題なし。"
+                self.memory.log_task_end(task_id, "success", result_summary=summary)
+                logger.info(f"video_knowledge_review: {summary}")
+                return
+
+            # Slack通知を構築
+            lines = ["【動画知識ライフサイクルレビュー】"]
+            if deleted:
+                lines.append(f"\n自動削除（90日未アクセス）: {len(deleted)}件")
+                for d in deleted:
+                    lines.append(f"  - {d['title']}（{d['days']}日）")
+            if needs_review:
+                lines.append(f"\n要確認（30日未アクセス+低使用）: {len(needs_review)}件")
+                for n in needs_review:
+                    lines.append(f"  - {n['title']}（{n['days']}日, {n['access_count']}回使用）")
+            if reconfirm:
+                lines.append(f"\n再確認候補（古い+高使用）: {len(reconfirm)}件")
+                for r in reconfirm:
+                    lines.append(f"  - {r['title']}（学習{r['learned_days']}日前, {r['access_count']}回使用）")
+            lines.append(f"\n保持中: {total}件")
+
+            message = "\n".join(lines)
+            send_slack_ai_team(message)
+
+            summary = f"削除{len(deleted)}件, 要確認{len(needs_review)}件, 再確認{len(reconfirm)}件, 保持{total}件"
+            self.memory.log_task_end(task_id, "success", result_summary=summary)
+            logger.info(f"video_knowledge_review: {summary}")
+
+        except _sp.TimeoutExpired:
+            self.memory.log_task_end(task_id, "error", error_message="timeout")
+            logger.error("video_knowledge_review: timeout")
+        except Exception as e:
+            self.memory.log_task_end(task_id, "error", error_message=str(e)[:500])
+            logger.error(f"video_knowledge_review: {e}")
 
     # ================================================================
 
