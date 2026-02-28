@@ -23,7 +23,7 @@ from handler_runner import HandlerRunner
 
 # Coordinator が使う LLM モデル
 COORDINATOR_MODEL = "claude-haiku-4-5-20251001"
-COORDINATOR_MAX_TOKENS = 1200
+COORDINATOR_MAX_TOKENS = 2000
 MAX_ROUNDS = 10  # ツール呼び出しループの上限
 
 
