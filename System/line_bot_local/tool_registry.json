@@ -285,17 +285,17 @@
       }
     },
     {
-      "name": "loom_reader",
-      "description": "Loom動画のURLからTranscript（文字起こし）とキーフレーム画像を自動抽出する。動画の内容理解・要約・学習に使う",
+      "name": "video_reader",
+      "description": "Loom/YouTube動画のURLからTranscript（文字起こし）とキーフレーム画像を自動抽出する。動画の内容理解・要約・学習に使う",
       "confirmation_level": "L1",
       "handler_type": "subprocess",
-      "handler_path": "loom_reader/loom_reader.py",
+      "handler_path": "video_reader/video_reader.py",
       "input_schema": {
         "type": "object",
         "properties": {
           "url": {
             "type": "string",
-            "description": "Loom共有URL（例: https://www.loom.com/share/xxxxx）"
+            "description": "Loom or YouTube URL（例: https://www.loom.com/share/xxxxx, https://www.youtube.com/watch?v=xxxxx）"
           }
         },
         "required": [

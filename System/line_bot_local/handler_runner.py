@@ -168,13 +168,13 @@ class HandlerRunner:
             if range_:
                 cmd.append(range_)
 
-        elif tool_name == "loom_reader":
+        elif tool_name == "video_reader":
             url = arguments.get("url", "")
             if url:
                 cmd.append(url)
 
-        # loom_reader は動画DL+フレーム抽出で時間がかかる
-        timeout = 300 if tool_name == "loom_reader" else 120
+        # video_reader は動画DL+フレーム抽出で時間がかかる
+        timeout = 600 if tool_name == "video_reader" else 120
 
         result = subprocess.run(
             cmd,
