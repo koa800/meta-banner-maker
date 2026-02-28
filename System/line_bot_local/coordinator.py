@@ -354,9 +354,11 @@ def execute_goal(
 
                     result_text = runner.run(tool_name, tool_input) or "（結果なし）"
 
-                    # 結果を 2000 文字に制限（トークン節約）
-                    if len(result_text) > 2000:
-                        result_text = result_text[:2000] + "\n\n（...省略）"
+                    # 結果を文字数制限（トークン節約）
+                    # video_reader は transcript を含むため上限を緩和
+                    max_len = 4000 if tool_name == "video_reader" else 2000
+                    if len(result_text) > max_len:
+                        result_text = result_text[:max_len] + "\n\n（...省略）"
 
                     tool_results.append({
                         "type": "tool_result",
