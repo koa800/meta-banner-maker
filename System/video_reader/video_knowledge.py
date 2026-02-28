@@ -5,6 +5,10 @@
   python3 video_knowledge.py save '{"url":"...","title":"...","summary":"...","status":"pending"}'
   python3 video_knowledge.py list
   python3 video_knowledge.py update_pending '{"summary":"修正後の要約"}'
+  python3 video_knowledge.py confirm
+  python3 video_knowledge.py pending_info
+  python3 video_knowledge.py pending_reminders
+  python3 video_knowledge.py mark_reminded
   python3 video_knowledge.py search 'キーワード'
   python3 video_knowledge.py review
 """
@@ -20,19 +24,15 @@ _RUNTIME_DATA_DIR.mkdir(parents=True, exist_ok=True)
 _KNOWLEDGE_FILE = _RUNTIME_DATA_DIR / "video_knowledge.json"
 
 MAX_ENTRIES = 100
-AUTO_CONFIRM_SECONDS = 3600  # 1時間
+REMINDER_SECONDS = 3600  # 1時間後にリマインド
 
 
 def _load() -> list:
     if _KNOWLEDGE_FILE.exists():
         try:
-            entries = json.loads(_KNOWLEDGE_FILE.read_text(encoding="utf-8"))
+            return json.loads(_KNOWLEDGE_FILE.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, Exception):
             return []
-        # 読み込み時に auto_confirm を実行
-        if _auto_confirm(entries):
-            _save(entries)
-        return entries
     return []
 
 
@@ -41,26 +41,6 @@ def _save(data: list):
     tmp = _KNOWLEDGE_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.rename(_KNOWLEDGE_FILE)
-
-
-def _auto_confirm(entries: list) -> bool:
-    """pending → confirmed（1時間超）。変更があればTrue"""
-    changed = False
-    now = datetime.now()
-    for e in entries:
-        if e.get("status") != "pending":
-            continue
-        learned_at = e.get("learned_at", "")
-        if not learned_at:
-            continue
-        try:
-            dt = datetime.strptime(learned_at, "%Y-%m-%dT%H:%M:%S")
-        except ValueError:
-            continue
-        if (now - dt).total_seconds() > AUTO_CONFIRM_SECONDS:
-            e["status"] = "confirmed"
-            changed = True
-    return changed
 
 
 def _generate_id(url: str) -> str:
@@ -123,6 +103,7 @@ def save(data: dict) -> str:
         "status": data.get("status", "confirmed"),
         "access_count": prev_access_count,
         "last_accessed": prev_last_accessed,
+        "reminded_at": None,
     }
 
     if existing_idx is not None:
@@ -138,6 +119,32 @@ def save(data: dict) -> str:
 
     _save(entries)
     return json.dumps({"status": "success", "action": action, "id": entry_id, "title": title}, ensure_ascii=False)
+
+
+def confirm_pending() -> str:
+    """直近のpendingエントリをconfirmedに変更する（承認）"""
+    entries = _load()
+
+    # 直近の pending エントリを探す（後ろから検索）
+    target_idx = None
+    for i in range(len(entries) - 1, -1, -1):
+        if entries[i].get("status") == "pending":
+            target_idx = i
+            break
+
+    if target_idx is None:
+        return json.dumps({"status": "error", "message": "承認待ちのエントリがありません"}, ensure_ascii=False)
+
+    entry = entries[target_idx]
+    entry["status"] = "confirmed"
+    entries[target_idx] = entry
+    _save(entries)
+    return json.dumps({
+        "status": "success",
+        "action": "confirmed",
+        "id": entry.get("id", ""),
+        "title": entry.get("title", ""),
+    }, ensure_ascii=False)
 
 
 def update_pending(data: dict) -> str:
@@ -164,8 +171,9 @@ def update_pending(data: dict) -> str:
     if "title" in data:
         entry["title"] = data["title"]
 
-    # learned_at をリセット（自動確定タイマーを延長）
+    # learned_at をリセット（リマインドタイマーをリセット）
     entry["learned_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    entry["reminded_at"] = None  # リマインド済みフラグもリセット
 
     entries[target_idx] = entry
     _save(entries)
@@ -175,6 +183,77 @@ def update_pending(data: dict) -> str:
         "id": entry.get("id", ""),
         "title": entry.get("title", ""),
     }, ensure_ascii=False)
+
+
+def get_pending_info() -> str:
+    """pendingエントリの情報を返す（Coordinatorのプロンプト注入用）"""
+    entries = _load()
+    pending = [e for e in entries if e.get("status") == "pending"]
+    if not pending:
+        return ""
+
+    lines = ["【承認待ちの動画知識】"]
+    for e in pending:
+        lines.append(f"  タイトル: {e.get('title', '')}")
+        lines.append(f"  要約: {e.get('summary', '')}")
+        procs = e.get("key_processes", [])
+        if procs:
+            lines.append(f"  手順: {' → '.join(procs)}")
+    lines.append("ユーザーが「OK」「覚えて」「それでいい」等と言ったら confirm_video_learning を呼ぶこと。")
+    lines.append("修正指示があれば update_video_learning で修正してから確認を取り直すこと。")
+    return "\n".join(lines)
+
+
+def get_pending_needing_reminder() -> list:
+    """1時間経過してリマインド未送信のpendingエントリを返す"""
+    entries = _load()
+    now = datetime.now()
+    result = []
+
+    for e in entries:
+        if e.get("status") != "pending":
+            continue
+        if e.get("reminded_at"):
+            continue
+        learned_at = e.get("learned_at", "")
+        if not learned_at:
+            continue
+        try:
+            dt = datetime.strptime(learned_at, "%Y-%m-%dT%H:%M:%S")
+        except ValueError:
+            continue
+        if (now - dt).total_seconds() > REMINDER_SECONDS:
+            result.append(e)
+
+    return result
+
+
+def mark_reminded() -> str:
+    """リマインド対象のpendingエントリに reminded_at を設定する"""
+    entries = _load()
+    now = datetime.now()
+    now_str = now.strftime("%Y-%m-%dT%H:%M:%S")
+    count = 0
+
+    for e in entries:
+        if e.get("status") != "pending":
+            continue
+        if e.get("reminded_at"):
+            continue
+        learned_at = e.get("learned_at", "")
+        if not learned_at:
+            continue
+        try:
+            dt = datetime.strptime(learned_at, "%Y-%m-%dT%H:%M:%S")
+        except ValueError:
+            continue
+        if (now - dt).total_seconds() > REMINDER_SECONDS:
+            e["reminded_at"] = now_str
+            count += 1
+
+    if count > 0:
+        _save(entries)
+    return json.dumps({"status": "success", "marked": count}, ensure_ascii=False)
 
 
 def list_knowledge() -> str:
@@ -214,7 +293,6 @@ def search_relevant(query: str, top_n: int = 5) -> str:
         summary = (e.get("summary") or "").lower()
         url = (e.get("url") or "").lower()
         procs = " ".join(e.get("key_processes", [])).lower()
-        text = f"{title} {summary} {procs}"
 
         # URL直接マッチは高スコア
         if url and url in query_lower:
@@ -339,7 +417,7 @@ def review_stale() -> dict:
 
 def main():
     if len(sys.argv) < 2:
-        print("使い方: python3 video_knowledge.py [save|list|update_pending|search|review]", file=sys.stderr)
+        print("使い方: python3 video_knowledge.py [save|list|confirm|update_pending|pending_info|pending_reminders|mark_reminded|search|review]", file=sys.stderr)
         sys.exit(1)
 
     command = sys.argv[1]
@@ -355,6 +433,9 @@ def main():
             sys.exit(1)
         print(save(data))
 
+    elif command == "confirm":
+        print(confirm_pending())
+
     elif command == "list":
         result = list_knowledge()
         print(result if result else "（学習済みの動画はありません）")
@@ -369,6 +450,17 @@ def main():
             print(f"JSON解析エラー: {e}", file=sys.stderr)
             sys.exit(1)
         print(update_pending(data))
+
+    elif command == "pending_info":
+        result = get_pending_info()
+        print(result if result else "（承認待ちの知識はありません）")
+
+    elif command == "pending_reminders":
+        result = get_pending_needing_reminder()
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+
+    elif command == "mark_reminded":
+        print(mark_reminded())
 
     elif command == "search":
         if len(sys.argv) < 3:

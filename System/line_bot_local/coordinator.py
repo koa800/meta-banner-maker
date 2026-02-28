@@ -118,7 +118,7 @@ def _load_agent_summary(project_root: Path) -> str:
 
 def _load_video_knowledge(project_root: Path, goal_text: str = "") -> str:
     """ゴールテキストに関連する動画知識を検索して注入する。
-    auto_confirm も同時に実行する。"""
+    pendingエントリがあればその情報も注入する（承認フロー用）。"""
     knowledge_path = Path.home() / "agents" / "data" / "video_knowledge.json"
     if not knowledge_path.exists():
         return ""
@@ -129,93 +129,90 @@ def _load_video_knowledge(project_root: Path, goal_text: str = "") -> str:
     if not entries:
         return ""
 
-    # auto_confirm: pending → confirmed（1時間超）
-    now = datetime.now()
+    parts = []
     changed = False
-    for e in entries:
-        if e.get("status") != "pending":
-            continue
-        learned_at = e.get("learned_at", "")
-        if not learned_at:
-            continue
-        try:
-            dt = datetime.strptime(learned_at, "%Y-%m-%dT%H:%M:%S")
-        except ValueError:
-            continue
-        if (now - dt).total_seconds() > 3600:
-            e["status"] = "confirmed"
-            changed = True
 
+    # --- pendingエントリの情報を注入（承認フロー用） ---
+    pending = [e for e in entries if e.get("status") == "pending"]
+    if pending:
+        lines = ["【承認待ちの動画知識】"]
+        for e in pending:
+            lines.append(f"  タイトル: {e.get('title', '')}")
+            lines.append(f"  要約: {e.get('summary', '')}")
+            procs = e.get("key_processes", [])
+            if procs:
+                lines.append(f"  手順: {' → '.join(procs)}")
+        lines.append("ユーザーが「OK」「覚えて」「それでいい」等と言ったら confirm_video_learning を呼ぶこと。")
+        lines.append("修正指示があれば update_video_learning で修正してから再度確認を取ること。")
+        parts.append("\n".join(lines))
+
+    # --- confirmedエントリから関連性ベースで注入 ---
     confirmed = [e for e in entries if e.get("status", "confirmed") == "confirmed"]
-    if not confirmed:
-        if changed:
-            _save_video_knowledge(knowledge_path, entries)
-        return ""
+    if confirmed:
+        if goal_text:
+            query_lower = goal_text.lower()
+            query_words = set(query_lower.split())
 
-    # ゴールテキストがある場合: 関連性ベースで上位5件に絞る
-    if goal_text:
-        query_lower = goal_text.lower()
-        query_words = set(query_lower.split())
+            scored = []
+            for e in confirmed:
+                score = 0
+                title = (e.get("title") or "").lower()
+                summary = (e.get("summary") or "").lower()
+                url = (e.get("url") or "").lower()
+                procs = " ".join(e.get("key_processes", [])).lower()
 
-        scored = []
-        for e in confirmed:
-            score = 0
-            title = (e.get("title") or "").lower()
-            summary = (e.get("summary") or "").lower()
-            url = (e.get("url") or "").lower()
-            procs = " ".join(e.get("key_processes", [])).lower()
+                # URL直接マッチは高スコア
+                if url and url in query_lower:
+                    score += 100
 
-            # URL直接マッチは高スコア
-            if url and url in query_lower:
-                score += 100
+                # 単語マッチ
+                for word in query_words:
+                    if len(word) < 2:
+                        continue
+                    if word in title:
+                        score += 3
+                    if word in summary:
+                        score += 2
+                    if word in procs:
+                        score += 2
 
-            # 単語マッチ
-            for word in query_words:
-                if len(word) < 2:
-                    continue
-                if word in title:
-                    score += 3
-                if word in summary:
-                    score += 2
-                if word in procs:
-                    score += 2
+                if score > 0:
+                    scored.append((score, e))
 
-            if score > 0:
-                scored.append((score, e))
+            if scored:
+                scored.sort(key=lambda x: x[0], reverse=True)
+                selected = [e for _, e in scored[:5]]
 
-        if not scored:
-            if changed:
-                _save_video_knowledge(knowledge_path, entries)
-            return ""
+                # access_count / last_accessed を更新
+                now_str = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+                selected_ids = {e.get("id") for e in selected}
+                for e in entries:
+                    if e.get("id") in selected_ids:
+                        e["access_count"] = e.get("access_count", 0) + 1
+                        e["last_accessed"] = now_str
+                changed = True
+            else:
+                selected = []
+        else:
+            # ゴールテキストがない場合: 全件（最大10件、新しい順）
+            selected = confirmed[-10:]
 
-        scored.sort(key=lambda x: x[0], reverse=True)
-        selected = [e for _, e in scored[:5]]
-
-        # access_count / last_accessed を更新
-        now_str = now.strftime("%Y-%m-%dT%H:%M:%S")
-        selected_ids = {e.get("id") for e in selected}
-        for e in entries:
-            if e.get("id") in selected_ids:
-                e["access_count"] = e.get("access_count", 0) + 1
-                e["last_accessed"] = now_str
-        changed = True
-    else:
-        # ゴールテキストがない場合: 全件（最大10件、新しい順）
-        selected = confirmed[-10:]
+        if selected:
+            lines = ["【関連する動画知識】"]
+            for i, e in enumerate(selected, 1):
+                source_label = {"loom": "Loom", "youtube": "YouTube"}.get(e.get("source", ""), e.get("source", ""))
+                date = e.get("learned_at", "")[:10]
+                lines.append(f"[{i}] {e.get('title', '')} ({source_label}, {date})")
+                lines.append(f"  要約: {e.get('summary', '')}")
+                procs = e.get("key_processes", [])
+                if procs:
+                    lines.append(f"  手順: {' → '.join(procs)}")
+            parts.append("\n".join(lines))
 
     if changed:
         _save_video_knowledge(knowledge_path, entries)
 
-    lines = ["【関連する動画知識】"]
-    for i, e in enumerate(selected, 1):
-        source_label = {"loom": "Loom", "youtube": "YouTube"}.get(e.get("source", ""), e.get("source", ""))
-        date = e.get("learned_at", "")[:10]
-        lines.append(f"[{i}] {e.get('title', '')} ({source_label}, {date})")
-        lines.append(f"  要約: {e.get('summary', '')}")
-        procs = e.get("key_processes", [])
-        if procs:
-            lines.append(f"  手順: {' → '.join(procs)}")
-    return "\n".join(lines)
+    return "\n\n".join(parts)
 
 
 def _save_video_knowledge(path: Path, data: list):
@@ -288,9 +285,10 @@ LoomやYouTubeのURLが送られて「見ておいて」「確認して」等の
 1. video_reader ツールで内容を取得
 2. transcript_summary（あれば優先）または transcript_text から内容を理解し、要約+手順を箇条書きで報告
 3. 同じツールループ内で save_video_learning(status="pending") を呼んで即保存
-4. 報告 + 「修正があれば教えてください。なければそのまま覚えます」
-※ OKの返事は不要。修正がなければ1時間後に自動確定される
-※ 修正指示が来たら update_video_learning で更新する
+4. 報告 + 「この内容で覚えていいですか？修正があれば教えてください」
+※ 承認は必須。「OK」「覚えて」「それでいい」等の返事が来たら confirm_video_learning で確定する
+※ 修正指示が来たら update_video_learning で修正後、再度確認を取る
+※ 承認なしに confirm してはいけない。承認待ちの知識はシステムプロンプトに表示される
 
 【禁止】
 - 認識確認なしに曖昧なゴールを実行すること

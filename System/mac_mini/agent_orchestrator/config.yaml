@@ -97,6 +97,9 @@ schedule:
   video_knowledge_review:
     cron: "0 11 * * 0"           # 日曜 11:00  動画知識ライフサイクルレビュー（hinata_memoryの後）
     enabled: true
+  video_learning_reminder:
+    interval_minutes: 30         # 承認待ち動画知識のリマインド（1時間経過でLINE通知）
+    enabled: true
 
   # === 常時監視（軽量・ローカル処理） ===
   health_check:

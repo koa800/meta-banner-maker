@@ -305,7 +305,7 @@
     },
     {
       "name": "save_video_learning",
-      "description": "動画から学んだ内容を保存する。video_readerの結果を受け取ったら同じツールループ内で即座に呼ぶこと。status='pending'で保存し、1時間後に自動確定される",
+      "description": "動画から学んだ内容を保存する。video_readerの結果を受け取ったら同じツールループ内で即座にstatus='pending'で呼ぶこと。ユーザーの承認後にconfirm_video_learningで確定する",
       "confirmation_level": "L1",
       "handler_type": "subprocess",
       "handler_path": "video_reader/video_knowledge.py",
@@ -332,7 +332,7 @@
           "status": {
             "type": "string",
             "enum": ["pending", "confirmed"],
-            "description": "保存ステータス。通常は'pending'で保存し1時間後に自動確定"
+            "description": "保存ステータス。必ず'pending'で保存し、ユーザー承認後にconfirm_video_learningで確定する"
           }
         },
         "required": ["url", "title", "summary"]
@@ -340,7 +340,7 @@
     },
     {
       "name": "update_video_learning",
-      "description": "保存済みのpending状態の動画知識を修正する。ユーザーから修正指示があったときに使う",
+      "description": "保存済みのpending状態の動画知識を修正する。ユーザーから修正指示があったときに使う。修正後は再度確認を取り、承認されたらconfirm_video_learningで確定する",
       "confirmation_level": "L1",
       "handler_type": "subprocess",
       "handler_path": "video_reader/video_knowledge.py",
@@ -361,6 +361,17 @@
             "description": "修正後のタイトル"
           }
         }
+      }
+    },
+    {
+      "name": "confirm_video_learning",
+      "description": "pendingの動画知識を承認・確定する。ユーザーが「OK」「覚えて」「それでいい」等と承認したときに呼ぶ。承認なしに呼んではいけない",
+      "confirmation_level": "L1",
+      "handler_type": "subprocess",
+      "handler_path": "video_reader/video_knowledge.py",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
       }
     },
     {

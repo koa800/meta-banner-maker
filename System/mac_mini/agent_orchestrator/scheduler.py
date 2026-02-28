@@ -108,6 +108,7 @@ class TaskScheduler:
             "secretary_proactive_work": self._run_secretary_proactive_work,
             "weekly_hinata_memory": self._run_weekly_hinata_memory,
             "video_knowledge_review": self._run_video_knowledge_review,
+            "video_learning_reminder": self._run_video_learning_reminder,
         }
 
     def setup(self):
@@ -2855,6 +2856,57 @@ JSON形式で返してください:
         except Exception as e:
             self.memory.log_task_end(task_id, False, str(e))
             logger.error(f"weekly_hinata_memory エラー: {e}")
+
+    # ================================================================
+
+    async def _run_video_learning_reminder(self):
+        """30分ごと: 承認待ち動画知識のリマインド
+
+        1時間以上pendingのまま放置されている動画知識があれば、
+        LINE通知でリマインドする。リマインドは1回のみ。
+        """
+        import subprocess as _sp
+        import json as _json
+        from .notifier import send_line_notify
+
+        script_path = self.system_dir / "video_reader" / "video_knowledge.py"
+        if not script_path.exists():
+            return
+
+        try:
+            # リマインド対象を取得
+            result = _sp.run(
+                [sys.executable, str(script_path), "pending_reminders"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode != 0:
+                return
+
+            pending = _json.loads(result.stdout.strip())
+            if not pending:
+                return
+
+            # LINE通知を送信
+            for e in pending:
+                title = e.get("title", "不明な動画")
+                summary = e.get("summary", "")[:80]
+                message = (
+                    f"先ほどの動画知識の確認をお願いします。\n\n"
+                    f"タイトル: {title}\n"
+                    f"要約: {summary}\n\n"
+                    f"問題なければ「OK」、修正があれば内容を教えてください。"
+                )
+                send_line_notify(message)
+                logger.info(f"video_learning_reminder: sent reminder for '{title}'")
+
+            # リマインド済みマーク
+            _sp.run(
+                [sys.executable, str(script_path), "mark_reminded"],
+                capture_output=True, text=True, timeout=30,
+            )
+
+        except Exception as e:
+            logger.error(f"video_learning_reminder: {e}")
 
     # ================================================================
 
