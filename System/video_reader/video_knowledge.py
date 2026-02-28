@@ -56,7 +56,11 @@ def _generate_id(url: str) -> str:
         return f"yt_{m.group(1)}"
     # その他: URLハッシュ
     import hashlib
-    return f"vid_{hashlib.md5(url.encode()).hexdigest()[:8]}"
+    h = hashlib.md5(url.encode()).hexdigest()[:8]
+    # 画像URLは img_ プレフィックス
+    if any(ext in url.lower() for ext in [".jpg", ".jpeg", ".png", ".gif", ".webp", "/images/"]):
+        return f"img_{h}"
+    return f"vid_{h}"
 
 
 def save(data: dict) -> str:
@@ -95,10 +99,13 @@ def save(data: dict) -> str:
     entry = {
         "id": entry_id,
         "source": source,
+        "source_type": data.get("source_type", "video"),
         "title": title,
         "url": url,
         "summary": summary,
         "key_processes": data.get("key_processes", []),
+        "key_points": data.get("key_points", []),
+        "use_context": data.get("use_context", ""),
         "learned_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
         "status": data.get("status", "confirmed"),
         "access_count": prev_access_count,
@@ -168,6 +175,10 @@ def update_pending(data: dict) -> str:
         entry["summary"] = data["summary"]
     if "key_processes" in data:
         entry["key_processes"] = data["key_processes"]
+    if "key_points" in data:
+        entry["key_points"] = data["key_points"]
+    if "use_context" in data:
+        entry["use_context"] = data["use_context"]
     if "title" in data:
         entry["title"] = data["title"]
 
@@ -192,13 +203,21 @@ def get_pending_info() -> str:
     if not pending:
         return ""
 
-    lines = ["【承認待ちの動画知識】"]
+    lines = ["【承認待ちの知識】"]
     for e in pending:
+        source_type = e.get("source_type", "video")
+        lines.append(f"  種別: {source_type}")
         lines.append(f"  タイトル: {e.get('title', '')}")
         lines.append(f"  要約: {e.get('summary', '')}")
         procs = e.get("key_processes", [])
         if procs:
             lines.append(f"  手順: {' → '.join(procs)}")
+        kps = e.get("key_points", [])
+        if kps:
+            lines.append(f"  ポイント: {' / '.join(kps)}")
+        uc = e.get("use_context", "")
+        if uc:
+            lines.append(f"  活用場面: {uc}")
     lines.append("ユーザーが「OK」「覚えて」「それでいい」等と言ったら confirm_video_learning を呼ぶこと。")
     lines.append("修正指示があれば update_video_learning で修正してから確認を取り直すこと。")
     return "\n".join(lines)
@@ -263,15 +282,23 @@ def list_knowledge() -> str:
     if not confirmed:
         return ""
 
-    lines = ["【過去に学んだ動画の知識】"]
+    lines = ["【過去に学んだ知識】"]
     for i, e in enumerate(confirmed, 1):
+        source_type = e.get("source_type", "video")
         source_label = {"loom": "Loom", "youtube": "YouTube"}.get(e.get("source", ""), e.get("source", ""))
+        type_label = {"video": source_label, "image": "画像", "screenshot": "スクショ", "document": "文書"}.get(source_type, source_label)
         date = e.get("learned_at", "")[:10]
-        lines.append(f"[{i}] {e.get('title', '')} ({source_label}, {date})")
+        lines.append(f"[{i}] {e.get('title', '')} ({type_label}, {date})")
         lines.append(f"  要約: {e.get('summary', '')}")
         procs = e.get("key_processes", [])
         if procs:
             lines.append(f"  手順: {' → '.join(procs)}")
+        kps = e.get("key_points", [])
+        if kps:
+            lines.append(f"  ポイント: {' / '.join(kps)}")
+        uc = e.get("use_context", "")
+        if uc:
+            lines.append(f"  活用場面: {uc}")
 
     return "\n".join(lines)
 
@@ -293,6 +320,8 @@ def search_relevant(query: str, top_n: int = 5) -> str:
         summary = (e.get("summary") or "").lower()
         url = (e.get("url") or "").lower()
         procs = " ".join(e.get("key_processes", [])).lower()
+        use_ctx = (e.get("use_context") or "").lower()
+        kps = " ".join(e.get("key_points", [])).lower()
 
         # URL直接マッチは高スコア
         if url and url in query_lower:
@@ -307,6 +336,10 @@ def search_relevant(query: str, top_n: int = 5) -> str:
             if word in summary:
                 score += 2
             if word in procs:
+                score += 2
+            if word in use_ctx:
+                score += 2
+            if word in kps:
                 score += 2
 
         if score > 0:
@@ -329,15 +362,20 @@ def search_relevant(query: str, top_n: int = 5) -> str:
     _save(entries)
 
     # テキスト生成
-    lines = ["【関連する動画知識】"]
+    lines = ["【関連する知識】"]
     for i, (score, e) in enumerate(top, 1):
+        source_type = e.get("source_type", "video")
         source_label = {"loom": "Loom", "youtube": "YouTube"}.get(e.get("source", ""), e.get("source", ""))
+        type_label = {"video": source_label, "image": "画像", "screenshot": "スクショ", "document": "文書"}.get(source_type, source_label)
         date = e.get("learned_at", "")[:10]
-        lines.append(f"[{i}] {e.get('title', '')} ({source_label}, {date})")
+        lines.append(f"[{i}] {e.get('title', '')} ({type_label}, {date})")
         lines.append(f"  要約: {e.get('summary', '')}")
         procs = e.get("key_processes", [])
         if procs:
             lines.append(f"  手順: {' → '.join(procs)}")
+        uc = e.get("use_context", "")
+        if uc:
+            lines.append(f"  活用場面: {uc}")
 
     return "\n".join(lines)
 

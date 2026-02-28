@@ -135,13 +135,21 @@ def _load_video_knowledge(project_root: Path, goal_text: str = "") -> str:
     # --- pendingエントリの情報を注入（承認フロー用） ---
     pending = [e for e in entries if e.get("status") == "pending"]
     if pending:
-        lines = ["【承認待ちの動画知識】"]
+        lines = ["【承認待ちの知識】"]
         for e in pending:
+            source_type = e.get("source_type", "video")
+            lines.append(f"  種別: {source_type}")
             lines.append(f"  タイトル: {e.get('title', '')}")
             lines.append(f"  要約: {e.get('summary', '')}")
             procs = e.get("key_processes", [])
             if procs:
                 lines.append(f"  手順: {' → '.join(procs)}")
+            kps = e.get("key_points", [])
+            if kps:
+                lines.append(f"  ポイント: {' / '.join(kps)}")
+            uc = e.get("use_context", "")
+            if uc:
+                lines.append(f"  活用場面: {uc}")
         lines.append("ユーザーが「OK」「覚えて」「それでいい」等と言ったら confirm_video_learning を呼ぶこと。")
         lines.append("修正指示があれば update_video_learning で修正してから再度確認を取ること。")
         parts.append("\n".join(lines))
@@ -160,6 +168,8 @@ def _load_video_knowledge(project_root: Path, goal_text: str = "") -> str:
                 summary = (e.get("summary") or "").lower()
                 url = (e.get("url") or "").lower()
                 procs = " ".join(e.get("key_processes", [])).lower()
+                use_ctx = (e.get("use_context") or "").lower()
+                kps = " ".join(e.get("key_points", [])).lower()
 
                 # URL直接マッチは高スコア
                 if url and url in query_lower:
@@ -174,6 +184,10 @@ def _load_video_knowledge(project_root: Path, goal_text: str = "") -> str:
                     if word in summary:
                         score += 2
                     if word in procs:
+                        score += 2
+                    if word in use_ctx:
+                        score += 2
+                    if word in kps:
                         score += 2
 
                 if score > 0:
@@ -198,15 +212,20 @@ def _load_video_knowledge(project_root: Path, goal_text: str = "") -> str:
             selected = confirmed[-10:]
 
         if selected:
-            lines = ["【関連する動画知識】"]
+            lines = ["【関連する知識】"]
             for i, e in enumerate(selected, 1):
+                source_type = e.get("source_type", "video")
                 source_label = {"loom": "Loom", "youtube": "YouTube"}.get(e.get("source", ""), e.get("source", ""))
+                type_label = {"video": source_label, "image": "画像", "screenshot": "スクショ", "document": "文書"}.get(source_type, source_label)
                 date = e.get("learned_at", "")[:10]
-                lines.append(f"[{i}] {e.get('title', '')} ({source_label}, {date})")
+                lines.append(f"[{i}] {e.get('title', '')} ({type_label}, {date})")
                 lines.append(f"  要約: {e.get('summary', '')}")
                 procs = e.get("key_processes", [])
                 if procs:
                     lines.append(f"  手順: {' → '.join(procs)}")
+                uc = e.get("use_context", "")
+                if uc:
+                    lines.append(f"  活用場面: {uc}")
             parts.append("\n".join(lines))
 
     if changed:
@@ -289,6 +308,17 @@ LoomやYouTubeのURLが送られて「見ておいて」「確認して」等の
 ※ 承認は必須。「OK」「覚えて」「それでいい」等の返事が来たら confirm_video_learning で確定する
 ※ 修正指示が来たら update_video_learning で修正後、再度確認を取る
 ※ 承認なしに confirm してはいけない。承認待ちの知識はシステムプロンプトに表示される
+
+【画像・ドキュメント学習フロー】
+「覚えて」「学んで」等の指示 + 画像URL/ドキュメントURLがあったら:
+1. analyze_content(url=画像URL, instruction=ユーザーの補足があれば渡す) で内容を分析
+2. 分析結果(title, summary, key_points, use_context)を確認
+3. save_video_learning(status="pending", source_type="image", use_context=分析結果のuse_context, key_points=分析結果のkey_points) で即保存
+4. 報告: タイトル・要約・ポイント・活用場面を提示 + 「この内容で覚えていいですか？」
+※ 承認が必要。OKが来たら confirm_video_learning で確定
+※ 修正があれば update_video_learning で更新
+重要: use_context（この知識がどの場面で使えるか）を必ず分析・保存すること。
+ユーザーが「それでOK」と一発承認できる精度を目指す。
 
 【禁止】
 - 認識確認なしに曖昧なゴールを実行すること

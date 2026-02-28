@@ -173,6 +173,15 @@ class HandlerRunner:
             if url:
                 cmd.append(url)
 
+        elif tool_name == "analyze_content":
+            url = arguments.get("url", "")
+            if url:
+                cmd.append("image")
+                cmd.append(url)
+            instruction = arguments.get("instruction", "")
+            if instruction:
+                cmd.append(instruction)
+
         elif tool_name == "save_video_learning":
             cmd.append("save")
             cmd.append(json.dumps(arguments, ensure_ascii=False))

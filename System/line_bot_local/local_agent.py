@@ -2705,6 +2705,12 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
         if function_name == "execute_goal":
             goal_text = arguments.get("goal", instruction)
 
+            # 画像URL統合（画像+「覚えて」フロー）
+            image_url = arguments.get("image_url", "")
+            if image_url:
+                goal_text = f"{goal_text}\n\n画像URL: {image_url}"
+                print(f"   📎 ゴールに画像URL統合: {image_url[:60]}")
+
             # 会話コンテキスト注入（coordinatorが「OK」等のフォローアップを理解するため）
             if sender_name:
                 try:

@@ -304,8 +304,29 @@
       }
     },
     {
+      "name": "analyze_content",
+      "description": "画像・スクリーンショット・ドキュメントの内容をAI分析する。学習リクエスト（「覚えて」「学んで」等）+ 画像URL時にまず呼び、分析結果を元にsave_video_learningで保存する",
+      "confirmation_level": "L1",
+      "handler_type": "subprocess",
+      "handler_path": "content_analyzer.py",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "画像URL or ドキュメントURL"
+          },
+          "instruction": {
+            "type": "string",
+            "description": "ユーザーからの補足指示（例: 「Lステップの設定画面」）"
+          }
+        },
+        "required": ["url"]
+      }
+    },
+    {
       "name": "save_video_learning",
-      "description": "動画から学んだ内容を保存する。video_readerの結果を受け取ったら同じツールループ内で即座にstatus='pending'で呼ぶこと。ユーザーの承認後にconfirm_video_learningで確定する",
+      "description": "動画・画像・ドキュメントから学んだ内容を保存する。video_readerやanalyze_contentの結果を受け取ったら同じツールループ内で即座にstatus='pending'で呼ぶこと。ユーザーの承認後にconfirm_video_learningで確定する",
       "confirmation_level": "L1",
       "handler_type": "subprocess",
       "handler_path": "video_reader/video_knowledge.py",
@@ -314,11 +335,11 @@
         "properties": {
           "url": {
             "type": "string",
-            "description": "動画URL"
+            "description": "動画URL or 画像URL"
           },
           "title": {
             "type": "string",
-            "description": "動画タイトル"
+            "description": "タイトル"
           },
           "summary": {
             "type": "string",
@@ -328,6 +349,20 @@
             "type": "array",
             "items": { "type": "string" },
             "description": "学んだ手順・プロセスのリスト"
+          },
+          "key_points": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "覚えておくべきポイントのリスト"
+          },
+          "use_context": {
+            "type": "string",
+            "description": "この知識が役立つ場面の説明"
+          },
+          "source_type": {
+            "type": "string",
+            "enum": ["video", "image", "screenshot", "document"],
+            "description": "ソース種別（デフォルト: video）"
           },
           "status": {
             "type": "string",
@@ -340,7 +375,7 @@
     },
     {
       "name": "update_video_learning",
-      "description": "保存済みのpending状態の動画知識を修正する。ユーザーから修正指示があったときに使う。修正後は再度確認を取り、承認されたらconfirm_video_learningで確定する",
+      "description": "保存済みのpending状態の知識を修正する。ユーザーから修正指示があったときに使う。修正後は再度確認を取り、承認されたらconfirm_video_learningで確定する",
       "confirmation_level": "L1",
       "handler_type": "subprocess",
       "handler_path": "video_reader/video_knowledge.py",
@@ -355,6 +390,15 @@
             "type": "array",
             "items": { "type": "string" },
             "description": "修正後の手順リスト"
+          },
+          "key_points": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "修正後のポイントリスト"
+          },
+          "use_context": {
+            "type": "string",
+            "description": "修正後の活用場面"
           },
           "title": {
             "type": "string",

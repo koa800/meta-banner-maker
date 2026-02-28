@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月28日（動画学習ループ完成・承認必須化・知識ライフサイクル管理） |
+| 最終更新 | 2026年2月28日（画像・スクショ・ドキュメント学習パイプライン追加） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -248,6 +248,7 @@
 | 「再起動」「リスタート」「エージェント再起動」 | Mac Mini上のローカルエージェントを遠隔再起動（restart_agent） |
 | 「〇〇を調べて」「〇〇をリサーチして」等 | ゴール実行エンジン（Coordinator）経由でWeb検索・ツール呼び出し→統合結果をLINE返答（execute_goal） |
 | 「これ見ておいて [動画URL]」 | Loom/YouTube動画のTranscript取得→要約+手順を報告→pending保存→承認待ち。「OK」で確定、修正指示で更新。1時間放置でLINEリマインド（video_reader → save_video_learning → confirm_video_learning） |
+| [画像送信] + 「覚えて」 | 画像をClaude Visionで分析→タイトル・要約・ポイント・活用場面を構造化→pending保存→承認待ち。「OK」で確定（analyze_content → save_video_learning → confirm_video_learning） |
 
 ---
 
@@ -274,7 +275,7 @@
 | `~/Library/LineBot/local_agent.py` | **実行ファイル**（MacBook launchdから起動。TCC制限のため~/Desktop/から直接読めないため~/Library/LineBot/に配置） |
 | `~/Library/LineBot/coordinator.py` | Coordinator（ゴール実行エンジン司令塔） |
 | `~/Library/LineBot/handler_runner.py` | ハンドラランナー |
-| `~/Library/LineBot/tool_registry.json` | ツール定義（15ツール） |
+| `~/Library/LineBot/tool_registry.json` | ツール定義（16ツール） |
 | `~/Library/LineBot/data/` | データキャッシュ（Master/等のコピー。post-commitフックで自動同期） |
 | `System/line_bot_local/sync_data.sh` | データファイル同期（Master/配下等。local_agent.pyはgit管理に統一済み） |
 | `System/kpi_processor.py` | KPI投入エンジン（import/process/check_today/refresh） |
@@ -801,6 +802,7 @@ MacBook (どこからでも)
 - [x] 動画知識の承認必須化: 自動確定（沈黙=承認）を廃止。承認は必ずユーザーから取る。1時間放置でLINEリマインド（video_learning_reminder、30分間隔）
 - [x] 動画知識ライフサイクル管理: access_count/last_accessed追跡、関連性ベース注入（ゴールテキストとキーワードマッチで上位5件）、週次レビュー（90日未アクセス→自動削除、30日+低使用→要確認）
 - [x] Coordinatorへのpendingエントリ注入: ステートレスでも承認フローが機能するよう、システムプロンプトに承認待ち知識を動的注入
+- [x] 画像・スクショ・ドキュメント学習パイプライン: 画像送信+「覚えて」→Claude Visionで分析→構造化知識（title/summary/key_points/use_context）→pending保存→承認→confirmed。analyze_contentツール追加（計16ツール）。video_knowledge.pyにsource_type/use_context/key_pointsフィールド追加。search_relevantのスコアリング強化
 
 ---
 
