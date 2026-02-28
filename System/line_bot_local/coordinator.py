@@ -200,7 +200,7 @@ profiles.json の transfer.transfer_status に応じて、ワークフローの�
 【動画学習フロー】
 LoomやYouTubeのURLが送られて「見ておいて」「確認して」等の指示があったら:
 1. video_reader ツールで内容を取得
-2. transcript_text から内容を理解し、要約+手順を箇条書きで報告
+2. transcript_summary（あれば優先）または transcript_text から内容を理解し、要約+手順を箇条書きで報告
 3. 「この理解で合っていますか？」と確認する
 4. ユーザーが「OK」「合ってる」「うん」等と確認したら save_video_learning で保存
 5. 保存完了を報告する（「覚えました。次回から活用します」等）

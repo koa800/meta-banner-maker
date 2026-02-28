@@ -9,6 +9,7 @@
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -279,6 +280,57 @@ def generate_summary(out_dir: Path, meta: dict, has_transcript: bool, frame_coun
     (out_dir / "summary.txt").write_text("\n".join(lines))
 
 
+# --- transcript 要約（長い動画用） ---
+
+SUMMARIZE_THRESHOLD = 3000  # これ以上の transcript は要約する
+SUMMARIZE_MODEL = "claude-sonnet-4-5-20241022"
+
+
+def summarize_transcript(transcript: str, meta: dict) -> str | None:
+    """長い transcript を Sonnet で要約する。APIキー未設定時は None"""
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        # config.json からフォールバック
+        config_path = Path(__file__).resolve().parent.parent / "line_bot_local" / "config.json"
+        if config_path.exists():
+            try:
+                cfg = json.loads(config_path.read_text(encoding="utf-8"))
+                api_key = cfg.get("anthropic_api_key", "")
+            except Exception:
+                pass
+    if not api_key:
+        return None
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+
+        title = meta.get("title", "")
+        duration = meta.get("duration", 0)
+        dur_str = f"{duration // 60}分{duration % 60}秒" if duration >= 60 else f"{duration}秒"
+
+        response = client.messages.create(
+            model=SUMMARIZE_MODEL,
+            max_tokens=800,
+            system="あなたは動画の内容を正確に要約するアシスタントです。",
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"以下は「{title}」（{dur_str}）の動画のTranscriptです。\n\n"
+                    f"この動画の内容を以下の形式で要約してください:\n"
+                    f"1. 概要（2-3文）\n"
+                    f"2. 主要な手順・ポイント（箇条書き）\n"
+                    f"3. 重要なキーワード・固有名詞\n\n"
+                    f"---\n{transcript[:8000]}\n---"
+                ),
+            }],
+        )
+        return response.content[0].text.strip()
+    except Exception as e:
+        print(f"Transcript要約エラー: {e}", file=sys.stderr)
+        return None
+
+
 # --- main ---
 
 def main():
@@ -341,7 +393,20 @@ def main():
         transcript_path = out_dir / "transcript.txt"
         if transcript_path.exists():
             transcript_text = transcript_path.read_text(encoding="utf-8")
-            result["transcript_text"] = transcript_text[:3000]
+            if len(transcript_text) > SUMMARIZE_THRESHOLD:
+                # 長い transcript → Sonnet で要約
+                print(f"   📝 Transcript が長い({len(transcript_text)}文字)ため要約中...",
+                      file=sys.stderr)
+                summary = summarize_transcript(transcript_text, meta)
+                if summary:
+                    result["transcript_summary"] = summary
+                    result["transcript_text"] = transcript_text[:1000]  # 冒頭だけ参考用
+                else:
+                    # 要約失敗時は先頭3000文字をそのまま
+                    result["transcript_text"] = transcript_text[:3000]
+            else:
+                # 短い transcript → そのまま全文
+                result["transcript_text"] = transcript_text
 
     # 8. 結果出力
     print(json.dumps(result, ensure_ascii=False, indent=2))
