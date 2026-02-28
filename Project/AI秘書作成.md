@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月27日（OS共有基盤・自己認識・ルール同期API追加） |
+| 最終更新 | 2026年2月28日（動画学習ループ完成・承認必須化・知識ライフサイクル管理） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -44,7 +44,7 @@
                                │  【v2】Coordinator（司令塔）    │
                                │  - coordinator.py              │
                                │  - handler_runner.py           │
-                               │  - tool_registry.json (13ツール)│
+                               │  - tool_registry.json (15ツール)│
                                │  - ゴール→分解→委任→統合→報告  │
                                │  → 詳細: Project/ゴール実行     │
                                │    エンジン設計.md              │
@@ -247,6 +247,7 @@
 | 「メール確認」「メールチェック」 | mail_manager.py runを即時実行→返信待ち件数と概要を返答（mail_check） |
 | 「再起動」「リスタート」「エージェント再起動」 | Mac Mini上のローカルエージェントを遠隔再起動（restart_agent） |
 | 「〇〇を調べて」「〇〇をリサーチして」等 | ゴール実行エンジン（Coordinator）経由でWeb検索・ツール呼び出し→統合結果をLINE返答（execute_goal） |
+| 「これ見ておいて [動画URL]」 | Loom/YouTube動画のTranscript取得→要約+手順を報告→pending保存→承認待ち。「OK」で確定、修正指示で更新。1時間放置でLINEリマインド（video_reader → save_video_learning → confirm_video_learning） |
 
 ---
 
@@ -273,7 +274,7 @@
 | `~/Library/LineBot/local_agent.py` | **実行ファイル**（MacBook launchdから起動。TCC制限のため~/Desktop/から直接読めないため~/Library/LineBot/に配置） |
 | `~/Library/LineBot/coordinator.py` | Coordinator（ゴール実行エンジン司令塔） |
 | `~/Library/LineBot/handler_runner.py` | ハンドラランナー |
-| `~/Library/LineBot/tool_registry.json` | ツール定義（13ツール） |
+| `~/Library/LineBot/tool_registry.json` | ツール定義（15ツール） |
 | `~/Library/LineBot/data/` | データキャッシュ（Master/等のコピー。post-commitフックで自動同期） |
 | `System/line_bot_local/sync_data.sh` | データファイル同期（Master/配下等。local_agent.pyはgit管理に統一済み） |
 | `System/kpi_processor.py` | KPI投入エンジン（import/process/check_today/refresh） |
@@ -796,6 +797,10 @@ MacBook (どこからでも)
 - [x] Claude Code bypassPermissions設定: Bash/WebSearch/Read等の全ツール解放。破壊的操作（rm/sudo/kill/force-push等）のみask制限
 - [x] Mac Mini _repo シンボリックリンク整備: `credentials/` `data/` `config/` を `~/agents/System/` にリンク。Claude Codeからsheets_manager.py等が正常動作
 - [x] 人名ハルシネーション防止: 返信案プロンプトに社内メンバー一覧を注入 + 人名ルール（profiles.jsonに存在する正確な名前のみ使用）を追加
+- [x] 動画学習パイプライン: Loom/YouTube URLからTranscript取得→要約→pending保存→承認→confirmed。video_reader/save_video_learning/confirm_video_learning/update_video_learningの4ツール体制
+- [x] 動画知識の承認必須化: 自動確定（沈黙=承認）を廃止。承認は必ずユーザーから取る。1時間放置でLINEリマインド（video_learning_reminder、30分間隔）
+- [x] 動画知識ライフサイクル管理: access_count/last_accessed追跡、関連性ベース注入（ゴールテキストとキーワードマッチで上位5件）、週次レビュー（90日未アクセス→自動削除、30日+低使用→要確認）
+- [x] Coordinatorへのpendingエントリ注入: ステートレスでも承認フローが機能するよう、システムプロンプトに承認待ち知識を動的注入
 
 ---
 
