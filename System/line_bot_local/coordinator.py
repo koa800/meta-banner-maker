@@ -117,7 +117,7 @@ def _load_agent_summary(project_root: Path) -> str:
 
 def _load_video_knowledge(project_root: Path) -> str:
     """過去に学んだ動画知識をプロンプト注入用テキストとして読み込む"""
-    knowledge_path = project_root / "Master" / "learning" / "video_knowledge.json"
+    knowledge_path = Path.home() / "agents" / "data" / "video_knowledge.json"
     if not knowledge_path.exists():
         return ""
     try:

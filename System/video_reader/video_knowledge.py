@@ -11,16 +11,10 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-# 保存先: Master/learning/video_knowledge.json
-_SCRIPT_DIR = Path(__file__).resolve().parent
-_PROJECT_ROOT = _SCRIPT_DIR.parent.parent
-_KNOWLEDGE_FILE = _PROJECT_ROOT / "Master" / "learning" / "video_knowledge.json"
-
-# Mac Mini 環境フォールバック
-if not _KNOWLEDGE_FILE.parent.exists():
-    _alt = Path.home() / "agents" / "_repo" / "Master" / "learning" / "video_knowledge.json"
-    if _alt.parent.exists():
-        _KNOWLEDGE_FILE = _alt
+# 保存先: ~/agents/data/video_knowledge.json（ランタイムデータ。git管理外）
+_RUNTIME_DATA_DIR = Path.home() / "agents" / "data"
+_RUNTIME_DATA_DIR.mkdir(parents=True, exist_ok=True)
+_KNOWLEDGE_FILE = _RUNTIME_DATA_DIR / "video_knowledge.json"
 
 MAX_ENTRIES = 100
 
