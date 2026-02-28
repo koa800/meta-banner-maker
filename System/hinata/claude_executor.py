@@ -23,6 +23,16 @@ WORK_DIR = _agents_dir if _agents_dir.exists() else Path.home() / "Cursor"
 CLAUDE_CMD = "/opt/homebrew/bin/claude"
 SELF_RESTART_SH = str(Path(__file__).parent / "self_restart.sh")
 
+# 日向専用の Claude Code 設定ディレクトリ
+# ※ 秘書（~/.claude-secretary）やデフォルト（~/.claude）とは分離
+_CLAUDE_HINATA_CONFIG = Path.home() / ".claude-hinata"
+
+def _claude_env() -> dict:
+    """Claude Code 実行時の環境変数を構築する。"""
+    env = os.environ.copy()
+    env["CLAUDE_CONFIG_DIR"] = str(_CLAUDE_HINATA_CONFIG)
+    return env
+
 def execute_full_cycle(
     instruction: str = None,
     cycle_num: int = 0,
@@ -200,11 +210,12 @@ Chrome が常時起動しており、Claude in Chrome 拡張経由で MCP ツー
         # start_new_session=True でプロセスグループを分離し、
         # タイムアウト時に子プロセスごと確実に終了させる
         proc = subprocess.Popen(
-            [CLAUDE_CMD, "-p", prompt],
+            [CLAUDE_CMD, "-p", "--chrome", prompt],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             cwd=str(WORK_DIR),
+            env=_claude_env(),
             start_new_session=True,
         )
         try:
@@ -294,11 +305,12 @@ def execute_self_repair(
     try:
         logger.info("自己修復サイクル開始")
         proc = subprocess.Popen(
-            [CLAUDE_CMD, "-p", prompt],
+            [CLAUDE_CMD, "-p", "--chrome", prompt],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             cwd=str(WORK_DIR),
+            env=_claude_env(),
             start_new_session=True,
         )
         try:
