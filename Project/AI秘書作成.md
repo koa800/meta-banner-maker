@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月28日（画像・スクショ・ドキュメント学習パイプライン追加） |
+| 最終更新 | 2026年2月28日（Claude Code --chrome統合: 日報含む全業務をLINEから自律実行可能に） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -33,9 +33,10 @@
                                │  local_agent.py                │
                                │                                │
                                │  【v3】Claude Code 自律モード   │
-                               │  - claude -p (CLI) で自律実行   │
+                               │  - claude -p --chrome で自律実行 │
+                               │  - Chrome MCP: ブラウザ操作可能  │
                                │  - 返信案: プロファイル自動検索  │
-                               │  - タスク: スクリプト実行・Web検索│
+                               │  - タスク: スクリプト・Web・ブラウザ│
                                │  - Bash/WebSearch/Read/Grep 全解放│
                                │  - ~/.claude-secretary/ で認証分離│
                                │  - 失敗時: 既存API/Coordinator │
@@ -105,7 +106,7 @@
 
 ### Phase 2: 自然言語タスク実行（完了）
 5. **Googleカレンダー連携**: 「明日14時に会議入れて」で予定追加
-6. **PC委譲タスク**: 複雑タスクをCursorに転送（日報入力はLINE非対応・Cursor直接実行）
+6. **PC委譲タスク**: 複雑タスクをMac Miniで自律実行（Claude Code + Chrome MCPでブラウザ操作も可能）
 7. **ゴール実行エンジン接続（execute_goal）**: LINE→Render(app.py)→task_queue→local_agent.py→coordinator.py→LINE通知のE2Eフロー完了。調査・リサーチ系タスクをCoordinatorにルーティング。MacBookは`~/Library/LineBot/`にデプロイ（TCC制限対策）
 
 ### Phase 3: Mac Mini 常駐エージェント（完了）
@@ -147,10 +148,10 @@
 28. **plistパス自動修正**: `git_pull_sync.sh`が毎回実行時にlaunchctl plistのパス整合性をチェック。Library版（`~/Library/LineBot/`）など古いパスを参照していた場合、正しいデプロイ先（`~/agents/line_bot_local/`）に自動修正＆再起動。config.jsonも旧パスから自動マイグレーション
 
 ### Phase 8: Claude Code 自律モード（完了）
-33. **Claude Code CLI統合**: `claude -p`（非対話モード）で返信案生成・タスク実行を自律的に実行。ファイル読み取り・Grep検索・スクリプト実行・Web検索を自分で判断して使用
+33. **Claude Code CLI統合**: `claude -p --chrome`（非対話モード + Chrome MCP有効）で返信案生成・タスク実行を自律的に実行。ファイル読み取り・Grep検索・スクリプト実行・Web検索・ブラウザ操作を自分で判断して使用
 34. **返信案のハイブリッド生成**: Pythonが事前に送信者プロファイル・学習データを計算 → Claude Codeが自律的にprofiles.json検索・goal-tree.md参照で追加文脈を取得 → マーカー（`===REPLY_START===`/`===REPLY_END===`）で返信文を抽出。失敗時は既存Claude API直接呼び出しにフォールバック
-35. **汎用タスク実行**: LINEからの自然言語指示をClaude Codeが自律実行。sheets_manager.py/mail_manager.py/Google API等のスクリプトをBashで実行可能。破壊的操作（ファイル削除・git操作・デプロイ・プロセスkill・環境変数変更）は明示的に禁止
-36. **認証分離**: `~/.claude-secretary/`（甲原アカウント MAX）で日向エージェント（`~/.claude/`）と完全分離。`CLAUDE_CONFIG_DIR`環境変数でsubprocess起動時に切り替え
+35. **汎用タスク実行**: LINEからの自然言語指示をClaude Codeが自律実行。sheets_manager.py/mail_manager.py/Google API等のスクリプトをBashで実行可能。Chrome MCPでLooker Studio等のブラウザ操作も可能。破壊的操作（ファイル削除・git操作・デプロイ・プロセスkill・環境変数変更）は明示的に禁止
+36. **認証分離**: `~/.claude-secretary/`（秘書アカウント koa800.secretary@gmail.com MAX 5x）で日向エージェント（`~/.claude/`）と完全分離。`CLAUDE_CONFIG_DIR`環境変数でsubprocess起動時に切り替え
 37. **bypassPermissions**: `~/.claude-secretary/settings.json`でBash/WebSearch/Read等の全ツール解放。rm/sudo/kill/force-push等の破壊的操作のみask制限
 38. **人名ハルシネーション防止**: profiles.jsonから全メンバー名を抽出し「社内メンバー一覧」としてプロンプトに注入。「人名ルール: profiles.jsonに存在する正確な名前のみ使用」を出力ルールに追加
 
@@ -234,7 +235,7 @@
 |--------|------|
 | 「明日14時に会議入れて」 | Googleカレンダーに予定追加 |
 | 「今日の予定を教えて」 | カレンダー予定を表示 |
-| 「日報入れて」 | 「Cursorで実行してください」と案内を返す（Looker Studio・b-dashのブラウザ操作が必要なためLINEから実行不可） |
+| 「日報入れて」 | Claude Code + Chrome MCPでLooker StudioからCSV取得→日報スプレッドシートに自動入力 |
 | 「広告数値の評価をして」「ROAS教えて」 | KPIデータ自動取得→Claudeが分析・トレンド評価・改善提案を返答（kpi_query） |
 | 「次何？」「次にやることは？」 | Addness+メール+KPIサマリをClaudeが分析→優先行動リスト返答（context_query） |
 | 「〇〇の画像を作って」「バナーを作って」 | 3段階プロンプト最適化→3パターン並行生成→LINE画像送信（generate_image）。参照画像送信後5分以内なら自動連携。修正指示で前回コンテキスト引き継ぎ |
@@ -287,7 +288,7 @@
 | パス | 説明 |
 |------|------|
 | `~/.claude-secretary/settings.json` | 秘書用Claude Code権限設定（bypassPermissions + 破壊的操作ask制限） |
-| `~/.claude-secretary/.credentials.json` | 秘書用OAuth認証情報（甲原アカウント MAX） |
+| `~/.claude-secretary/.credentials.json` | 秘書用OAuth認証情報（秘書アカウント koa800.secretary@gmail.com MAX 5x） |
 | `~/agents/_repo/System/credentials/` → `~/agents/System/credentials/` | シンボリックリンク（client_secret.json等） |
 | `~/agents/_repo/System/data/` → `~/agents/System/data/` | シンボリックリンク（kpi_summary.json等） |
 | `~/agents/_repo/System/config/` → `~/agents/System/config/` | シンボリックリンク（ai_news.json等） |
@@ -759,7 +760,7 @@ MacBook (どこからでも)
 - [x] ヘルプコマンド（「ヘルプ」「コマンド一覧」で全機能一覧を表示・Claude API呼び出しなし）
 - [x] qa_statusコマンド（「QA状況」でqa_monitor_state.json読み込み→検知件数・保留数・最終チェック返答）
 - [x] local_agent.py _SYSTEM_DIR パスバグ修正（who_to_ask/addness_sync/mail_check/context_queryがMac Miniで正常動作）
-- [x] 日報入力のLINE対応見直し（AppleScriptエラー→Cursor案内メッセージに変更。Looker Studio・b-dashブラウザ操作必須のためCursor直接実行が正解）
+- [x] 日報入力のLINE対応（Claude Code + Chrome MCPでLooker StudioからCSV取得→日報スプレッドシートに自動入力。`--chrome`フラグで秘書Chromeのブラウザ操作ツールを利用）
 - [x] Chatwork連携（Webhook受信→返信案生成→承認→Chatwork APIで返信。プラットフォーム分岐でLINE/CW自動判別）
 - [x] スプレッドシート文脈参照（people-profiles.jsonのrelated_sheetsからシートデータを自動取得→プロンプト注入）
 - [x] people-identities.jsonにchatwork_account_id/chatwork_display_nameフィールド追加（全81エントリ）
@@ -793,8 +794,8 @@ MacBook (どこからでも)
 - [x] 深掘り質問の制限: データ取得系は即実行、確認は最大1回に制限（質問より行動を優先）
 - [x] 番号選択バグ修正: AI秘書が提示した番号リストに「2」「3」で回答するとメッセージ送信コマンドと誤認されていた問題を修正（メンション/Q&A文脈のみコマンド扱い）
 - [x] ai_news Anthropic API切替: OpenAI→Anthropic（claude-haiku-4-5）、Slack送信はSLACK_AI_TEAM_WEBHOOK_URL環境変数にフォールバック
-- [x] Claude Code自律モード統合（Phase 8）: 返信案生成・タスク実行でClaude Code CLIを優先使用。プロファイル自動検索・スクリプト実行・Web検索が可能に。失敗時は既存API/Coordinatorにフォールバック
-- [x] Claude Code認証分離: `~/.claude-secretary/`（甲原アカウント koa800sea.nifs@gmail.com MAX）で日向エージェント（`~/.claude/`）と完全分離
+- [x] Claude Code自律モード統合（Phase 8）: 返信案生成・タスク実行でClaude Code CLI（`--chrome`フラグ付き）を優先使用。プロファイル自動検索・スクリプト実行・Web検索・ブラウザ操作が可能に。失敗時は既存API/Coordinatorにフォールバック
+- [x] Claude Code認証分離: `~/.claude-secretary/`（秘書アカウント koa800.secretary@gmail.com MAX 5x）で日向エージェント（`~/.claude/`）と完全分離
 - [x] Claude Code bypassPermissions設定: Bash/WebSearch/Read等の全ツール解放。破壊的操作（rm/sudo/kill/force-push等）のみask制限
 - [x] Mac Mini _repo シンボリックリンク整備: `credentials/` `data/` `config/` を `~/agents/System/` にリンク。Claude Codeからsheets_manager.py等が正常動作
 - [x] 人名ハルシネーション防止: 返信案プロンプトに社内メンバー一覧を注入 + 人名ルール（profiles.jsonに存在する正確な名前のみ使用）を追加

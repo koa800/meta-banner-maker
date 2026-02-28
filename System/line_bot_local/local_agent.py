@@ -88,7 +88,7 @@ OS_SYNC_STATE_FILE = _RUNTIME_DATA_DIR / "os_sync_state.json"
 _SKILLS_DIR = _SYSTEM_DIR / "line_bot" / "skills"
 
 # Claude Code CLI（AI秘書の自律モード）
-# 甲原さんのクローンとして甲原アカウント（koa800sea.nifs@gmail.com）を使用
+# 秘書アカウント（koa800.secretary@gmail.com）で実行
 # 日向エージェントとは完全分離（別ディレクトリ・別認証）
 _CLAUDE_CMD = Path("/opt/homebrew/bin/claude")
 _CLAUDE_SECRETARY_CONFIG = Path.home() / ".claude-secretary"
@@ -226,7 +226,7 @@ def _generate_reply_with_claude_code(
         env = os.environ.copy()
         env["CLAUDE_CONFIG_DIR"] = str(_CLAUDE_SECRETARY_CONFIG)
         result = subprocess.run(
-            [str(_CLAUDE_CMD), "-p", "--model", "claude-sonnet-4-6",
+            [str(_CLAUDE_CMD), "-p", "--chrome", "--model", "claude-sonnet-4-6",
              "--max-turns", "12", prompt],
             capture_output=True,
             text=True,
@@ -311,6 +311,29 @@ def _execute_with_claude_code(
 - curl等でWeb情報を取得可能
 - Google API（OAuth認証済み）: Sheets, Gmail, Calendar
 
+### ブラウザ操作（Claude in Chrome MCP）
+あなたはChrome MCPツールでブラウザを直接操作できます。以下のツールが利用可能:
+- `mcp__claude-in-chrome__tabs_context_mcp` — タブ一覧取得（最初に必ず呼ぶ）
+- `mcp__claude-in-chrome__tabs_create_mcp` — 新しいタブを開く
+- `mcp__claude-in-chrome__navigate` — URLに遷移
+- `mcp__claude-in-chrome__read_page` — ページ内容を読み取り
+- `mcp__claude-in-chrome__javascript_tool` — JavaScriptを実行
+- `mcp__claude-in-chrome__computer` — クリック・入力などのUI操作
+- `mcp__claude-in-chrome__form_input` — フォーム入力
+- `mcp__claude-in-chrome__find` — ページ内検索
+- `mcp__claude-in-chrome__get_page_text` — ページテキスト取得
+
+ブラウザ操作の注意:
+- 最初に `tabs_context_mcp` でタブ状態を確認すること
+- 新しいページは `tabs_create_mcp` で新タブを開いてから操作
+- alertやconfirmダイアログはトリガーしないこと（ブラウザがフリーズする）
+
+### 定常業務の手順
+日報入力の場合: `Project/定常業務.md` に詳細手順あり
+- Looker Studio URL: https://lookerstudio.google.com/u/2/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_dsqvinv6zd
+- 日報スプレッドシート: ID `16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk`、タブ「日報」
+- デフォルト日付: 指定なしなら対象日は前日。Looker Studioの日付設定は2日前（前々日）
+
 ## 実行ルール
 - 指示を正確に実行すること
 - 実行中に判断に迷ったら、安全な方を選ぶ
@@ -340,7 +363,7 @@ def _execute_with_claude_code(
         env = os.environ.copy()
         env["CLAUDE_CONFIG_DIR"] = str(_CLAUDE_SECRETARY_CONFIG)
         result = subprocess.run(
-            [str(_CLAUDE_CMD), "-p", "--model", "claude-sonnet-4-6",
+            [str(_CLAUDE_CMD), "-p", "--chrome", "--model", "claude-sonnet-4-6",
              "--max-turns", "15", prompt],
             capture_output=True,
             text=True,
@@ -3419,11 +3442,25 @@ def run_agent():
                         print(f"   ⚠️ 開始報告に失敗 → スキップ")
                         continue
 
-                    # 日報入力: Looker Studio・b-dash のブラウザ操作が必要なためCursor専用
+                    # 日報入力: Claude Code + Chrome MCP でブラウザ操作→スプレッドシート書き込み
+                    # （以前はCursor専用だったが、--chrome フラグで秘書ChromeのMCPツールが使えるようになった）
                     if function_name == "input_daily_report":
-                        complete_task(task_id, True,
-                                      "📊 日報入力はLooker Studio・b-dashのブラウザ操作が必要なため、LINEからは実行できません。\nCursorを開いて「日報報告して」と入力してください。")
-                        print(f"   ℹ️ 日報入力はCursor専用 → 案内メッセージをLINEに送信")
+                        print(f"   📊 日報入力タスク開始（Claude Code + Chrome MCP）")
+                        success, result = _execute_with_claude_code(
+                            instruction="日報を入力してください。手順: "
+                                "1. Looker Studio (https://lookerstudio.google.com/u/2/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_dsqvinv6zd) でCSVを取得 "
+                                "2. 取得したデータを日報スプレッドシート（ID: 16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk、タブ: 日報）に入力 "
+                                "3. 対象日は指定がなければ前日（1日前）。日付指定は2日前（前々日）がデフォルト "
+                                "4. Project/定常業務.md に詳細手順あり",
+                            sender_name=sender_name,
+                            timeout_seconds=600,
+                        )
+                        if success:
+                            complete_task(task_id, True, result)
+                            print(f"   ✅ 日報入力完了")
+                        else:
+                            complete_task(task_id, False, "日報入力に失敗しました", result)
+                            print(f"   ❌ 日報入力エラー: {result}")
                         continue
 
                     # 画像生成: Claude Code CLI + Chrome MCPで生成AIツールを操作
