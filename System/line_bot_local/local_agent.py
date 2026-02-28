@@ -2704,6 +2704,25 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
         # ===== ゴール実行 → Claude Code 自律実行 =====
         if function_name == "execute_goal":
             goal_text = arguments.get("goal", instruction)
+
+            # 会話コンテキスト注入（coordinatorが「OK」等のフォローアップを理解するため）
+            if sender_name:
+                try:
+                    _cs_goal_path = _RUNTIME_DATA_DIR / "contact_state.json"
+                    if _cs_goal_path.exists():
+                        _cs_goal = json.loads(_cs_goal_path.read_text(encoding="utf-8"))
+                        _person_goal = _cs_goal.get(sender_name)
+                        if isinstance(_person_goal, dict):
+                            _convs_goal = _person_goal.get("conversations", [])
+                            if _convs_goal:
+                                _recent_goal = _convs_goal[-3:]
+                                _ctx_lines = [f"・{c['date']} {c['summary']}" for c in _recent_goal]
+                                _ctx_text = "\n".join(_ctx_lines)
+                                goal_text = f"【直近の会話】\n{_ctx_text}\n\n【今回のメッセージ】\n{goal_text}"
+                                print(f"   💬 ゴールに会話コンテキスト注入: {sender_name} ({len(_recent_goal)}件)")
+                except Exception as e:
+                    print(f"⚠️ ゴール会話コンテキスト読み込みエラー: {e}")
+
             print(f"   🎯 Claude Code でゴール実行: {goal_text[:60]}...")
             if _CLAUDE_CODE_ENABLED:
                 success, result = _execute_with_claude_code(

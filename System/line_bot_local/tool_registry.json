@@ -304,6 +304,36 @@
       }
     },
     {
+      "name": "save_video_learning",
+      "description": "動画から学んだ内容を保存する。ユーザーが理解を確認した後に呼ぶ",
+      "confirmation_level": "L1",
+      "handler_type": "subprocess",
+      "handler_path": "video_reader/video_knowledge.py",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "動画URL"
+          },
+          "title": {
+            "type": "string",
+            "description": "動画タイトル"
+          },
+          "summary": {
+            "type": "string",
+            "description": "内容要約"
+          },
+          "key_processes": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "学んだ手順・プロセスのリスト"
+          }
+        },
+        "required": ["url", "title", "summary"]
+      }
+    },
+    {
       "name": "generate_image",
       "description": "画像・バナー・広告ビジュアルを生成する。プロンプトに基づいて画像を作成する",
       "confirmation_level": "L2",

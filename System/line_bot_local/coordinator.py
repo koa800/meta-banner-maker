@@ -115,6 +115,30 @@ def _load_agent_summary(project_root: Path) -> str:
     return "\n".join(lines)
 
 
+def _load_video_knowledge(project_root: Path) -> str:
+    """過去に学んだ動画知識をプロンプト注入用テキストとして読み込む"""
+    knowledge_path = project_root / "Master" / "learning" / "video_knowledge.json"
+    if not knowledge_path.exists():
+        return ""
+    try:
+        entries = json.loads(knowledge_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    if not entries:
+        return ""
+
+    lines = ["【過去に学んだ動画の知識】"]
+    for i, e in enumerate(entries, 1):
+        source_label = {"loom": "Loom", "youtube": "YouTube"}.get(e.get("source", ""), e.get("source", ""))
+        date = e.get("learned_at", "")[:10]
+        lines.append(f"[{i}] {e.get('title', '')} ({source_label}, {date})")
+        lines.append(f"  要約: {e.get('summary', '')}")
+        procs = e.get("key_processes", [])
+        if procs:
+            lines.append(f"  手順: {' → '.join(procs)}")
+    return "\n".join(lines)
+
+
 def _build_system_prompt(sender_name: str = "", project_root: Path = None) -> str:
     """Coordinator 用のシステムプロンプトを構築する"""
     prompt = """あなたは甲原海人のAI秘書システムの Coordinator です。
@@ -173,6 +197,14 @@ profiles.json の transfer.transfer_status に応じて、ワークフローの�
 - Phase 3（人間実行+AIサポート）: transfer_target の人間に依頼し、AIはサポート情報を提供
 - Phase 4（完全自走）: transfer_target の人間に直接依頼。AIは不要
 
+【動画学習フロー】
+LoomやYouTubeのURLが送られて「見ておいて」「確認して」等の指示があったら:
+1. video_reader ツールで内容を取得
+2. transcript_text から内容を理解し、要約+手順を箇条書きで報告
+3. 「この理解で合っていますか？」と確認する
+4. ユーザーが「OK」「合ってる」「うん」等と確認したら save_video_learning で保存
+5. 保存完了を報告する（「覚えました。次回から活用します」等）
+
 【禁止】
 - 認識確認なしに曖昧なゴールを実行すること
 - 「実行していいですか？」という許可型の質問
@@ -188,6 +220,11 @@ profiles.json の transfer.transfer_status に応じて、ワークフローの�
         if agent_summary:
             prompt += f"\n\n{agent_summary}"
             prompt += "\n\n上記エージェントの得意分野を踏まえてツールを選択すること。人間に依頼する場合は ask_human ツールを使う。"
+
+        # 過去の動画知識を注入
+        video_knowledge = _load_video_knowledge(project_root)
+        if video_knowledge:
+            prompt += f"\n\n{video_knowledge}"
 
     return prompt
 

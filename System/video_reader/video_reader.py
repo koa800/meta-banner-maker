@@ -203,18 +203,13 @@ def extract_frames(url: str, duration: int, out_dir: Path) -> int:
     frames_dir = out_dir / "frames"
     frames_dir.mkdir(exist_ok=True)
 
-    # フレーム間隔: 動画長に応じて5〜20枚を目標
-    if duration <= 60:
-        interval = max(5, duration // 10)
-    elif duration <= 300:
-        interval = 15
-    elif duration <= 600:
-        interval = 30
-    elif duration <= 1800:
-        interval = 60
-    else:
-        # 30分超: 最大20枚に制限
-        interval = max(60, duration // 20)
+    # フレーム間隔: 人間の視聴体験に近い密度（5秒間隔デフォルト）
+    interval = 5  # デフォルト5秒ごと
+    if duration > 3600:
+        interval = 10  # 1時間超: 10秒ごと
+
+    # タイムアウト: 動画長+120秒（余裕）、最低600秒
+    dl_timeout = max(600, duration + 120)
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_video = Path(tmp) / "video.mp4"
@@ -222,7 +217,7 @@ def extract_frames(url: str, duration: int, out_dir: Path) -> int:
             [YT_DLP,
              "-f", "bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[ext=mp4][height<=720]/best",
              "-o", str(tmp_video), url],
-            capture_output=True, text=True, timeout=600,
+            capture_output=True, text=True, timeout=dl_timeout,
         )
         if r.returncode != 0:
             print(f"動画DL失敗: {r.stderr.strip()}", file=sys.stderr)
@@ -230,10 +225,10 @@ def extract_frames(url: str, duration: int, out_dir: Path) -> int:
 
         r = subprocess.run(
             [FFMPEG, "-i", str(tmp_video),
-             "-vf", f"fps=1/{interval}",
-             "-q:v", "3",
+             "-vf", f"fps=1/{interval},scale=640:-1",
+             "-q:v", "5",
              str(frames_dir / "frame_%03d.jpg")],
-            capture_output=True, text=True, timeout=600,
+            capture_output=True, text=True, timeout=dl_timeout,
         )
         if r.returncode != 0:
             print(f"フレーム抽出失敗: {r.stderr.strip()}", file=sys.stderr)
@@ -341,7 +336,14 @@ def main():
     # 6. 要約
     generate_summary(out_dir, meta, has_transcript, frame_count)
 
-    # 7. 結果出力
+    # 7. transcript本文をJSON出力に含める（coordinatorが内容を理解するため）
+    if has_transcript:
+        transcript_path = out_dir / "transcript.txt"
+        if transcript_path.exists():
+            transcript_text = transcript_path.read_text(encoding="utf-8")
+            result["transcript_text"] = transcript_text[:3000]
+
+    # 8. 結果出力
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
