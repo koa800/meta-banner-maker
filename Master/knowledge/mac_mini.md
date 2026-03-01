@@ -32,6 +32,7 @@
 - 日向: `com.hinata.agent`
 - local_agent: `com.linebot.localagent`
 - 秘書Chrome: `com.secretary.chrome`
+- サービス監視: `com.addness.service-watchdog`（Orchestrator非依存、5分ごと）
 
 ### 手動トリガー
 - `curl -X POST http://mac-mini-agent:8500/schedule/run/{task_name}`

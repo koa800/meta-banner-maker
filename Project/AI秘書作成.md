@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年2月28日（Claude Code --chrome統合: 日報含む全業務をLINEから自律実行可能に） |
+| 最終更新 | 2026年3月1日（再発防止: API キー混入排除・サービス自動復旧・タスク滞留検知） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -475,7 +475,7 @@ bash System/line_bot_local/sync_data.sh
 | macOS TCC（Mac Mini） | launchd から Desktop は直接アクセス不可。`~/agents/` をデプロイ先に使用（Library版は廃止済み） |
 | macOS TCC（MacBook） | LaunchAgentから `~/Desktop/` は直接アクセス不可。`~/Library/LineBot/` にデプロイ。`data/` にMaster/等のキャッシュコピーを配置し、post-commitフックで自動同期 |
 | LINE webhook重複 | 同一 message_id のタスクは1件のみキューイング済み |
-| Mac Mini TCC制限 | LaunchAgent から `~/Desktop/` は直接アクセス不可。`~/agents/` を作業ディレクトリに使用。plistが古いパス（`~/Library/LineBot/`等）を参照していた場合、`git_pull_sync.sh`の`ensure_plist_path`が自動修正。plist再生成時は`config.json`から`ANTHROPIC_API_KEY`/`AGENT_TOKEN`/`LINE_BOT_SERVER_URL`も自動設定 |
+| Mac Mini TCC制限 | LaunchAgent から `~/Desktop/` は直接アクセス不可。`~/agents/` を作業ディレクトリに使用。plistが古いパス（`~/Library/LineBot/`等）を参照していた場合、`git_pull_sync.sh`の`ensure_plist_path`が自動修正。plist再生成時は`config.json`から`AGENT_TOKEN`/`LINE_BOT_SERVER_URL`のみ設定（`ANTHROPIC_API_KEY`はplistに埋め込まない。local_agentがconfig.jsonから直接読む。plist経由で混入するとClaude Code CLIがOAuthではなくAPIキーを使い障害の原因になるため） |
 | MacBook↔Mac Mini同期 | GitHub push/pull方式。post-commitで自動push→Mac Mini Orchestratorが5分ごとにgit pull→ローカルrsyncでデプロイ。外出先からも同期可能。旧rsync over SSH方式（sync_from_macbook.sh）は2026-02-22に無効化済み |
 | git_pull_sync rsync除外 | `*.db`（SQLiteランタイムDB）を除外リストに追加。rsync `--delete`でagent.dbが毎回削除されるバグを修正済み（2026-02-22） |
 | Orchestrator SYSTEM_DIR | tools.py の SYSTEM_DIR は __file__ ベースで動的解決（Desktop/Mac Mini両対応）。ハードコードしないこと |
@@ -492,6 +492,8 @@ bash System/line_bot_local/sync_data.sh
 | KPIデータ開示制御 | 事業KPI（売上・広告費・ROAS等）は内部メンバーのみ開示。外部パートナー・未登録者には `fetch_addness_kpi()` のデータ注入をスキップ。ただしプロファイルの `related_sheets` に登録されたシートデータは外部にも開示可 |
 | タスク失敗通知 | Orchestratorのタスクが失敗するとLINE通知（2時間レート制限）。health_check/oauth_health_checkは除外 |
 | 自動復旧（health_check） | local_agent停止検知→launchctl自動再起動→LINE報告。Q&Aモニター4時間以上停止→local_agent再起動。メール通知失敗→5秒後に1回リトライ |
+| 自動復旧（service_watchdog） | Orchestrator非依存の独立監視。launchdで5分ごと実行。local_agent/Orchestratorの生存確認→停止時は自動復旧+LINE通知。bash+launchctlのみで依存ゼロ。`monitoring/service_watchdog.sh` |
+| タスク滞留検知（Render） | `add_task_to_queue()` 実行時に既存pendingタスクの滞留をチェック。5分以上滞留→秘書グループにLINE警告（1時間に1回まで）。local_agentが停止してタスクが処理されない状況を早期発見 |
 
 ### MacBook を閉じてもスリープしない（クラムシェルモード）
 
@@ -536,6 +538,7 @@ bash System/line_bot_local/sync_data.sh
 |------------|------|--------|
 | `com.linebot.localagent` | LINE Bot ポーリング・返信案生成 | — |
 | `com.addness.agent-orchestrator` | タスクスケジューラ・修復エージェント・git同期 | 8500 |
+| `com.addness.service-watchdog` | Orchestrator非依存のサービス監視・自動復旧 | — |
 | `com.prevent.sleep` | Macスリープ防止（caffeinate） | — |
 
 ### Orchestratorスケジュール（業務カレンダー）
@@ -573,6 +576,7 @@ bash System/line_bot_local/sync_data.sh
 | 5分ごと | `health_check` | 🟢 | 死活監視・自動復旧（停止検知→再起動→LINE通知） |
 | 5分ごと | `git_pull_sync` | 🟢 | GitHubからpull→rsyncデプロイ→サービス再起動 |
 | 30分ごと | `render_health_check` | 🟢 | Renderサーバー死活監視（ダウン時LINE通知） |
+| 5分ごと | `service_watchdog` | 🟢 | Orchestrator非依存のサービス監視・自動復旧（bash+launchctlのみ） |
 | 30分ごと | `repair_check` | 🟢 | ログからエラー検知→修復提案 |
 
 #### 週次タスク
@@ -673,6 +677,7 @@ MacBook (どこからでも)
   └── Mac Mini Orchestrator (git_pull_sync, 5分ごと)
        ├── [毎回] plistパス整合性チェック（ensure_plist_path）
        │    └── ~/agents/ 以外のパスを参照 → plist再生成＆再起動→LINE通知
+       │    └── ※ ANTHROPIC_API_KEY はplistに埋め込まない（Claude Code OAuth障害防止）
        ├── git fetch → 差分なければ即終了（軽量）
        ├── git reset --hard origin/main
        ├── ローカル rsync → ~/agents/ にデプロイ

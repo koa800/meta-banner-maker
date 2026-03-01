@@ -98,11 +98,11 @@ ensure_plist_path() {
   sleep 1
 
   # config.json から環境変数を読み取り（plistに埋め込む）
-  local ANTHROPIC_KEY=""
+  # ※ ANTHROPIC_API_KEY は埋め込まない（local_agent が config.json から直接読む。
+  #    plist 経由で混入すると Claude Code CLI が OAuth ではなく API キーを使い障害の原因になる）
   local AGENT_TOKEN_VAL=""
   local LINE_BOT_URL=""
   if [ -f "$NEW_CONFIG" ]; then
-    ANTHROPIC_KEY=$(python3 -c "import json; print(json.load(open('$NEW_CONFIG')).get('anthropic_api_key',''))" 2>/dev/null || echo "")
     AGENT_TOKEN_VAL=$(python3 -c "import json; print(json.load(open('$NEW_CONFIG')).get('agent_token',''))" 2>/dev/null || echo "")
     LINE_BOT_URL=$(python3 -c "import json; print(json.load(open('$NEW_CONFIG')).get('server_url',''))" 2>/dev/null || echo "")
   fi
@@ -153,12 +153,6 @@ ensure_plist_path() {
 EOPLIST
 
   # 環境変数がある場合のみ追加（空のまま書き込まない）
-  if [ -n "$ANTHROPIC_KEY" ]; then
-    cat >> "$PLIST" <<EOENV
-        <key>ANTHROPIC_API_KEY</key>
-        <string>${ANTHROPIC_KEY}</string>
-EOENV
-  fi
   if [ -n "$AGENT_TOKEN_VAL" ]; then
     cat >> "$PLIST" <<EOENV
         <key>AGENT_TOKEN</key>
