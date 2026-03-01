@@ -772,9 +772,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
 
             # 広告チーム全体LINEグループにリマインド送信
             lines = [
-                f"\n📋 【日報シート 未記入】",
-                f"日報に未記入項目がある方です。",
-                f"記入をお願いします！",
+                f"📋 日報が未記入の方は書いておいてください！",
                 "",
             ]
             for person, items in missing_by_person.items():
