@@ -109,6 +109,7 @@ class TaskScheduler:
             "weekly_hinata_memory": self._run_weekly_hinata_memory,
             "video_knowledge_review": self._run_video_knowledge_review,
             "video_learning_reminder": self._run_video_learning_reminder,
+            "daily_report_reminder": self._run_daily_report_reminder,
         }
 
     def setup(self):
@@ -729,6 +730,66 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
 
         except Exception as e:
             logger.error(f"日報検証: エラー - {e}")
+
+    async def _run_daily_report_reminder(self):
+        """平日11:00: チームメンバーの日報未記入を検出→赤ハイライト→LINEリマインド"""
+        import subprocess
+        import json as _json
+        from datetime import date, timedelta
+        from .notifier import notify_ai_team
+
+        target_date = date.today() - timedelta(days=1)
+        target_md = f"{target_date.month}/{target_date.day}"
+        project_root = Path(self.config.get("paths", {}).get("repo_root", "~/agents")).expanduser()
+
+        logger.info(f"日報リマインド: {target_md} の未記入チェック開始")
+
+        try:
+            result = subprocess.run(
+                ["python3", "System/sheets_manager.py", "check_daily_report", target_md],
+                capture_output=True, text=True, timeout=60,
+                cwd=str(project_root),
+            )
+            if result.returncode != 0:
+                logger.error(f"日報リマインド: check_daily_report 失敗: {result.stderr[:300]}")
+                return
+
+            data = _json.loads(result.stdout)
+
+            if data.get("error"):
+                logger.warning(f"日報リマインド: {data['error']}")
+                return
+
+            missing_by_person = data.get("missing_by_person", {})
+            missing_count = data.get("missing_count", 0)
+
+            if missing_count == 0:
+                logger.info(f"日報リマインド: {target_md} の全データ入力済み")
+                return
+
+            # LINE通知を構築
+            lines = [
+                f"\n📋 日報リマインド（{target_md}分）",
+                "━━━━━━━━━━━━",
+                "以下のメンバーの日報が未記入です:",
+                "",
+            ]
+            for person, items in missing_by_person.items():
+                lines.append(f"■ {person}: {', '.join(items)}")
+
+            lines.append("━━━━━━━━━━━━")
+            lines.append(
+                "シートURL: https://docs.google.com/spreadsheets/d/"
+                "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk/edit?gid=1717970415"
+            )
+
+            notify_ai_team("\n".join(lines))
+            logger.info(f"日報リマインド: {missing_count}件の未記入を通知（{len(missing_by_person)}名）")
+
+        except _json.JSONDecodeError as e:
+            logger.error(f"日報リマインド: JSON解析エラー - {e}")
+        except Exception as e:
+            logger.error(f"日報リマインド: エラー - {e}")
 
     async def _run_daily_report(self):
         from .notifier import send_line_notify

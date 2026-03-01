@@ -258,6 +258,162 @@ def append_rows(url_or_id, values, sheet_name=None, account=None):
     print(f"追加完了: {ws.title} に {len(values)} 行追加")
 
 
+# ─── 日報チェック ─────────────────────────────────────────────
+
+DAILY_REPORT_SHEET_ID = "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk"
+DAILY_REPORT_TAB = "日報"
+
+
+def _col_idx_to_letter(idx):
+    """0-based index → Excel列文字 (A=0, B=1, ..., Z=25, AA=26, ...)"""
+    result = ""
+    idx += 1
+    while idx > 0:
+        idx, remainder = divmod(idx - 1, 26)
+        result = chr(65 + remainder) + result
+    return result
+
+
+def check_daily_report(target_md, account=None):
+    """指定日(M/D)の日報未記入を検出し、赤ハイライトしてJSON結果を出力する。
+
+    処理フロー:
+    1. ヘッダー行から対象列を特定
+    2. 対象列のデータをFORMULA renderingで取得（数式セルと手入力セルを区別）
+    3. A〜C列の構造データ（セクション・責任者・詳細項目）を取得
+    4. 未記入セルを検出（数式セルはスキップ）
+    5. 未記入セルに赤背景を設定
+    6. JSON結果を出力
+    """
+    client = get_client(account)
+    spreadsheet = client.open_by_key(DAILY_REPORT_SHEET_ID)
+    ws = spreadsheet.worksheet(DAILY_REPORT_TAB)
+
+    # 1. ヘッダー行から対象列を特定
+    headers = ws.row_values(1)
+    target_col_idx = None
+    for i, h in enumerate(headers):
+        if str(h).strip() == target_md:
+            target_col_idx = i
+            break
+
+    if target_col_idx is None:
+        result = {"date": target_md, "error": f"{target_md} の列が見つかりません"}
+        print(json.dumps(result, ensure_ascii=False))
+        return result
+
+    col_letter = _col_idx_to_letter(target_col_idx)
+
+    # 2. 対象列のデータをFORMULA renderingで取得（数式と値を区別）
+    # gspread の value_render_option を使用
+    data_range = f"{col_letter}4:{col_letter}86"
+    formulas = ws.get(data_range, value_render_option="FORMULA")
+    values = ws.get(data_range, value_render_option="FORMATTED_VALUE")
+
+    # 3. A〜C列の構造データを取得（セクション・責任者・詳細項目）
+    structure = ws.get("A4:C86", value_render_option="FORMATTED_VALUE")
+
+    # 4. 未記入セルを検出
+    missing_cells = []  # (row_idx_0based, 項目名, 責任者)
+    current_person = ""
+
+    for i in range(len(structure)):
+        # A列: セクション, B列: 責任者, C列: 詳細項目
+        row_struct = structure[i] if i < len(structure) else []
+        col_a = str(row_struct[0]).strip() if len(row_struct) > 0 else ""
+        col_b = str(row_struct[1]).strip() if len(row_struct) > 1 else ""
+        col_c = str(row_struct[2]).strip() if len(row_struct) > 2 else ""
+
+        # B列に名前がある → 責任者更新
+        if col_b:
+            current_person = col_b
+
+        # 項目名を決定（C列優先、なければA列）
+        item_name = col_c or col_a
+        if not item_name:
+            continue
+
+        # 対象列のデータ
+        formula_row = formulas[i] if i < len(formulas) else []
+        value_row = values[i] if i < len(values) else []
+        formula_val = str(formula_row[0]).strip() if formula_row else ""
+        display_val = str(value_row[0]).strip() if value_row else ""
+
+        # 数式セル → スキップ（自動入力分）
+        if formula_val.startswith("="):
+            continue
+
+        # 値あり → OK
+        if display_val:
+            continue
+
+        # 空で手入力が必要 → 未記入
+        actual_row = i + 4  # シート上の行番号（Row 4始まり）
+        missing_cells.append((actual_row, item_name, current_person))
+
+    # 5. Google Sheets batchUpdate API で赤ハイライト
+    sheet_id = ws.id
+    requests_list = []
+
+    # まず対象列全体の背景色をクリア（白に戻す）
+    requests_list.append({
+        "repeatCell": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": 3,   # Row 4 (0-based: 3)
+                "endRowIndex": 86,    # Row 86
+                "startColumnIndex": target_col_idx,
+                "endColumnIndex": target_col_idx + 1,
+            },
+            "cell": {
+                "userEnteredFormat": {
+                    "backgroundColor": {"red": 1, "green": 1, "blue": 1}
+                }
+            },
+            "fields": "userEnteredFormat.backgroundColor"
+        }
+    })
+
+    # 未記入セルに赤背景を設定
+    for row_num, item_name, person in missing_cells:
+        requests_list.append({
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": row_num - 1,  # 0-based
+                    "endRowIndex": row_num,
+                    "startColumnIndex": target_col_idx,
+                    "endColumnIndex": target_col_idx + 1,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "backgroundColor": {"red": 1, "green": 0.85, "blue": 0.85}
+                    }
+                },
+                "fields": "userEnteredFormat.backgroundColor"
+            }
+        })
+
+    if requests_list:
+        spreadsheet.batch_update({"requests": requests_list})
+
+    # 6. JSON結果を出力
+    missing_by_person = {}
+    for row_num, item_name, person in missing_cells:
+        if person not in missing_by_person:
+            missing_by_person[person] = []
+        missing_by_person[person].append(item_name)
+
+    result = {
+        "date": target_md,
+        "column": col_letter,
+        "missing_count": len(missing_cells),
+        "missing_by_person": missing_by_person,
+    }
+    print(json.dumps(result, ensure_ascii=False))
+    return result
+
+
 # ─── ドライブ系 ───────────────────────────────────────────────
 
 def list_my_sheets(query=None, account=None):
@@ -310,6 +466,7 @@ def print_usage():
   all <URL|ID>                        全シートを読み込み
   write <URL|ID> <セル> <値> [シート]  単一セルに書き込み
   append <URL|ID> <JSON配列>          末尾に行を追加
+  check_daily_report <M/D>             日報未記入チェック（赤ハイライト+JSON結果）
   list [検索語]                        アクセス可能なシート一覧
 
 例:
@@ -386,6 +543,12 @@ if __name__ == "__main__":
             values = json.loads(argv[2])
             sheet_name = argv[3] if len(argv) > 3 else None
             append_rows(url, values, sheet_name=sheet_name, account=account)
+
+        elif cmd == "check_daily_report":
+            if len(argv) < 2:
+                print("エラー: 日付（M/D形式）を指定してください")
+                sys.exit(1)
+            check_daily_report(argv[1], account=account)
 
         elif cmd == "list":
             query = argv[1] if len(argv) > 1 else None

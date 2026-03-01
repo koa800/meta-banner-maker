@@ -50,6 +50,11 @@ schedule:
     cron: "0 10,14,17 * * 1-5"   # 平日 10:00/14:00/17:00  Addnessタスクを自律的に進める
     enabled: true
 
+  # === 日報リマインド ===
+  daily_report_reminder:
+    cron: "0 11 * * 1-5"           # 平日 11:00 チームメンバーの日報未記入リマインド
+    enabled: true
+
   # === 日中 ===
   looker_csv_download:
     cron: "30 11 * * *"          # 11:30  Looker Studio CSVダウンロード（前々日分。12:00のkpi_daily_importの前に実行）
