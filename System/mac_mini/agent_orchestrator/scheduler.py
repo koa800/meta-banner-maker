@@ -332,8 +332,10 @@ class TaskScheduler:
         return stderr[:200] if stderr.strip() else stdout[-200:]
 
     def _execute_claude_code_task(self, task_label, claude_cmd, secretary_config,
-                                  project_root, prompt, max_turns=25, timeout=600):
+                                  project_root, prompt, max_turns=25, timeout=600,
+                                  use_chrome=False):
         """Claude Code CLI 実行ヘルパー（1回リトライ・エラー分類付き）。
+        use_chrome=True のときは --chrome を渡し、秘書用ChromeのMCPでブラウザ操作を有効にする。
         Returns: (success: bool, output: str, error_msg: str)
         """
         import subprocess
@@ -343,7 +345,10 @@ class TaskScheduler:
         env = os.environ.copy()
         env["CLAUDE_CONFIG_DIR"] = str(secretary_config)
         cmd = [str(claude_cmd), "-p", "--model", "claude-sonnet-4-6",
-               "--max-turns", str(max_turns), prompt]
+               "--max-turns", str(max_turns)]
+        if use_chrome:
+            cmd.append("--chrome")
+        cmd.append(prompt)
 
         for attempt in range(2):  # 最大2回（初回 + リトライ1回）
             try:
@@ -508,7 +513,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
 
         success, output, error = self._execute_claude_code_task(
             "日報自動入力", claude_cmd, secretary_config, project_root,
-            prompt, max_turns=25, timeout=600,
+            prompt, max_turns=25, timeout=600, use_chrome=True,
         )
 
         if success:
@@ -1542,7 +1547,7 @@ head -3 "{csv_dir}/{csv_filename}"
 
         success, output, error = self._execute_claude_code_task(
             "Looker CSVダウンロード", claude_cmd, secretary_config, project_root,
-            prompt, max_turns=20, timeout=480,
+            prompt, max_turns=20, timeout=480, use_chrome=True,
         )
 
         if success:
