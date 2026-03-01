@@ -268,6 +268,67 @@ class TaskScheduler:
                 return p
         return None
 
+    def _refresh_claude_oauth(self, secretary_config):
+        """Claude Code の OAuth トークンが期限切れ or 1時間以内に切れる場合、
+        refresh_token を使って自動更新する。
+        Returns: (ok: bool, error_msg: str)
+        """
+        import json
+        import subprocess
+        from pathlib import Path
+
+        creds_path = Path(secretary_config) / ".credentials.json"
+        if not creds_path.exists():
+            return False, f"credentials.json が見つかりません: {creds_path}"
+
+        try:
+            with open(creds_path) as f:
+                creds = json.load(f)
+        except Exception as e:
+            return False, f"credentials.json 読み込みエラー: {e}"
+
+        oauth = creds.get("claudeAiOauth", {})
+        expires_at = oauth.get("expiresAt", 0)
+        refresh_token = oauth.get("refreshToken")
+        if not refresh_token:
+            return False, "refresh_token がありません。再認証が必要です"
+
+        import time
+        now_ms = int(time.time() * 1000)
+        remaining_ms = expires_at - now_ms
+        remaining_hours = remaining_ms / (1000 * 3600)
+
+        if remaining_hours > 1.0:
+            logger.info(f"Claude OAuth: トークン有効（残り {remaining_hours:.1f}時間）")
+            return True, ""
+
+        # 1時間以内に切れる or すでに期限切れ → リフレッシュ
+        logger.info(f"Claude OAuth: トークン更新開始（残り {remaining_hours:.1f}時間）")
+        try:
+            env = dict(os.environ)
+            if "/opt/homebrew/bin" not in env.get("PATH", ""):
+                env["PATH"] = f"/opt/homebrew/bin:{env.get('PATH', '')}"
+            env["CLAUDE_CONFIG_DIR"] = str(secretary_config)
+
+            # Claude Code CLI を一度起動すれば内部で自動リフレッシュされる
+            claude_cmd = self._find_claude_cmd()
+            if not claude_cmd:
+                return False, "Claude Code CLI が見つかりません"
+
+            result = subprocess.run(
+                [str(claude_cmd), "-p", "--max-turns", "1", "1+1は？"],
+                capture_output=True, text=True, timeout=60, env=env,
+            )
+            if result.returncode == 0:
+                logger.info("Claude OAuth: トークン自動リフレッシュ成功")
+                return True, ""
+            else:
+                return False, f"Claude Code 起動失敗（code={result.returncode}）: {result.stderr[:200]}"
+        except subprocess.TimeoutExpired:
+            return False, "Claude Code タイムアウト（60秒）"
+        except Exception as e:
+            return False, f"リフレッシュ例外: {e}"
+
     def _ensure_claude_chrome_ready(self):
         """Claude Code + Chrome の事前チェック。Chrome 未起動なら自動起動を試みる。
         Returns: (ok, claude_cmd, secretary_config, project_root, error_msg)
@@ -288,6 +349,11 @@ class TaskScheduler:
             )
 
         project_root = Path(self.config.get("paths", {}).get("repo_root", "~/agents")).expanduser()
+
+        # Claude Code OAuth トークンチェック + 自動リフレッシュ
+        oauth_ok, oauth_err = self._refresh_claude_oauth(secretary_config)
+        if not oauth_ok:
+            return False, None, None, None, f"Claude Code OAuth エラー: {oauth_err}"
 
         # Chrome 起動確認 + 自動起動
         try:
@@ -530,7 +596,25 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
             else:
                 logger.info(f"日報自動入力: 完了（マーカーなし）- {output[-300:]}")
         else:
-            notify_ai_team(f"⚠️ 日報自動入力失敗（リトライ後）\n{error}")
+            # エラー種別に応じた通知
+            if "ログイン" in error or "login" in error.lower():
+                notify_ai_team(
+                    f"⚠️ 日報自動入力失敗: Googleログイン切れ\n"
+                    f"Chrome で koa800sea.nifs@gmail.com に再ログインが必要です\n"
+                    f"対処: Mac Mini の Chrome を開き Looker Studio にアクセス→ログイン"
+                )
+            elif "OAuth" in error or "credential" in error.lower():
+                notify_ai_team(
+                    f"⚠️ 日報自動入力失敗: Claude Code 認証エラー\n"
+                    f"秘書の Claude Code OAuth トークンの再取得が必要です\n{error}"
+                )
+            elif "Chrome" in error or "MCP" in error:
+                notify_ai_team(
+                    f"⚠️ 日報自動入力失敗: Chrome/MCP接続エラー\n"
+                    f"Chrome または Claude in Chrome 拡張の再起動が必要です\n{error}"
+                )
+            else:
+                notify_ai_team(f"⚠️ 日報自動入力失敗（リトライ後）\n{error}")
 
     async def _run_daily_report_verify(self):
         """09:20: 日報自動入力の完了検証。実データを確認して未入力なら LINE+Slack 通知。"""
@@ -1207,6 +1291,20 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                 logger.info(f"OAuth health check: QA stats failed (non-auth): {result.error[:100]}")
         else:
             logger.info("OAuth health check OK")
+
+        # Claude Code OAuth トークンもチェック（日報自動入力に必要）
+        from pathlib import Path
+        secretary_config = Path.home() / ".claude-secretary"
+        if secretary_config.exists():
+            oauth_ok, oauth_err = self._refresh_claude_oauth(secretary_config)
+            if oauth_ok:
+                logger.info("Claude Code OAuth health check OK")
+            else:
+                send_line_notify(
+                    f"\n⚠️ Claude Code OAuth 警告\n{oauth_err}\n"
+                    f"日報自動入力（08:40）が失敗する可能性があります"
+                )
+                logger.error(f"Claude Code OAuth health check failed: {oauth_err}")
 
     async def _run_weekly_stats(self):
         """毎週月曜9:30: 先週のシステム稼働サマリーをLINE+Slack通知"""

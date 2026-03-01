@@ -27,19 +27,19 @@ schedule:
   ai_news:
     cron: "10 8 * * *"           # 08:10  AIニュース収集
     enabled: true
+  oauth_health_check:
+    cron: "25 8 * * *"           # 08:25  認証チェック（Google + Claude Code OAuth）※日報入力(08:40)の前に実行
+    enabled: true
   daily_addness_digest:
     cron: "30 8 * * *"           # 08:30  朝のブリーフィング
     enabled: true
   addness_goal_check:
     cron: "0 9 * * *"            # 09:00  ゴール→やることリスト整理
     enabled: true
-  oauth_health_check:
-    cron: "10 9 * * *"           # 09:10  Google認証チェック
-    enabled: true
 
   # === 朝の定常業務 ===
   daily_report_input:
-    cron: "40 8 * * *"           # 08:40  日報自動入力（秘書がClaude Codeで実行）
+    cron: "40 8 * * *"           # 08:40  日報自動入力（秘書がClaude Codeで実行）※OAuthチェック後
     enabled: true
   daily_report_verify:
     cron: "20 9 * * *"           # 09:20  日報入力の完了検証（シートの実データ確認）
