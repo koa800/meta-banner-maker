@@ -274,16 +274,23 @@ def _col_idx_to_letter(idx):
     return result
 
 
+def _get_sheet_merges(spreadsheet, sheet_id):
+    """指定シートの結合セル範囲リストを取得"""
+    try:
+        metadata = spreadsheet.fetch_sheet_metadata()
+    except Exception:
+        return []
+    for sheet in metadata.get('sheets', []):
+        if sheet.get('properties', {}).get('sheetId') == sheet_id:
+            return sheet.get('merges', [])
+    return []
+
+
 def check_daily_report(target_md, account=None):
     """指定日(M/D)の日報未記入を検出し、赤ハイライトしてJSON結果を出力する。
 
-    処理フロー:
-    1. ヘッダー行から対象列を特定
-    2. 対象列のデータをFORMULA renderingで取得（数式セルと手入力セルを区別）
-    3. A〜C列の構造データ（セクション・責任者・詳細項目）を取得
-    4. 未記入セルを検出（数式セルはスキップ）
-    5. 未記入セルに赤背景を設定
-    6. JSON結果を出力
+    - 日報（非結合セル）: 対象列が空なら未記入
+    - 週報（結合セル / 金〜木の1週間）: 対象列が結合範囲の最終列の場合のみチェック
     """
     client = get_client(account)
     spreadsheet = client.open_by_key(DAILY_REPORT_SHEET_ID)
@@ -304,92 +311,86 @@ def check_daily_report(target_md, account=None):
 
     col_letter = _col_idx_to_letter(target_col_idx)
 
-    # 2. 対象列のデータをFORMULA renderingで取得（数式と値を区別）
-    # gspread の value_render_option を使用
+    # 2. 結合セル情報を取得（週報と日報の判別に使用）
+    merges = _get_sheet_merges(spreadsheet, ws.id)
+    # 行ごとの結合情報（対象列を含む結合のみ）
+    # {row_0based: (startColumnIndex, endColumnIndex)}
+    row_merge_at_col = {}
+    for m in merges:
+        sc = m.get('startColumnIndex', 0)
+        ec = m.get('endColumnIndex', 0)
+        if sc <= target_col_idx < ec and ec - sc > 1:
+            for row in range(m.get('startRowIndex', 0), m.get('endRowIndex', 0)):
+                row_merge_at_col[row] = (sc, ec)
+
+    # 3. データ取得
     data_range = f"{col_letter}4:{col_letter}86"
     formulas = ws.get(data_range, value_render_option="FORMULA")
     values = ws.get(data_range, value_render_option="FORMATTED_VALUE")
-
-    # 3. A〜C列の構造データを取得（セクション・責任者・詳細項目）
     structure = ws.get("A4:C86", value_render_option="FORMATTED_VALUE")
 
-    # 4. 未記入セルを検出
-    missing_cells = []  # (row_idx_0based, 項目名, 責任者)
+    # 4. 各行をチェック
+    # checked_cells: (row_0based, item_name, person, is_ok, merge_info)
+    checked_cells = []
     current_person = ""
 
     for i in range(len(structure)):
-        # A列: セクション, B列: 責任者, C列: 詳細項目
         row_struct = structure[i] if i < len(structure) else []
         col_a = str(row_struct[0]).strip() if len(row_struct) > 0 else ""
         col_b = str(row_struct[1]).strip() if len(row_struct) > 1 else ""
         col_c = str(row_struct[2]).strip() if len(row_struct) > 2 else ""
 
-        # B列に名前がある → 責任者更新
         if col_b:
             current_person = col_b
 
-        # 項目名を決定（C列優先、なければA列）
         item_name = col_c or col_a
         if not item_name:
             continue
 
-        # 対象列のデータ
+        row_0based = i + 3  # 0-based row index (Row 4 = index 3)
+
+        # 結合セルチェック
+        merge_info = row_merge_at_col.get(row_0based)
+        if merge_info:
+            start_col, end_col = merge_info
+            # 対象列が結合範囲の最終列でない → 週報の期限前 → スキップ
+            if target_col_idx != end_col - 1:
+                continue
+
+        # 数式/値チェック
         formula_row = formulas[i] if i < len(formulas) else []
         value_row = values[i] if i < len(values) else []
         formula_val = str(formula_row[0]).strip() if formula_row else ""
         display_val = str(value_row[0]).strip() if value_row else ""
 
-        # 数式セル → スキップ（自動入力分）
         if formula_val.startswith("="):
             continue
 
-        # 値あり → OK
-        if display_val:
-            continue
+        is_ok = bool(display_val)
+        checked_cells.append((row_0based, item_name, current_person, is_ok, merge_info))
 
-        # 空で手入力が必要 → 未記入
-        actual_row = i + 4  # シート上の行番号（Row 4始まり）
-        missing_cells.append((actual_row, item_name, current_person))
-
-    # 5. Google Sheets batchUpdate API で赤ハイライト
+    # 5. ハイライト設定（チェック対象セルのみ操作。週報の期限前セルは触らない）
     sheet_id = ws.id
     requests_list = []
 
-    # まず対象列全体の背景色をクリア（白に戻す）
-    requests_list.append({
-        "repeatCell": {
-            "range": {
-                "sheetId": sheet_id,
-                "startRowIndex": 3,   # Row 4 (0-based: 3)
-                "endRowIndex": 86,    # Row 86
-                "startColumnIndex": target_col_idx,
-                "endColumnIndex": target_col_idx + 1,
-            },
-            "cell": {
-                "userEnteredFormat": {
-                    "backgroundColor": {"red": 1, "green": 1, "blue": 1}
-                }
-            },
-            "fields": "userEnteredFormat.backgroundColor"
-        }
-    })
+    for row_0based, item_name, person, is_ok, merge_info in checked_cells:
+        if merge_info:
+            col_start, col_end = merge_info
+        else:
+            col_start = target_col_idx
+            col_end = target_col_idx + 1
 
-    # 未記入セルに赤背景を設定
-    for row_num, item_name, person in missing_cells:
+        bg = {"red": 1, "green": 1, "blue": 1} if is_ok else {"red": 1, "green": 0.85, "blue": 0.85}
         requests_list.append({
             "repeatCell": {
                 "range": {
                     "sheetId": sheet_id,
-                    "startRowIndex": row_num - 1,  # 0-based
-                    "endRowIndex": row_num,
-                    "startColumnIndex": target_col_idx,
-                    "endColumnIndex": target_col_idx + 1,
+                    "startRowIndex": row_0based,
+                    "endRowIndex": row_0based + 1,
+                    "startColumnIndex": col_start,
+                    "endColumnIndex": col_end,
                 },
-                "cell": {
-                    "userEnteredFormat": {
-                        "backgroundColor": {"red": 1, "green": 0.85, "blue": 0.85}
-                    }
-                },
+                "cell": {"userEnteredFormat": {"backgroundColor": bg}},
                 "fields": "userEnteredFormat.backgroundColor"
             }
         })
@@ -399,15 +400,16 @@ def check_daily_report(target_md, account=None):
 
     # 6. JSON結果を出力
     missing_by_person = {}
-    for row_num, item_name, person in missing_cells:
-        if person not in missing_by_person:
-            missing_by_person[person] = []
-        missing_by_person[person].append(item_name)
+    for row_0based, item_name, person, is_ok, merge_info in checked_cells:
+        if not is_ok:
+            if person not in missing_by_person:
+                missing_by_person[person] = []
+            missing_by_person[person].append(item_name)
 
     result = {
         "date": target_md,
         "column": col_letter,
-        "missing_count": len(missing_cells),
+        "missing_count": sum(1 for _, _, _, ok, _ in checked_cells if not ok),
         "missing_by_person": missing_by_person,
     }
     print(json.dumps(result, ensure_ascii=False))

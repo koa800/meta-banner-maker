@@ -225,7 +225,7 @@ class TaskScheduler:
         """メール処理結果をLINE+Slack通知（返信待ちがある場合のみ）"""
         if not result.success or not result.output:
             return
-        from .notifier import notify_ai_team as send_line_notify  # LINE+Slack同時送信
+        from .notifier import send_line_notify  # LINEのみ
 
         waiting_m = re.search(r"返信待ち[：:]\s*(\d+)\s*件", result.output)
         delete_m = re.search(r"削除確認[：:]\s*(\d+)\s*件", result.output)
@@ -467,7 +467,7 @@ class TaskScheduler:
 
     async def _run_daily_report_input(self):
         """日報自動入力: 秘書がClaude Code経由でLooker Studioからデータ取得→日報シート書き込み→LINE報告。"""
-        from .notifier import notify_ai_team
+        from .notifier import send_line_notify
         from datetime import date, timedelta
 
         logger.info("日報自動入力: 開始")
@@ -476,7 +476,7 @@ class TaskScheduler:
         ok, claude_cmd, secretary_config, project_root, preflight_err = self._ensure_claude_chrome_ready()
         if not ok:
             logger.error(f"日報自動入力: プリフライト失敗 - {preflight_err}")
-            notify_ai_team(f"⚠️ 日報自動入力失敗\n{preflight_err}")
+            send_line_notify(f"⚠️ 日報自動入力失敗\n{preflight_err}")
             return
 
         target_date = date.today() - timedelta(days=1)
@@ -597,37 +597,37 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                 report = output.split("===RESULT_START===")[1].split("===RESULT_END===")[0].strip()
                 logger.info(f"日報自動入力: 完了 - {report[:300]}")
                 if "エラー" in report:
-                    notify_ai_team(f"⚠️ 日報自動入力: {report[:300]}")
+                    send_line_notify(f"⚠️ 日報自動入力: {report[:300]}")
             else:
                 logger.info(f"日報自動入力: 完了（マーカーなし）- {output[-300:]}")
         else:
             # エラー種別に応じた通知
             if "ログイン" in error or "login" in error.lower():
-                notify_ai_team(
+                send_line_notify(
                     f"⚠️ 日報自動入力失敗: Googleログイン切れ\n"
                     f"Chrome で koa800sea.nifs@gmail.com に再ログインが必要です\n"
                     f"対処: Mac Mini の Chrome を開き Looker Studio にアクセス→ログイン"
                 )
             elif "OAuth" in error or "credential" in error.lower():
-                notify_ai_team(
+                send_line_notify(
                     f"⚠️ 日報自動入力失敗: Claude Code 認証エラー\n"
                     f"秘書の Claude Code OAuth トークンの再取得が必要です\n{error}"
                 )
             elif "Chrome" in error or "MCP" in error:
-                notify_ai_team(
+                send_line_notify(
                     f"⚠️ 日報自動入力失敗: Chrome/MCP接続エラー\n"
                     f"Chrome または Claude in Chrome 拡張の再起動が必要です\n{error}"
                 )
             else:
-                notify_ai_team(f"⚠️ 日報自動入力失敗（リトライ後）\n{error}")
+                send_line_notify(f"⚠️ 日報自動入力失敗（リトライ後）\n{error}")
 
     async def _run_daily_report_verify(self):
-        """09:20: 日報自動入力の完了検証。実データを確認して未入力なら LINE+Slack 通知。"""
+        """09:20: 日報自動入力の完了検証。実データを確認して未入力なら LINE 通知。"""
         import subprocess
         import ast
         import re
         from datetime import date, timedelta
-        from .notifier import notify_ai_team
+        from .notifier import send_line_notify
 
         target_date = date.today() - timedelta(days=1)
         target_md = f"{target_date.month}/{target_date.day}"
@@ -723,7 +723,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                 else:
                     msg += "タスクは実行されましたが、書き込みに失敗した可能性があります\n"
                 msg += "━━━━━━━━━━━━"
-                notify_ai_team(msg)
+                send_line_notify(msg)
                 logger.warning(f"日報検証: 未入力 - {missing}")
             else:
                 logger.info(f"日報検証: {target_md} の全データ入力確認OK")
@@ -736,7 +736,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
         import subprocess
         import json as _json
         from datetime import date, timedelta
-        from .notifier import notify_ai_team
+        from .notifier import send_line_notify
 
         target_date = date.today() - timedelta(days=1)
         target_md = f"{target_date.month}/{target_date.day}"
@@ -783,7 +783,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                 "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk/edit?gid=1717970415"
             )
 
-            notify_ai_team("\n".join(lines))
+            send_line_notify("\n".join(lines))
             logger.info(f"日報リマインド: {missing_count}件の未記入を通知（{len(missing_by_person)}名）")
 
         except _json.JSONDecodeError as e:
@@ -1054,8 +1054,8 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
         logger.info(f"Weekly idea proposal sent: {task_text[:80]}")
 
     async def _run_daily_addness_digest(self):
-        """毎朝8:30: actionable-tasks.md（タスク）+ カレンダー（今日の予定）をLINE+Slack通知"""
-        from .notifier import notify_ai_team as send_line_notify  # LINE+Slack同時送信
+        """毎朝8:30: actionable-tasks.md（タスク）+ カレンダー（今日の予定）をLINE通知"""
+        from .notifier import send_line_notify  # LINEのみ
         from datetime import date
 
         master_dir = self.config.get("paths", {}).get("master_dir", "~/agents/Master")
@@ -1372,9 +1372,9 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                 logger.error(f"Claude Code OAuth health check failed: {oauth_err}")
 
     async def _run_weekly_stats(self):
-        """毎週月曜9:30: 先週のシステム稼働サマリーをLINE+Slack通知"""
+        """毎週月曜9:30: 先週のシステム稼働サマリーをLINE通知"""
         import json as _json
-        from .notifier import notify_ai_team as send_line_notify  # LINE+Slack同時送信
+        from .notifier import send_line_notify  # LINEのみ
         from datetime import date
 
         stats = self.memory.get_task_stats(since_hours=168)  # 7日間
@@ -1627,7 +1627,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
         """毎日11:30: Looker Studio CSVダウンロード（前々日分）。秘書がClaude Code + Chrome MCPで実行。"""
         from pathlib import Path
         from datetime import date, timedelta
-        from .notifier import notify_ai_team
+        from .notifier import send_line_notify
 
         logger.info("Looker CSV ダウンロード: 開始")
 
@@ -1635,7 +1635,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
         ok, claude_cmd, secretary_config, project_root, preflight_err = self._ensure_claude_chrome_ready()
         if not ok:
             logger.error(f"Looker CSV ダウンロード: プリフライト失敗 - {preflight_err}")
-            notify_ai_team(f"⚠️ Looker CSVダウンロード失敗\n{preflight_err}")
+            send_line_notify(f"⚠️ Looker CSVダウンロード失敗\n{preflight_err}")
             return
 
         target_date = date.today() - timedelta(days=2)
@@ -1732,7 +1732,7 @@ head -3 "{csv_dir}/{csv_filename}"
                 report = output.split("===RESULT_START===")[1].split("===RESULT_END===")[0].strip()
                 logger.info(f"Looker CSV ダウンロード: 完了 - {report[:300]}")
                 if "エラー" in report:
-                    notify_ai_team(f"⚠️ Looker CSVダウンロード: {report[:300]}")
+                    send_line_notify(f"⚠️ Looker CSVダウンロード: {report[:300]}")
                 else:
                     # ダウンロード成功 → csv_sheet_sync で元データ更新
                     await self._run_csv_sheet_sync_after_download(project_root)
@@ -1740,7 +1740,7 @@ head -3 "{csv_dir}/{csv_filename}"
                 logger.info(f"Looker CSV ダウンロード: 完了（マーカーなし）- {output[-300:]}")
                 await self._run_csv_sheet_sync_after_download(project_root)
         else:
-            notify_ai_team(f"⚠️ Looker CSVダウンロード失敗（リトライ後）\n{error}")
+            send_line_notify(f"⚠️ Looker CSVダウンロード失敗（リトライ後）\n{error}")
 
     async def _run_csv_sheet_sync_after_download(self, project_root):
         """CSVダウンロード後にcsv_sheet_syncを実行して元データシートを更新する。"""
@@ -3218,7 +3218,7 @@ JSON形式で返してください:
         秘書が実質的に進められるタスクを1つ選び、実行する。
         成果物は Master/addness/proactive_output/ に保存、LINE報告。
         """
-        from .notifier import notify_ai_team
+        from .notifier import send_line_notify
         from pathlib import Path
         from datetime import datetime
         import json
@@ -3367,7 +3367,7 @@ PROACTIVE_RESULT:
                 f"━━━━━━━━━━━━\n"
                 f"完了時刻: {now_str}"
             )
-            notify_ai_team(report)
+            send_line_notify(report)
             logger.info(f"秘書自律ワーク: 完了 - {task_name}")
         else:
             # 自律ワークの失敗は静かにログのみ（定常業務ではないため通知しない）
