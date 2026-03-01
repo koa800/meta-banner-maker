@@ -395,6 +395,10 @@ class TaskScheduler:
             return "APIレート制限（しばらく待ってリトライ）"
         if any(k in combined for k in ["ログイン", "login", "sign in", "アカウント選択"]):
             return "Googleログイン切れ（Chrome で再ログインが必要）"
+        if any(k in combined for k in ["credit balance", "credit", "billing", "payment"]):
+            return "Claude Code クレジット不足（秘書アカウントの利用枠をリセット待ち）"
+        if "max turns" in combined or "reached max" in combined:
+            return "ターン数上限到達（max_turns を増やす必要あり）"
         return stderr[:200] if stderr.strip() else stdout[-200:]
 
     def _execute_claude_code_task(self, task_label, claude_cmd, secretary_config,
@@ -1577,6 +1581,15 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
         target_str = target_date.strftime("%Y-%m-%d")
         csv_filename = f"{target_str}_アドネス全体数値_媒体・ファネル別データ_表.csv"
         csv_dir = Path.home() / "Desktop" / "Looker Studio CSV"
+        csv_dir.mkdir(parents=True, exist_ok=True)
+
+        # 既にCSVが存在する場合はスキップ
+        csv_path = csv_dir / csv_filename
+        if csv_path.exists() and csv_path.stat().st_size > 100:
+            logger.info(f"Looker CSV ダウンロード: {csv_filename} は既に存在 → スキップ")
+            # シート同期だけ実行（まだ元データに反映されていない可能性があるため）
+            await self._run_csv_sheet_sync_after_download(project_root)
+            return
 
         prompt = f"""あなたは甲原海人のAI秘書です。Looker StudioからCSVをダウンロードしてください。
 
@@ -1649,7 +1662,7 @@ head -3 "{csv_dir}/{csv_filename}"
 
         success, output, error = self._execute_claude_code_task(
             "Looker CSVダウンロード", claude_cmd, secretary_config, project_root,
-            prompt, max_turns=20, timeout=480, use_chrome=True,
+            prompt, max_turns=25, timeout=480, use_chrome=True,
         )
 
         if success:
@@ -1659,10 +1672,33 @@ head -3 "{csv_dir}/{csv_filename}"
                 logger.info(f"Looker CSV ダウンロード: 完了 - {report[:300]}")
                 if "エラー" in report:
                     notify_ai_team(f"⚠️ Looker CSVダウンロード: {report[:300]}")
+                else:
+                    # ダウンロード成功 → csv_sheet_sync で元データ更新
+                    await self._run_csv_sheet_sync_after_download(project_root)
             else:
                 logger.info(f"Looker CSV ダウンロード: 完了（マーカーなし）- {output[-300:]}")
+                await self._run_csv_sheet_sync_after_download(project_root)
         else:
             notify_ai_team(f"⚠️ Looker CSVダウンロード失敗（リトライ後）\n{error}")
+
+    async def _run_csv_sheet_sync_after_download(self, project_root):
+        """CSVダウンロード後にcsv_sheet_syncを実行して元データシートを更新する。"""
+        import subprocess
+        try:
+            env = dict(os.environ)
+            if "/opt/homebrew/bin" not in env.get("PATH", ""):
+                env["PATH"] = f"/opt/homebrew/bin:{env.get('PATH', '')}"
+            result = subprocess.run(
+                ["python3", "System/csv_sheet_sync.py"],
+                capture_output=True, text=True, timeout=120,
+                cwd=str(project_root), env=env,
+            )
+            if result.returncode == 0:
+                logger.info(f"csv_sheet_sync 完了: {result.stdout[-200:]}")
+            else:
+                logger.warning(f"csv_sheet_sync 失敗: {result.stderr[:200]}")
+        except Exception as e:
+            logger.warning(f"csv_sheet_sync 例外: {e}")
 
     async def _run_kpi_daily_import(self):
         """毎日12:00: 元データの完了チェック → 投入 or リマインド"""
