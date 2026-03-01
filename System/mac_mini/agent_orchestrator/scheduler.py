@@ -415,13 +415,13 @@ class TaskScheduler:
 ## 手順
 
 ### Step 1: Looker Studio 日別データページからデータ取得
-- URL: https://lookerstudio.google.com/u/2/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_evmsc9twzd
+- URL: https://lookerstudio.google.com/u/1/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_evmsc9twzd
 - ブラウザで開く → 幅1400px・高さ900pxにリサイズ → スクショ撮影
 - テーブル上部をズームイン撮影して先頭行（{target_md}分）の数字を再確認
 - 読み取る数値: 集客数、個別予約数、着金売上（確定ベース）
 
 ### Step 2: Looker Studio 会員数ページからデータ取得
-- URL: https://lookerstudio.google.com/u/2/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_dfv0688m0d
+- URL: https://lookerstudio.google.com/u/1/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_dfv0688m0d
 - ブラウザで開く → 幅1400px・高さ900pxにリサイズ → スクショ撮影
 - 読み取る数値: スキルプラス会員数（net change）、解約数
 
@@ -1484,7 +1484,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
 ## 手順
 
 ### Step 1: Looker Studio を開く
-- URL: https://lookerstudio.google.com/u/2/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_dsqvinv6zd
+- URL: https://lookerstudio.google.com/u/1/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_dsqvinv6zd
 - ページ名: 媒体・ファネル別データ
 - ブラウザで開いて読み込み完了を待つ
 
