@@ -28,8 +28,9 @@ _AGENT_TOKEN = os.environ.get("AGENT_TOKEN", "")
 _SLACK_AI_TEAM_WEBHOOK = os.environ.get("SLACK_AI_TEAM_WEBHOOK_URL", "")
 
 
-def send_line_notify(message: str, truncate: bool = True) -> bool:
-    """Send a message to the LINE secretary group via Render server."""
+def send_line_notify(message: str, truncate: bool = True, group_id: str = "") -> bool:
+    """Send a message to a LINE group via Render server.
+    group_id未指定時は秘書グループに送信。"""
     if not _AGENT_TOKEN:
         logger.warning("AGENT_TOKEN not set — cannot send LINE notification")
         return False
@@ -37,11 +38,15 @@ def send_line_notify(message: str, truncate: bool = True) -> bool:
     if truncate and len(message) > MAX_MESSAGE_LEN:
         message = message[:MAX_MESSAGE_LEN] + "\n...(truncated)"
 
+    payload = {"message": message}
+    if group_id:
+        payload["group_id"] = group_id
+
     try:
         resp = requests.post(
             f"{_SERVER_URL}/notify",
             headers={"Authorization": f"Bearer {_AGENT_TOKEN}"},
-            json={"message": message},
+            json=payload,
             timeout=40,  # Renderのコールドスタート待ち
         )
         if resp.status_code == 200:

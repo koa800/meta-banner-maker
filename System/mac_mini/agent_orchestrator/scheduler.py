@@ -731,8 +731,11 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
         except Exception as e:
             logger.error(f"日報検証: エラー - {e}")
 
+    # 広告チーム全体 LINEグループID
+    _AD_TEAM_GROUP_ID = "C7dd7f40a3af2186ff490997264c1036a"
+
     async def _run_daily_report_reminder(self):
-        """平日11:00: チームメンバーの日報未記入を検出→赤ハイライト→LINEリマインド"""
+        """平日12:00/19:00: チームメンバーの日報未記入を検出→赤ハイライト→広告チーム全体LINEにリマインド"""
         import subprocess
         import json as _json
         from datetime import date, timedelta
@@ -767,24 +770,27 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                 logger.info(f"日報リマインド: {target_md} の全データ入力済み")
                 return
 
-            # LINE通知を構築
+            # 広告チーム全体LINEグループにリマインド送信
             lines = [
-                f"\n📋 日報リマインド（{target_md}分）",
-                "━━━━━━━━━━━━",
-                "以下のメンバーの日報が未記入です:",
+                f"\n📋 【日報シート 未記入】",
+                f"日報に未記入項目がある方です。",
+                f"記入をお願いします！",
                 "",
             ]
             for person, items in missing_by_person.items():
-                lines.append(f"■ {person}: {', '.join(items)}")
+                lines.append(f"▶ {person}さん")
+                for item in items:
+                    lines.append(f"　・{item}")
 
-            lines.append("━━━━━━━━━━━━")
+            lines.append("")
             lines.append(
-                "シートURL: https://docs.google.com/spreadsheets/d/"
+                "📊 シートはこちら:\n"
+                "https://docs.google.com/spreadsheets/d/"
                 "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk/edit?gid=1717970415"
             )
 
-            send_line_notify("\n".join(lines))
-            logger.info(f"日報リマインド: {missing_count}件の未記入を通知（{len(missing_by_person)}名）")
+            send_line_notify("\n".join(lines), group_id=self._AD_TEAM_GROUP_ID)
+            logger.info(f"日報リマインド: {missing_count}件の未記入を広告チーム全体に通知（{len(missing_by_person)}名）")
 
         except _json.JSONDecodeError as e:
             logger.error(f"日報リマインド: JSON解析エラー - {e}")
