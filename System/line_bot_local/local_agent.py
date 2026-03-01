@@ -223,8 +223,10 @@ def _generate_reply_with_claude_code(
     try:
         print(f"   🤖 Claude Code で返信生成中（自律モード）...")
         # 日向とは完全分離（秘書専用の設定ディレクトリを使用）
+        # ANTHROPIC_API_KEY を除外 → Claude Code が OAuth（秘書アカウント）を使うようにする
         env = os.environ.copy()
         env["CLAUDE_CONFIG_DIR"] = str(_CLAUDE_SECRETARY_CONFIG)
+        env.pop("ANTHROPIC_API_KEY", None)
         result = subprocess.run(
             [str(_CLAUDE_CMD), "-p", "--chrome", "--model", "claude-sonnet-4-6",
              "--max-turns", "12", prompt],
@@ -360,8 +362,10 @@ def _execute_with_claude_code(
 
     try:
         print(f"   🤖 Claude Code でタスク実行中...")
+        # ANTHROPIC_API_KEY を除外 → Claude Code が OAuth（秘書アカウント）を使うようにする
         env = os.environ.copy()
         env["CLAUDE_CONFIG_DIR"] = str(_CLAUDE_SECRETARY_CONFIG)
+        env.pop("ANTHROPIC_API_KEY", None)
         result = subprocess.run(
             [str(_CLAUDE_CMD), "-p", "--chrome", "--model", "claude-sonnet-4-6",
              "--max-turns", "15", prompt],
