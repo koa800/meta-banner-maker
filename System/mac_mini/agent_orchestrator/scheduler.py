@@ -782,7 +782,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
 
             lines.append("")
             lines.append(
-                "📊 シートはこちら:\n"
+                "日報を書く👇\n"
                 "https://docs.google.com/spreadsheets/d/"
                 "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk/edit?gid=1717970415"
             )
