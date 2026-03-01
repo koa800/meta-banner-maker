@@ -200,7 +200,13 @@ class AgentOrchestrator:
                     content={"error": f"Unknown task: {task_name}", "available": available}
                 )
             # バックグラウンドで非同期実行（レスポンスをブロックしない）
-            asyncio.create_task(task_fn())
+            async def _run_with_logging(name, fn):
+                try:
+                    await fn()
+                    logger.info(f"Manual trigger completed: {name}")
+                except Exception as e:
+                    logger.error(f"Manual trigger failed: {name} - {e}", exc_info=True)
+            asyncio.create_task(_run_with_logging(task_name, task_fn))
             logger.info(f"Manual trigger: {task_name}")
             return {"status": "triggered", "task": task_name}
 

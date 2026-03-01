@@ -343,6 +343,10 @@ class TaskScheduler:
         import time as _time
 
         env = os.environ.copy()
+        # launchd 環境でも node が見つかるよう PATH を保証
+        path = env.get("PATH", "")
+        if "/opt/homebrew/bin" not in path:
+            env["PATH"] = f"/opt/homebrew/bin:{path}"
         env["CLAUDE_CONFIG_DIR"] = str(secretary_config)
         cmd = [str(claude_cmd), "-p", "--model", "claude-sonnet-4-6",
                "--max-turns", str(max_turns)]
@@ -513,7 +517,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
 
         success, output, error = self._execute_claude_code_task(
             "日報自動入力", claude_cmd, secretary_config, project_root,
-            prompt, max_turns=25, timeout=600, use_chrome=True,
+            prompt, max_turns=40, timeout=900, use_chrome=True,
         )
 
         if success:
