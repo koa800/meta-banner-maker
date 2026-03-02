@@ -5,6 +5,7 @@ Renderサーバーからタスクをポーリングして自動実行
 Claude APIを直接呼び出して処理し、結果をLINEに自動報告
 Q&A質問監視機能も統合
 """
+from __future__ import annotations
 
 import os
 import sys

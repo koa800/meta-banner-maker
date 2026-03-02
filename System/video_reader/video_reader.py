@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """Video Reader — Loom / YouTube URLからTranscript+キーフレーム画像を自動抽出
 
 使い方:

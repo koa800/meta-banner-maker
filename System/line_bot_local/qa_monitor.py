@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 Q&A質問監視モジュール
 複数の「回答用」シートをポーリングして新着質問を検知

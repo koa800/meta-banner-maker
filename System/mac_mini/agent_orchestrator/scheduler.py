@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 APScheduler-based task scheduler for the agent orchestrator.
 Replaces cron jobs with in-process scheduling and logging.
