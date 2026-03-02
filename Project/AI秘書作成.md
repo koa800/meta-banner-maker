@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年3月1日（再発防止: API キー混入排除・サービス自動復旧・タスク滞留検知） |
+| 最終更新 | 2026年3月2日（エラー自律リカバリ強化・Anthropicクレジット監視追加） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -163,6 +163,11 @@
 43. **多段フォールバック**: Gemini API → Pollinations.ai（無料API）のフォールバック構成
 44. **画像アップロードAPI**: Render `/api/upload_image` で画像受付、`/api/images/<filename>` で配信（HTTPS直リンク）
 45. **月間予算制限（¥2,000）**: アプリレベルで `gemini_usage.json` に月間使用量を記録し、2000円（約100枚）で自動停止→Pollinationsにフォールバック。GCP予算アラート（50%/90%/100%でメール通知）も設定済み
+
+### Phase 11: エラー自律リカバリ（実装完了）
+49. **Anthropic APIクレジット残高監視**: Orchestratorが週1回（月曜08:20）テストAPIコールで残高チェック。クレジット不足検知時にLINE通知。復旧時にも通知。自動課金はしない
+50. **LINE応答エラー1回リトライ**: Render（app.py）でAnthropic API呼び出し失敗時、クレジット不足以外なら3秒待って1回リトライ。クレジット不足は即エラー通知
+51. **日報検証→自動再実行**: daily_report_verify（09:20）で未入力を検知した場合、daily_report_inputを自動で再実行（1日1回まで）。リトライ後も未完了ならLINE通知
 
 ### Phase 10: OS共有基盤・自己認識（実装完了）
 46. **行動ルール（OS）の動的同期**: `execution_rules.json` をSingle Source of Truthとし、app.py（Render）へは `/api/sync_execution_rules` APIで自動同期。local_agent起動時+ルール更新時に自動実行。永続ディスクに保存しフォールバックにハードコード版を併用
