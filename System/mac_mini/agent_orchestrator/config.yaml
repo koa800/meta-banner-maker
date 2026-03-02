@@ -30,6 +30,9 @@ schedule:
   oauth_health_check:
     cron: "25 8 * * *"           # 08:25  認証チェック（Google + Claude Code OAuth）※日報入力(08:40)の前に実行
     enabled: true
+  anthropic_credit_check:
+    cron: "20 8,14,20 * * *"     # 08:20/14:20/20:20  Anthropic APIクレジット残高チェック
+    enabled: true
   daily_addness_digest:
     cron: "30 8 * * *"           # 08:30  朝のブリーフィング
     enabled: true

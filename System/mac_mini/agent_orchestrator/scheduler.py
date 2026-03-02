@@ -110,6 +110,7 @@ class TaskScheduler:
             "video_knowledge_review": self._run_video_knowledge_review,
             "video_learning_reminder": self._run_video_learning_reminder,
             "daily_report_reminder": self._run_daily_report_reminder,
+            "anthropic_credit_check": self._run_anthropic_credit_check,
         }
 
     def setup(self):
@@ -147,7 +148,7 @@ class TaskScheduler:
         logger.info("Scheduler shut down")
 
     # タスク失敗通知を送らないタスク（自前でエラーハンドリングするもの）
-    _NO_FAILURE_NOTIFY = {"health_check", "oauth_health_check", "render_health_check"}
+    _NO_FAILURE_NOTIFY = {"health_check", "oauth_health_check", "render_health_check", "anthropic_credit_check"}
     # git_pull_syncは独自の頻度制限付き通知を実装（_run_git_pull_sync参照）
 
     async def _execute_tool(self, task_name: str, tool_fn, **kwargs) -> tools.ToolResult:
@@ -1311,6 +1312,68 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
             )
             if ok:
                 self.memory.set_state("render_health_notified", datetime.now().isoformat())
+
+    async def _run_anthropic_credit_check(self):
+        """Anthropic APIクレジット残高チェック（1日3回）
+
+        極小のAPIコールを試行し、クレジット不足エラーを検知したらLINE通知。
+        """
+        import json as _json
+        import urllib.request
+        from .notifier import send_line_notify
+
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            logger.warning("ANTHROPIC_API_KEY not set, skipping credit check")
+            return
+
+        try:
+            payload = _json.dumps({
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}],
+            }).encode()
+            req = urllib.request.Request(
+                "https://api.anthropic.com/v1/messages",
+                data=payload,
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                resp.read()
+            logger.info("Anthropic credit check OK")
+            # 復旧通知（前回エラーだった場合）
+            if self.memory.get_state("anthropic_credit_alert_active"):
+                send_line_notify("\n✅ Anthropic APIクレジットが復旧しました")
+                self.memory.set_state("anthropic_credit_alert_active", "")
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            if "credit balance" in body.lower():
+                # 重複通知抑制（6時間以内）
+                last_notified = self.memory.get_state("anthropic_credit_notified")
+                if last_notified:
+                    try:
+                        if (datetime.now() - datetime.fromisoformat(last_notified)).total_seconds() < 21600:
+                            return
+                    except (ValueError, TypeError):
+                        pass
+
+                send_line_notify(
+                    "\n⚠️ Anthropic APIクレジット不足\n"
+                    "秘書のLINE応答が停止しています。\n"
+                    "Claude Console → Billing でクレジットを追加してください。\n"
+                    "https://console.anthropic.com/settings/billing"
+                )
+                self.memory.set_state("anthropic_credit_notified", datetime.now().isoformat())
+                self.memory.set_state("anthropic_credit_alert_active", "true")
+                logger.warning("Anthropic credit balance too low — LINE notified")
+            else:
+                logger.warning(f"Anthropic credit check HTTP error: {e.code} {body[:200]}")
+        except Exception as e:
+            logger.warning(f"Anthropic credit check error: {e}")
 
     async def _run_oauth_health_check(self):
         """Google OAuthトークンの有効性チェック（日次）"""
