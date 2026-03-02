@@ -9,9 +9,10 @@ import logging
 import os
 import signal
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from learning import build_learning_context
 
@@ -27,11 +28,124 @@ SELF_RESTART_SH = str(Path(__file__).parent / "self_restart.sh")
 # ※ 秘書（~/.claude-secretary）やデフォルト（~/.claude）とは分離
 _CLAUDE_HINATA_CONFIG = Path.home() / ".claude-hinata"
 
+
 def _claude_env() -> dict:
     """Claude Code 実行時の環境変数を構築する。"""
     env = os.environ.copy()
     env["CLAUDE_CONFIG_DIR"] = str(_CLAUDE_HINATA_CONFIG)
+    # ANTHROPIC_API_KEY があると OAuth ではなく API key が使われてしまう
+    env.pop("ANTHROPIC_API_KEY", None)
     return env
+
+
+def _kill_process_group(proc: subprocess.Popen):
+    """プロセスグループ全体を SIGTERM → SIGKILL で確実に終了させる。"""
+    try:
+        pgid = os.getpgid(proc.pid)
+    except OSError:
+        return
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def _run_claude(
+    prompt: str,
+    timeout_seconds: int,
+    label: str = "Claude Code",
+    use_chrome: bool = True,
+    max_turns: int = 15,
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Claude Code CLI を実行して結果を返す。
+
+    Returns:
+        (output, error) — 成功時は (output, None)、失敗時は (None, error_description)
+    """
+    cmd = [CLAUDE_CMD, "-p", "--model", "claude-sonnet-4-6", "--max-turns", str(max_turns)]
+    if use_chrome:
+        cmd.append("--chrome")
+    cmd.append(prompt)
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=str(WORK_DIR),
+            env=_claude_env(),
+            start_new_session=True,
+        )
+    except FileNotFoundError:
+        return None, "claude コマンドが見つかりません"
+    except Exception as e:
+        return None, f"プロセス起動失敗: {e}"
+
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        logger.error(f"{label} タイムアウト（{timeout_seconds}秒）")
+        _kill_process_group(proc)
+        return None, f"タイムアウト（{timeout_seconds}秒）"
+
+    # stderr は常にログに残す（exit code 0 でも診断情報が含まれる）
+    if stderr and stderr.strip():
+        logger.info(f"{label} stderr: {stderr.strip()[:500]}")
+
+    if proc.returncode != 0:
+        logger.error(f"{label} エラー (code={proc.returncode}): {stderr[:300]}")
+        return None, f"exit code {proc.returncode}: {stderr[:200]}"
+
+    output = stdout.strip()
+    if not output:
+        logger.warning(f"{label} 空出力（exit code 0 だが stdout が空）")
+        return None, "空出力（stdout が空）"
+
+    logger.info(f"{label} 完了（{len(output)}文字）")
+    return output, None
+
+
+def _run_claude_with_retry(
+    prompt: str,
+    timeout_seconds: int,
+    label: str = "Claude Code",
+    max_turns: int = 15,
+) -> Optional[str]:
+    """
+    Claude Code を実行し、失敗時は --chrome なしでリトライする。
+
+    1回目: --chrome あり（ブラウザ操作可能）
+    2回目: --chrome なし（ブラウザ不可だが確実に動く）
+    """
+    # 1回目: --chrome あり
+    result, error = _run_claude(prompt, timeout_seconds, label, use_chrome=True, max_turns=max_turns)
+    if result:
+        return result
+
+    logger.warning(f"{label} --chrome モード失敗: {error}。--chrome なしでリトライします")
+    time.sleep(3)
+
+    # 2回目: --chrome なし（fallback）
+    result, error = _run_claude(prompt, timeout_seconds, f"{label}（リトライ）", use_chrome=False, max_turns=max_turns)
+    if result:
+        return result
+
+    logger.error(f"{label} リトライも失敗: {error}")
+    return None
+
 
 def execute_full_cycle(
     instruction: str = None,
@@ -205,56 +319,9 @@ Chrome が常時起動しており、Claude in Chrome 拡張経由で MCP ツー
 3. `bash {SELF_RESTART_SH} "修正内容の説明"` で自分を再起動
 """
 
-    try:
-        logger.info(f"Claude Code フルサイクル開始 (#{cycle_num})")
-        # start_new_session=True でプロセスグループを分離し、
-        # タイムアウト時に子プロセスごと確実に終了させる
-        proc = subprocess.Popen(
-            [CLAUDE_CMD, "-p", "--chrome", prompt],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            cwd=str(WORK_DIR),
-            env=_claude_env(),
-            start_new_session=True,
-        )
-        try:
-            stdout, stderr = proc.communicate(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            # プロセスグループ全体を SIGTERM → 少し待って SIGKILL
-            pgid = os.getpgid(proc.pid)
-            logger.error(f"Claude Code タイムアウト（{timeout_seconds}秒）— pgid={pgid} を終了")
-            try:
-                os.killpg(pgid, signal.SIGTERM)
-            except OSError:
-                pass
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(pgid, signal.SIGKILL)
-                except OSError:
-                    pass
-                proc.wait(timeout=5)
-            return None
-
-        if proc.returncode == 0:
-            output = stdout.strip()
-            logger.info(f"Claude Code完了（{len(output)}文字）")
-            return output
-        else:
-            logger.error(
-                f"Claude Code エラー (code={proc.returncode}): "
-                f"{stderr[:300]}"
-            )
-            return None
-
-    except FileNotFoundError:
-        logger.error("claude コマンドが見つかりません。")
-        return None
-    except Exception as e:
-        logger.error(f"Claude Code 実行失敗: {e}")
-        return None
+    logger.info(f"Claude Code フルサイクル開始 (#{cycle_num})")
+    result = _run_claude_with_retry(prompt, timeout_seconds, f"フルサイクル #{cycle_num}")
+    return result
 
 
 def execute_self_repair(
@@ -302,44 +369,9 @@ def execute_self_repair(
 修復結果を報告してください。
 """
 
-    try:
-        logger.info("自己修復サイクル開始")
-        proc = subprocess.Popen(
-            [CLAUDE_CMD, "-p", "--chrome", prompt],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            cwd=str(WORK_DIR),
-            env=_claude_env(),
-            start_new_session=True,
-        )
-        try:
-            stdout, stderr = proc.communicate(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            pgid = os.getpgid(proc.pid)
-            logger.error(f"自己修復タイムアウト（{timeout_seconds}秒）— pgid={pgid} を終了")
-            try:
-                os.killpg(pgid, signal.SIGTERM)
-            except OSError:
-                pass
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(pgid, signal.SIGKILL)
-                except OSError:
-                    pass
-                proc.wait(timeout=5)
-            return None
-
-        if proc.returncode == 0:
-            output = stdout.strip()
-            logger.info(f"自己修復完了（{len(output)}文字）")
-            return output
-        else:
-            logger.error(f"自己修復失敗 (code={proc.returncode}): {stderr[:300]}")
-            return None
-
-    except Exception as e:
-        logger.error(f"自己修復実行失敗: {e}")
-        return None
+    logger.info("自己修復サイクル開始")
+    # 自己修復は --chrome 不要（コード修正が目的）
+    result, error = _run_claude(prompt, timeout_seconds, "自己修復", use_chrome=False, max_turns=10)
+    if error:
+        logger.error(f"自己修復失敗: {error}")
+    return result

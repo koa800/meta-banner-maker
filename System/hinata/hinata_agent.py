@@ -258,10 +258,8 @@ def run_cycle(config: dict, state: dict, instruction: str = None) -> dict:
         save_state(state)
         return state
     else:
-        logger.warning(f"サイクル #{cycle_num} 失敗")
-        # 失敗もアクション記録（何が失敗したか追跡するため）
-        record_action(cycle_num, instruction, "失敗: Claude Codeが結果を返さなかった")
-        send_message(f"⚠️ サイクル #{cycle_num} の実行に失敗しました。")
+        logger.warning(f"サイクル #{cycle_num} 失敗（--chrome + リトライ両方失敗）")
+        record_action(cycle_num, instruction, "失敗: Claude Codeが結果を返さなかった（chrome + リトライ済み）")
         save_state(state)
         raise RuntimeError(f"サイクル #{cycle_num} でClaude Codeが結果を返しませんでした")
 
