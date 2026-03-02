@@ -53,7 +53,10 @@ schedule:
 
   # === 秘書自律ワーク ===
   secretary_proactive_work:
-    cron: "0 10,14,17 * * 1-5"   # 平日 10:00/14:00/17:00  Addnessタスクを自律的に進める
+    cron: "0 10,14,17 * * 1-5"   # 平日 10:00/14:00/17:00（secretary_goal_progress に統合）
+    enabled: false
+  secretary_goal_progress:
+    interval_minutes: 30         # 30分ごとに発火（空き時間判定あり）
     enabled: true
 
   # === 日報リマインド ===
@@ -124,7 +127,7 @@ schedule:
     enabled: true
   repair_check:
     interval_minutes: 30         # エラー検知・修復提案
-    enabled: true
+    enabled: false               # 2026-03-02 クレジット消費過多のため一時停止
 
   # === 深夜 ===
   log_rotate:

@@ -14,7 +14,7 @@
 - 09:20: daily_report_verify（日報データ検証）
 
 ### 日中
-- 平日 10:00/14:00/17:00: secretary_proactive_work（秘書自律ワーク）
+- 30分ごと: secretary_goal_progress（秘書ゴール進行モード。空き時間判定あり。旧secretary_proactive_workを置き換え）
 - 平日 12:00/19:00: daily_report_reminder（チームメンバー日報未記入リマインド）
 - 11:30: looker_csv_download（Chrome MCP。前々日分。max_turns=25, timeout=8分）
 - 12:00: kpi_daily_import（CSV → スプレッドシート取り込み）

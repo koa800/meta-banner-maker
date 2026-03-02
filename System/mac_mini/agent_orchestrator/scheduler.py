@@ -106,6 +106,7 @@ class TaskScheduler:
             "slack_hinata_auto_reply": self._run_slack_hinata_auto_reply,
             "os_sync_session": self._run_os_sync_session,
             "secretary_proactive_work": self._run_secretary_proactive_work,
+            "secretary_goal_progress": self._run_secretary_goal_progress,
             "weekly_hinata_memory": self._run_weekly_hinata_memory,
             "video_knowledge_review": self._run_video_knowledge_review,
             "video_learning_reminder": self._run_video_learning_reminder,
@@ -149,7 +150,7 @@ class TaskScheduler:
         logger.info("Scheduler shut down")
 
     # タスク失敗通知を送らないタスク（自前でエラーハンドリングするもの）
-    _NO_FAILURE_NOTIFY = {"health_check", "oauth_health_check", "render_health_check", "anthropic_credit_check"}
+    _NO_FAILURE_NOTIFY = {"health_check", "oauth_health_check", "render_health_check", "anthropic_credit_check", "secretary_goal_progress"}
     # git_pull_syncは独自の頻度制限付き通知を実装（_run_git_pull_sync参照）
 
     async def _execute_tool(self, task_name: str, tool_fn, **kwargs) -> tools.ToolResult:
@@ -3533,3 +3534,349 @@ PROACTIVE_RESULT:
         else:
             # 自律ワークの失敗は静かにログのみ（定常業務ではないため通知しない）
             logger.error(f"秘書自律ワーク: 失敗 - {error}")
+
+    # ================================================================
+    # 秘書ゴール進行モード
+    # ================================================================
+
+    def _is_free_for_goal_progress(self) -> bool:
+        """空き時間判定。定常業務の時間帯やクールダウン中は False を返す。"""
+        now = datetime.now()
+        h, m = now.hour, now.minute
+        t = h * 60 + m  # 分換算
+
+        # 深夜・早朝（22:00-07:00）はスキップ
+        if h >= 22 or h < 7:
+            logger.debug("ゴール進行: 深夜・早朝 → スキップ")
+            return False
+
+        # 定常業務の時間帯（±15分バッファ）をブロック
+        blocked_ranges = [
+            (8 * 60 + 10, 9 * 60 + 35),   # 08:10-09:35: OAuth→日報入力→日報検証
+            (11 * 60 + 15, 12 * 60 + 15),  # 11:15-12:15: Looker CSV→KPIインポート
+            (20 * 60 + 45, 21 * 60 + 25),  # 20:45-21:25: 日次レポート
+        ]
+        for start, end in blocked_ranges:
+            if start <= t <= end:
+                logger.debug(f"ゴール進行: 定常業務時間帯 ({start//60}:{start%60:02d}-{end//60}:{end%60:02d}) → スキップ")
+                return False
+
+        # 前回実行から20分以内は再実行しない
+        last_run = self.memory.get_state("goal_progress_last_run")
+        if last_run:
+            try:
+                last_dt = datetime.fromisoformat(last_run)
+                elapsed = (now - last_dt).total_seconds()
+                if elapsed < 1200:  # 20分 = 1200秒
+                    logger.debug(f"ゴール進行: クールダウン中（前回から{elapsed/60:.0f}分）→ スキップ")
+                    return False
+            except (ValueError, TypeError):
+                pass
+
+        return True
+
+    def _load_goal_progress_state(self) -> dict:
+        """MemoryStore からゴール進行の状態を復元する。"""
+        import json as _json
+        raw = self.memory.get_state("goal_progress_state")
+        if raw:
+            try:
+                return _json.loads(raw)
+            except Exception:
+                pass
+        return {
+            "current_phase": "check_goal",
+            "completion_criteria": [],
+            "action_items": [],
+            "current_action_index": 0,
+            "cycle_count": 0,
+            "last_action_result": "",
+            "consecutive_failures": 0,
+        }
+
+    def _save_goal_progress_state(self, state: dict):
+        """MemoryStore にゴール進行の状態を保存する。"""
+        import json as _json
+        self.memory.set_state("goal_progress_state", _json.dumps(state, ensure_ascii=False))
+
+    def _record_secretary_action(self, cycle: int, result: str):
+        """秘書のアクション履歴を Master/learning/secretary_action_log.json に記録（最大50件）。"""
+        import json as _json
+        from pathlib import Path
+
+        log_path = Path(
+            self.config.get("paths", {}).get("master_dir", "~/agents/Master")
+        ).expanduser() / "learning" / "secretary_action_log.json"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+
+        entries = []
+        if log_path.exists():
+            try:
+                entries = _json.loads(log_path.read_text(encoding="utf-8"))
+            except Exception:
+                entries = []
+
+        entries.append({
+            "cycle": cycle,
+            "timestamp": datetime.now().isoformat(),
+            "result": result[:500],
+        })
+        entries = entries[-50:]  # 最新50件を保持
+
+        tmp = log_path.with_suffix(".tmp")
+        tmp.write_text(_json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.rename(log_path)
+
+    def _build_secretary_learning_context(self) -> str:
+        """プロンプト注入用の学習コンテキストを構築する。"""
+        import json as _json
+        from pathlib import Path
+
+        sections = []
+
+        # 1. 甲原さんの行動ルール（既存の関数を再利用）
+        rules = _build_execution_rules_compact()
+        if rules:
+            sections.append(rules)
+
+        master_dir = Path(
+            self.config.get("paths", {}).get("master_dir", "~/agents/Master")
+        ).expanduser()
+
+        # 2. 直近5件のアクション履歴
+        log_path = master_dir / "learning" / "secretary_action_log.json"
+        if log_path.exists():
+            try:
+                entries = _json.loads(log_path.read_text(encoding="utf-8"))
+                recent = entries[-5:]
+                if recent:
+                    lines = [f"- サイクル#{e['cycle']} ({e['timestamp'][:16]}): {e['result'][:150]}" for e in recent]
+                    sections.append("\n### 直近のアクション履歴\n" + "\n".join(lines))
+            except Exception:
+                pass
+
+        # 3. 秘書の学習記憶
+        memory_path = master_dir / "learning" / "secretary_memory.md"
+        if memory_path.exists():
+            try:
+                content = memory_path.read_text(encoding="utf-8").strip()
+                if content:
+                    sections.append(f"\n### 秘書の学習記憶\n{content[:1000]}")
+            except Exception:
+                pass
+
+        return "\n".join(sections)
+
+    def _parse_goal_progress_result(self, output: str, prev_state: dict) -> dict:
+        """Claude Code 出力をパースしてゴール進行状態を更新する。"""
+        import json as _json
+        state = dict(prev_state)
+
+        # ===GOAL_PROGRESS_START=== ... ===GOAL_PROGRESS_END=== を抽出
+        start_marker = "===GOAL_PROGRESS_START==="
+        end_marker = "===GOAL_PROGRESS_END==="
+        if start_marker in output and end_marker in output:
+            block = output.split(start_marker, 1)[1].split(end_marker, 1)[0].strip()
+            try:
+                parsed = _json.loads(block)
+                if "phase" in parsed:
+                    state["current_phase"] = parsed["phase"]
+                if "completion_criteria" in parsed:
+                    state["completion_criteria"] = parsed["completion_criteria"]
+                if "action_items" in parsed:
+                    state["action_items"] = parsed["action_items"]
+                if "current_action_index" in parsed:
+                    state["current_action_index"] = parsed["current_action_index"]
+                if "result_summary" in parsed:
+                    state["last_action_result"] = parsed["result_summary"]
+            except _json.JSONDecodeError:
+                # JSON でなくても result_summary だけ拾う
+                state["last_action_result"] = block[:300]
+
+        state["cycle_count"] = prev_state.get("cycle_count", 0) + 1
+        return state
+
+    def _build_goal_progress_prompt(self, state: dict, learning_context: str) -> str:
+        """秘書ゴール進行モードのプロンプトを構築する。"""
+        from pathlib import Path
+
+        now = datetime.now().strftime("%Y/%m/%d %H:%M")
+        cycle = state.get("cycle_count", 0)
+        phase = state.get("current_phase", "check_goal")
+        last_result = state.get("last_action_result", "なし（初回）")
+        criteria = state.get("completion_criteria", [])
+        actions = state.get("action_items", [])
+        action_idx = state.get("current_action_index", 0)
+
+        project_root = Path(self.config.get("paths", {}).get("repo_root", "~/agents")).expanduser()
+        creds_file = project_root / "System" / "credentials" / "kohara_google.txt"
+
+        # 進捗情報
+        progress_section = ""
+        if criteria:
+            criteria_str = "\n".join([f"  - {c}" for c in criteria])
+            progress_section += f"\n### 完了基準\n{criteria_str}\n"
+        if actions:
+            action_lines = []
+            for i, a in enumerate(actions):
+                mark = "✅" if i < action_idx else ("▶️" if i == action_idx else "⬜")
+                action_lines.append(f"  {mark} {i+1}. {a}")
+            progress_section += f"\n### アクション一覧（進捗）\n" + "\n".join(action_lines) + "\n"
+
+        prompt = f"""あなたは甲原海人のAI秘書です。定常業務がない空き時間なので、Addnessの「定常業務の自動化」ゴールを自律的に進めてください。
+
+## 現在の状態
+
+現在: {now} / サイクル: #{cycle} / フェーズ: {phase}
+前回の結果: {last_result}
+{progress_section}
+{learning_context}
+
+## ゴール進行の手順
+
+あなたは以下のフェーズに沿って動きます。現在のフェーズ「{phase}」から再開してください。
+
+### フェーズ: check_goal
+1. `tabs_context_mcp` でタブ情報を取得
+2. `tabs_create_mcp` で新しいタブを作成
+3. `navigate` で Addness のゴールページに遷移:
+   https://app.addness.co.jp/goals/01JMCKB7NB5B4X3RJDSZ5QZ6ZC
+4. `read_page` でゴールの状態・アクション・コメントを確認
+5. 現状を把握したら次のフェーズへ
+
+### フェーズ: define_criteria
+1. ゴールの内容を踏まえて、具体的な「完了基準」を3〜5個定義する
+2. 完了基準は測定可能で、1つのサイクル（15分）で進められる粒度にする
+
+### フェーズ: list_actions
+1. 完了基準を達成するための具体的なアクション一覧を作成する
+2. 各アクションは1サイクル（15分）以内で完了できる粒度にする
+3. 優先度順に並べる
+
+### フェーズ: execute
+1. 未完了アクションの中から次のアクション（index={action_idx}）を1つ実行する
+2. コード修正・ファイル作成・Web調査・ブラウザ操作など、必要な手段を使って実行する
+3. 実行後、結果を記録する
+4. 全アクション完了時は check_goal に戻る
+
+### フェーズ: report
+1. 今回のサイクルで何をしたか・何が分かったか・次に何が必要かをまとめる
+2. check_goal に戻る
+
+## ブラウザ操作（Chrome MCP）
+
+1. **タブ確認**: `mcp__claude-in-chrome__tabs_context_mcp`
+2. **新規タブ**: `mcp__claude-in-chrome__tabs_create_mcp`
+3. **ページ遷移**: `mcp__claude-in-chrome__navigate`
+4. **ページ読み取り**: `mcp__claude-in-chrome__read_page`
+5. **クリック/入力**: `mcp__claude-in-chrome__find`
+6. **フォーム入力**: `mcp__claude-in-chrome__form_input`
+7. **JavaScript**: `mcp__claude-in-chrome__javascript_tool`
+8. **テキスト取得**: `mcp__claude-in-chrome__get_page_text`
+
+## Addness ログイン
+
+ログインが必要な場合:
+1. 認証情報を読み込む: `cat {creds_file}`
+2. koa800sea.nifs@gmail.com でGoogleログイン
+3. 2段階認証が出たら:
+   ```bash
+   cd {project_root}
+   python3 System/line_notify.py "🔐 Googleログイン: 2段階認証の承認をお願いします"
+   ```
+   90秒待機 → 確認
+
+## 制約
+
+- **Addnessにコメントを投稿しない**（確認・報告はLINE経由で行う）
+- **決済しない**（金銭が発生する操作は禁止）
+- **承認が必要な作業**（外部へのメッセージ送信、本番環境変更等）は実行せず、LINEで甲原さんに確認する
+- **1サイクル最大15分** で区切る。完了しなくても途中経過を記録して終了する
+
+## 出力フォーマット
+
+最後に必ず以下の形式で出力してください:
+
+===GOAL_PROGRESS_START===
+{{
+  "phase": "(次のフェーズ名: check_goal / define_criteria / list_actions / execute / report)",
+  "completion_criteria": ["基準1", "基準2"],
+  "action_items": ["アクション1", "アクション2"],
+  "current_action_index": 0,
+  "result_summary": "今回やったことの要約（3行以内）"
+}}
+===GOAL_PROGRESS_END===
+"""
+        return prompt
+
+    async def _run_secretary_goal_progress(self):
+        """秘書ゴール進行モード: 空き時間にAddnessのゴールを自律的に進める。"""
+        from .notifier import send_line_notify
+
+        logger.info("秘書ゴール進行: 開始チェック")
+
+        # 空き時間判定
+        if not self._is_free_for_goal_progress():
+            return
+
+        # プリフライトチェック（Chrome + OAuth）
+        ok, claude_cmd, secretary_config, project_root, preflight_err = self._ensure_claude_chrome_ready()
+        if not ok:
+            logger.warning(f"秘書ゴール進行: プリフライト失敗 → スキップ - {preflight_err}")
+            return
+
+        logger.info("秘書ゴール進行: 実行開始")
+        self.memory.set_state("goal_progress_last_run", datetime.now().isoformat())
+
+        # 状態復元 + 学習コンテキスト構築
+        state = self._load_goal_progress_state()
+        learning_context = self._build_secretary_learning_context()
+
+        # プロンプト構築
+        prompt = self._build_goal_progress_prompt(state, learning_context)
+
+        # Claude Code 実行
+        success, output, error = self._execute_claude_code_task(
+            "秘書ゴール進行", claude_cmd, secretary_config,
+            project_root, prompt, max_turns=30, timeout=900,
+            use_chrome=True,
+        )
+
+        if success:
+            # 結果パース → 状態更新
+            new_state = self._parse_goal_progress_result(output, state)
+            new_state["consecutive_failures"] = 0
+            self._save_goal_progress_state(new_state)
+
+            # アクション記録
+            result_summary = new_state.get("last_action_result", "")
+            self._record_secretary_action(new_state["cycle_count"], result_summary)
+
+            # LINE報告
+            now_str = datetime.now().strftime("%H:%M")
+            report = (
+                f"🎯 秘書ゴール進行 完了\n"
+                f"━━━━━━━━━━━━\n"
+                f"サイクル: #{new_state['cycle_count']} / フェーズ: {new_state['current_phase']}\n"
+                f"{result_summary[:400]}\n"
+                f"━━━━━━━━━━━━\n"
+                f"完了時刻: {now_str}"
+            )
+            send_line_notify(report)
+            logger.info(f"秘書ゴール進行: 完了 - サイクル#{new_state['cycle_count']}")
+        else:
+            # 失敗 → 連続失敗カウント
+            state["consecutive_failures"] = state.get("consecutive_failures", 0) + 1
+            self._save_goal_progress_state(state)
+
+            logger.error(f"秘書ゴール進行: 失敗 ({state['consecutive_failures']}回連続) - {error}")
+
+            # 連続3回失敗でLINE通知
+            if state["consecutive_failures"] >= 3:
+                send_line_notify(
+                    f"⚠️ 秘書ゴール進行: 連続{state['consecutive_failures']}回失敗\n"
+                    f"エラー: {error[:300]}"
+                )
+                # カウントリセット（通知後は再カウント）
+                state["consecutive_failures"] = 0
+                self._save_goal_progress_state(state)

@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年3月2日（Looker Studioセッション維持・自動ログイン・クレジット監視） |
+| 最終更新 | 2026年3月2日（ゴール進行モード追加） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -170,6 +170,13 @@
 51. **日報検証→自動再実行**: daily_report_verify（09:20）で未入力を検知した場合、daily_report_inputを自動で再実行（1日1回まで）。リトライ後も未完了ならLINE通知
 52. **Looker Studioセッション維持**: 毎朝07:00に `looker_session_keepalive` がChrome CDP経由でLooker Studioの2ページを開いてGoogleセッションをリフレッシュ（Claude Code不要の軽量処理）
 53. **Looker Studio自動ログイン**: Googleログイン切れ検知時、`credentials/kohara_google.txt`からパスワードを読み込みChrome MCPで自動ログイン（koa800sea.nifs→kohara.kaitoの順）。2段階認証はLINE通知→甲原のiPhoneで承認
+
+### Phase 12: ゴール進行モード（実装完了）
+54. **秘書ゴール進行モード**: 定常業務の空き時間（30分ごとにチェック）にAddnessの「定常業務の自動化」ゴールを自律的に進める。Chrome MCPでAddnessを直接操作し、ゴール確認→完了基準定義→アクション一覧作成→実行→報告のサイクルを回す
+55. **空き時間判定**: 深夜早朝（22-07時）・定常業務時間帯（日報入力/Looker CSV/日次レポート±15分バッファ）・前回実行20分以内はスキップ。定常業務 > LINE指示 > ゴール進行の優先順位を維持
+56. **サイクル間状態引き継ぎ**: MemoryStore（SQLite）でフェーズ・完了基準・アクション一覧・進捗を永続化。30分後の次サイクルで前回の続きから再開
+57. **学習ループ**: `Master/learning/secretary_action_log.json`（最大50件）にアクション履歴を自動記録。直近5件+行動ルール+学習記憶をプロンプトに注入し、同じ失敗を繰り返さない
+58. **連続失敗通知**: 3回連続失敗でLINE通知。1サイクル最大15分（900秒タイムアウト）で定常業務を妨げない
 
 ### Phase 10: OS共有基盤・自己認識（実装完了）
 46. **行動ルール（OS）の動的同期**: `execution_rules.json` をSingle Source of Truthとし、app.py（Render）へは `/api/sync_execution_rules` APIで自動同期。local_agent起動時+ルール更新時に自動実行。永続ディスクに保存しフォールバックにハードコード版を併用
