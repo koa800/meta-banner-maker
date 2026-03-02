@@ -205,7 +205,11 @@ push_learning_data() {
   if git push origin main 2>> "$LOG_FILE"; then
     log "学習データ push 完了"
   else
-    log "WARNING: 学習データ push 失敗（次回リトライ）"
+    # push失敗 → コミットを取り消してファイルを退避
+    # （この後の git reset --hard でコミットもファイルも消えるため）
+    log "WARNING: 学習データ push 失敗 → 一時退避"
+    git reset HEAD~1 2>/dev/null || true
+    cp -r "$learning_dir" /tmp/hinata_learning_backup 2>/dev/null || true
   fi
 }
 
@@ -253,6 +257,13 @@ if ! git reset --hard origin/main 2>> "$LOG_FILE"; then
   exit 1
 fi
 log "git reset 完了"
+
+# 学習データの一時退避を復元（push失敗時のみ /tmp に退避されている）
+if [ -d /tmp/hinata_learning_backup ]; then
+  cp -r /tmp/hinata_learning_backup/* "$REPO_DIR/Master/learning/" 2>/dev/null || true
+  rm -rf /tmp/hinata_learning_backup
+  log "学習データ復元完了（push失敗分 → 次回再試行）"
+fi
 
 # --- ローカル rsync でデプロイ ---
 
