@@ -297,28 +297,29 @@ def _extract_recent_posts(profile: dict) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Claude analysis
+# Claude analysis (Claude Code CLI — サブスク課金・API消費なし)
 # ---------------------------------------------------------------------------
-CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
+
+
+def _run_claude_cli(prompt: str, model: str = "claude-sonnet-4-6",
+                    max_turns: int = 3, timeout: int = 180) -> str:
+    """Claude Code CLI でテキスト生成。サブスク課金でAPI消費なし。"""
+    env = os.environ.copy()
+    path = env.get("PATH", "")
+    if "/opt/homebrew/bin" not in path:
+        env["PATH"] = f"/opt/homebrew/bin:{path}"
+    claude_cmd = "/opt/homebrew/bin/claude"
+    cmd = [claude_cmd, "-p", "--model", model, "--max-turns", str(max_turns), prompt]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+    if result.returncode != 0:
+        raise RuntimeError(f"Claude CLI failed (code={result.returncode}): {result.stderr[:300]}")
+    return result.stdout.strip()
 
 
 def _call_claude(api_key: str, system: str, user_msg: str, max_tokens: int = 4096) -> str:
-    headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
-    payload = {
-        "model": "claude-sonnet-4-20250514",
-        "max_tokens": max_tokens,
-        "system": system,
-        "messages": [{"role": "user", "content": user_msg}],
-    }
-    resp = requests.post(CLAUDE_API_URL, headers=headers, json=payload, timeout=120)
-    if resp.status_code != 200:
-        raise RuntimeError(f"Claude API error ({resp.status_code}): {resp.text[:500]}")
-    data = resp.json()
-    return data["content"][0]["text"]
+    """Claude Code CLI 経由でテキスト生成（api_key は後方互換のため残すが未使用）。"""
+    prompt = f"{system}\n\n{user_msg}"
+    return _run_claude_cli(prompt, model="claude-sonnet-4-6", max_turns=3, timeout=180)
 
 
 def classify_followings(api_key: str, followings: list[dict]) -> dict:

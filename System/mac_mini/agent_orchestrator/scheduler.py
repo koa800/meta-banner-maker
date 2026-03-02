@@ -500,9 +500,10 @@ cat {creds_file}
 
     def _execute_claude_code_task(self, task_label, claude_cmd, secretary_config,
                                   project_root, prompt, max_turns=25, timeout=600,
-                                  use_chrome=False):
+                                  use_chrome=False, model="claude-sonnet-4-6"):
         """Claude Code CLI 実行ヘルパー（1回リトライ・エラー分類付き）。
         use_chrome=True のときは --chrome を渡し、秘書用ChromeのMCPでブラウザ操作を有効にする。
+        model: 使用するモデル（デフォルト: claude-sonnet-4-6）
         Returns: (success: bool, output: str, error_msg: str)
         """
         import subprocess
@@ -515,7 +516,7 @@ cat {creds_file}
         if "/opt/homebrew/bin" not in path:
             env["PATH"] = f"/opt/homebrew/bin:{path}"
         env["CLAUDE_CONFIG_DIR"] = str(secretary_config)
-        cmd = [str(claude_cmd), "-p", "--model", "claude-sonnet-4-6",
+        cmd = [str(claude_cmd), "-p", "--model", model,
                "--max-turns", str(max_turns)]
         if use_chrome:
             cmd.append("--chrome")
@@ -1595,10 +1596,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
         await self._check_follow_up_suggestions(send_line_notify)
 
     async def _notify_weekly_bottleneck(self, send_line_notify):
-        """今週のボトルネックをClaudeで分析してLINE通知"""
-        import anthropic as _anthropic
-        from datetime import date
-
+        """今週のボトルネックをClaude Code CLIで分析してLINE通知"""
         master_dir = self.config.get("paths", {}).get("master_dir", "~/agents/Master")
         actionable_path = os.path.expanduser(os.path.join(master_dir, "addness", "actionable-tasks.md"))
         if not os.path.exists(actionable_path):
@@ -1611,13 +1609,14 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
             return
 
         try:
-            client = _anthropic.Anthropic()
-            response = client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=400,
-                system="あなたはスキルプラス事業の戦略アドバイザーです。簡潔に要点を伝えてください。",
-                messages=[{"role": "user", "content": f"""以下のAddnessタスク状況を分析し、
-今週の最大のボトルネックを1〜2件特定してください。
+            ok, claude_cmd, secretary_config, project_root, err = self._prepare_claude_env()
+            if not ok:
+                logger.debug(f"Weekly bottleneck: CLI準備失敗: {err}")
+                return
+
+            prompt = f"""あなたはスキルプラス事業の戦略アドバイザーです。簡潔に要点を伝えてください。
+
+以下のAddnessタスク状況を分析し、今週の最大のボトルネックを1〜2件特定してください。
 
 【タスク状況】
 {content}
@@ -1627,15 +1626,21 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
 ・[最重要課題] 〜 理由を1行で
 ・[次点] 〜 理由を1行で（あれば）
 
-具体的で行動につながる内容にしてください。"""}]
+具体的で行動につながる内容にしてください。"""
+
+            success, analysis, error = self._execute_claude_code_task(
+                "weekly_bottleneck", claude_cmd, secretary_config,
+                project_root, prompt, max_turns=3, timeout=120,
             )
-            analysis = response.content[0].text.strip()
-            ok = send_line_notify(
-                f"\n{analysis}\n"
-                f"━━━━━━━━━━━━"
-            )
-            if ok:
-                logger.info("Weekly bottleneck analysis sent")
+            if success and analysis:
+                ok = send_line_notify(
+                    f"\n{analysis}\n"
+                    f"━━━━━━━━━━━━"
+                )
+                if ok:
+                    logger.info("Weekly bottleneck analysis sent")
+            else:
+                logger.debug(f"Weekly bottleneck: CLI失敗: {error}")
         except Exception as e:
             logger.debug(f"Weekly bottleneck analysis error: {e}")
 
@@ -1643,7 +1648,6 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
         """毎週水曜10:00: 最新AIニュースを分析してスキルプラスのコンテンツ更新提案をLINE通知"""
         from .notifier import send_line_notify
         from datetime import date
-        import anthropic as _anthropic
 
         today_str = date.today().strftime("%Y/%m/%d")
 
@@ -1664,13 +1668,16 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
             return
 
         try:
+            ok_env, claude_cmd, secretary_config, project_root, err = self._prepare_claude_env()
+            if not ok_env:
+                logger.error(f"weekly_content_suggestions: CLI準備失敗: {err}")
+                return
+
             _content_exec_rules = _build_execution_rules_compact()
-            client = _anthropic.Anthropic()
-            response = client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=500,
-                system="あなたはスキルプラス（AI副業教育コース）のコンテンツディレクターです。" + _content_exec_rules,
-                messages=[{"role": "user", "content": f"""以下の最新AIニュースを踏まえて、スキルプラスのカリキュラム・教材の更新提案をしてください。
+
+            prompt = f"""あなたはスキルプラス（AI副業教育コース）のコンテンツディレクターです。{_content_exec_rules}
+
+以下の最新AIニュースを踏まえて、スキルプラスのカリキュラム・教材の更新提案をしてください。
 
 【最新AIニュース（直近）】
 {news_content}
@@ -1682,19 +1689,25 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
 1. [セクション/教材名]: [追加・修正内容を1行で]
    → 理由: [そのニュースとの関連を1行で]
 
-受講生にとって今すぐ価値がある内容にしてください。"""}]
+受講生にとって今すぐ価値がある内容にしてください。"""
+
+            success, suggestions, error = self._execute_claude_code_task(
+                "weekly_content_suggestions", claude_cmd, secretary_config,
+                project_root, prompt, max_turns=3, timeout=120,
             )
-            suggestions = response.content[0].text.strip()
-            message = (
-                f"\n{suggestions}\n"
-                f"━━━━━━━━━━━━\n"
-                f"💡 詳細はCursorで展開できます"
-            )
-            task_id = self.memory.log_task_start("weekly_content_suggestions")
-            ok = send_line_notify(message)
-            self.memory.log_task_end(task_id, "success" if ok else "error",
-                                     result_summary=suggestions[:100])
-            logger.info("Weekly content suggestions sent")
+            if success and suggestions:
+                message = (
+                    f"\n{suggestions}\n"
+                    f"━━━━━━━━━━━━\n"
+                    f"💡 詳細はCursorで展開できます"
+                )
+                task_id = self.memory.log_task_start("weekly_content_suggestions")
+                ok = send_line_notify(message)
+                self.memory.log_task_end(task_id, "success" if ok else "error",
+                                         result_summary=suggestions[:100])
+                logger.info("Weekly content suggestions sent")
+            else:
+                logger.error(f"weekly_content_suggestions: CLI失敗: {error}")
         except Exception as e:
             logger.error(f"Weekly content suggestions failed: {e}")
 
@@ -2035,9 +2048,8 @@ head -3 "{csv_dir}/{csv_filename}"
                 )
 
     async def _run_daily_group_digest(self):
-        """毎日21:00: グループLINEの1日分のメッセージをClaude分析→秘書グループに報告"""
+        """毎日21:00: グループLINEの1日分のメッセージをClaude Code CLI分析→秘書グループに報告"""
         import json as _json
-        import anthropic as _anthropic
         from .notifier import send_line_notify
         from datetime import date
 
@@ -2103,16 +2115,13 @@ head -3 "{csv_dir}/{csv_filename}"
             log_text = log_text[:4000] + "\n...(以下省略)"
 
         try:
-            client = _anthropic.Anthropic()
-            response = client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=600,
-                system=(
-                    "あなたはスキルプラス事業のAI秘書です。"
-                    "甲原海人（代表・マーケティング責任者）向けに、"
-                    "LINEグループの1日の会話を簡潔に報告してください。"
-                ),
-                messages=[{"role": "user", "content": f"""以下は今日のLINEグループのメッセージログです。
+            ok_env, claude_cmd, secretary_config, project_root, env_err = self._prepare_claude_env()
+            if not ok_env:
+                raise RuntimeError(f"CLI準備失敗: {env_err}")
+
+            prompt = f"""あなたはスキルプラス事業のAI秘書です。甲原海人（代表・マーケティング責任者）向けに、LINEグループの1日の会話を簡潔に報告してください。
+
+以下は今日のLINEグループのメッセージログです。
 甲原さんが把握すべき内容を簡潔にまとめてください。
 
 {log_text}
@@ -2123,9 +2132,16 @@ head -3 "{csv_dir}/{csv_filename}"
 ・メンバーの活動度やテンション（気になる点があれば）
 ・甲原さんがアクションすべき事項（あれば）
 
-特に報告すべき内容がないグループは省略してOKです。"""}],
+特に報告すべき内容がないグループは省略してOKです。"""
+
+            success, cli_output, error = self._execute_claude_code_task(
+                "daily_group_digest", claude_cmd, secretary_config,
+                project_root, prompt, max_turns=3, timeout=120,
             )
-            analysis = response.content[0].text.strip()
+            if success and cli_output:
+                analysis = cli_output
+            else:
+                raise RuntimeError(f"CLI失敗: {error}")
         except Exception as e:
             logger.error(f"daily_group_digest: Claude analysis failed: {e}")
             # Claude失敗時は簡易サマリーで代替
@@ -2473,6 +2489,7 @@ JSON以外の文字は出力しないでください。"""}],
         logger.info(f"weekly_profile_learning completed: {updated_count} updated, {skipped_count} skipped, style_rules={style_rules_count}, comm_updated={len(comm_updated_names)}")
 
     async def _run_repair_check(self):
+        # 2026-03-02 API消費削減のため無効化。手動修復は claude -p で代替。
         if _repair_agent_ref is None:
             logger.warning("Repair agent not initialized, skipping repair check")
             return
@@ -3164,20 +3181,28 @@ JSON以外の文字は出力しないでください。"""}],
 
 ## 出力形式
 
-JSON形式で返してください:
+以下のマーカーで囲んだJSON形式で返してください（マーカー行以外のテキストは出力しないでください）:
+===JSON_START===
 {{"memory": "hinata_memory.mdの全文", "report": "Slack投稿テキスト"}}
+===JSON_END===
 """
             try:
-                client = anthropic.Anthropic()
-                response = client.messages.create(
-                    model="claude-sonnet-4-6",
-                    max_tokens=2000,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                result_text = response.content[0].text.strip()
+                ok_env, claude_cmd, secretary_config, project_root, env_err = self._prepare_claude_env()
+                if not ok_env:
+                    raise RuntimeError(f"CLI準備失敗: {env_err}")
 
-                # JSON抽出（```json ... ``` で囲まれていたら剥がす）
-                if "```json" in result_text:
+                success, result_text, cli_error = self._execute_claude_code_task(
+                    "weekly_hinata_memory", claude_cmd, secretary_config,
+                    project_root, prompt, max_turns=3, timeout=180,
+                )
+                if not success:
+                    raise RuntimeError(f"CLI失敗: {cli_error}")
+
+                # ===JSON_START=== / ===JSON_END=== マーカーでJSON抽出
+                if "===JSON_START===" in result_text and "===JSON_END===" in result_text:
+                    result_text = result_text.split("===JSON_START===", 1)[1].split("===JSON_END===", 1)[0].strip()
+                # フォールバック: ```json ... ``` で囲まれていたら剥がす
+                elif "```json" in result_text:
                     result_text = result_text.split("```json", 1)[1].split("```", 1)[0].strip()
                 elif "```" in result_text:
                     result_text = result_text.split("```", 1)[1].split("```", 1)[0].strip()

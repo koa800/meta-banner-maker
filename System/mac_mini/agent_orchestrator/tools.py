@@ -20,6 +20,21 @@ SYSTEM_DIR = os.path.dirname(os.path.dirname(_orch_dir))  # System/
 VENV_PYTHON = os.path.expanduser("~/agent-env/bin/python3")
 
 
+def _run_claude_cli(prompt: str, model: str = "claude-sonnet-4-6",
+                    max_turns: int = 3, timeout: int = 120) -> str:
+    """Claude Code CLI でテキスト生成。サブスク課金でAPI消費なし。"""
+    env = os.environ.copy()
+    path = env.get("PATH", "")
+    if "/opt/homebrew/bin" not in path:
+        env["PATH"] = f"/opt/homebrew/bin:{path}"
+    claude_cmd = "/opt/homebrew/bin/claude"
+    cmd = [claude_cmd, "-p", "--model", model, "--max-turns", str(max_turns), prompt]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+    if result.returncode != 0:
+        raise RuntimeError(f"Claude CLI failed (code={result.returncode}): {result.stderr[:300]}")
+    return result.stdout.strip()
+
+
 @dataclass
 class ToolResult:
     success: bool
@@ -415,7 +430,6 @@ def os_sync_session() -> ToolResult:
     Claude APIで現在の理解をサマリー化してLINEに送信。
     """
     import json as _json
-    import anthropic as _anthropic
     from .notifier import send_line_notify
 
     master_dir = os.path.expanduser("~/agents/Master")
@@ -553,16 +567,10 @@ def os_sync_session() -> ToolResult:
 """
 
     try:
-        client = _anthropic.Anthropic()
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=800,
-            system="あなたは甲原海人のAI秘書。OSすり合わせを秘書側から能動的に行う。",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        os_report = response.content[0].text.strip()
+        cli_prompt = f"あなたは甲原海人のAI秘書。OSすり合わせを秘書側から能動的に行う。\n\n{prompt}"
+        os_report = _run_claude_cli(cli_prompt, model="claude-sonnet-4-6", max_turns=3, timeout=120)
     except Exception as e:
-        return ToolResult(success=False, output="", error=f"Claude API error: {e}")
+        return ToolResult(success=False, output="", error=f"Claude CLI error: {e}")
 
     sent = send_line_notify(os_report)
     if sent:

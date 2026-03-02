@@ -113,27 +113,32 @@ def fetch_all_news(config: dict) -> list[dict]:
     return all_articles[:max_articles]
 
 
-def _get_anthropic_api_key(config: dict) -> str:
-    """config → 環境変数の順で Anthropic API Key を取得"""
-    key = config.get("anthropic_api_key", "").strip()
-    if key:
-        return key
-    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if key:
-        return key
-    raise ValueError("Anthropic API Key が設定されていません（config or 環境変数 ANTHROPIC_API_KEY）")
+def _run_claude_cli(prompt: str, model: str = "claude-sonnet-4-6",
+                    max_turns: int = 3, timeout: int = 120) -> str:
+    """Claude Code CLI でテキスト生成。サブスク課金でAPI消費なし。"""
+    import subprocess as _sp
+    env = os.environ.copy()
+    path = env.get("PATH", "")
+    if "/opt/homebrew/bin" not in path:
+        env["PATH"] = f"/opt/homebrew/bin:{path}"
+    claude_cmd = "/opt/homebrew/bin/claude"
+    cmd = [claude_cmd, "-p", "--model", model, "--max-turns", str(max_turns), prompt]
+    result = _sp.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+    if result.returncode != 0:
+        raise RuntimeError(f"Claude CLI failed (code={result.returncode}): {result.stderr[:300]}")
+    return result.stdout.strip()
 
 
-def summarize_with_anthropic(articles: list[dict], config: dict) -> str:
-    """Anthropic Messages API で記事を日本語要約"""
-    api_key = _get_anthropic_api_key(config)
-
+def summarize_with_claude_cli(articles: list[dict], config: dict) -> str:
+    """Claude Code CLI で記事を日本語要約（サブスク課金・API消費なし）"""
     articles_text = "\n".join([
         f"- {a['title']} ({a['source']})"
         for a in articles
     ])
 
-    prompt = f"""以下はGoogle Newsから収集したAI関連の最新ニュース見出しです。
+    prompt = f"""あなたはAI業界に詳しいテックライターです。英語のニュース見出しを日本語で分かりやすく要約します。専門用語は適切に解説してください。
+
+以下はGoogle Newsから収集したAI関連の最新ニュース見出しです。
 これらを日本語で要約し、重要なニュースや発表をまとめてください。
 
 要約のフォーマット:
@@ -147,37 +152,7 @@ def summarize_with_anthropic(articles: list[dict], config: dict) -> str:
 {articles_text}
 ---"""
 
-    headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json",
-    }
-
-    payload = {
-        "model": config.get("anthropic_model", "claude-haiku-4-5-20251001"),
-        "max_tokens": 1500,
-        "system": "あなたはAI業界に詳しいテックライターです。英語のニュース見出しを日本語で分かりやすく要約します。専門用語は適切に解説してください。",
-        "messages": [
-            {"role": "user", "content": prompt},
-        ],
-    }
-
-    response = requests.post(
-        "https://api.anthropic.com/v1/messages",
-        headers=headers,
-        json=payload,
-        timeout=60,
-    )
-
-    if response.status_code != 200:
-        logger.error("Anthropic APIエラー", extra={
-            "status_code": response.status_code,
-            "error": {"type": "APIError", "message": response.text[:500]},
-        })
-        raise Exception(f"Anthropic API error: {response.status_code} - {response.text}")
-
-    data = response.json()
-    return data["content"][0]["text"]
+    return _run_claude_cli(prompt, model="claude-sonnet-4-6", max_turns=3, timeout=120)
 
 
 def send_to_slack(message: str, config: dict) -> bool:
@@ -240,8 +215,8 @@ def main():
             return
         
         # 要約
-        print("Anthropic APIで要約中...")
-        summary = summarize_with_anthropic(articles, config)
+        print("Claude Code CLIで要約中...")
+        summary = summarize_with_claude_cli(articles, config)
         print("  → 要約完了")
         
         # Slack送信
