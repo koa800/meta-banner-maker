@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年3月2日（ゴール進行モード追加） |
+| 最終更新 | 2026年3月2日（API→CLI移行・ゴール進行モード追加） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -167,6 +167,7 @@
 ### Phase 11: エラー自律リカバリ（実装完了）
 49. **Anthropic APIクレジット残高監視**: Orchestratorが週1回（月曜08:20）テストAPIコールで残高チェック。クレジット不足検知時にLINE通知。復旧時にも通知。自動課金はしない
 50. **LINE応答エラー1回リトライ**: Render（app.py）でAnthropic API呼び出し失敗時、クレジット不足以外なら3秒待って1回リトライ。クレジット不足は即エラー通知
+54. **API→CLI移行（API消費削減）**: 非リアルタイムのバッチ/スケジュールタスク7箇所をAnthropic API直接呼び出しからClaude Code CLI（サブスク課金）に移行。対象: weekly_bottleneck, weekly_content_suggestions, daily_group_digest, weekly_hinata_memory, os_sync_session, ai_news要約, sns_analyzer分析。repair_checkは無効化（手動`claude -p`で代替）
 51. **日報検証→自動再実行**: daily_report_verify（09:20）で未入力を検知した場合、daily_report_inputを自動で再実行（1日1回まで）。リトライ後も未完了ならLINE通知
 52. **Looker Studioセッション維持**: 毎朝07:00に `looker_session_keepalive` がChrome CDP経由でLooker Studioの2ページを開いてGoogleセッションをリフレッシュ（Claude Code不要の軽量処理）
 53. **Looker Studio自動ログイン**: Googleログイン切れ検知時、`credentials/kohara_google.txt`からパスワードを読み込みChrome MCPで自動ログイン（koa800sea.nifs→kohara.kaitoの順）。2段階認証はLINE通知→甲原のiPhoneで承認
@@ -463,7 +464,7 @@ bash System/line_bot_local/sync_data.sh
 | `LINE_CHANNEL_SECRET` | LINE Webhook署名検証 |
 | `LINE_CHANNEL_ACCESS_TOKEN` | LINE API認証 |
 | `OPENAI_API_KEY` | OpenAI API認証（旧・カレンダー用途のみ残存） |
-| `ANTHROPIC_API_KEY` | Claude API認証（返信案生成） |
+| `ANTHROPIC_API_KEY` | Claude API認証（Render返信案生成・クレジット残高チェック用。Orchestratorのバッチタスクは2026-03-02以降Claude Code CLIに移行済み） |
 | `OWNER_USER_ID` | オーナー（甲原海人）のLINE User ID |
 | `SECRETARY_GROUP_ID` | AI秘書とのやりとり部屋のGroup ID |
 | `LOCAL_AGENT_TOKEN` | PC常駐エージェント・Mac Mini Orchestrator認証用（Mac Mini側の `AGENT_TOKEN` と同値） |
@@ -591,7 +592,7 @@ bash System/line_bot_local/sync_data.sh
 | 5分ごと | `git_pull_sync` | 🟢 | GitHubからpull→rsyncデプロイ→サービス再起動 |
 | 30分ごと | `render_health_check` | 🟢 | Renderサーバー死活監視（ダウン時LINE通知） |
 | 5分ごと | `service_watchdog` | 🟢 | Orchestrator非依存のサービス監視・自動復旧（bash+launchctlのみ） |
-| 30分ごと | `repair_check` | 🟢 | ログからエラー検知→修復提案 |
+| 30分ごと | `repair_check` | 🟢 | ~~ログからエラー検知→修復提案~~（API消費削減のため無効化。手動`claude -p`で代替） |
 
 #### 週次タスク
 
@@ -812,7 +813,7 @@ MacBook (どこからでも)
 - [x] 曖昧な指示へのヒヤリング: 「広告どう？」等の抽象質問には選択肢を提示して聞き返す
 - [x] 深掘り質問の制限: データ取得系は即実行、確認は最大1回に制限（質問より行動を優先）
 - [x] 番号選択バグ修正: AI秘書が提示した番号リストに「2」「3」で回答するとメッセージ送信コマンドと誤認されていた問題を修正（メンション/Q&A文脈のみコマンド扱い）
-- [x] ai_news Anthropic API切替: OpenAI→Anthropic（claude-haiku-4-5）、Slack送信はSLACK_AI_TEAM_WEBHOOK_URL環境変数にフォールバック
+- [x] ai_news Anthropic API切替: OpenAI→Anthropic→Claude Code CLI（サブスク課金）。Slack送信はSLACK_AI_TEAM_WEBHOOK_URL環境変数にフォールバック
 - [x] Claude Code自律モード統合（Phase 8）: 返信案生成・タスク実行でClaude Code CLI（`--chrome`フラグ付き）を優先使用。プロファイル自動検索・スクリプト実行・Web検索・ブラウザ操作が可能に。失敗時は既存API/Coordinatorにフォールバック
 - [x] Claude Code認証分離: `~/.claude-secretary/`（秘書アカウント koa800.secretary@gmail.com MAX 5x）で日向エージェント（`~/.claude/`）と完全分離
 - [x] Claude Code bypassPermissions設定: Bash/WebSearch/Read等の全ツール解放。破壊的操作（rm/sudo/kill/force-push等）のみask制限

@@ -32,7 +32,7 @@
 ### 常時
 - 5分ごと: health_check + git_pull_sync
 - 15秒ごと: slack_dispatch + slack_hinata_auto_reply
-- 30分ごと: repair_check + render_health_check + video_learning_reminder
+- 30分ごと: ~~repair_check~~（2026-03-02無効化） + render_health_check + video_learning_reminder
 
 ## Looker Studio / 日報
 
@@ -42,6 +42,23 @@
 - **セッション維持**: 07:00に毎日CDP経由でLooker Studioを開いてセッションリフレッシュ
 - **認証情報**: `System/credentials/kohara_google.txt`（.gitignore、Mac Miniには scp で配置）
 - **詳細手順**: `Project/定常業務.md` 参照
+
+## API → Claude Code CLI 移行（2026-03-02）
+
+非リアルタイムのバッチ/スケジュールタスクはAnthropic API直接呼び出しからClaude Code CLI（サブスク課金）に移行済み。
+
+| タスク | 移行前 | 移行後 |
+|--------|--------|--------|
+| weekly_bottleneck | Anthropic API (haiku) | CLI (sonnet, max_turns=3) |
+| weekly_content_suggestions | Anthropic API (haiku) | CLI (sonnet, max_turns=3) |
+| daily_group_digest | Anthropic API (haiku) | CLI (sonnet, max_turns=3) |
+| weekly_hinata_memory | Anthropic API (sonnet) | CLI (sonnet, max_turns=3, JSON出力マーカー) |
+| os_sync_session | Anthropic API (sonnet) | CLI (sonnet, max_turns=3) |
+| ai_news要約 | REST API (haiku) | CLI (sonnet, max_turns=3) |
+| sns_analyzer分析 | REST API (sonnet) | CLI (sonnet, max_turns=3) |
+| repair_check | Anthropic API | **無効化**（手動`claude -p`で代替） |
+
+**APIのまま残すもの**: Render(app.py), local_agent, handler_runner, qa_handler, content_analyzer, generate_comm_profiles, addness_people_profiler, Slack即時応答, anthropic_credit_check, weekly_profile_learning, who_to_ask
 
 ## Renderデータ永続化
 
