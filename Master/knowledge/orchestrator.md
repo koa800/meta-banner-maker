@@ -5,7 +5,7 @@
 ### 朝の流れ
 - 06:30: sheets_sync（データ準備）
 - 08:10: ai_news
-- 08:20/14:20/20:20: anthropic_credit_check（Anthropic APIクレジット残高チェック → 不足時LINE通知）
+- 月曜 08:20: anthropic_credit_check（Anthropic APIクレジット残高チェック → 不足時LINE通知）
 - 08:25: oauth_health_check（Google + Claude Code OAuth 検査・自動リフレッシュ）
 - 08:30: daily_addness_digest（朝ブリーフィング + カレンダー）
 - 08:40: daily_report_input（Chrome MCP。max_turns=40, timeout=15分）
