@@ -712,20 +712,29 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                 if not value:
                     missing.append(label)
 
-            # 4. 結果に基づいて通知
+            # 4. 結果に基づいて通知 + 自動リトライ
             if missing:
-                msg = (
-                    f"\n⚠️ 日報検証: {target_md} のデータ未入力\n"
-                    f"━━━━━━━━━━━━\n"
-                    f"未入力: {', '.join(missing)}\n"
-                )
-                if not task_ran_today:
-                    msg += "日報入力タスクが実行されていない可能性があります\n"
+                # 既にリトライ済みなら通知のみ
+                retry_done = self.memory.get_state("daily_report_retry_date") == str(date.today())
+                if retry_done:
+                    msg = (
+                        f"\n⚠️ 日報検証: {target_md} のデータ未入力（リトライ後も未完了）\n"
+                        f"━━━━━━━━━━━━\n"
+                        f"未入力: {', '.join(missing)}\n"
+                        f"━━━━━━━━━━━━"
+                    )
+                    send_line_notify(msg)
+                    logger.warning(f"日報検証: リトライ後も未入力 - {missing}")
                 else:
-                    msg += "タスクは実行されましたが、書き込みに失敗した可能性があります\n"
-                msg += "━━━━━━━━━━━━"
-                send_line_notify(msg)
-                logger.warning(f"日報検証: 未入力 - {missing}")
+                    # 自動リトライ実行
+                    logger.info(f"日報検証: 未入力検知 {missing} → daily_report_input を自動再実行")
+                    send_line_notify(
+                        f"\n🔄 日報検証: {target_md} 未入力を検知\n"
+                        f"未入力: {', '.join(missing)}\n"
+                        f"日報入力を自動で再実行します"
+                    )
+                    self.memory.set_state("daily_report_retry_date", str(date.today()))
+                    await self._run_daily_report_input()
             else:
                 logger.info(f"日報検証: {target_md} の全データ入力確認OK")
 
