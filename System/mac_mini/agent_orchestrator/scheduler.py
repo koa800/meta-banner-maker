@@ -1010,19 +1010,16 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                     except Exception as re_err:
                         logger.error(f"local_agent restart failed: {re_err}")
 
-                state_key = "local_agent_stale_notified"
-                last_n = self.memory.get_state(state_key)
-                if not last_n or (datetime.now() - datetime.fromisoformat(last_n)).total_seconds() > 3600:
-                    if restarted:
-                        send_line_notify(
-                            "\n🔄 local_agent 自動再起動\nプロセス停止を検知→自動で再起動しました"
-                        )
-                    else:
+                # 自動再起動失敗時のみ通知（成功時は通知しない）
+                if not restarted:
+                    state_key = "local_agent_stale_notified"
+                    last_n = self.memory.get_state(state_key)
+                    if not last_n or (datetime.now() - datetime.fromisoformat(last_n)).total_seconds() > 3600:
                         send_line_notify(
                             "\n⚠️ local_agent 停止\nプロセスが見つかりません\n"
                             "自動再起動にも失敗。手動で確認してください"
                         )
-                    self.memory.set_state(state_key, datetime.now().isoformat())
+                        self.memory.set_state(state_key, datetime.now().isoformat())
         except Exception as e:
             logger.debug(f"local_agent check error: {e}")
 
