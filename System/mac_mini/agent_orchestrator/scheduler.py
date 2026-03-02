@@ -750,11 +750,13 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
             )
             if header_result.returncode != 0:
                 logger.error(f"日報検証: ヘッダー読み取り失敗: {header_result.stderr[:200]}")
+                send_line_notify(f"⚠️ 日報検証失敗: ヘッダー読み取りエラー\n{header_result.stderr[:150]}")
                 return
 
             match = re.search(r'行1:\s*(\[.*\])', header_result.stdout)
             if not match:
                 logger.error("日報検証: ヘッダー行のパースに失敗")
+                send_line_notify("⚠️ 日報検証失敗: ヘッダー行のパースエラー")
                 return
 
             headers = ast.literal_eval(match.group(1))
@@ -780,6 +782,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
             )
             if data_result.returncode != 0:
                 logger.error(f"日報検証: データ読み取り失敗: {data_result.stderr[:200]}")
+                send_line_notify(f"⚠️ 日報検証失敗: データ読み取りエラー\n{data_result.stderr[:150]}")
                 return
 
             # 各行のデータを抽出（行1=row5, 行3=row7, 行5=row9, 行9=row13, 行10=row14, 行11=row15）
@@ -834,6 +837,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
 
         except Exception as e:
             logger.error(f"日報検証: エラー - {e}")
+            send_line_notify(f"⚠️ 日報検証で予期しないエラー\n{str(e)[:150]}")
 
     # 広告チーム全体 LINEグループID
     _AD_TEAM_GROUP_ID = "C7dd7f40a3af2186ff490997264c1036a"
@@ -859,12 +863,14 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
             )
             if result.returncode != 0:
                 logger.error(f"日報リマインド: check_daily_report 失敗: {result.stderr[:300]}")
+                send_line_notify(f"⚠️ 日報リマインド失敗: check_daily_report エラー\n{result.stderr[:150]}")
                 return
 
             data = _json.loads(result.stdout)
 
             if data.get("error"):
                 logger.warning(f"日報リマインド: {data['error']}")
+                send_line_notify(f"⚠️ 日報リマインド: {data['error'][:150]}")
                 return
 
             missing_by_person = data.get("missing_by_person", {})
@@ -896,8 +902,10 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
 
         except _json.JSONDecodeError as e:
             logger.error(f"日報リマインド: JSON解析エラー - {e}")
+            send_line_notify(f"⚠️ 日報リマインド: JSON解析エラー\n{str(e)[:150]}")
         except Exception as e:
             logger.error(f"日報リマインド: エラー - {e}")
+            send_line_notify(f"⚠️ 日報リマインドで予期しないエラー\n{str(e)[:150]}")
 
     async def _run_daily_report(self):
         from .notifier import send_line_notify
@@ -1919,6 +1927,7 @@ head -3 "{csv_dir}/{csv_filename}"
     async def _run_csv_sheet_sync_after_download(self, project_root):
         """CSVダウンロード後にcsv_sheet_syncを実行して元データシートを更新する。"""
         import subprocess
+        from .notifier import send_line_notify
         try:
             env = dict(os.environ)
             if "/opt/homebrew/bin" not in env.get("PATH", ""):
@@ -1932,8 +1941,10 @@ head -3 "{csv_dir}/{csv_filename}"
                 logger.info(f"csv_sheet_sync 完了: {result.stdout[-200:]}")
             else:
                 logger.warning(f"csv_sheet_sync 失敗: {result.stderr[:200]}")
+                send_line_notify(f"⚠️ CSV→シート同期失敗\nKPIデータが更新されていない可能性あり\n{result.stderr[:150]}")
         except Exception as e:
             logger.warning(f"csv_sheet_sync 例外: {e}")
+            send_line_notify(f"⚠️ CSV→シート同期で例外発生\n{str(e)[:150]}")
 
     async def _run_kpi_daily_import(self):
         """毎日12:00: 元データの完了チェック → 投入 or リマインド"""
@@ -2071,12 +2082,14 @@ head -3 "{csv_dir}/{csv_filename}"
         result = await self._execute_tool("fetch_group_log", tools.fetch_group_log, date=today_str)
         if not result.success or not result.output:
             logger.warning(f"daily_group_digest: failed to fetch group log: {result.error}")
+            send_line_notify(f"⚠️ グループダイジェスト: ログ取得失敗\n{(result.error or 'unknown')[:150]}")
             return
 
         try:
             data = _json.loads(result.output)
         except _json.JSONDecodeError:
             logger.error("daily_group_digest: invalid JSON from group log")
+            send_line_notify("⚠️ グループダイジェスト: ログデータの解析に失敗")
             return
 
         groups = data.get("groups", {})
