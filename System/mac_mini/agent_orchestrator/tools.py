@@ -239,6 +239,11 @@ def kpi_cache_build() -> ToolResult:
     return _run_script(os.path.join(SYSTEM_DIR, "kpi_cache_builder.py"), [])
 
 
+def kpi_anomaly_check() -> ToolResult:
+    """KPIデータの異常検知（日別・月別の変動を分析し媒体別にドリルダウン）"""
+    return _run_script(os.path.join(SYSTEM_DIR, "kpi_anomaly_detector.py"), ["--verbose"])
+
+
 # --------------- Utility ---------------
 
 def shell_command(cmd: str, timeout: int = 60) -> ToolResult:
@@ -613,6 +618,7 @@ TOOL_REGISTRY = {
     "fetch_group_log": {"fn": fetch_group_log, "description": "Renderサーバーから日次グループログを取得"},
     "update_people_profiles": {"fn": update_people_profiles, "description": "人物プロファイルにグループインサイトを書き込み"},
     "kpi_cache_build": {"fn": kpi_cache_build, "description": "ローカルCSVキャッシュからkpi_summary.jsonを再構築"},
+    "kpi_anomaly_check": {"fn": kpi_anomaly_check, "description": "KPIデータの異常検知・媒体別ドリルダウン"},
     "log_rotate": {"fn": log_rotate, "description": "ログファイルのローテーション（50MB超を圧縮、30日保持）"},
     "os_sync_session": {"fn": os_sync_session, "description": "OSすり合わせセッション（秘書→甲原にLINE通知）"},
 }

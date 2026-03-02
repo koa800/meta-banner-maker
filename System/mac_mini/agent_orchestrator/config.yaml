@@ -77,6 +77,9 @@ schedule:
   kpi_daily_import:
     cron: "0 12 * * *"           # 12:00  KPIデータ投入
     enabled: true
+  kpi_anomaly_check:
+    cron: "5 12 * * *"           # 12:05  KPI異常検知（投入直後に分析→異常時LINE通知）
+    enabled: true
 
   # === 夜の流れ ===
   daily_report:

@@ -19,6 +19,7 @@
 - 平日 12:00/19:00: daily_report_reminder（チームメンバー日報未記入リマインド）
 - 11:30: looker_csv_download（Chrome MCP。前々日分。max_turns=25, timeout=8分）
 - 12:00: kpi_daily_import（CSV → スプレッドシート取り込み）
+- 12:05: kpi_anomaly_check（KPI異常検知 → 異常時のみLINE通知。媒体ドリルダウン+仮説生成）
 - 3時間ごと: mail_inbox_personal + mail_inbox_kohara（:00/:05）
 
 ### 夜

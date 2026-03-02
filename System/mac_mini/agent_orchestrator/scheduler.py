@@ -113,6 +113,7 @@ class TaskScheduler:
             "daily_report_reminder": self._run_daily_report_reminder,
             "anthropic_credit_check": self._run_anthropic_credit_check,
             "looker_session_keepalive": self._run_looker_session_keepalive,
+            "kpi_anomaly_check": self._run_kpi_anomaly_check,
         }
 
     def setup(self):
@@ -2016,6 +2017,21 @@ head -3 "{csv_dir}/{csv_filename}"
                 f"⚠️ 夜間KPIキャッシュ再生成失敗\n"
                 f"{(result.error or 'unknown')[:150]}"
             )
+
+    async def _run_kpi_anomaly_check(self):
+        """KPI投入後: 異常検知 → LINE通知（異常がある場合のみ）"""
+        result = await self._execute_tool("kpi_anomaly_check", tools.kpi_anomaly_check)
+        if result.success:
+            output = result.output.strip()
+            if "異常なし" in output:
+                logger.info("KPI anomaly check: no anomalies")
+            elif output:
+                # 異常検知あり → LINE通知
+                from .notifier import send_line_notify
+                send_line_notify(output)
+                logger.info(f"KPI anomaly detected and notified: {output[:200]}")
+        else:
+            logger.warning(f"KPI anomaly check failed: {result.error[:200] if result.error else 'unknown'}")
 
     async def _run_log_rotate(self):
         """毎日3:00: ログローテーション"""
