@@ -183,6 +183,34 @@ EOPLIST
 
 ensure_plist_path
 
+# --- 学習データ push（fetch/reset の前に実行して上書き防止） ---
+push_learning_data() {
+  local learning_dir="$REPO_DIR/Master/learning"
+  [ -d "$learning_dir" ] || return 0
+
+  # 学習ファイルに変更があるか確認
+  local changed_files
+  changed_files=$(git diff --name-only -- "Master/learning/" 2>/dev/null || echo "")
+  local untracked_files
+  untracked_files=$(git ls-files --others --exclude-standard -- "Master/learning/" 2>/dev/null || echo "")
+
+  if [ -z "$changed_files" ] && [ -z "$untracked_files" ]; then
+    return 0
+  fi
+
+  log "学習データ変更検出 → commit & push"
+  git add "Master/learning/" 2>> "$LOG_FILE" || { log "WARNING: git add 失敗（学習データ）"; return 0; }
+  git commit -m "auto: 日向学習データ同期 ($(date '+%m/%d %H:%M'))" 2>> "$LOG_FILE" || { log "WARNING: git commit 失敗（学習データ）"; return 0; }
+
+  if git push origin main 2>> "$LOG_FILE"; then
+    log "学習データ push 完了"
+  else
+    log "WARNING: 学習データ push 失敗（次回リトライ）"
+  fi
+}
+
+push_learning_data
+
 # --- fetch して差分チェック（厳密検証） ---
 FETCH_STDERR=$(mktemp)
 if ! git fetch origin main 2>"$FETCH_STDERR"; then

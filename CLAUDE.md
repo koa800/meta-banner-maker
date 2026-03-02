@@ -164,6 +164,7 @@ Master/learning/
 - **アクション記録**: hinata_agent.py（親プロセス）が確実に書く。Claude Code に任せない
 - **フィードバック検出**: 指示のテキストから感情を自動判定（positive/negative）
 - **コンテキスト注入**: learning.py が直近アクション+フィードバック+記憶+知見をプロンプトに注入
+- **データ同期**: `git_pull_sync.sh` が fetch/reset 前に学習データを自動 commit & push（5分ごと）
 
 ### タスクキュー（hinata_tasks.json）
 

@@ -30,6 +30,13 @@
 - **未接続**: 画像生成（Lubert）/ 動画生成（動画AI未設定）
 - **画像学習パイプライン**: 画像送信+「覚えて」→Claude Vision分析→構造化知識→承認→保存
 
+## 日向学習データの同期
+
+- `Master/learning/` 配下の学習データ（action_log.json, feedback_log.json, hinata_memory.md, insights.md）は Mac Mini 上で書き込まれる
+- `git_pull_sync.sh` が fetch/reset の**前に**ローカル変更を自動 commit & push することで GitHub と同期
+- 同期頻度: 5分ごと（git_pull_sync のスケジュールに統合）
+- push 失敗時はログ記録のみで次回リトライ（pull はブロックしない）
+
 ## 行動ルール（OS）の共有構造
 
 - **Single Source of Truth**: `Master/learning/execution_rules.json`

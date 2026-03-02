@@ -5,6 +5,7 @@
 ### 朝の流れ
 - 06:30: sheets_sync（データ準備）
 - 07:00: looker_session_keepalive（CDP でLooker Studioを開いてGoogleセッション維持）
+- 3日ごと 08:00: addness_fetch（Addnessゴールツリー取得）
 - 08:10: ai_news
 - 月曜 08:20: anthropic_credit_check（Anthropic APIクレジット残高チェック → 不足時LINE通知）
 - 08:25: oauth_health_check（Google + Claude Code OAuth 検査・自動リフレッシュ）
@@ -27,12 +28,15 @@
 - 月曜 9:00: weekly_idea_proposal / 9:30: weekly_stats
 - 水曜 10:00: weekly_content_suggestions
 - 金曜 20:00: os_sync_session（秘書→甲原のOSすり合わせ）
-- 日曜 10:00: weekly_profile_learning / 10:30: weekly_hinata_memory / 11:00: video_knowledge_review
+- 日曜 10:00: weekly_profile_learning / 10:30: weekly_hinata_memory / 11:00: video_knowledge_review（動画知識ライフサイクルレビュー）
+
+### 深夜
+- 03:00: log_rotate（ログ圧縮）
 
 ### 常時
-- 5分ごと: health_check + git_pull_sync
+- 5分ごと: health_check + git_pull_sync（学習データ自動push付き）
 - 15秒ごと: slack_dispatch + slack_hinata_auto_reply
-- 30分ごと: ~~repair_check~~（2026-03-02無効化） + render_health_check + video_learning_reminder
+- 30分ごと: ~~repair_check~~（2026-03-02無効化） + render_health_check + video_learning_reminder（承認待ち動画知識リマインド）
 
 ## Looker Studio / 日報
 
