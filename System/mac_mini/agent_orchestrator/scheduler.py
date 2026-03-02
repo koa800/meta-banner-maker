@@ -606,8 +606,9 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
             if "ログイン" in error or "login" in error.lower():
                 send_line_notify(
                     f"⚠️ 日報自動入力失敗: Googleログイン切れ\n"
-                    f"Chrome で koa800sea.nifs@gmail.com に再ログインが必要です\n"
-                    f"対処: Mac Mini の Chrome を開き Looker Studio にアクセス→ログイン"
+                    f"対処: Mac Mini の Chrome で Looker Studio に再ログイン\n"
+                    f"第1候補: koa800sea.nifs@gmail.com\n"
+                    f"第2候補: kohara.kaito@team.addness.co.jp"
                 )
             elif "OAuth" in error or "credential" in error.lower():
                 send_line_notify(

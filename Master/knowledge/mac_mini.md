@@ -17,6 +17,11 @@
 | ポート9223 Chrome | 9223 | koa800sea.nifs | 甲原 | 甲原としてWebサイト操作 |
 | `secretary_chrome_profile` | 9224 | koa800.secretary | koa800.secretary | 秘書 Chrome MCP（メイン） |
 
+### Looker Studio のログインアカウント
+- **第1候補**: `koa800sea.nifs@gmail.com`（閲覧権限付与済み・ポート9223で自動ログイン可）
+- **第2候補**: `kohara.kaito@team.addness.co.jp`（元の権限者。koa800sea.nifsでダメな場合こちらで）
+- セッション切れ時は Mac Mini の Chrome で Looker Studio にアクセスし再ログイン
+
 ### Claude Code CLI
 - **パス**: `/opt/homebrew/bin/claude`（npm global install）v2.1.63
 - **Node.js**: `/opt/homebrew/bin/node` v25.6.1（brew install）

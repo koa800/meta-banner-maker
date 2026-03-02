@@ -234,6 +234,9 @@ rsync -a --delete \
   --exclude "addness_data/" \
   --exclude "qa_sync/" \
   --exclude "mail_review_web/" \
+  --exclude "looker_browser_profile/" \
+  --exclude "hinata_old/" \
+  --exclude "hinata/logs/" \
   --exclude "__pycache__/" \
   --exclude "*.pyc" \
   --exclude "line_bot/" \
@@ -243,6 +246,8 @@ rsync -a --delete \
   --exclude "data/" \
   --exclude "credentials/" \
   --exclude "config/" \
+  --exclude "mac_mini/agent_orchestrator/logs/" \
+  --exclude "mac_mini/agent_orchestrator/*.db" \
   "$REPO_DIR/System/" "$DEPLOY_DIR/System/" \
   && log "System/ OK" || log "ERROR: System/ rsync 失敗"
 
