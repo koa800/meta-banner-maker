@@ -4,6 +4,7 @@
 
 ### 朝の流れ
 - 06:30: sheets_sync（データ準備）
+- 07:00: looker_session_keepalive（CDP でLooker Studioを開いてGoogleセッション維持）
 - 08:10: ai_news
 - 月曜 08:20: anthropic_credit_check（Anthropic APIクレジット残高チェック → 不足時LINE通知）
 - 08:25: oauth_health_check（Google + Claude Code OAuth 検査・自動リフレッシュ）
@@ -37,6 +38,9 @@
 
 - **CSV保存先**: `~/Desktop/Looker Studio CSV/`（前々日分）。**日報の対象日は前日**
 - **日報入力先**: 報告シート `16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk`「日報」タブ
+- **Googleログイン切れ時**: 自動ログイン（koa800sea.nifs → kohara.kaito の順で試行。2FAはLINE通知→iPhone承認）
+- **セッション維持**: 07:00に毎日CDP経由でLooker Studioを開いてセッションリフレッシュ
+- **認証情報**: `System/credentials/kohara_google.txt`（.gitignore、Mac Miniには scp で配置）
 - **詳細手順**: `Project/定常業務.md` 参照
 
 ## Renderデータ永続化

@@ -111,6 +111,7 @@ class TaskScheduler:
             "video_learning_reminder": self._run_video_learning_reminder,
             "daily_report_reminder": self._run_daily_report_reminder,
             "anthropic_credit_check": self._run_anthropic_credit_check,
+            "looker_session_keepalive": self._run_looker_session_keepalive,
         }
 
     def setup(self):
@@ -376,6 +377,99 @@ class TaskScheduler:
 
         return True, claude_cmd, secretary_config, project_root, ""
 
+    def _build_google_login_instructions(self) -> str:
+        """Looker Studio ログイン切れ時の自動ログイン手順（プロンプト注入用）。"""
+        project_root = Path(self.config.get("paths", {}).get("repo_root", "~/agents")).expanduser()
+        creds_file = project_root / "System" / "credentials" / "kohara_google.txt"
+        return f"""### Googleログイン切れの場合（自動復旧）
+Looker Studio にアクセスした際、ログイン画面やアカウント選択画面が表示された場合は、
+エラーとして終了せず、以下の手順で自動ログインを試みてください。
+
+1. 認証情報を読み込む:
+```bash
+cat {creds_file}
+```
+この出力がGoogleアカウントのパスワードです。
+
+2. ログインフロー（第1候補: koa800sea.nifs@gmail.com）:
+   - アカウント選択画面 → `koa800sea.nifs@gmail.com` を選択。なければ「別のアカウントを使用」
+   - メール入力画面 → `koa800sea.nifs@gmail.com` を入力して「次へ」
+   - パスワード入力画面 → 上記で読み取ったパスワードを入力して「次へ」
+   - 2段階認証画面が表示されたら:
+     a. LINEで通知:
+        ```bash
+        cd {project_root}
+        python3 System/line_notify.py "🔐 Googleログイン: 2段階認証の承認をお願いします（iPhoneに通知が届いています）"
+        ```
+     b. 90秒待機（sleep 90）
+     c. ページの状態を確認。まだ認証画面なら追加で60秒待機
+   - ログイン成功 → Looker Studio に自動遷移するので、元のタスクを続行
+
+3. koa800sea.nifs でログイン失敗した場合:
+   - `kohara.kaito@team.addness.co.jp` で同じパスワードを使ってリトライ
+
+4. 両方失敗した場合のみ:
+   → ===RESULT_START===
+   エラー: Googleログイン失敗（自動復旧できませんでした）
+   ===RESULT_END===
+   と出力して終了"""
+
+    async def _run_looker_session_keepalive(self):
+        """Looker Studio の Google セッションを維持。Chrome CDP でページを開いて閉じる。"""
+        import json
+        import subprocess
+        import time as _time
+        import urllib.request
+
+        CHROME_PORT = 9224  # 秘書Chrome
+        LOOKER_URLS = [
+            "https://lookerstudio.google.com/u/1/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_evmsc9twzd",
+            "https://lookerstudio.google.com/u/1/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_dfv0688m0d",
+        ]
+
+        logger.info("Looker セッション維持: 開始")
+
+        # Chrome 起動確認
+        try:
+            r = subprocess.run(["pgrep", "-f", "Google Chrome"],
+                               capture_output=True, timeout=5)
+            if r.returncode != 0:
+                logger.info("Looker セッション維持: Chrome 未起動 → スキップ")
+                return
+        except Exception:
+            return
+
+        opened_tabs = []
+        for url in LOOKER_URLS:
+            try:
+                req = urllib.request.Request(
+                    f"http://localhost:{CHROME_PORT}/json/new?{url}")
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    tab_info = json.loads(resp.read())
+                    tab_id = tab_info.get("id", "")
+                    if tab_id:
+                        opened_tabs.append(tab_id)
+            except Exception as e:
+                logger.warning(f"Looker セッション維持: タブ作成失敗 - {e}")
+
+        if not opened_tabs:
+            logger.warning("Looker セッション維持: タブを開けませんでした")
+            return
+
+        # ページ読み込み待ち
+        _time.sleep(20)
+
+        # タブを閉じる
+        for tab_id in opened_tabs:
+            try:
+                close_req = urllib.request.Request(
+                    f"http://localhost:{CHROME_PORT}/json/close/{tab_id}")
+                urllib.request.urlopen(close_req, timeout=10)
+            except Exception:
+                pass
+
+        logger.info(f"Looker セッション維持: 完了（{len(opened_tabs)}ページ）")
+
     @staticmethod
     def _col_idx_to_letter(idx):
         """0-based index → Excel列文字 (A=0, B=1, ..., Z=25, AA=26, ...)"""
@@ -565,12 +659,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
   ===RESULT_END===
   と出力して終了
 
-### Googleログイン切れ
-- Looker Studio にアクセスした際、ログイン画面やアカウント選択画面が表示された場合:
-  → ===RESULT_START===
-  エラー: Looker Studio のGoogleログインが切れています。Chrome で再ログインが必要です
-  ===RESULT_END===
-  と出力して終了
+{self._build_google_login_instructions()}
 
 ### 数値の検証
 - 全ての数値がゼロの場合は異常（データ更新遅延の可能性）。LINE報告に「⚠️ 全数値ゼロ: データ更新遅延の可能性」を追記
@@ -1781,12 +1870,7 @@ head -3 "{csv_dir}/{csv_filename}"
   ===RESULT_END===
   と出力して終了
 
-### Googleログイン切れ
-- Looker Studio にアクセスした際、ログイン画面が表示された場合:
-  → ===RESULT_START===
-  エラー: Looker Studio のGoogleログインが切れています
-  ===RESULT_END===
-  と出力して終了
+{self._build_google_login_instructions()}
 
 ### ダウンロード失敗
 - CSVエクスポートボタンが見つからない場合:

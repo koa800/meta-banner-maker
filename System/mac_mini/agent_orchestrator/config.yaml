@@ -27,6 +27,9 @@ schedule:
   ai_news:
     cron: "10 8 * * *"           # 08:10  AIニュース収集
     enabled: true
+  looker_session_keepalive:
+    cron: "0 7 * * *"            # 07:00  Looker Studio セッション維持（CDP でページを開いて閉じる）
+    enabled: true
   oauth_health_check:
     cron: "25 8 * * *"           # 08:25  認証チェック（Google + Claude Code OAuth）※日報入力(08:40)の前に実行
     enabled: true
