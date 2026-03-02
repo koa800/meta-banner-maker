@@ -32,8 +32,39 @@ AIツール/
 - ゴール実行・日報入力: Claude Code CLI (claude-secretary)
 - カレンダー・メール: Google Calendar/Gmail API
 
+## 広告リサーチツール
+
+### 動画広告分析Pro（DPro）
+
+| 項目 | 内容 |
+|------|------|
+| URL | https://dpro.kashika-20mile.com/search |
+| ログインID | addness.adteam@gmail.com |
+| パスワード | Addness0726@@ |
+| 用途 | YouTube / Instagram の動画広告を横断分析。消化額・再生数・LP遷移先・広告主を一覧で確認できる |
+
+**主な使い方**:
+- 競合・他社の動画広告クリエイティブ（CR）とLP（遷移先）をリサーチ
+- 消化額の増加が大きい＝直近で当たっている広告を特定
+- LP種別（記事LP / 直LP / LINE誘導LP / アンケートLP）ごとのトレンド把握
+
+**URLパラメータ**:
+- `app_id=1` → YouTube のみ
+- `app_id=4` → Instagram のみ
+- `app_id=1%2C4` → YouTube + Instagram
+- `media_type=video` → 動画のみ
+- `interval=2` → 2週間
+
+**データ取得の技術メモ**:
+- テーブルは ag-grid（仮想スクロール、DOMに18行のみ）
+- 全行取得は React fiber tree → `stateNode.api` → `forEachNode()` で100件取得可能
+- URL を含むデータは `console.log()` → `read_console_messages` で回収（JavaScript tool の return では BLOCKED される）
+- 詳細なスクリプトは `Master/addness/dpro_動画広告リサーチ.md` を参照
+
+---
+
 ## 今後の拡張計画
 
 - [ ] ブラウザ経由の画像生成（Lovart, Gemini ナノバナナ）
 - [ ] ブラウザ経由の動画生成
-- [ ] secretary_proactive_work で自律的にAIツールを使い分け
+- [ ] secretary_goal_progress で自律的にAIツールを使い分け
