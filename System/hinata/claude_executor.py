@@ -324,6 +324,90 @@ Chrome が常時起動しており、Claude in Chrome 拡張経由で MCP ツー
     return result
 
 
+def execute_orchestrator_repair(
+    diagnosis: dict,
+    timeout_seconds: int = 600,
+) -> Optional[str]:
+    """
+    Orchestrator から投入された定常業務の修復タスクを実行する。
+
+    Args:
+        diagnosis: 診断情報（task_name, trigger, error_type, recent_runs 等）
+        timeout_seconds: タイムアウト
+    Returns:
+        修復結果のテキスト。失敗ならNone。
+    """
+    task_name = diagnosis.get("task_name", "不明")
+    trigger = diagnosis.get("trigger", "unknown")
+    error_type = diagnosis.get("error_type", "")
+    recent_runs = diagnosis.get("recent_runs", [])
+
+    # 診断情報を人間が読める形に整形
+    diagnosis_text = f"タスク名: {task_name}\n検知理由: {trigger}\n"
+    if error_type:
+        diagnosis_text += f"エラー種別: {error_type}\n"
+    if trigger == "slow_execution":
+        diagnosis_text += (
+            f"実行時間: {diagnosis.get('duration_seconds', 0):.0f}秒\n"
+            f"タイムアウト閾値: {diagnosis.get('timeout', 0)}秒\n"
+        )
+    if recent_runs:
+        diagnosis_text += "直近の実行履歴:\n"
+        for r in recent_runs[:5]:
+            diagnosis_text += f"  - [{r.get('status')}] {r.get('at', '')} {r.get('error', '')[:100]}\n"
+
+    # 修復対象ファイルリスト
+    repair_files = [
+        "System/mac_mini/agent_orchestrator/scheduler.py",
+        "System/mac_mini/agent_orchestrator/tools.py",
+        "System/sheets_manager.py",
+        "System/mac_mini/agent_orchestrator/notifier.py",
+    ]
+    files_list = "\n".join(f"  - {f}" for f in repair_files)
+
+    prompt = f"""あなたは「日向」AIエージェントの定常業務修復モードです。
+
+## 診断情報（Orchestrator が自動検知）
+
+{diagnosis_text}
+
+## 修復対象ファイル（これ以外は編集禁止）
+
+{files_list}
+
+## 修復手順
+
+1. CLAUDE.md の関連セクションを読んで、タスクの仕組みを把握する
+2. 診断情報のエラーメッセージとタスク名から、失敗の原因を特定する
+3. 対象ファイルのコードを読んで、修正箇所を見つける
+4. **最小限の修正**で問題を解決する
+5. 修正後、構文チェック:
+   ```bash
+   python3 -c "import py_compile; py_compile.compile('修正ファイルパス', doraise=True)"
+   ```
+6. 構文チェック通過後、コミット＆プッシュ:
+   ```bash
+   cd {WORK_DIR} && git add 修正ファイル && git commit -m "fix: {task_name}の自動修復 - 修正内容" && git push
+   ```
+
+## 重要ルール
+
+- **最小限修正**: 壊れていない部分は絶対に触らない
+- **構文チェック必須**: py_compile が通らなければコミットしない
+- **対象ファイル限定**: 上記リスト以外のファイルは編集しない
+- **自信がなければ断念**: 原因が不明 or 修正範囲が大きい場合は「修復不可: 理由」と報告する
+- 環境問題（認証切れ・Chrome接続等）はコード修正では直らないので「修復不可」とする
+
+修復結果を報告してください。"""
+
+    logger.info(f"Orchestrator 修復タスク開始: {task_name} (trigger={trigger})")
+    # 修復は --chrome 不要（コード修正が目的）
+    result, error = _run_claude(prompt, timeout_seconds, f"修復: {task_name}", use_chrome=False, max_turns=15)
+    if error:
+        logger.error(f"Orchestrator 修復失敗: {error}")
+    return result
+
+
 def execute_self_repair(
     error_summary: str,
     recent_logs: str = "",

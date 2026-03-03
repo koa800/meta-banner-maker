@@ -478,6 +478,121 @@ cat {creds_file}
             result = chr(65 + remainder) + result
         return result
 
+    # ---- 自動修復対象タスク / 修復不可エラー ----
+    _REPAIRABLE_TASKS = {
+        "日報自動入力", "Looker CSVダウンロード", "KPI日次インポート",
+        "日報入力検証", "シート同期", "KPI夜間キャッシュ",
+    }
+    _NON_REPAIRABLE_ERRORS = {
+        "認証エラー", "Chrome MCP 接続エラー", "Googleログイン切れ",
+        "APIレート制限", "Claude Code クレジット不足",
+    }
+
+    def _check_task_health(self, task_name: str, success: bool, task_log_id: int,
+                           max_turns: int, timeout: int, error_type: str = ""):
+        """タスク実行後の健全性チェック。異常検知時に日向へ修復タスクを投入する。"""
+        # 修復対象外タスクはスキップ
+        if task_name not in self._REPAIRABLE_TASKS:
+            return
+
+        # 環境エラー（コード修正では直らない）はスキップ
+        if error_type:
+            for pattern in self._NON_REPAIRABLE_ERRORS:
+                if pattern in error_type:
+                    logger.info(f"_check_task_health: {task_name} は環境エラーのため修復対象外 ({error_type})")
+                    return
+
+        # 24時間以内に同タスクの修復を投入済みならスキップ
+        last_repair = self.memory.get_state(f"last_repair_{task_name}")
+        if last_repair:
+            from datetime import timedelta
+            try:
+                last_dt = datetime.fromisoformat(last_repair)
+                if datetime.now() - last_dt < timedelta(hours=24):
+                    logger.info(f"_check_task_health: {task_name} は24h以内に修復投入済み。スキップ")
+                    return
+            except ValueError:
+                pass
+
+        diagnosis = None
+
+        if not success:
+            # 連続失敗チェック（2回以上で修復投入）
+            streak = self.memory.get_task_failure_streak(task_name)
+            if streak >= 2:
+                recent = self.memory.get_recent_task_runs(task_name, limit=5)
+                diagnosis = {
+                    "task_name": task_name,
+                    "trigger": "consecutive_failures",
+                    "failure_streak": streak,
+                    "error_type": error_type,
+                    "recent_runs": [
+                        {"status": r["status"], "error": r.get("error_message", ""), "at": r["started_at"]}
+                        for r in recent
+                    ],
+                }
+        else:
+            # 成功だが duration > timeout * 0.8 → 次回タイムアウトの予兆
+            runs = self.memory.get_recent_task_runs(task_name, limit=1)
+            if runs and runs[0].get("duration_seconds"):
+                duration = runs[0]["duration_seconds"]
+                if duration > timeout * 0.8:
+                    diagnosis = {
+                        "task_name": task_name,
+                        "trigger": "slow_execution",
+                        "duration_seconds": duration,
+                        "timeout": timeout,
+                        "threshold": timeout * 0.8,
+                    }
+
+        if diagnosis:
+            self._dispatch_repair_to_hinata(task_name, diagnosis)
+
+    def _dispatch_repair_to_hinata(self, task_name: str, diagnosis: dict):
+        """日向に修復タスクを投入する。"""
+        import json
+
+        HINATA_TASKS = Path(os.path.expanduser("~/agents/System/hinata/hinata_tasks.json"))
+
+        # hinata_tasks.json に同タスクの pending repair がないか重複チェック
+        if HINATA_TASKS.exists():
+            try:
+                existing = json.loads(HINATA_TASKS.read_text(encoding="utf-8"))
+                for t in existing:
+                    if (t.get("command_type") == "repair"
+                            and t.get("status") == "pending"
+                            and task_name in t.get("instruction", "")):
+                        logger.info(f"_dispatch_repair: {task_name} の修復タスクが既にpending。スキップ")
+                        return
+            except (json.JSONDecodeError, IOError):
+                pass
+
+        instruction = json.dumps(diagnosis, ensure_ascii=False)
+        self._add_hinata_task(HINATA_TASKS, instruction, "", "repair", source="orchestrator")
+
+        # 重複防止タイムスタンプを記録
+        self.memory.set_state(f"last_repair_{task_name}", datetime.now().isoformat())
+
+        # Slack に検知報告（ログ目的）
+        trigger = diagnosis.get("trigger", "unknown")
+        try:
+            from .notifier import send_slack_ai_team
+            if trigger == "consecutive_failures":
+                send_slack_ai_team(
+                    f"🔧 *自動修復検知*: {task_name}\n"
+                    f"連続{diagnosis.get('failure_streak', '?')}回失敗。日向に修復タスクを投入しました。"
+                )
+            elif trigger == "slow_execution":
+                send_slack_ai_team(
+                    f"⏱️ *予防修復検知*: {task_name}\n"
+                    f"実行時間 {diagnosis.get('duration_seconds', 0):.0f}秒（閾値: {diagnosis.get('threshold', 0):.0f}秒）。"
+                    f"日向に予防修復タスクを投入しました。"
+                )
+        except Exception as e:
+            logger.warning(f"_dispatch_repair: Slack通知失敗: {e}")
+
+        logger.info(f"_dispatch_repair: {task_name} の修復タスクを日向に投入 (trigger={trigger})")
+
     def _classify_claude_error(self, stderr: str, stdout: str = "") -> str:
         """Claude Code 実行エラーの原因を分類し、対処を含むメッセージを返す。"""
         combined = (stderr + " " + stdout).lower()
@@ -507,6 +622,9 @@ cat {creds_file}
         import os
         import time as _time
 
+        # メトリクス記録: 開始
+        task_log_id = self.memory.log_task_start(task_label)
+
         env = os.environ.copy()
         # launchd 環境でも node が見つかるよう PATH を保証
         path = env.get("PATH", "")
@@ -528,6 +646,9 @@ cat {creds_file}
                 if result.returncode == 0:
                     output = result.stdout.strip()
                     logger.info(f"{task_label}: Claude Code 完了 ({len(output)} chars)")
+                    # メトリクス記録: 成功
+                    self.memory.log_task_end(task_log_id, "success", result_summary=output[:300])
+                    self._check_task_health(task_label, True, task_log_id, max_turns, timeout)
                     return True, output, ""
 
                 # 失敗 → 全文をログに記録（LINE には分類済み要約のみ送信）
@@ -541,6 +662,9 @@ cat {creds_file}
                     logger.info(f"{task_label}: 60秒後にリトライ...")
                     _time.sleep(60)
                     continue
+                # メトリクス記録: 失敗
+                self.memory.log_task_end(task_log_id, "error", error_message=error_detail)
+                self._check_task_health(task_label, False, task_log_id, max_turns, timeout, error_detail)
                 return False, result.stdout, error_detail
 
             except subprocess.TimeoutExpired:
@@ -548,15 +672,23 @@ cat {creds_file}
                 if attempt == 0:
                     _time.sleep(60)
                     continue
-                return False, "", f"タイムアウト（{timeout // 60}分超過 × 2回）"
+                err = f"タイムアウト（{timeout // 60}分超過 × 2回）"
+                self.memory.log_task_end(task_log_id, "error", error_message=err)
+                self._check_task_health(task_label, False, task_log_id, max_turns, timeout, err)
+                return False, "", err
 
             except Exception as e:
                 logger.error(f"{task_label}: 例外 (attempt {attempt+1}) - {e}")
                 if attempt == 0:
                     _time.sleep(60)
                     continue
-                return False, "", str(e)
+                err = str(e)
+                self.memory.log_task_end(task_log_id, "error", error_message=err)
+                self._check_task_health(task_label, False, task_log_id, max_turns, timeout, err)
+                return False, "", err
 
+        self.memory.log_task_end(task_log_id, "error", error_message="リトライ上限到達")
+        self._check_task_health(task_label, False, task_log_id, max_turns, timeout, "リトライ上限到達")
         return False, "", "リトライ上限到達"
 
     async def _run_daily_report_input(self):
@@ -2852,7 +2984,8 @@ JSON以外の文字は出力しないでください。"""}],
         )
 
     @staticmethod
-    def _add_hinata_task(tasks_path: Path, instruction: str, slack_ts: str, command_type: str):
+    def _add_hinata_task(tasks_path: Path, instruction: str, slack_ts: str,
+                         command_type: str, source: str = "slack"):
         """日向のタスクキューにタスクを追加する。"""
         import json
         import uuid
@@ -2869,7 +3002,7 @@ JSON以外の文字は出力しないでください。"""}],
             "id": str(uuid.uuid4())[:8],
             "instruction": instruction,
             "command_type": command_type,
-            "source": "slack",
+            "source": source,
             "slack_ts": slack_ts,
             "status": "pending",
             "created_at": datetime.now().isoformat(),

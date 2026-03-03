@@ -149,6 +149,30 @@ class MemoryStore:
                 stats[name][r["status"]] = r["cnt"]
             return stats
 
+    def get_recent_task_runs(self, task_name: str, limit: int = 10) -> list:
+        """指定タスクの直近N回の実行履歴を返す。"""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM task_log WHERE task_name = ? ORDER BY started_at DESC LIMIT ?",
+                (task_name, limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_task_failure_streak(self, task_name: str) -> int:
+        """直近の連続失敗回数を返す（最新の成功以降の失敗数）。"""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT status FROM task_log WHERE task_name = ? ORDER BY started_at DESC LIMIT 20",
+                (task_name,),
+            ).fetchall()
+            streak = 0
+            for r in rows:
+                if r["status"] == "success":
+                    break
+                if r["status"] == "error":
+                    streak += 1
+            return streak
+
     def get_daily_summary(self) -> dict:
         today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
         with self._conn() as conn:

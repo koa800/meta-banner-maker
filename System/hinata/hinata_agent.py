@@ -25,7 +25,7 @@ from typing import Optional
 
 import subprocess as _subprocess
 
-from claude_executor import execute_full_cycle, execute_self_repair
+from claude_executor import execute_full_cycle, execute_self_repair, execute_orchestrator_repair
 from learning import record_action, detect_and_record_feedback
 from slack_comm import send_message, send_report
 
@@ -333,6 +333,42 @@ def handle_task(task: dict, config: dict, state: dict) -> dict:
         save_state(state)
         send_message("再開します！")
         complete_task(task_id, True, "再開しました")
+        return state
+
+    elif command_type == "repair":
+        claim_task(task_id)
+        logger.info(f"Orchestrator からの修復タスク: {text[:100]}")
+        try:
+            diagnosis = json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            diagnosis = {"task_name": "不明", "error_type": text[:200]}
+
+        try:
+            result = execute_orchestrator_repair(diagnosis)
+            if result:
+                if "修復不可" in result:
+                    send_message(
+                        f"⚠️ *修復断念*: {diagnosis.get('task_name', '不明')}\n\n"
+                        f"{result[:400]}\n\n甲原さんの確認が必要です。"
+                    )
+                    complete_task(task_id, False, result[:500])
+                else:
+                    send_message(
+                        f"✅ *自動修復完了*: {diagnosis.get('task_name', '不明')}\n\n{result[:400]}"
+                    )
+                    complete_task(task_id, True, result[:500])
+            else:
+                send_message(
+                    f"❌ *修復失敗*: {diagnosis.get('task_name', '不明')}\n\n"
+                    f"Claude Code が結果を返しませんでした。甲原さんの確認が必要です。"
+                )
+                complete_task(task_id, False, "Claude Code が結果を返さなかった")
+        except Exception as e:
+            logger.error(f"repair タスクエラー: {e}")
+            send_message(
+                f"❌ *修復エラー*: {diagnosis.get('task_name', '不明')}\n{str(e)[:200]}"
+            )
+            complete_task(task_id, False, str(e)[:500])
         return state
 
     elif command_type == "instruction":
