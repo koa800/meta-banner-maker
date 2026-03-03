@@ -2241,26 +2241,21 @@ def call_claude_api(instruction: str, task: dict):
 
             # 秘書グループ向けの整形済みメッセージを生成
             platform_tag = "[CW] " if platform == "chatwork" else ""
-            profile_badge = f"👤 {sender_name}{category_line}" if profile else f"👤 {sender_name}"
+            sender_label = f"{sender_name}（{category_line.strip()}）" if category_line.strip() else sender_name
             quoted_line = ""
             if quoted_text:
                 q_preview = quoted_text[:50] + "..." if len(quoted_text) > 50 else quoted_text
-                quoted_line = f"📌 引用元: 「{q_preview}」\n"
-            sheet_note = "📊 シートデータ参照済み\n" if sheet_section else ""
+                quoted_line = f"引用: 「{q_preview}」\n"
             result = (
-                f"{'💬 引用返信案' if quoted_text else '💡 返信案'} {platform_tag}\n"
-                f"{profile_badge}\n"
-                f"\n"
-                f"グループ: {group_name}\n"
+                f"{'引用返信案' if quoted_text else '返信案'} {platform_tag}\n"
+                f"{sender_label} / {group_name}\n"
                 f"「{original_message[:80]}{'...' if len(original_message) > 80 else ''}」\n"
-                f"{quoted_line}{sheet_note}"
+                f"{quoted_line}"
                 f"\n"
-                f"返信案:\n{reply_suggestion}\n"
+                f"{reply_suggestion}\n"
                 f"\n"
-                f"─────────────\n"
-                f"このメッセージにリプライ:\n"
-                f"1 → 承認して送信\n"
-                f"2 [別の内容] → 編集して送信"
+                f"リプライで操作:\n"
+                f"1 → 承認  2 [内容] → 編集"
             )
             # 接触記録を更新（フォローアップ追跡用 + 会話記憶）
             if sender_name:
@@ -2335,7 +2330,7 @@ def call_claude_api(instruction: str, task: dict):
                 messages=[{"role": "user", "content": lp_prompt}]
             )
             draft = _strip_markdown_for_line(response.content[0].text.strip())
-            result_text = f"📝 LPドラフト: {product}\n━━━━━━━━━━━━\n{draft}\n━━━━━━━━━━━━\n💡 フル版はCursorで展開できます"
+            result_text = f"LPドラフト: {product}\n\n{draft}"
             return True, result_text
 
         # ===== 動画スクリプト自動生成タスク =====
@@ -2382,7 +2377,7 @@ TikTok/Instagram向けの引きの強い台本を作成してください。"""
                 messages=[{"role": "user", "content": script_prompt}]
             )
             script = _strip_markdown_for_line(response.content[0].text.strip())
-            result_text = f"🎬 動画台本: {product} ({video_type})\n━━━━━━━━━━━━\n{script}\n━━━━━━━━━━━━\n💡 Cursorで拡張版を作成できます"
+            result_text = f"動画台本: {product}（{video_type}）\n\n{script}"
             return True, result_text
 
         # ===== バナー構成案生成タスク =====
@@ -2418,7 +2413,7 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
                 messages=[{"role": "user", "content": banner_prompt}]
             )
             concepts = _strip_markdown_for_line(response.content[0].text.strip())
-            result_text = f"🎨 バナー構成案: {product} ({platform})\n━━━━━━━━━━━━\n{concepts}\n━━━━━━━━━━━━\n💡 採用案はCursorで画像生成プロンプトに展開できます"
+            result_text = f"バナー構成案: {product}（{platform}）\n\n{concepts}"
             return True, result_text
 
         # ===== 委託先推薦タスク（「誰に頼む？」等） =====
@@ -2434,7 +2429,7 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
                     capture_output=True, text=True, timeout=60
                 )
                 if r.returncode == 0 and r.stdout.strip():
-                    result_text = f"👥 委託先推薦\n━━━━━━━━━━━━\n{r.stdout.strip()[:700]}\n━━━━━━━━━━━━"
+                    result_text = f"委託先の推薦です。\n\n{r.stdout.strip()[:700]}"
                     return True, result_text
                 else:
                     err = r.stderr.strip()[:200] if r.stderr else "不明なエラー"
@@ -2464,18 +2459,15 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
                     last_check_str = last_check[:16]
 
                 parts = [
-                    f"📊 Q&A状況",
-                    f"━━━━━━━━━━━━",
-                    f"通知済み: {len(sent_ids)}件累計",
-                    f"保留中回答: {len(pending)}件",
+                    f"Q&Aの状況です。",
+                    f"通知済み: {len(sent_ids)}件 / 保留中: {len(pending)}件",
                     f"最終チェック: {last_check_str}",
-                    f"━━━━━━━━━━━━",
                 ]
                 if pending:
-                    parts.append("【保留中】")
+                    parts.append("\n保留中の質問:")
                     for qid, qdata in list(pending.items())[:3]:
                         q = qdata.get("question", "")[:30]
-                        parts.append(f"  {qid}: {q}...")
+                        parts.append(f"  {q}...")
                 return True, "\n".join(parts)
             except Exception as e:
                 return False, f"Q&A状況取得エラー: {str(e)}"
@@ -2508,15 +2500,13 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
                 ]
 
                 parts = [
-                    f"🤖 Orchestrator状態",
-                    f"━━━━━━━━━━━━",
-                    f"本日: {success}/{total}件成功 ({errors}件エラー)",
-                    f"スケジュール済み: {schedule.get('total', '?')}ジョブ",
+                    f"Orchestratorの状態です。",
+                    f"本日: {success}/{total}件成功（{errors}件エラー）",
+                    f"スケジュール: {schedule.get('total', '?')}ジョブ",
                     "",
-                    f"直近スケジュール:",
+                    f"直近の予定:",
                 ]
                 parts.extend(sched_lines or ["  （取得失敗）"])
-                parts.append("━━━━━━━━━━━━")
                 return True, "\n".join(parts)
             except Exception as e:
                 return False, f"Orchestrator接続エラー: {str(e)[:150]}\n（Mac Mini Orchestratorが起動していない可能性があります）"
@@ -2547,7 +2537,7 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
                     mtime = actionable_path.stat().st_mtime
                     updated = _dt.fromtimestamp(mtime).strftime("%m/%d %H:%M")
                     summary = f"🔴 期限超過: {overdue_count}件 / 🔄 実行中: {inprog_count}件\n更新: {updated}"
-                return True, f"✅ Addness同期完了\n━━━━━━━━━━━━\n{summary or 'データを更新しました'}\n━━━━━━━━━━━━"
+                return True, f"Addnessの同期が完了しました。\n{summary or 'データを更新しました。'}"
             except Exception as e:
                 return False, f"Addness同期実行エラー: {str(e)}"
 
@@ -2566,7 +2556,7 @@ LINEで読める形式で、合計600文字以内に収めてください。"""
                     capture_output=True, text=True, timeout=120
                 )
                 if r.returncode == 0 and r.stdout.strip():
-                    return True, f"📬 メール確認 ({account})\n━━━━━━━━━━━━\n{r.stdout.strip()[:600]}\n━━━━━━━━━━━━"
+                    return True, f"メール確認しました（{account}）\n\n{r.stdout.strip()[:600]}"
                 else:
                     err = r.stderr.strip()[:300] if r.stderr else "処理完了（結果なし）"
                     return False, f"メール確認エラー: {err}"

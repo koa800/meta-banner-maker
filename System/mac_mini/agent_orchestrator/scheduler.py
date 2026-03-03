@@ -194,10 +194,8 @@ class TaskScheduler:
             except (ValueError, TypeError):
                 pass
         ok = notify_ai_team(
-            f"\n⚠️ タスクエラー: {task_name}\n"
-            f"━━━━━━━━━━━━\n"
-            f"{error_msg[:250]}\n"
-            f"━━━━━━━━━━━━"
+            f"{task_name} でエラーが出ました。\n"
+            f"{error_msg[:250]}"
         )
         if ok:
             self.memory.set_state(state_key, now.isoformat())
@@ -207,7 +205,8 @@ class TaskScheduler:
         if result.success:
             ctx_result = await self._execute_tool("addness_to_context", tools.addness_to_context)
             from .notifier import send_line_notify
-            send_line_notify(f"✅ Addnessゴール同期完了（コンテキスト{'更新済み' if ctx_result.success else '更新失敗'}）")
+            if not ctx_result.success:
+                send_line_notify("Addnessのゴール同期はできましたが、コンテキスト更新に失敗しました。")
         else:
             await self._execute_tool("addness_to_context", tools.addness_to_context)
 
@@ -242,13 +241,9 @@ class TaskScheduler:
             return
 
         account_label = "personal" if account == "personal" else "kohara"
-        message = (
-            f"\n📬 メール確認 ({account_label})\n"
-            f"━━━━━━━━━━━━\n"
-            f"返信待ち: {waiting}件"
-            + (f" / 削除確認: {delete}件" if delete > 0 else "")
-            + f"\n━━━━━━━━━━━━"
-        )
+        message = f"メールに返信待ちが{waiting}件あります（{account_label}）"
+        if delete > 0:
+            message += f"\n削除確認も{delete}件あります。"
         ok = send_line_notify(message)
         if ok:
             logger.info(f"Mail notification sent for {account}: waiting={waiting}")
@@ -575,7 +570,7 @@ cat {creds_file}
         ok, claude_cmd, secretary_config, project_root, preflight_err = self._ensure_claude_chrome_ready()
         if not ok:
             logger.error(f"日報自動入力: プリフライト失敗 - {preflight_err}")
-            send_line_notify(f"⚠️ 日報自動入力失敗\n{preflight_err}")
+            send_line_notify(f"日報の自動入力を始めようとしましたが、準備段階で失敗しました。\n{preflight_err}")
             return
 
         target_date = date.today() - timedelta(days=1)
@@ -642,15 +637,13 @@ python3 System/sheets_manager.py write "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cm
 取得した数値を埋め込んで報告する:
 ```bash
 cd {project_root}
-python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
-━━━━━━━━━━━━
+python3 System/line_notify.py "日報入力が完了しました。
+
 集客数: XXX人
 個別予約数: XX件
 着金売上: ¥X,XXX,XXX
 会員数: XX人（解約: X人）
-サブスク新規: X人
-━━━━━━━━━━━━
-完了時刻: $(date +%H:%M)"
+サブスク新規: X人"
 ```
 ※ XXX 部分は Step 1〜3 で取得した実際の数値に置き換えること。
 
@@ -691,30 +684,29 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                 report = output.split("===RESULT_START===")[1].split("===RESULT_END===")[0].strip()
                 logger.info(f"日報自動入力: 完了 - {report[:300]}")
                 if "エラー" in report:
-                    send_line_notify(f"⚠️ 日報自動入力: {report[:300]}")
+                    send_line_notify(f"日報の自動入力でエラーがありました。\n{report[:300]}")
             else:
                 logger.info(f"日報自動入力: 完了（マーカーなし）- {output[-300:]}")
         else:
             # エラー種別に応じた通知
             if "ログイン" in error or "login" in error.lower():
                 send_line_notify(
-                    f"⚠️ 日報自動入力失敗: Googleログイン切れ\n"
-                    f"対処: Mac Mini の Chrome で Looker Studio に再ログイン\n"
-                    f"第1候補: koa800sea.nifs@gmail.com\n"
-                    f"第2候補: kohara.kaito@team.addness.co.jp"
+                    "日報の自動入力が失敗しました。Googleのログインが切れているようです。\n"
+                    "Mac MiniのChromeでLooker Studioに再ログインしてください。\n"
+                    "（koa800sea.nifs → kohara.kaito の順で試す）"
                 )
             elif "OAuth" in error or "credential" in error.lower():
                 send_line_notify(
-                    f"⚠️ 日報自動入力失敗: Claude Code 認証エラー\n"
-                    f"秘書の Claude Code OAuth トークンの再取得が必要です\n{error}"
+                    f"日報の自動入力が失敗しました。秘書の認証トークンが切れています。\n"
+                    f"再取得が必要です。"
                 )
             elif "Chrome" in error or "MCP" in error:
                 send_line_notify(
-                    f"⚠️ 日報自動入力失敗: Chrome/MCP接続エラー\n"
-                    f"Chrome または Claude in Chrome 拡張の再起動が必要です\n{error}"
+                    "日報の自動入力が失敗しました。Chromeとの接続がうまくいきませんでした。\n"
+                    "Chromeの再起動が必要です。"
                 )
             else:
-                send_line_notify(f"⚠️ 日報自動入力失敗（リトライ後）\n{error}")
+                send_line_notify(f"日報の自動入力がリトライ後も失敗しました。\n{error[:200]}")
 
     async def _run_daily_report_verify(self):
         """09:20: 日報自動入力の完了検証。実データを確認して未入力なら LINE 通知。"""
@@ -750,13 +742,13 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
             )
             if header_result.returncode != 0:
                 logger.error(f"日報検証: ヘッダー読み取り失敗: {header_result.stderr[:200]}")
-                send_line_notify(f"⚠️ 日報検証失敗: ヘッダー読み取りエラー\n{header_result.stderr[:150]}")
+                send_line_notify(f"日報の検証でつまずきました。シートのヘッダーが読めませんでした。")
                 return
 
             match = re.search(r'行1:\s*(\[.*\])', header_result.stdout)
             if not match:
                 logger.error("日報検証: ヘッダー行のパースに失敗")
-                send_line_notify("⚠️ 日報検証失敗: ヘッダー行のパースエラー")
+                send_line_notify("日報の検証でつまずきました。シートの構造が変わっている可能性があります。")
                 return
 
             headers = ast.literal_eval(match.group(1))
@@ -782,7 +774,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
             )
             if data_result.returncode != 0:
                 logger.error(f"日報検証: データ読み取り失敗: {data_result.stderr[:200]}")
-                send_line_notify(f"⚠️ 日報検証失敗: データ読み取りエラー\n{data_result.stderr[:150]}")
+                send_line_notify("日報の検証でつまずきました。データの読み取りに失敗しています。")
                 return
 
             # 各行のデータを抽出（行1=row5, 行3=row7, 行5=row9, 行9=row13, 行10=row14, 行11=row15）
@@ -815,10 +807,8 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                 retry_done = self.memory.get_state("daily_report_retry_date") == str(date.today())
                 if retry_done:
                     msg = (
-                        f"\n⚠️ 日報検証: {target_md} のデータ未入力（リトライ後も未完了）\n"
-                        f"━━━━━━━━━━━━\n"
-                        f"未入力: {', '.join(missing)}\n"
-                        f"━━━━━━━━━━━━"
+                        f"{target_md}の日報がまだ入っていません（自動リトライ後も未完了）\n"
+                        f"未入力: {', '.join(missing)}"
                     )
                     send_line_notify(msg)
                     logger.warning(f"日報検証: リトライ後も未入力 - {missing}")
@@ -826,9 +816,8 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                     # 自動リトライ実行
                     logger.info(f"日報検証: 未入力検知 {missing} → daily_report_input を自動再実行")
                     send_line_notify(
-                        f"\n🔄 日報検証: {target_md} 未入力を検知\n"
-                        f"未入力: {', '.join(missing)}\n"
-                        f"日報入力を自動で再実行します"
+                        f"{target_md}の日報に未入力がありました。\n"
+                        f"{', '.join(missing)} が空なので、自動で再入力します。"
                     )
                     self.memory.set_state("daily_report_retry_date", str(date.today()))
                     await self._run_daily_report_input()
@@ -837,7 +826,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
 
         except Exception as e:
             logger.error(f"日報検証: エラー - {e}")
-            send_line_notify(f"⚠️ 日報検証で予期しないエラー\n{str(e)[:150]}")
+            send_line_notify(f"日報の検証中に想定外のエラーが出ました。\n{str(e)[:150]}")
 
     # 広告チーム全体 LINEグループID
     _AD_TEAM_GROUP_ID = "C7dd7f40a3af2186ff490997264c1036a"
@@ -863,14 +852,14 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
             )
             if result.returncode != 0:
                 logger.error(f"日報リマインド: check_daily_report 失敗: {result.stderr[:300]}")
-                send_line_notify(f"⚠️ 日報リマインド失敗: check_daily_report エラー\n{result.stderr[:150]}")
+                send_line_notify(f"日報リマインドの未記入チェックでエラーが出ました。")
                 return
 
             data = _json.loads(result.stdout)
 
             if data.get("error"):
                 logger.warning(f"日報リマインド: {data['error']}")
-                send_line_notify(f"⚠️ 日報リマインド: {data['error'][:150]}")
+                send_line_notify(f"日報リマインドの確認中にエラーがありました。\n{data['error'][:150]}")
                 return
 
             missing_by_person = data.get("missing_by_person", {})
@@ -902,10 +891,10 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
 
         except _json.JSONDecodeError as e:
             logger.error(f"日報リマインド: JSON解析エラー - {e}")
-            send_line_notify(f"⚠️ 日報リマインド: JSON解析エラー\n{str(e)[:150]}")
+            send_line_notify(f"日報リマインドでデータの読み取りに失敗しました。")
         except Exception as e:
             logger.error(f"日報リマインド: エラー - {e}")
-            send_line_notify(f"⚠️ 日報リマインドで予期しないエラー\n{str(e)[:150]}")
+            send_line_notify(f"日報リマインド中に想定外のエラーが出ました。")
 
     async def _run_daily_report(self):
         from .notifier import send_line_notify
@@ -921,14 +910,11 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
         error_tasks = [name for name, s in stats.items() if s.get("error", 0) > 0]
 
         report_lines = [
-            f"\n📊 日次レポート ({date.today().strftime('%m/%d')})",
-            "━━━━━━━━━━━━",
-            f"タスク: {success}/{total}件成功 ({success_rate}%)",
-            f"APIコール: {summary['api_calls']}回",
+            f"今日の稼働報告です（{date.today().strftime('%m/%d')}）",
+            f"タスク {success}/{total}件成功（{success_rate}%）",
         ]
         if error_tasks:
-            report_lines.append(f"⚠️ エラー: {', '.join(error_tasks[:5])}")
-        report_lines.append("━━━━━━━━━━━━")
+            report_lines.append(f"エラーあり: {', '.join(error_tasks[:5])}")
 
         send_line_notify("\n".join(report_lines))
 
@@ -950,8 +936,8 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
         if api_calls > limit * 0.9:
             logger.warning(f"API call rate critical: {api_calls}/{limit} in last hour")
             send_line_notify(
-                f"\n⚠️ API使用量警告\n直近1時間: {api_calls}/{limit}回\n"
-                f"API制限に近づいています。Anthropicダッシュボードを確認してください。"
+                f"APIの使用量が多くなっています（直近1時間: {api_calls}/{limit}回）\n"
+                f"制限に近いので少し注意が必要です。"
             )
         elif api_calls > limit * 0.8:
             logger.warning(f"API call rate high: {api_calls}/{limit} in last hour")
@@ -982,9 +968,9 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                                     restarted = True
                                 except Exception:
                                     pass
-                            msg = (f"\n🔄 Q&Aモニター停止検知→local_agent再起動\n最終チェック: {age_hours:.0f}時間前"
+                            msg = (f"Q&Aモニターが{age_hours:.0f}時間止まっていたので再起動しました。"
                                    if restarted else
-                                   f"\n⚠️ Q&Aモニター停止\n最終チェック: {age_hours:.0f}時間前\n再起動失敗。手動確認してください")
+                                   f"Q&Aモニターが{age_hours:.0f}時間止まっています。再起動も失敗したので手動で確認が必要です。")
                             send_line_notify(msg)
                             self.memory.set_state(state_key, datetime.now().isoformat())
             except Exception as e:
@@ -1026,8 +1012,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                     last_n = self.memory.get_state(state_key)
                     if not last_n or (datetime.now() - datetime.fromisoformat(last_n)).total_seconds() > 3600:
                         send_line_notify(
-                            "\n⚠️ local_agent 停止\nプロセスが見つかりません\n"
-                            "自動再起動にも失敗。手動で確認してください"
+                            "ローカルエージェントが止まっています。再起動も失敗したので手動で確認が必要です。"
                         )
                         self.memory.set_state(state_key, datetime.now().isoformat())
         except Exception as e:
@@ -1044,9 +1029,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                     last_n = self.memory.get_state(state_key)
                     if not last_n or (datetime.now() - datetime.fromisoformat(last_n)).total_seconds() > 21600:  # 6時間に1回
                         send_line_notify(
-                            f"⚠️ KPIキャッシュ未更新\n"
-                            f"最終更新: {cache_age_hours:.0f}時間前\n"
-                            f"AI秘書のKPIデータが古くなっています"
+                            f"KPIデータが{cache_age_hours:.0f}時間前から更新されていません。秘書の数値回答が古い可能性があります。"
                         )
                         self.memory.set_state(state_key, datetime.now().isoformat())
             except Exception as e:
@@ -1063,9 +1046,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                 if not last_n or (datetime.now() - datetime.fromisoformat(last_n)).total_seconds() > 21600:
                     free_gb = usage.free / (1024**3)
                     send_line_notify(
-                        f"⚠️ Mac Mini ディスク残量警告\n"
-                        f"使用率: {used_pct:.1f}% / 残り: {free_gb:.1f}GB\n"
-                        f"ログ・キャッシュの整理が必要です"
+                        f"Mac Miniのディスクが残り{free_gb:.1f}GBです（使用率{used_pct:.0f}%）。整理が必要です。"
                     )
                     self.memory.set_state(state_key, datetime.now().isoformat())
         except Exception as e:
@@ -1091,9 +1072,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                         last_n = self.memory.get_state(state_key)
                         if not last_n or (datetime.now() - datetime.fromisoformat(last_n)).total_seconds() > 3600:
                             send_line_notify(
-                                f"🚨 Orchestratorクラッシュループ検知\n"
-                                f"短時間に{recent}回再起動しています\n"
-                                f"ログを確認してください"
+                                f"Orchestratorが短時間に{recent}回再起動しています。何か問題が起きているかもしれません。"
                             )
                             self.memory.set_state(state_key, datetime.now().isoformat())
                 elif uptime_min > 10:
@@ -1154,11 +1133,8 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                 break
 
         message = (
-            f"\n💡 今週のおすすめタスク（{priority}）\n"
-            f"━━━━━━━━━━━━\n"
-            f"{task_text}{reason}\n"
-            f"━━━━━━━━━━━━\n"
-            f"→ agent_ideas.md で管理中"
+            f"今週やるといいかもしれないタスクです（{priority}）\n\n"
+            f"{task_text}{reason}"
         )
         task_id = self.memory.log_task_start("weekly_idea_proposal")
         ok = send_line_notify(message)
@@ -1263,10 +1239,8 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                 return
 
             message = (
-                f"\n📅 今日の予定 ({today_str})\n"
-                "━━━━━━━━━━━━\n"
+                f"今日の予定です。\n\n"
                 + "\n".join(events[:8])
-                + "\n━━━━━━━━━━━━"
             )
             ok = send_line_notify(message)
             if ok:
@@ -1320,14 +1294,13 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
             logger.info("No urgent Addness tasks for today")
             return
 
-        parts = [f"\n📋 今日のタスク（{today_str}）\n━━━━━━━━━━━━"]
+        parts = [f"おはようございます。今日のタスク状況です。"]
         if overdue_items:
-            parts.append(f"🔴 期限超過 ({len(overdue_items)}件):")
-            parts.extend(f"  ・{t}" for t in overdue_items[:4])
+            parts.append(f"\n期限超過（{len(overdue_items)}件）")
+            parts.extend(f"  {t}" for t in overdue_items[:4])
         if in_progress_items:
-            parts.append(f"🔄 実行中:")
-            parts.extend(f"  ・{t}" for t in in_progress_items[:3])
-        parts.append(f"━━━━━━━━━━━━\n📅 データ: {data_date}")
+            parts.append(f"\n実行中")
+            parts.extend(f"  {t}" for t in in_progress_items[:3])
 
         message = "\n".join(parts)
         task_id = self.memory.log_task_start("daily_addness_digest")
@@ -1370,14 +1343,13 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
             logger.info("No urgent Addness goals for today")
             return
 
-        parts = [f"\n📋 Addness 日次ダイジェスト（{today_str}）\n━━━━━━━━━━━━"]
+        parts = [f"Addnessのタスク状況です。"]
         if overdue:
-            parts.append("【期限超過】\n" + "\n".join(overdue[:5]))
+            parts.append("\n期限超過\n" + "\n".join(overdue[:5]))
         if due_today:
-            parts.append("【本日期限】\n" + "\n".join(due_today[:3]))
+            parts.append("\n本日期限\n" + "\n".join(due_today[:3]))
         if due_soon:
-            parts.append("【今週期限】\n" + "\n".join(due_soon[:5]))
-        parts.append("━━━━━━━━━━━━")
+            parts.append("\n今週期限\n" + "\n".join(due_soon[:5]))
 
         task_id = self.memory.log_task_start("daily_addness_digest")
         ok = send_line_notify("\n".join(parts))
@@ -1415,8 +1387,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                     pass
 
             ok = send_line_notify(
-                f"\n⚠️ Renderサーバー応答なし\n{server_url}\n\nエラー: {err_str}\n"
-                f"LINE秘書が応答できていない可能性があります"
+                "Renderサーバーから応答がありません。LINE秘書が止まっている可能性があります。"
             )
             if ok:
                 self.memory.set_state("render_health_notified", datetime.now().isoformat())
@@ -1455,7 +1426,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
             logger.info("Anthropic credit check OK")
             # 復旧通知（前回エラーだった場合）
             if self.memory.get_state("anthropic_credit_alert_active"):
-                send_line_notify("\n✅ Anthropic APIクレジットが復旧しました")
+                send_line_notify("AnthropicのAPIクレジットが復旧しました。")
                 self.memory.set_state("anthropic_credit_alert_active", "")
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")
@@ -1470,8 +1441,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                         pass
 
                 send_line_notify(
-                    "\n⚠️ Anthropic APIクレジット不足\n"
-                    "秘書のLINE応答が停止しています。\n"
+                    "AnthropicのAPIクレジットが不足しています。秘書の応答が止まっています。\n"
                     "Claude Console → Billing でクレジットを追加してください。\n"
                     "https://console.anthropic.com/settings/billing"
                 )
@@ -1493,9 +1463,8 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
         # token.jsonの存在確認
         if not os.path.exists(token_path):
             send_line_notify(
-                "\n⚠️ OAuth警告\ntoken.jsonが見つかりません\n"
-                "Q&A監視・メール・カレンダーが動作していない可能性があります\n"
-                "MacBookから再セットアップが必要です"
+                "認証ファイルが見つかりません。Q&A監視・メール・カレンダーが動いていない可能性があります。\n"
+                "MacBookから再セットアップが必要です。"
             )
             logger.error("token.json not found")
             return
@@ -1505,13 +1474,13 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
             with open(token_path) as f:
                 token_data = json.load(f)
         except Exception as e:
-            send_line_notify(f"\n⚠️ OAuth警告\ntoken.json読み込みエラー: {str(e)[:150]}")
+            send_line_notify(f"認証ファイルの読み込みでエラーが出ました。")
             logger.error(f"Failed to read token.json: {e}")
             return
 
         if not token_data.get("refresh_token"):
             send_line_notify(
-                "\n⚠️ OAuth警告\nrefresh_tokenが存在しません\n再認証が必要です"
+                "認証トークンが見つかりません。再認証が必要です。"
             )
             logger.error("No refresh_token in token.json")
             return
@@ -1523,8 +1492,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
             auth_keywords = ["auth", "token", "credential", "403", "401", "permission", "access"]
             if any(k in err_lower for k in auth_keywords):
                 send_line_notify(
-                    f"\n⚠️ Google OAuth エラー\nGoogle API認証に失敗しました\n"
-                    f"MacBookで再認証が必要な場合があります\n\nエラー:\n{result.error[:200]}"
+                    "Google APIの認証に失敗しました。MacBookで再認証が必要かもしれません。"
                 )
                 logger.error(f"OAuth health check: auth error: {result.error[:200]}")
             else:
@@ -1541,8 +1509,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                 logger.info("Claude Code OAuth health check OK")
             else:
                 send_line_notify(
-                    f"\n⚠️ Claude Code OAuth 警告\n{oauth_err}\n"
-                    f"日報自動入力（08:40）が失敗する可能性があります"
+                    "秘書の認証トークンに問題があります。日報の自動入力が失敗する可能性があります。"
                 )
                 logger.error(f"Claude Code OAuth health check failed: {oauth_err}")
 
@@ -1582,16 +1549,14 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                 data_age_note = f"\n⚠️ Addnessデータ: {age_days:.0f}日前（要更新）"
 
         parts = [
-            f"\n📊 週次サマリー ({date.today().strftime('%m/%d')})",
-            "━━━━━━━━━━━━",
-            f"タスク実行: {success}/{total}件成功 ({success_rate}%)",
-            f"Q&A通知済み: {qa_count}件累計",
+            f"今週の稼働まとめです（{date.today().strftime('%m/%d')}）",
+            f"タスク {success}/{total}件成功（{success_rate}%）",
+            f"Q&A通知: {qa_count}件",
         ]
         if error_tasks:
-            parts.append(f"⚠️ エラー: {', '.join(error_tasks[:4])}")
+            parts.append(f"エラーあり: {', '.join(error_tasks[:4])}")
         if data_age_note:
             parts.append(data_age_note)
-        parts.append("━━━━━━━━━━━━")
 
         ok = send_line_notify("\n".join(parts))
         logger.info(f"Weekly stats sent: {total} tasks, {success_rate}% success, {qa_count} Q&As")
@@ -1640,10 +1605,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                 project_root, prompt, max_turns=3, timeout=120,
             )
             if success and analysis:
-                ok = send_line_notify(
-                    f"\n{analysis}\n"
-                    f"━━━━━━━━━━━━"
-                )
+                ok = send_line_notify(analysis)
                 if ok:
                     logger.info("Weekly bottleneck analysis sent")
             else:
@@ -1703,11 +1665,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
                 project_root, prompt, max_turns=3, timeout=120,
             )
             if success and suggestions:
-                message = (
-                    f"\n{suggestions}\n"
-                    f"━━━━━━━━━━━━\n"
-                    f"💡 詳細はCursorで展開できます"
-                )
+                message = suggestions
                 task_id = self.memory.log_task_start("weekly_content_suggestions")
                 ok = send_line_notify(message)
                 self.memory.log_task_end(task_id, "success" if ok else "error",
@@ -1774,10 +1732,9 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
 
         # 最も古い順で最大5件
         suggestions.sort(reverse=True)
-        parts = [f"\n💬 フォローアップ提案\n━━━━━━━━━━━━"]
+        parts = ["しばらく連絡を取っていない方がいます。"]
         for days, name, category in suggestions[:5]:
-            parts.append(f"  {name}({category}) — {days}日未連絡")
-        parts.append("━━━━━━━━━━━━")
+            parts.append(f"  {name}さん（{category}）— {days}日")
 
         ok = send_line_notify("\n".join(parts))
         logger.info(f"Follow-up suggestions sent: {len(suggestions[:5])} people")
@@ -1799,13 +1756,9 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
             if delta not in (90, 30, 7, 3, 1):
                 continue  # 通知対象日のみ
 
-            urgency = "🔴" if delta <= 7 else "🟠" if delta <= 30 else "🟡"
             ok = send_line_notify(
-                f"\n{urgency} リマインダー: {label}\n"
-                f"━━━━━━━━━━━━\n"
-                f"期限: {deadline.strftime('%Y/%m/%d')} (残{delta}日)\n"
-                f"{detail}\n"
-                f"━━━━━━━━━━━━"
+                f"{label}の期限まで残り{delta}日です（{deadline.strftime('%m/%d')}）\n"
+                f"{detail}"
             )
             if ok:
                 logger.info(f"Special reminder sent: {label} in {delta} days")
@@ -1822,7 +1775,7 @@ python3 System/line_notify.py "✅ 定常業務完了: 日報入力（自動）
         ok, claude_cmd, secretary_config, project_root, preflight_err = self._ensure_claude_chrome_ready()
         if not ok:
             logger.error(f"Looker CSV ダウンロード: プリフライト失敗 - {preflight_err}")
-            send_line_notify(f"⚠️ Looker CSVダウンロード失敗\n{preflight_err}")
+            send_line_notify(f"Looker CSVのダウンロード準備で失敗しました。\n{preflight_err}")
             return
 
         target_date = date.today() - timedelta(days=2)
@@ -1914,7 +1867,7 @@ head -3 "{csv_dir}/{csv_filename}"
                 report = output.split("===RESULT_START===")[1].split("===RESULT_END===")[0].strip()
                 logger.info(f"Looker CSV ダウンロード: 完了 - {report[:300]}")
                 if "エラー" in report:
-                    send_line_notify(f"⚠️ Looker CSVダウンロード: {report[:300]}")
+                    send_line_notify(f"Looker CSVダウンロードでエラーがありました。\n{report[:300]}")
                 else:
                     # ダウンロード成功 → csv_sheet_sync で元データ更新
                     await self._run_csv_sheet_sync_after_download(project_root)
@@ -1922,7 +1875,7 @@ head -3 "{csv_dir}/{csv_filename}"
                 logger.info(f"Looker CSV ダウンロード: 完了（マーカーなし）- {output[-300:]}")
                 await self._run_csv_sheet_sync_after_download(project_root)
         else:
-            send_line_notify(f"⚠️ Looker CSVダウンロード失敗（リトライ後）\n{error}")
+            send_line_notify(f"Looker CSVのダウンロードがリトライ後も失敗しました。\n{error[:200]}")
 
     async def _run_csv_sheet_sync_after_download(self, project_root):
         """CSVダウンロード後にcsv_sheet_syncを実行して元データシートを更新する。"""
@@ -1941,10 +1894,10 @@ head -3 "{csv_dir}/{csv_filename}"
                 logger.info(f"csv_sheet_sync 完了: {result.stdout[-200:]}")
             else:
                 logger.warning(f"csv_sheet_sync 失敗: {result.stderr[:200]}")
-                send_line_notify(f"⚠️ CSV→シート同期失敗\nKPIデータが更新されていない可能性あり\n{result.stderr[:150]}")
+                send_line_notify("CSVからシートへの同期が失敗しました。KPIデータが更新されていない可能性があります。")
         except Exception as e:
             logger.warning(f"csv_sheet_sync 例外: {e}")
-            send_line_notify(f"⚠️ CSV→シート同期で例外発生\n{str(e)[:150]}")
+            send_line_notify("CSVからシートへの同期中にエラーが出ました。")
 
     async def _run_kpi_daily_import(self):
         """毎日12:00: 元データの完了チェック → 投入 or リマインド"""
@@ -1968,10 +1921,7 @@ head -3 "{csv_dir}/{csv_filename}"
                     cache_status = "\n⚠️ KPIキャッシュ再生成に失敗（AI秘書のデータが古い可能性あり）"
                     logger.warning(f"KPI cache build failed after import: {cache_result.error[:200] if cache_result.error else 'unknown'}")
                 send_line_notify(
-                    f"\n📊 KPIデータ更新完了\n"
-                    f"━━━━━━━━━━━━\n"
-                    f"{result.output[:200]}{cache_status}\n"
-                    f"━━━━━━━━━━━━"
+                    f"KPIデータの更新が完了しました。{cache_status}"
                 )
             elif result.success and "投入対象なし" in result.output:
                 logger.info(f"KPI process: already up to date for {target_date}")
@@ -1979,22 +1929,14 @@ head -3 "{csv_dir}/{csv_filename}"
                 # 投入失敗を通知
                 logger.warning(f"KPI process result: {result.output[:200]}")
                 send_line_notify(
-                    f"\n⚠️ KPIデータ投入エラー\n"
-                    f"━━━━━━━━━━━━\n"
-                    f"対象日: {target_date}\n"
-                    f"{(result.error or result.output or 'unknown')[:200]}\n"
-                    f"━━━━━━━━━━━━"
+                    f"KPIデータの投入でエラーが出ました（対象日: {target_date}）"
                 )
         else:
             # 未完了 → リマインド送信
             status = check.output if check.success else "チェック失敗"
             send_line_notify(
-                f"\n⏰ KPIデータ未投入リマインド\n"
-                f"━━━━━━━━━━━━\n"
-                f"対象日: {target_date}\n"
-                f"ステータス: {status}\n"
-                f"\n11:30のCSV自動ダウンロードが失敗した可能性があります。ログを確認してください\n"
-                f"━━━━━━━━━━━━"
+                f"{target_date}分のKPIデータがまだ入っていません。\n"
+                f"11:30のCSVダウンロードが失敗した可能性があります。"
             )
             logger.warning(f"KPI data not ready for {target_date}: {status}")
 
@@ -2007,14 +1949,12 @@ head -3 "{csv_dir}/{csv_filename}"
             if cache_result.success:
                 logger.info(f"KPI cache rebuilt: {cache_result.output[:200]}")
                 from .notifier import send_line_notify
-                send_line_notify(f"✅ 管理シート同期+KPIキャッシュ更新完了")
+                send_line_notify("管理シートの同期とKPIキャッシュの更新が完了しました。")
             else:
                 logger.warning(f"KPI cache build failed: {cache_result.error[:200] if cache_result.error else 'unknown'}")
                 from .notifier import send_line_notify
                 send_line_notify(
-                    f"⚠️ KPIキャッシュ再生成失敗\n"
-                    f"Sheets同期は成功しましたが、キャッシュ生成に失敗しました。\n"
-                    f"AI秘書のKPIデータが古い可能性があります。"
+                    "管理シートの同期はできましたが、KPIキャッシュの更新に失敗しました。秘書の数値が古い可能性があります。"
                 )
 
     async def _run_kpi_nightly_cache(self):
@@ -2025,10 +1965,7 @@ head -3 "{csv_dir}/{csv_filename}"
         else:
             logger.warning(f"Nightly KPI cache build failed: {result.error[:200] if result.error else 'unknown'}")
             from .notifier import send_line_notify
-            send_line_notify(
-                f"⚠️ 夜間KPIキャッシュ再生成失敗\n"
-                f"{(result.error or 'unknown')[:150]}"
-            )
+            send_line_notify("夜間のKPIキャッシュ更新に失敗しました。")
 
     async def _run_kpi_anomaly_check(self):
         """KPI投入後: 異常検知 → LINE通知（異常がある場合のみ）"""
@@ -2059,7 +1996,7 @@ head -3 "{csv_dir}/{csv_filename}"
             if self._git_pull_consecutive_failures >= 6:
                 # 復旧通知
                 from .notifier import send_line_notify
-                send_line_notify(f"✅ Git同期復旧（{self._git_pull_consecutive_failures}回連続失敗後に復旧）")
+                send_line_notify(f"Git同期が復旧しました（{self._git_pull_consecutive_failures}回失敗後）。")
             self._git_pull_consecutive_failures = 0
         else:
             self._git_pull_consecutive_failures += 1
@@ -2067,9 +2004,7 @@ head -3 "{csv_dir}/{csv_filename}"
             if self._git_pull_consecutive_failures == 6 or (self._git_pull_consecutive_failures > 6 and self._git_pull_consecutive_failures % 12 == 0):
                 from .notifier import send_line_notify
                 send_line_notify(
-                    f"⚠️ Git同期 {self._git_pull_consecutive_failures}回連続失敗\n"
-                    f"Mac Miniがリポジトリと同期できていません。\n"
-                    f"エラー: {(result.error or 'unknown')[:150]}"
+                    f"Git同期が{self._git_pull_consecutive_failures}回連続で失敗しています。Mac Miniにコードの変更が反映されていません。"
                 )
 
     async def _run_daily_group_digest(self):
@@ -2082,14 +2017,14 @@ head -3 "{csv_dir}/{csv_filename}"
         result = await self._execute_tool("fetch_group_log", tools.fetch_group_log, date=today_str)
         if not result.success or not result.output:
             logger.warning(f"daily_group_digest: failed to fetch group log: {result.error}")
-            send_line_notify(f"⚠️ グループダイジェスト: ログ取得失敗\n{(result.error or 'unknown')[:150]}")
+            send_line_notify("グループLINEのログ取得に失敗しました。ダイジェストを作れませんでした。")
             return
 
         try:
             data = _json.loads(result.output)
         except _json.JSONDecodeError:
             logger.error("daily_group_digest: invalid JSON from group log")
-            send_line_notify("⚠️ グループダイジェスト: ログデータの解析に失敗")
+            send_line_notify("グループLINEのログデータがうまく読めませんでした。")
             return
 
         groups = data.get("groups", {})
@@ -2181,11 +2116,8 @@ head -3 "{csv_dir}/{csv_filename}"
             analysis = "\n".join(parts)
 
         message = (
-            f"\n📋 グループLINEダイジェスト ({date.today().strftime('%m/%d')})\n"
-            f"━━━━━━━━━━━━\n"
-            f"{analysis}\n"
-            f"━━━━━━━━━━━━\n"
-            f"計{total_messages}件のメッセージ"
+            f"今日のグループLINEまとめです（{total_messages}件）\n\n"
+            f"{analysis}"
         )
         ok = send_line_notify(message)
         if ok:
@@ -2499,14 +2431,10 @@ JSON以外の文字は出力しないでください。"""}],
         style_line = f"\nスタイルルール: {style_rules_count}件抽出" if style_rules_count else ""
         comm_line = f"\ncomm_profile更新: {', '.join(comm_updated_names)}" if comm_updated_names else ""
         message = (
-            f"\n🧠 週次プロファイル学習完了\n"
-            f"━━━━━━━━━━━━\n"
-            f"更新: {updated_count}名\n"
-            f"{details_section}\n"
-            f"\nスキップ: {skipped_count}名\n"
-            f"分析対象: {len(all_messages_by_person)}名 / {sum(len(m) for m in all_messages_by_person.values())}メッセージ"
-            f"{style_line}{comm_line}\n"
-            f"━━━━━━━━━━━━"
+            f"週次プロファイル学習が完了しました。\n"
+            f"更新: {updated_count}名 / スキップ: {skipped_count}名\n"
+            f"{details_section}"
+            f"{style_line}{comm_line}"
         )
         send_line_notify(message)
         self.memory.log_task_end(
@@ -2913,11 +2841,10 @@ JSON以外の文字は出力しないでください。"""}],
             return
 
         # LINEに転送
-        lines = [f"\n💬 Slack #ai-team 新着 ({len(human_msgs)}件)\n━━━━━━━━━━━━"]
+        lines = [f"Slack #ai-team に新着が{len(human_msgs)}件あります。\n"]
         for msg in human_msgs[:10]:
             text_preview = msg["text"][:100]
             lines.append(f"[{msg['datetime']}] {msg['user']}: {text_preview}")
-        lines.append("━━━━━━━━━━━━")
 
         ok = send_line_notify("\n".join(lines))
         if ok:
@@ -2959,21 +2886,15 @@ JSON以外の文字は出力しないでください。"""}],
 
         if silent_days == 1:
             send_line_notify(
-                "\n📋 日向の様子\n"
-                "今日は #ai-team で日向からの発言がなかったよ。\n"
-                "まだ慣れてないだけかもだけど、一応共有。"
+                "今日は #ai-team で日向からの発言がなかったです。まだ慣れていないだけかもしれませんが、一応共有します。"
             )
         elif silent_days == 3:
             send_line_notify(
-                "\n📋 日向の様子\n"
-                "3日間 #ai-team で日向の発言がないね。\n"
-                "ちょっと声かけたほうがいいかも。"
+                "3日間 #ai-team で日向の発言がありません。声をかけたほうがいいかもしれません。"
             )
         elif silent_days >= 7 and silent_days % 7 == 0:
             send_line_notify(
-                f"\n📋 日向の様子\n"
-                f"{silent_days}日間 #ai-team で日向の発言なし。\n"
-                f"何か問題が起きてるかもしれない。確認してみて。"
+                f"{silent_days}日間 #ai-team で日向の発言がありません。何か問題が起きているかもしれません。"
             )
         else:
             logger.info(f"hinata_activity_check: silent for {silent_days} days")
@@ -3575,11 +3496,8 @@ PROACTIVE_RESULT:
             # LINE 報告
             now_str = datetime.now().strftime("%H:%M")
             report = (
-                f"🤖 秘書自律ワーク完了\n"
-                f"━━━━━━━━━━━━\n"
-                f"{result_section[:500]}\n"
-                f"━━━━━━━━━━━━\n"
-                f"完了時刻: {now_str}"
+                f"自律ワークが完了しました。\n\n"
+                f"{result_section[:500]}"
             )
             send_line_notify(report)
             logger.info(f"秘書自律ワーク: 完了 - {task_name}")
@@ -3907,12 +3825,8 @@ PROACTIVE_RESULT:
             # LINE報告
             now_str = datetime.now().strftime("%H:%M")
             report = (
-                f"🎯 秘書ゴール進行 完了\n"
-                f"━━━━━━━━━━━━\n"
-                f"サイクル: #{new_state['cycle_count']} / フェーズ: {new_state['current_phase']}\n"
-                f"{result_summary[:400]}\n"
-                f"━━━━━━━━━━━━\n"
-                f"完了時刻: {now_str}"
+                f"ゴール進行が完了しました（サイクル#{new_state['cycle_count']}）\n\n"
+                f"{result_summary[:400]}"
             )
             send_line_notify(report)
             logger.info(f"秘書ゴール進行: 完了 - サイクル#{new_state['cycle_count']}")
@@ -3926,8 +3840,8 @@ PROACTIVE_RESULT:
             # 連続3回失敗でLINE通知
             if state["consecutive_failures"] >= 3:
                 send_line_notify(
-                    f"⚠️ 秘書ゴール進行: 連続{state['consecutive_failures']}回失敗\n"
-                    f"エラー: {error[:300]}"
+                    f"秘書のゴール進行が{state['consecutive_failures']}回連続で失敗しています。\n"
+                    f"{error[:200]}"
                 )
                 # カウントリセット（通知後は再カウント）
                 state["consecutive_failures"] = 0
