@@ -291,7 +291,20 @@ def check_daily_report(target_md, account=None):
 
     - 日報（非結合セル）: 対象列が空なら未記入
     - 週報（結合セル / 金〜木の1週間）: 対象列が結合範囲の最終列の場合のみチェック
+    - 週次項目（WEEKLY_ONLY_ITEMS）: 金曜日の分のみチェック
     """
+    # 週1回だけ算出する項目（金曜日のデータのみチェック対象）
+    WEEKLY_ONLY_ITEMS = {"運用スコア"}
+
+    # 対象日の曜日を判定（週次項目のスキップに使用）
+    from datetime import date as _date
+    try:
+        parts = target_md.split("/")
+        target_date = _date(_date.today().year, int(parts[0]), int(parts[1]))
+        target_weekday = target_date.weekday()  # 0=月, 4=金
+    except (ValueError, IndexError):
+        target_weekday = -1  # パース失敗時はスキップしない
+
     client = get_client(account)
     spreadsheet = client.open_by_key(DAILY_REPORT_SHEET_ID)
     ws = spreadsheet.worksheet(DAILY_REPORT_TAB)
@@ -345,6 +358,10 @@ def check_daily_report(target_md, account=None):
 
         item_name = col_c or col_a
         if not item_name:
+            continue
+
+        # 週次項目は金曜分のみチェック（例: 運用スコアは週1回算出）
+        if item_name in WEEKLY_ONLY_ITEMS and target_weekday != 4:
             continue
 
         row_0based = i + 3  # 0-based row index (Row 4 = index 3)
