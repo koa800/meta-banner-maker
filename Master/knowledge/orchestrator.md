@@ -37,7 +37,7 @@
 ### 常時
 - 5分ごと: health_check + git_pull_sync（学習データ自動push付き）
 - 15秒ごと: slack_dispatch + slack_hinata_auto_reply
-- 30分ごと: ~~repair_check~~（2026-03-02無効化） + render_health_check + video_learning_reminder（承認待ち動画知識リマインド）
+- 30分ごと: ~~repair_check~~（2026-03-02無効化。代替: イベント駆動の自動修復。`_check_task_health` がタスク実行直後に健全性チェック→異常時のみ日向に修復投入） + render_health_check + video_learning_reminder（承認待ち動画知識リマインド）
 
 ## Looker Studio / 日報
 
