@@ -560,7 +560,15 @@ cat {creds_file}
         return False, "", "リトライ上限到達"
 
     async def _run_daily_report_input(self):
-        """日報自動入力: 秘書がClaude Code経由でLooker Studioからデータ取得→日報シート書き込み→LINE報告。"""
+        """日報自動入力: Looker Studioからデータ取得→日報シート書き込み→LINE報告。
+
+        事前計算（Python側）:
+        - サブスク新規会員数: sheets_manager.py で直接取得
+        - 対象列: ヘッダー行から特定 → 列文字に変換
+        これにより Claude Code CLI のターン消費を大幅削減。
+        """
+        import subprocess
+        import ast
         from .notifier import send_line_notify
         from datetime import date, timedelta
 
@@ -575,64 +583,133 @@ cat {creds_file}
 
         target_date = date.today() - timedelta(days=1)
         target_md = f"{target_date.month}/{target_date.day}"
+        target_ymd = target_date.strftime('%Y-%m-%d')
 
-        prompt = f"""あなたは甲原海人のAI秘書です。日報を自動入力してください。
+        # ── 事前計算 1: サブスク新規会員数 ──
+        subscription_new = 0
+        subscription_err = None
+        try:
+            for tab_name in ["秘密の部屋（月額）", "秘密の部屋（年額）"]:
+                result = subprocess.run(
+                    ["python3", "System/sheets_manager.py", "read",
+                     "1gOVSt0PDub3-W8fBglKnuUAIub3FOyv-1X8CdFEvm70",
+                     tab_name, "A1:A5000"],
+                    capture_output=True, text=True, timeout=30,
+                    cwd=str(project_root),
+                )
+                if result.returncode == 0:
+                    subscription_new += result.stdout.count(target_ymd)
+                else:
+                    logger.warning(f"日報自動入力: サブスクシート({tab_name})読み取り失敗: {result.stderr[:100]}")
+            logger.info(f"日報自動入力: サブスク新規会員数 = {subscription_new}")
+        except Exception as e:
+            subscription_err = str(e)
+            logger.error(f"日報自動入力: サブスク事前計算失敗 - {e}")
 
-## タスク
-{target_date.strftime('%Y年%m月%d日')}（{target_md}）の日報データを取得し、日報シートに書き込んでください。
+        # ── 事前計算 2: 対象列の特定 ──
+        target_col = None
+        col_err = None
+        try:
+            header_result = subprocess.run(
+                ["python3", "System/sheets_manager.py", "read",
+                 "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk", "日報", "A1:JZ1"],
+                capture_output=True, text=True, timeout=30,
+                cwd=str(project_root),
+            )
+            if header_result.returncode == 0:
+                match = re.search(r'行1:\s*(\[.*\])', header_result.stdout)
+                if match:
+                    headers = ast.literal_eval(match.group(1))
+                    for i, h in enumerate(headers):
+                        if str(h).strip() == target_md:
+                            target_col = self._col_idx_to_letter(i)
+                            break
+                    if target_col:
+                        logger.info(f"日報自動入力: 対象列 = {target_col}（{target_md}）")
+                    else:
+                        col_err = f"ヘッダーに {target_md} が見つかりません"
+                        logger.error(f"日報自動入力: {col_err}")
+                else:
+                    col_err = "ヘッダー行のパースに失敗"
+                    logger.error(f"日報自動入力: {col_err}")
+            else:
+                col_err = f"ヘッダー読み取り失敗: {header_result.stderr[:100]}"
+                logger.error(f"日報自動入力: {col_err}")
+        except Exception as e:
+            col_err = str(e)
+            logger.error(f"日報自動入力: 列特定の事前計算失敗 - {e}")
 
-## 手順
+        # 対象列が特定できなければ中断
+        if not target_col:
+            send_line_notify(f"日報の自動入力を始めようとしましたが、日報シートの対象列が特定できませんでした。\n{col_err}")
+            return
 
-### Step 1: Looker Studio 日別データページからデータ取得
-- URL: https://lookerstudio.google.com/u/1/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_evmsc9twzd
-- ブラウザで開く → 幅1400px・高さ900pxにリサイズ → スクショ撮影
-- テーブル上部をズームイン撮影して先頭行（{target_md}分）の数字を再確認
-- 読み取る数値: 集客数、個別予約数、着金売上（確定ベース）
-
-### Step 2: Looker Studio 会員数ページからデータ取得
-- URL: https://lookerstudio.google.com/u/1/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_dfv0688m0d
-- ブラウザで開く → 幅1400px・高さ900pxにリサイズ → スクショ撮影
-- 読み取る数値: スキルプラス会員数（net change）、解約数
-
-### Step 3: サブスク新規会員数を Google Sheet API で取得
-- シートID: 1gOVSt0PDub3-W8fBglKnuUAIub3FOyv-1X8CdFEvm70
-- タブ「秘密の部屋（月額）」と「秘密の部屋（年額）」のA列に「{target_date.strftime('%Y-%m-%d')}」を含む行数を合算
+        # ── サブスク部分の指示 ──
+        if subscription_err:
+            subscription_instruction = f"""サブスク新規会員数は事前計算に失敗しました。以下のコマンドで取得してください:
 ```bash
 cd {project_root}
 python3 System/sheets_manager.py read "1gOVSt0PDub3-W8fBglKnuUAIub3FOyv-1X8CdFEvm70" "秘密の部屋（月額）" "A1:A5000"
 python3 System/sheets_manager.py read "1gOVSt0PDub3-W8fBglKnuUAIub3FOyv-1X8CdFEvm70" "秘密の部屋（年額）" "A1:A5000"
 ```
-それぞれの出力から「{target_date.strftime('%Y-%m-%d')}」を含む行数をカウントし合算。
+それぞれの出力から「{target_ymd}」を含む行数をカウントし合算。"""
+        else:
+            subscription_instruction = f"サブスク新規会員数は事前計算済み: **{subscription_new}人**（そのまま使用してください）"
 
-### Step 4: 日報シートのヘッダーから対象列を特定
-```bash
-cd {project_root}
-python3 System/sheets_manager.py read "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "日報" "A1:JZ1"
+        # ── CLI プロンプト（大幅簡素化） ──
+        prompt = f"""あなたは甲原海人のAI秘書です。日報を自動入力してください。
+
+## タスク
+{target_date.strftime('%Y年%m月%d日')}（{target_md}）の日報データを取得し、日報シートに書き込んでください。
+
+## 事前計算済み情報
+- 対象列: **{target_col}**（日報シートの {target_md} 列）
+- {subscription_instruction}
+
+## 手順
+
+### Step 1: Looker Studio 日別データページからデータ取得
+- URL: https://lookerstudio.google.com/u/1/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_evmsc9twzd
+- ブラウザで開く
+- javascript_tool で以下を実行してページテキストを取得:
+```javascript
+await new Promise(r => setTimeout(r, 10000)); document.body.innerText
 ```
-ヘッダーは M/D 形式。「{target_md}」に一致する列を見つける。
+- 取得したテキストから {target_md} の行を探し、以下の数値を読み取る:
+  - 集客数、個別予約数、着金売上（確定ベース）
+- テキストで数値が取得できない場合 → get_page_text で再試行
+- それでも取得できない場合 → スクショ撮影して目視確認（最終手段）
 
-### Step 5: 日報シートに書き込み
+### Step 2: Looker Studio 会員数ページからデータ取得
+- URL: https://lookerstudio.google.com/u/1/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_dfv0688m0d
+- ブラウザで開く
+- javascript_tool で以下を実行してページテキストを取得:
+```javascript
+await new Promise(r => setTimeout(r, 10000)); document.body.innerText
+```
+- 取得したテキストからスキルプラス会員数（net change）と解約数を読み取る
+- テキストで数値が取得できない場合 → get_page_text で再試行
+- それでも取得できない場合 → スクショ撮影して目視確認（最終手段）
 
-Step 4 で特定した列文字と、Step 1〜3 で取得した実際の数値を使って書き込む。
+### Step 3: 日報シートに書き込み
+
+列 = {target_col} を使い、Step 1〜2 で取得した数値と事前計算済みのサブスク新規会員数を書き込む。
 writeコマンドの引数順: `write シートID セル 値 タブ名`
 
-例: 列が W、着金売上が 3943320 の場合:
 ```bash
 cd {project_root}
-python3 System/sheets_manager.py write "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "W5" "3943320" "日報"
+python3 System/sheets_manager.py write "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "{target_col}5" "【着金売上の値】" "日報"
+python3 System/sheets_manager.py write "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "{target_col}7" "【集客数の値】" "日報"
+python3 System/sheets_manager.py write "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "{target_col}9" "【個別予約数の値】" "日報"
+python3 System/sheets_manager.py write "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "{target_col}13" "【会員数の値】" "日報"
+python3 System/sheets_manager.py write "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "{target_col}14" "【解約数の値】" "日報"
+python3 System/sheets_manager.py write "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "{target_col}15" "{subscription_new}" "日報"
 ```
-
-書き込み対象（列文字と値は実際のものに置き換えること）:
-- 行5: 着金売上（確定ベース）
-- 行7: 集客数
-- 行9: 個別予約数
-- 行13: スキルプラス会員数
-- 行14: 解約数
-- 行15: サブスク新規会員数
+※ 【】内は Step 1〜2 で取得した実際の数値に置き換えること。サブスク新規（行15）は上記の値をそのまま使用。
 
 行4（粗利益）と行6（広告費）は計算式/別管理なので絶対に触らないこと。
 
-### Step 6: LINE報告
+### Step 4: LINE報告
 
 取得した数値を埋め込んで報告する:
 ```bash
@@ -643,9 +720,9 @@ python3 System/line_notify.py "日報入力が完了しました。
 個別予約数: XX件
 着金売上: ¥X,XXX,XXX
 会員数: XX人（解約: X人）
-サブスク新規: X人"
+サブスク新規: {subscription_new}人"
 ```
-※ XXX 部分は Step 1〜3 で取得した実際の数値に置き換えること。
+※ XXX 部分は Step 1〜2 で取得した実際の数値に置き換えること。
 
 ## エラー時の対応
 
@@ -660,12 +737,10 @@ python3 System/line_notify.py "日報入力が完了しました。
 
 ### 数値の検証
 - 全ての数値がゼロの場合は異常（データ更新遅延の可能性）。LINE報告に「⚠️ 全数値ゼロ: データ更新遅延の可能性」を追記
-- スクショの数値が不鮮明な場合、追加でズームインして再確認（最大2回）
 - 着金売上・集客数が 0 の場合は「⚠️ 異常値検出」フラグをLINE報告に追記
 
 ## 重要ルール
 - 行4（粗利益）と行6（広告費）は絶対に書き込まない
-- Looker Studioのスクショは必ずズームイン再確認して数値を正確に読む
 - 書き込み前に取得した全数値を確認用にログ出力する
 
 ## 出力形式
@@ -675,7 +750,7 @@ python3 System/line_notify.py "日報入力が完了しました。
 
         success, output, error = self._execute_claude_code_task(
             "日報自動入力", claude_cmd, secretary_config, project_root,
-            prompt, max_turns=40, timeout=900, use_chrome=True,
+            prompt, max_turns=20, timeout=600, use_chrome=True,
         )
 
         if success:
