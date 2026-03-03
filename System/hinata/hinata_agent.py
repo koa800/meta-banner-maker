@@ -102,11 +102,48 @@ def is_chrome_running() -> bool:
         return False
 
 
-def ensure_chrome_running() -> bool:
-    """Chrome が起動していなければ起動する。戻り値: 起動済みか。"""
-    if is_chrome_running():
-        return True
-    logger.warning("Chrome が起動していません。起動を試みます...")
+def is_chrome_cdp_healthy() -> bool:
+    """Chrome DevTools Protocol (CDP) ポート 9223 が応答するか確認する。
+
+    プロセスが生きていても MCP 接続が死んでいるケースを検知する。
+    """
+    try:
+        result = _subprocess.run(
+            ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+             "--connect-timeout", "3", "--max-time", "5",
+             "http://localhost:9223/json/version"],
+            capture_output=True, text=True, timeout=10,
+        )
+        status_code = result.stdout.strip()
+        if status_code == "200":
+            return True
+        logger.warning(f"CDP ヘルスチェック失敗: HTTP {status_code}")
+        return False
+    except Exception as e:
+        logger.warning(f"CDP ヘルスチェック例外: {e}")
+        return False
+
+
+def restart_chrome() -> bool:
+    """Chrome を強制終了して再起動する。MCP 接続が不安定な場合に使用。"""
+    logger.warning("Chrome を再起動します...")
+    try:
+        # Chrome を終了（graceful → force）
+        _subprocess.run(["pkill", "-f", "Google Chrome"], timeout=5)
+        time.sleep(3)
+        # まだ残っていたら強制終了
+        if is_chrome_running():
+            _subprocess.run(["pkill", "-9", "-f", "Google Chrome"], timeout=5)
+            time.sleep(2)
+    except Exception as e:
+        logger.warning(f"Chrome 終了時エラー（続行）: {e}")
+
+    # 再起動
+    return _start_chrome()
+
+
+def _start_chrome() -> bool:
+    """Chrome を起動して CDP ポートの疎通を確認する。"""
     try:
         _subprocess.Popen(
             ["open", "-a", "Google Chrome", "--args",
@@ -117,19 +154,53 @@ def ensure_chrome_running() -> bool:
             stdout=_subprocess.DEVNULL,
             stderr=_subprocess.DEVNULL,
         )
-        # Chrome 起動待ち（GUI アプリの起動は時間がかかる場合がある）
-        time.sleep(10)
+        # Chrome 起動待ち → CDP 疎通確認（最大30秒）
+        for i in range(6):
+            time.sleep(5)
+            if is_chrome_running() and is_chrome_cdp_healthy():
+                logger.info("Chrome 起動成功（CDP 疎通確認済み）")
+                return True
+            logger.info(f"Chrome 起動待ち... ({(i+1)*5}秒)")
+
+        # プロセスはあるが CDP が応答しない
         if is_chrome_running():
-            logger.info("Chrome 起動成功")
-            send_message("Chrome が落ちていたので再起動しました。")
-            return True
-        else:
-            logger.error("Chrome 起動失敗")
-            send_message("⚠️ Chrome の起動に失敗しました。手動確認が必要です。")
-            return False
+            logger.warning("Chrome プロセスは起動したが CDP ポートが応答しません")
+            return True  # プロセスはあるので一応 True
+        logger.error("Chrome 起動失敗")
+        return False
     except Exception as e:
         logger.error(f"Chrome 起動エラー: {e}")
         return False
+
+
+def ensure_chrome_running() -> bool:
+    """Chrome が正常稼働していなければ起動/再起動する。
+
+    チェック順序:
+    1. プロセス存在確認
+    2. CDP ポート 9223 疎通確認
+    3. 異常時は再起動
+    """
+    if not is_chrome_running():
+        logger.warning("Chrome が起動していません。起動を試みます...")
+        ok = _start_chrome()
+        if ok:
+            send_message("Chrome が落ちていたので再起動しました。")
+        else:
+            send_message("⚠️ Chrome の起動に失敗しました。手動確認が必要です。")
+        return ok
+
+    # プロセスはあるが CDP が死んでいないか確認
+    if not is_chrome_cdp_healthy():
+        logger.warning("Chrome プロセスは存在するが CDP が応答しません。再起動します...")
+        ok = restart_chrome()
+        if ok:
+            send_message("Chrome の MCP 接続が不安定だったため再起動しました。")
+        else:
+            send_message("⚠️ Chrome の再起動に失敗しました。手動確認が必要です。")
+        return ok
+
+    return True
 
 
 # ====================================================================

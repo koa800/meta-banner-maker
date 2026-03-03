@@ -118,6 +118,78 @@ def _run_claude(
     return output, None
 
 
+def _restart_chrome_for_mcp() -> bool:
+    """MCP 接続復旧のため Chrome を再起動する。
+
+    hinata_agent.py の restart_chrome() を呼び出す。
+    claude_executor は hinata_agent をインポートしないため、直接実装。
+    """
+    import subprocess as sp
+    try:
+        # Chrome 終了
+        sp.run(["pkill", "-f", "Google Chrome"], timeout=5)
+        time.sleep(3)
+        # まだ残っていたら強制終了
+        try:
+            result = sp.run(["pgrep", "-f", "Google Chrome"],
+                            capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                sp.run(["pkill", "-9", "-f", "Google Chrome"], timeout=5)
+                time.sleep(2)
+        except Exception:
+            pass
+
+        # Chrome 再起動
+        chrome_profile = Path.home() / "agents" / "System" / "data" / "hinata_chrome_profile"
+        sp.Popen(
+            ["open", "-a", "Google Chrome", "--args",
+             f"--user-data-dir={chrome_profile}",
+             "--remote-debugging-port=9223",
+             "--no-first-run",
+             "--no-default-browser-check"],
+            stdout=sp.DEVNULL,
+            stderr=sp.DEVNULL,
+        )
+
+        # CDP ポート疎通待ち（最大30秒）
+        for i in range(6):
+            time.sleep(5)
+            try:
+                check = sp.run(
+                    ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+                     "--connect-timeout", "3", "--max-time", "5",
+                     "http://localhost:9223/json/version"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if check.stdout.strip() == "200":
+                    logger.info(f"Chrome 再起動成功（CDP 疎通確認、{(i+1)*5}秒）")
+                    return True
+            except Exception:
+                pass
+            logger.info(f"Chrome 再起動待ち... ({(i+1)*5}秒)")
+
+        logger.warning("Chrome 再起動: CDP 疎通確認できず（プロセスは起動した可能性あり）")
+        return True  # プロセスは立ち上がっている可能性があるので続行
+    except Exception as e:
+        logger.error(f"Chrome 再起動失敗: {e}")
+        return False
+
+
+def _is_mcp_disconnect_error(error: str) -> bool:
+    """エラー内容が MCP 接続切断かどうかを判定する。"""
+    if not error:
+        return False
+    mcp_keywords = [
+        "Browser extension is not connected",
+        "chrome-extension://",
+        "MCP",
+        "tabs_context_mcp",
+        "Detached while handling command",
+        "空出力",
+    ]
+    return any(kw in error for kw in mcp_keywords)
+
+
 def _run_claude_with_retry(
     prompt: str,
     timeout_seconds: int,
@@ -125,25 +197,42 @@ def _run_claude_with_retry(
     max_turns: int = 15,
 ) -> Optional[str]:
     """
-    Claude Code を実行し、失敗時は --chrome なしでリトライする。
+    Claude Code を実行し、失敗時はリトライする。
 
+    リトライ戦略:
     1回目: --chrome あり（ブラウザ操作可能）
-    2回目: --chrome なし（ブラウザ不可だが確実に動く）
+    2回目: MCP 切断エラーなら Chrome 再起動 → --chrome あり で再試行
+    3回目: --chrome なし（ブラウザ不可だが確実に動く）
     """
     # 1回目: --chrome あり
     result, error = _run_claude(prompt, timeout_seconds, label, use_chrome=True, max_turns=max_turns)
     if result:
         return result
 
-    logger.warning(f"{label} --chrome モード失敗: {error}。--chrome なしでリトライします")
+    # MCP 接続切断なら Chrome 再起動して --chrome で再試行
+    if _is_mcp_disconnect_error(error):
+        logger.warning(f"{label} MCP 接続切断を検知: {error}。Chrome を再起動して再試行します")
+        if _restart_chrome_for_mcp():
+            result, error = _run_claude(
+                prompt, timeout_seconds, f"{label}（Chrome再起動後）",
+                use_chrome=True, max_turns=max_turns,
+            )
+            if result:
+                return result
+            logger.warning(f"{label} Chrome 再起動後も失敗: {error}")
+        else:
+            logger.warning(f"{label} Chrome 再起動失敗")
+    else:
+        logger.warning(f"{label} --chrome モード失敗（MCP以外のエラー）: {error}")
+
     time.sleep(3)
 
-    # 2回目: --chrome なし（fallback）
-    result, error = _run_claude(prompt, timeout_seconds, f"{label}（リトライ）", use_chrome=False, max_turns=max_turns)
+    # 最終手段: --chrome なし（fallback）
+    result, error = _run_claude(prompt, timeout_seconds, f"{label}（--chrome なし）", use_chrome=False, max_turns=max_turns)
     if result:
         return result
 
-    logger.error(f"{label} リトライも失敗: {error}")
+    logger.error(f"{label} 全リトライ失敗: {error}")
     return None
 
 
