@@ -116,6 +116,7 @@ class TaskScheduler:
             "looker_session_keepalive": self._run_looker_session_keepalive,
             "kpi_anomaly_check": self._run_kpi_anomaly_check,
             "monthly_invoice_submission": self._run_monthly_invoice_submission,
+            "ds_insight_biweekly_report": self._run_ds_insight_biweekly_report,
         }
 
     def setup(self):
@@ -225,6 +226,8 @@ class TaskScheduler:
     async def _run_mail_kohara(self):
         result = await self._execute_tool("mail_inbox_kohara", tools.mail_run, account="kohara")
         await self._notify_mail_result(result, "kohara")
+        # DS.INSIGHTメール転送チェック
+        await self._check_dsinsight_emails()
 
     async def _notify_mail_result(self, result: tools.ToolResult, account: str):
         """メール処理結果をLINE+Slack通知（返信待ちがある場合のみ）"""
@@ -256,6 +259,143 @@ class TaskScheduler:
                 logger.info(f"Mail notification sent for {account} (retry): waiting={waiting}")
             else:
                 logger.warning(f"Mail notification failed for {account} after retry")
+
+    async def _check_dsinsight_emails(self):
+        """DS.INSIGHTからのメールをLINE転送（重複防止付き）"""
+        import json
+        from pathlib import Path
+        from .notifier import send_line_notify
+
+        try:
+            result = await self._execute_tool("dsinsight_mail_check", tools.dsinsight_mail_check, account="kohara")
+            if not result.success or result.output == "DS.INSIGHTメールなし":
+                return
+
+            items = json.loads(result.output)
+            if not items:
+                return
+
+            # 転送済みID管理
+            forwarded_path = Path(self.config.get("paths", {}).get("system_dir", "~/agents/System")).expanduser() / "data" / "ds_insight_forwarded_ids.json"
+            forwarded_path.parent.mkdir(parents=True, exist_ok=True)
+            forwarded_ids = set()
+            if forwarded_path.exists():
+                with open(forwarded_path) as f:
+                    forwarded_ids = set(json.load(f))
+
+            new_items = [item for item in items if item["id"] not in forwarded_ids]
+            if not new_items:
+                return
+
+            for item in new_items:
+                body_summary = item["body"][:500] if item["body"] else ""
+                message = f"📊 DS.INSIGHT通知\n\n{item['subject']}\n━━━━━━━━━━\n{body_summary}"
+                send_line_notify(message)
+                forwarded_ids.add(item["id"])
+                logger.info(f"DS.INSIGHTメール転送: {item['subject']}")
+
+            # 最大100件保持
+            with open(forwarded_path, "w") as f:
+                json.dump(list(forwarded_ids)[-100:], f)
+
+        except Exception as e:
+            logger.error(f"DS.INSIGHTメール転送エラー: {e}")
+
+    async def _run_ds_insight_biweekly_report(self):
+        """隔週DS.INSIGHTレポート生成（日曜 11:30）"""
+        import json
+        import subprocess
+        from datetime import date
+        from pathlib import Path
+        from .notifier import send_line_notify
+
+        # 隔週判定（3/8日曜を基準週）
+        weeks_since = (date.today() - date(2026, 3, 8)).days // 7
+        if weeks_since % 2 != 0:
+            logger.info("DS.INSIGHTレポート: 今週はスキップ（隔週判定）")
+            return
+
+        ok, claude_cmd, secretary_config, project_root, err = self._ensure_claude_chrome_ready()
+        if not ok:
+            logger.error(f"DS.INSIGHTレポート: 環境準備失敗 - {err}")
+            send_line_notify(f"⚠️ DS.INSIGHTレポート生成失敗: {err}")
+            return
+
+        # 前回データ読み込み
+        data_path = Path(self.config.get("paths", {}).get("system_dir", "~/agents/System")).expanduser() / "data" / "ds_insight_last.json"
+        data_path.parent.mkdir(parents=True, exist_ok=True)
+        last_data = ""
+        if data_path.exists():
+            with open(data_path) as f:
+                last_data = f.read()
+
+        last_context = f"\n\n前回データ:\n{last_data}" if last_data else "\n\n（初回実行のため前回データなし）"
+
+        prompt = f"""DS.INSIGHT（https://dsinsight.yahoo.co.jp/）にアクセスして以下のデータを取得し、レポートを生成してください。
+
+## 取得データ
+1. Basic: 「スキルプラス」「AI 副業」「副業」の検索ボリューム + 共起KW上位10件
+2. Journey: 「スキルプラス」の前後検索KW（ランキング上位10件、重複Vol・特徴度・検索時間差）
+3. Trend: AI・副業カテゴリの急上昇KW上位5件 + トレンドマップの注目KW
+
+## レポートフォーマット（ハイブリッド型）
+- 定点観測: 各KWの検索ボリューム推移
+- 変化検知: 前回比で大きく変動したKW・新規出現KW
+- インサイト: ビジネスに活かせる気づき（1〜2行）
+
+## 出力要件
+- 990文字以内（LINE通知用）
+- 改行と区切り線で読みやすく
+- 数値は前回比を示す（↑↓→）
+{last_context}
+
+## データ保存
+取得した数値データをJSON形式で {data_path} に保存してください。
+フォーマット: {{"date": "YYYY-MM-DD", "keywords": {{"KW名": {{"volume": 数値}}}}, "trend_keywords": ["KW1", "KW2"]}}
+"""
+
+        try:
+            env = {
+                **subprocess.os.environ,
+                "CLAUDE_CONFIG_DIR": str(secretary_config),
+                "PATH": f"/opt/homebrew/bin:{subprocess.os.environ.get('PATH', '')}",
+            }
+            env.pop("ANTHROPIC_API_KEY", None)
+
+            cmd = [
+                str(claude_cmd), "-p",
+                "--model", "claude-sonnet-4-6",
+                "--max-turns", "15",
+                "--chrome",
+                prompt,
+            ]
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=600,
+                cwd=str(project_root), env=env,
+            )
+
+            if result.returncode != 0:
+                logger.error(f"DS.INSIGHTレポート: Claude Code失敗 (code={result.returncode})")
+                send_line_notify(f"⚠️ DS.INSIGHTレポート生成失敗: Claude Code エラー")
+                return
+
+            output = result.stdout.strip()
+            if not output:
+                logger.warning("DS.INSIGHTレポート: Claude Code出力なし")
+                send_line_notify("⚠️ DS.INSIGHTレポート: 出力が空でした")
+                return
+
+            # レポートをLINE送信（990文字制限）
+            report = output[:990]
+            send_line_notify(f"📊 DS.INSIGHTレポート\n\n{report}")
+            logger.info("DS.INSIGHTレポート送信完了")
+
+        except subprocess.TimeoutExpired:
+            logger.error("DS.INSIGHTレポート: タイムアウト（600秒）")
+            send_line_notify("⚠️ DS.INSIGHTレポート: タイムアウト")
+        except Exception as e:
+            logger.error(f"DS.INSIGHTレポート: 例外 - {e}")
+            send_line_notify(f"⚠️ DS.INSIGHTレポート生成失敗: {e}")
 
     async def _run_addness_goal_check(self):
         result = await self._execute_tool("addness_to_context", tools.addness_to_context)
@@ -374,6 +514,21 @@ class TaskScheduler:
         except Exception as e:
             return False, None, None, None, f"Chrome チェックエラー: {e}"
 
+        return True, claude_cmd, secretary_config, project_root, ""
+
+    def _prepare_claude_env(self):
+        """Claude Code CLI の事前チェック（Chromeなし版）。"""
+        from pathlib import Path
+        claude_cmd = self._find_claude_cmd()
+        if not claude_cmd:
+            return False, None, None, None, "Claude Code CLIが見つかりません"
+        secretary_config = Path.home() / ".claude-secretary"
+        if not secretary_config.exists():
+            return False, None, None, None, f"秘書設定ディレクトリが見つかりません: {secretary_config}"
+        project_root = Path(self.config.get("paths", {}).get("repo_root", "~/agents")).expanduser()
+        oauth_ok, oauth_err = self._refresh_claude_oauth(secretary_config)
+        if not oauth_ok:
+            return False, None, None, None, f"Claude Code OAuth エラー: {oauth_err}"
         return True, claude_cmd, secretary_config, project_root, ""
 
     def _build_google_login_instructions(self) -> str:

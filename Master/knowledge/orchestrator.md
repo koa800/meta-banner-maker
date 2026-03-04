@@ -20,7 +20,7 @@
 - 11:30: looker_csv_download（Chrome MCP。前々日分。max_turns=25, timeout=8分）
 - 12:00: kpi_daily_import（CSV → スプレッドシート取り込み）
 - 12:05: kpi_anomaly_check（KPI異常検知 → 異常時のみLINE通知。媒体ドリルダウン+仮説生成）
-- 3時間ごと: mail_inbox_personal + mail_inbox_kohara（:00/:05）
+- 3時間ごと: mail_inbox_personal + mail_inbox_kohara（:00/:05。kohara実行時にDS.INSIGHTメール自動転送チェックも実施）
 
 ### 夜
 - 21:00: daily_report / 21:10: daily_group_digest / 22:00: kpi_nightly_cache
@@ -29,7 +29,7 @@
 - 月曜 9:00: weekly_idea_proposal / 9:30: weekly_stats
 - 水曜 10:00: weekly_content_suggestions
 - 金曜 20:00: os_sync_session（秘書→甲原のOSすり合わせ）
-- 日曜 10:00: weekly_profile_learning / 10:30: weekly_hinata_memory / 11:00: video_knowledge_review（動画知識ライフサイクルレビュー）
+- 日曜 10:00: weekly_profile_learning / 10:30: weekly_hinata_memory / 11:00: video_knowledge_review（動画知識ライフサイクルレビュー） / 11:30: ds_insight_biweekly_report（隔週。DS.INSIGHTデータ取得→レポート→LINE通知）
 
 ### 月次
 - 毎月3日 09:30: monthly_invoice_submission（請求書作成・提出。INVOY→承認→フォーム→Drive）

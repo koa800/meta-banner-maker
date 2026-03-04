@@ -121,6 +121,42 @@ def mail_status(account: str = "personal") -> ToolResult:
     )
 
 
+def dsinsight_mail_check(account: str = "kohara") -> ToolResult:
+    """DS.INSIGHTからのメールを検索・取得する（直近4時間以内）"""
+    try:
+        sys.path.insert(0, SYSTEM_DIR)
+        from mail_manager import get_gmail_service, get_header, get_body_text
+        service = get_gmail_service(account)
+        query = "from:noreply@mail.yahoo.co.jp subject:DS.INSIGHT newer_than:4h"
+        result = service.users().messages().list(
+            userId="me", q=query, maxResults=10
+        ).execute()
+        messages = result.get("messages", [])
+        if not messages:
+            return ToolResult(success=True, output="DS.INSIGHTメールなし", return_code=0)
+        items = []
+        for m in messages:
+            msg = service.users().messages().get(
+                userId="me", id=m["id"], format="full"
+            ).execute()
+            subject = get_header(msg, "Subject")
+            body = get_body_text(msg, 1000)
+            items.append({
+                "id": m["id"],
+                "subject": subject,
+                "body": body,
+            })
+        import json
+        return ToolResult(
+            success=True,
+            output=json.dumps(items, ensure_ascii=False),
+            return_code=0
+        )
+    except Exception as e:
+        logger.error(f"DS.INSIGHTメール検索エラー: {e}")
+        return ToolResult(success=False, output="", error=str(e), return_code=1)
+
+
 # --------------- Calendar ---------------
 
 def calendar_list(account: str = "personal", days: int = 7, target_date: str = None) -> ToolResult:
