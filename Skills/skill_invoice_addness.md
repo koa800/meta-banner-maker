@@ -127,12 +127,31 @@ Step 7: LINE で完了報告
 - 親フォルダID: `1bgUmZAH6okAGUWQ7uYSUo4K2KbOomfaM`
 - 2026年フォルダID: `1s64JH0T4nWlDIZV6QgAOvg9xDPV1pBAD`
 
-#### 現在の制限
+#### API アップロード（自動化済み）
 
-koa800sea.nifs@gmail.com の個人 Drive に API アクセスするための OAuth トークンが未設定。
-現状はブラウザ経由で手動アップロードが必要。
+`token_drive_personal.json`（koa800sea.nifs@gmail.com）で Drive API 経由でアップロード可能。
 
-**TODO**: koa800sea.nifs@gmail.com の Drive API トークンを取得すれば完全自動化可能。
+```bash
+cd /path/to/project
+python3 -c "
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+import json
+
+with open('System/credentials/token_drive_personal.json') as f:
+    t = json.load(f)
+creds = Credentials(token=t['token'], refresh_token=t['refresh_token'],
+                     token_uri=t['token_uri'], client_id=t['client_id'],
+                     client_secret=t['client_secret'], scopes=t['scopes'])
+service = build('drive', 'v3', credentials=creds)
+folder_id = '1s64JH0T4nWlDIZV6QgAOvg9xDPV1pBAD'  # 2026年フォルダ
+
+for f in ['YYYY年M月請求書_甲原海人.pdf', 'YYYY年M月経費建替_甲原海人.pdf']:
+    media = MediaFileUpload(f, mimetype='application/pdf')
+    service.files().create(body={'name': f, 'parents': [folder_id]}, media_body=media).execute()
+"
+```
 
 ### Step 7: 完了報告
 

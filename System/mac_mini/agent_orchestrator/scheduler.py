@@ -4194,6 +4194,34 @@ curl -s -X POST https://line-mention-bot-mmzu.onrender.com/api/notify_owner \\
 
 **★ ここで処理を中断してください。甲原さんの承認を待ちます。★**
 
+### Step 3: Google Drive に PDF 保存（承認後）
+承認後、PDF を Google Drive にアップロード:
+```bash
+cd {project_root}
+python3 -c "
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+import json
+with open('System/credentials/token_drive_personal.json') as f:
+    t = json.load(f)
+creds = Credentials(token=t['token'], refresh_token=t['refresh_token'],
+                     token_uri=t['token_uri'], client_id=t['client_id'],
+                     client_secret=t['client_secret'], scopes=t['scopes'])
+service = build('drive', 'v3', credentials=creds)
+folder_id = '1s64JH0T4nWlDIZV6QgAOvg9xDPV1pBAD'
+for fname in ['{target_year}年{target_month}月請求書_甲原海人.pdf', '{target_year}年{target_month}月経費建替_甲原海人.pdf']:
+    media = MediaFileUpload(fname, mimetype='application/pdf')
+    r = service.files().create(body={{'name': fname, 'parents': [folder_id]}}, media_body=media, fields='id,name').execute()
+    print(f'アップロード完了: {{r[\"name\"]}} (ID: {{r[\"id\"]}})')
+"
+```
+※ PDFのパスはダウンロードしたディレクトリに合わせること。
+
+### Step 4: 提出フォームで2回提出（承認後）
+Google Forms で業務委託報酬と経費立替をそれぞれ提出する。
+手順の詳細は Skills/skill_invoice_addness.md の Step 5 を参照。
+
 ===RESULT_START===
 請求書確認依頼をLINEに送信しました。甲原さんの「OK」返信を待っています。
 承認後、以下のコマンドで提出処理を再開してください:
