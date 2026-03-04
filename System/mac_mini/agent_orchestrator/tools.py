@@ -127,7 +127,7 @@ def dsinsight_mail_check(account: str = "kohara") -> ToolResult:
         sys.path.insert(0, SYSTEM_DIR)
         from mail_manager import get_gmail_service, get_header, get_body_text
         service = get_gmail_service(account)
-        query = "from:noreply@mail.yahoo.co.jp subject:DS.INSIGHT newer_than:4h"
+        query = "subject:DS.INSIGHT newer_than:4h"
         result = service.users().messages().list(
             userId="me", q=query, maxResults=10
         ).execute()
