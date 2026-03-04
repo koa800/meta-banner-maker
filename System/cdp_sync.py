@@ -25,6 +25,59 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 CHANGE_LOG_PATH = DATA_DIR / "cdp_change_log.json"
 SYNC_STATE_PATH = DATA_DIR / "cdp_sync_state.json"
 SIMILARITY_LOG_PATH = DATA_DIR / "cdp_email_warnings.json"
+LOCK_FILE_PATH = DATA_DIR / "cdp_sync.lock"
+LOCK_TIMEOUT_SECONDS = 600  # 10分でロックタイムアウト
+
+
+# ─── 排他制御（簡易ロック） ────────────────────────────
+
+class SyncLock:
+    """ファイルベースの簡易ロック。同期の同時実行を防止する"""
+
+    def __init__(self, lock_path=LOCK_FILE_PATH, timeout=LOCK_TIMEOUT_SECONDS):
+        self.lock_path = Path(lock_path)
+        self.timeout = timeout
+
+    def acquire(self):
+        """ロックを取得する。既にロック中ならFalseを返す"""
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if self.lock_path.exists():
+            # タイムアウトチェック（デッドロック防止）
+            try:
+                lock_data = json.loads(self.lock_path.read_text())
+                lock_time = datetime.fromisoformat(lock_data.get("locked_at", ""))
+                elapsed = (datetime.now() - lock_time).total_seconds()
+                if elapsed < self.timeout:
+                    print(f"同期ロック中: {lock_data.get('locked_by', '不明')} "
+                          f"({int(elapsed)}秒前に開始)")
+                    return False
+                else:
+                    print(f"ロックタイムアウト（{int(elapsed)}秒経過）→ 強制解除")
+            except (json.JSONDecodeError, ValueError, IOError):
+                print("破損したロックファイルを検出 → 強制解除")
+
+        # ロック取得
+        lock_data = {
+            "locked_at": datetime.now().isoformat(),
+            "locked_by": f"cdp_sync (PID: {os.getpid()})",
+        }
+        self.lock_path.write_text(json.dumps(lock_data, ensure_ascii=False))
+        return True
+
+    def release(self):
+        """ロックを解除する"""
+        if self.lock_path.exists():
+            self.lock_path.unlink()
+
+    def __enter__(self):
+        if not self.acquire():
+            raise RuntimeError("同期がロック中です。他の同期が完了するまで待ってください")
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
+        return False
 
 
 # ─── 変更ログ ─────────────────────────────────────────
@@ -841,9 +894,15 @@ CDP同期スクリプト
     if cmd == "sync":
         dry_run = "--dry-run" in sys.argv
         incremental = "--full" not in sys.argv
-        sync.load_master()
-        sync.ensure_capacity()
-        sync.auto_sync(dry_run=dry_run, incremental=incremental)
+        lock = SyncLock()
+        try:
+            with lock:
+                sync.load_master()
+                sync.ensure_capacity()
+                sync.auto_sync(dry_run=dry_run, incremental=incremental)
+        except RuntimeError as e:
+            print(f"エラー: {e}")
+            sys.exit(1)
 
     elif cmd == "dry-run":
         if len(sys.argv) < 5:
