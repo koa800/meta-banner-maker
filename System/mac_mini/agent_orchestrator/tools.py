@@ -121,40 +121,78 @@ def mail_status(account: str = "personal") -> ToolResult:
     )
 
 
-def dsinsight_mail_check(account: str = "kohara") -> ToolResult:
-    """DS.INSIGHTからのメールを検索・取得する（直近4時間以内）"""
+def _decode_mime_header(header: str) -> str:
+    """MIMEエンコードされたメールヘッダーをデコード"""
+    from email.header import decode_header
+    parts = []
+    for data, charset in decode_header(header):
+        if isinstance(data, bytes):
+            parts.append(data.decode(charset or "utf-8", errors="replace"))
+        else:
+            parts.append(data)
+    return "".join(parts)
+
+
+def _get_imap_body(msg, max_len: int = 1000) -> str:
+    """メールからtext/plainパートを抽出（マルチパート対応）"""
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_type() == "text/plain":
+                payload = part.get_payload(decode=True)
+                if payload:
+                    charset = part.get_content_charset() or "utf-8"
+                    return payload.decode(charset, errors="replace")[:max_len]
+    else:
+        payload = msg.get_payload(decode=True)
+        if payload:
+            charset = msg.get_content_charset() or "utf-8"
+            return payload.decode(charset, errors="replace")[:max_len]
+    return ""
+
+
+def dsinsight_mail_check() -> ToolResult:
+    """IMAP経由でk.kohara@addness.co.jpからDS.INSIGHTメールを検索・取得する（直近7日）"""
+    import imaplib
+    import email
+    import json
+    from email.header import decode_header
+    from pathlib import Path
+    from datetime import datetime, timedelta
+
+    creds_path = Path(SYSTEM_DIR) / "credentials" / "onamae_imap.json"
+    if not creds_path.exists():
+        return ToolResult(success=False, output="", error="IMAP認証情報なし: onamae_imap.json")
+
+    with open(creds_path) as f:
+        creds = json.load(f)
+
     try:
-        sys.path.insert(0, SYSTEM_DIR)
-        from mail_manager import get_gmail_service, get_header, get_body_text
-        service = get_gmail_service(account)
-        query = "subject:DS.INSIGHT newer_than:4h"
-        result = service.users().messages().list(
-            userId="me", q=query, maxResults=10
-        ).execute()
-        messages = result.get("messages", [])
-        if not messages:
-            return ToolResult(success=True, output="DS.INSIGHTメールなし", return_code=0)
+        conn = imaplib.IMAP4_SSL(creds["server"], creds.get("port", 993))
+        conn.login(creds["username"], creds["password"])
+        conn.select("INBOX", readonly=True)
+
+        since = (datetime.now() - timedelta(days=7)).strftime("%d-%b-%Y")
+        _, msg_nums = conn.search(None, f'(SINCE {since} SUBJECT "DS.INSIGHT")')
+
+        if not msg_nums[0]:
+            conn.logout()
+            return ToolResult(success=True, output="DS.INSIGHTメールなし")
+
         items = []
-        for m in messages:
-            msg = service.users().messages().get(
-                userId="me", id=m["id"], format="full"
-            ).execute()
-            subject = get_header(msg, "Subject")
-            body = get_body_text(msg, 1000)
-            items.append({
-                "id": m["id"],
-                "subject": subject,
-                "body": body,
-            })
-        import json
-        return ToolResult(
-            success=True,
-            output=json.dumps(items, ensure_ascii=False),
-            return_code=0
-        )
+        for num in msg_nums[0].split()[-10:]:
+            _, data = conn.fetch(num, "(RFC822)")
+            msg = email.message_from_bytes(data[0][1])
+            subject = _decode_mime_header(msg.get("Subject", ""))
+            body = _get_imap_body(msg, max_len=1000)
+            msg_id = msg.get("Message-ID", num.decode())
+            items.append({"id": msg_id, "subject": subject, "body": body})
+
+        conn.logout()
+        return ToolResult(success=True, output=json.dumps(items, ensure_ascii=False))
+
     except Exception as e:
-        logger.error(f"DS.INSIGHTメール検索エラー: {e}")
-        return ToolResult(success=False, output="", error=str(e), return_code=1)
+        logger.error(f"DS.INSIGHT IMAP検索エラー: {e}")
+        return ToolResult(success=False, output="", error=str(e))
 
 
 # --------------- Calendar ---------------

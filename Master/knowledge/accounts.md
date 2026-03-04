@@ -11,6 +11,15 @@
 - `~/.claude/settings.json` で `bypassPermissions`（フルオート）設定済み
 - 削除系・プロセス・HTTP削除・クラウド・Git破壊的・決済は承認必須（`ask` リスト）
 
+## お名前.com ドメインメール
+
+- **アドレス**: `k.kohara@addness.co.jp`
+- **用途**: DS.INSIGHTメール配信先（Yahoo!ビジネスID紐付き）
+- **Webメール**: Roundcube（https://webmail74.onamae.ne.jp/）※転送設定・フィルター不可
+- **IMAP接続**: `mail.addness.co.jp:993`（SSL）
+- **認証情報**: `System/credentials/onamae_imap.json`
+- **Orchestrator連携**: `dsinsight_mail_check` が IMAP で直接メール取得 → LINE転送
+
 ## Tailscale
 
 - MacBook: `100.112.73.6` / Mac Mini (`mac-mini-agent`): `100.96.200.105`

@@ -267,7 +267,7 @@ class TaskScheduler:
         from .notifier import send_line_notify
 
         try:
-            result = await self._execute_tool("dsinsight_mail_check", tools.dsinsight_mail_check, account="kohara")
+            result = await self._execute_tool("dsinsight_mail_check", tools.dsinsight_mail_check)
             if not result.success or result.output == "DS.INSIGHTメールなし":
                 return
 
