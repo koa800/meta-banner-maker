@@ -24,30 +24,46 @@ class CDPSync:
         self.client = get_client(account)
         self.ss = self.client.open_by_key(CDP_SHEET_ID)
         self._exclusion_list = None
+        self._exclusion_emails = set()
+        self._exclusion_phones = set()
+        self._exclusion_lines = set()
         self._master_headers = None
         self._master_data = None
 
     # ─── 除外リスト ─────────────────────────────────────
 
     def load_exclusion_list(self):
-        """除外リストのメールアドレスを読み込む"""
+        """除外リストを読み込む（メール・電話番号・LINE名）"""
         ws = self.ss.worksheet("除外リスト")
         data = ws.get_all_values()
-        emails = set()
-        for row in data[1:]:  # ヘッダー除く
-            if row and row[0].strip():
-                emails.add(row[0].strip().lower())
-        self._exclusion_list = emails
-        print(f"除外リスト: {len(emails)}件")
-        return emails
+        # ヘッダー: メールアドレス / 電話番号 / LINE名 / 名前 / 除外理由 / 追加日
+        self._exclusion_emails = set()
+        self._exclusion_phones = set()
+        self._exclusion_lines = set()
+        for row in data[1:]:
+            if len(row) > 0 and row[0].strip():
+                self._exclusion_emails.add(row[0].strip().lower())
+            if len(row) > 1 and row[1].strip():
+                self._exclusion_phones.add(normalize_phone(row[1].strip()))
+            if len(row) > 2 and row[2].strip():
+                self._exclusion_lines.add(row[2].strip())
+        total = len(self._exclusion_emails | self._exclusion_phones | self._exclusion_lines)
+        print(f"除外リスト: メール{len(self._exclusion_emails)}件, "
+              f"電話{len(self._exclusion_phones)}件, LINE{len(self._exclusion_lines)}件")
+        self._exclusion_list = self._exclusion_emails  # 後方互換
+        return self._exclusion_emails
 
-    def is_excluded(self, email):
-        """メールアドレスが除外リストに含まれるか"""
+    def is_excluded(self, email=None, phone=None, line_name=None):
+        """メール・電話番号・LINE名のいずれかが除外リストに含まれるか"""
         if self._exclusion_list is None:
             self.load_exclusion_list()
-        if not email:
-            return False
-        return email.strip().lower() in self._exclusion_list
+        if email and email.strip().lower() in self._exclusion_emails:
+            return True
+        if phone and normalize_phone(phone.strip()) in self._exclusion_phones:
+            return True
+        if line_name and line_name.strip() in self._exclusion_lines:
+            return True
+        return False
 
     # ─── 顧客マスタ ─────────────────────────────────────
 
