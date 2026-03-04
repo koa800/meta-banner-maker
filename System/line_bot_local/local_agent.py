@@ -332,7 +332,7 @@ def _execute_with_claude_code(
 - alertやconfirmダイアログはトリガーしないこと（ブラウザがフリーズする）
 
 ### 定常業務の手順
-日報入力の場合: `Project/定常業務.md` に詳細手順あり
+日報入力の場合: `Master/knowledge/定常業務.md` に詳細手順あり
 - Looker Studio URL: https://lookerstudio.google.com/u/2/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_dsqvinv6zd
 - 日報スプレッドシート: ID `16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk`、タブ「日報」
 - デフォルト日付: 指定なしなら対象日は前日。Looker Studioの日付設定は2日前（前々日）
@@ -3446,7 +3446,7 @@ def run_agent():
                                 "1. Looker Studio (https://lookerstudio.google.com/u/2/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_dsqvinv6zd) でCSVを取得 "
                                 "2. 取得したデータを日報スプレッドシート（ID: 16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk、タブ: 日報）に入力 "
                                 "3. 対象日は指定がなければ前日（1日前）。日付指定は2日前（前々日）がデフォルト "
-                                "4. Project/定常業務.md に詳細手順あり",
+                                "4. Master/knowledge/定常業務.md に詳細手順あり",
                             sender_name=sender_name,
                             timeout_seconds=600,
                         )

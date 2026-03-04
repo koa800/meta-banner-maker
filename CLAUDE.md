@@ -8,11 +8,11 @@
 
 | ファイル | 更新トリガー |
 |---------|------------|
-| `Project/AI秘書作成.md` | `System/line_bot/app.py` または `System/line_bot_local/local_agent.py` を変更したとき |
-| `Project/質問自動回答プロジェクト.md` | Q&A関連（`qa_handler.py`, `qa_monitor.py`, `qa_search.py`）を変更したとき |
-| `Project/メール自動管理.md` | メール関連（`mail_manager.py`, `mail_inbox_*.py`）を変更したとき |
-| `Project/数値管理自動化.md` | 数値管理関連（`csv_sheet_sync.py`, `sheets_manager.py`, `sheets_sync.py`）を変更したとき |
-| `Project/定常業務.md` | 日報入力手順・Looker Studio CSV取得手順・完了報告フォーマットを変更したとき |
+| `Project/4_AI基盤/AI秘書作成.md` | `System/line_bot/app.py` または `System/line_bot_local/local_agent.py` を変更したとき |
+| `Project/2_CS/質問自動回答プロジェクト.md` | Q&A関連（`qa_handler.py`, `qa_monitor.py`, `qa_search.py`）を変更したとき |
+| `Project/3_業務自動化/メール自動管理.md` | メール関連（`mail_manager.py`, `mail_inbox_*.py`）を変更したとき |
+| `Project/3_業務自動化/数値管理自動化.md` | 数値管理関連（`csv_sheet_sync.py`, `sheets_manager.py`, `sheets_sync.py`）を変更したとき |
+| `Master/knowledge/定常業務.md` | 日報入力手順・Looker Studio CSV取得手順・完了報告フォーマットを変更したとき |
 
 ### 更新の原則
 
@@ -47,8 +47,12 @@
 
 ```
 cursor/
-├── Project/              # プロジェクトドキュメント（常に最新を維持）
-├── Master/               # 知識ベース（people/, addness/, self_clone/, learning/, sheets/）
+├── Project/              # プロジェクトドキュメント（機能領域別に分類）
+│   ├── 1_集客/           # 広告・集客系プロジェクト
+│   ├── 2_CS/             # CS・コンテンツ系プロジェクト
+│   ├── 3_業務自動化/      # 業務効率化プロジェクト
+│   └── 4_AI基盤/         # AIエージェント・基盤プロジェクト
+├── Master/               # 知識ベース（people/, addness/, self_clone/, learning/, sheets/, knowledge/）
 ├── System/               # 実装ファイル
 │   ├── credentials/      # OAuth トークン・クライアントシークレット（.gitignore）
 │   ├── config/           # アプリ固有設定 JSON（.gitignore 対象あり）

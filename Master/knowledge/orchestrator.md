@@ -49,7 +49,7 @@
 - **Googleログイン切れ時**: 自動ログイン（koa800sea.nifs → kohara.kaito の順で試行。2FAはLINE通知→iPhone承認）
 - **セッション維持**: 07:00に毎日CDP経由でLooker Studioを開いてセッションリフレッシュ
 - **認証情報**: `System/credentials/kohara_google.txt`（.gitignore、Mac Miniには scp で配置）
-- **詳細手順**: `Project/定常業務.md` 参照
+- **詳細手順**: `Master/knowledge/定常業務.md` 参照
 
 ## API → Claude Code CLI 移行（2026-03-02）
 

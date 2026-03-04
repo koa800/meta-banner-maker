@@ -124,7 +124,7 @@
 - **Google OAuth監視**: 毎朝9:00 token.jsonとGoogle API認証チェック、失敗時LINE通知（`oauth_health_check`）
 - **同期失敗通知**: sync_from_macbook.shの同期エラー時にLINE通知
 - **API使用量警告**: 直近1時間のAPI使用量が90%超でLINE通知（health_check強化）
-- **MacBook移行ガイド**: `Project/MacBook移行ガイド.md` 作成（1ヶ月後の機種変更に対応）
+- **MacBook移行ガイド**: `Master/knowledge/MacBook移行ガイド.md` 作成（1ヶ月後の機種変更に対応）
 
 ### P2/P3 エージェント機能（2026-02-21）
 - **calendar_list バグ修正**: `tools.py` でdays=1のとき今日の日付を自動設定

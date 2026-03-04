@@ -47,7 +47,7 @@
                                │  - handler_runner.py           │
                                │  - tool_registry.json (15ツール)│
                                │  - ゴール→分解→委任→統合→報告  │
-                               │  → 詳細: Project/ゴール実行     │
+                               │  → 詳細: Project/4_AI基盤/ゴール実行 │
                                │    エンジン設計.md              │
                                └──────────────────────────────┘
                                               │
@@ -497,13 +497,13 @@ bash System/line_bot_local/sync_data.sh
 | local_agent.py _SYSTEM_DIR | スクリプト呼び出しパスも __file__ ベースで動的解決済み。`mail_manager.py` の存在チェックでDesktop/Mac Miniを自動判別（`_AGENT_DIR.parent` → なければ `parent/System/`）|
 | LINE Notify廃止 | LINE Notify は2025年3月終了。Render `/notify` エンドポイント + LINE Messaging API push_message で代替 |
 | Google OAuth token.json | `~/agents/token.json` に保存。access tokenは1時間で失効するがrefresh_tokenで自動更新。oauth_health_checkが毎朝9時に監視 |
-| MacBook機種変更 | `Project/MacBook移行ガイド.md` 参照。Mac Mini側は完全自律稼働のため影響なし。SSHキーとpost-commitフックの再設定のみ必要 |
+| MacBook機種変更 | `Master/knowledge/MacBook移行ガイド.md` 参照。Mac Mini側は完全自律稼働のため影響なし。SSHキーとpost-commitフックの再設定のみ必要 |
 | 手元PCのスリープ・閉じ蓋 | 定常タスク（Orchestrator・LINE local・メール・日報・Q&A等）は**Mac Mini**で稼働。手元のMacBookをスリープ/閉じ蓋しても**これらの仕組みは止まらない**。閉じ蓋でもスリープしないようにするには下記「クラムシェルモード」を参照 |
 | Chatwork Webhook設定 | Chatwork管理画面 → Webhook設定 → イベント `mention_to_me` → URL: Chatwork Webhook URL |
 | Chatwork account_id | `curl -H "x-chatworktoken: TOKEN" https://api.chatwork.com/v2/me` で取得 |
 | Chatwork送信者紐付け | `people-identities.json` の `chatwork_account_id` フィールドに相手のaccount_idを設定してプロファイル逆引き可能に |
 | スプレッドシート文脈 | `people-profiles.json` の `related_sheets` にシートID・シート名・説明を設定。返信案生成時に `sheets_manager.py json` で自動取得 |
-| Addness KPIシート | `【アドネス全体】数値管理シート`（ID: `1FOh_XGZWaEisfFEngiN848kSm2E6HotAZiMDTmO7BNA`）。タブ: 元データ / スキルプラス（日別）/ スキルプラス（月別）。`csv_sheet_sync.py` がCSV同期→日別月別構築→KPIキャッシュ生成を連鎖実行。詳細は `Project/数値管理自動化.md` を参照。kohara アカウントで読み書き |
+| Addness KPIシート | `【アドネス全体】数値管理シート`（ID: `1FOh_XGZWaEisfFEngiN848kSm2E6HotAZiMDTmO7BNA`）。タブ: 元データ / スキルプラス（日別）/ スキルプラス（月別）。`csv_sheet_sync.py` がCSV同期→日別月別構築→KPIキャッシュ生成を連鎖実行。詳細は `Project/3_業務自動化/数値管理自動化.md` を参照。kohara アカウントで読み書き |
 | KPIデータ開示制御 | 事業KPI（売上・広告費・ROAS等）は内部メンバーのみ開示。外部パートナー・未登録者には `fetch_addness_kpi()` のデータ注入をスキップ。ただしプロファイルの `related_sheets` に登録されたシートデータは外部にも開示可 |
 | タスク失敗通知 | Orchestratorのタスクが失敗するとLINE通知（2時間レート制限）。health_check/oauth_health_checkは除外 |
 | 自動復旧（health_check） | local_agent停止検知→launchctl自動再起動→LINE報告。Q&Aモニター4時間以上停止→local_agent再起動。メール通知失敗→5秒後に1回リトライ |
@@ -714,7 +714,7 @@ MacBook (どこからでも)
 | `System/mac_mini/agent_orchestrator/config.yaml` | エージェント設定（パス・スケジュール等） |
 | `System/mac_mini/git_pull_sync.sh` | GitHub pull→ローカルデプロイスクリプト |
 | `.git/hooks/post-commit` | コミット時に自動 `git push origin main` |
-| `Project/MacBook移行ガイド.md` | MacBook機種変更時の移行手順書 |
+| `Master/knowledge/MacBook移行ガイド.md` | MacBook機種変更時の移行手順書 |
 
 ---
 
@@ -756,7 +756,7 @@ MacBook (どこからでも)
 - [x] 同期失敗LINE通知（sync_from_macbook.shのrsyncエラー時にLINE通知）
 - [x] API使用量警告（直近1時間が90%超でLINE通知）
 - [x] スケジュールステータスAPI（GET /schedule/status で全ジョブの次回実行・最終成功を確認可能）
-- [x] MacBook移行ガイド作成（`Project/MacBook移行ガイド.md`・1ヶ月後の機種変更向け）
+- [x] MacBook移行ガイド作成（`Master/knowledge/MacBook移行ガイド.md`・1ヶ月後の機種変更向け）
 - [x] calendar_listバグ修正（tools.pyのdays=1で今日の日付を自動設定・`"7"`を日付として渡すバグ解消）
 - [x] 日次ダイジェスト+カレンダー統合（毎朝8:30の通知に今日の予定を追加）
 - [x] ミーティング準備ブリーフィング（カレンダー参加者をpeople-profiles.jsonでルックアップ・カテゴリ付きで表示）

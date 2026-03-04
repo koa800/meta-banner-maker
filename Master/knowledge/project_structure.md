@@ -7,7 +7,7 @@
 - `Master/people/profiles.json` → 58名のプロファイル（comm_profile含む）
 - `Master/learning/reply_feedback.json` → 返信修正フィードバック（correction/approval）
 - `Master/learning/style_rules.json` → 返信スタイルルール（weekly_profile_learningで自動生成）
-- `Project/AI秘書作成.md` → AI秘書システムのメインドキュメント
+- `Project/4_AI基盤/AI秘書作成.md` → AI秘書システムのメインドキュメント
 
 ## 積み上がる学習（Phase 7, 2026-02-25 実装完了）
 
