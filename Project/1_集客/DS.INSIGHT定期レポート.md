@@ -59,13 +59,17 @@ DS.INSIGHT → メール配信 → k.kohara@addness.co.jp（お名前.com）
                     LINE秘書グループに通知 → 甲原さんに届く
 ```
 
-**LINE通知フォーマット:**
+**LINE通知フォーマット（AI要約）:**
 ```
 📊 DS.INSIGHT通知
 
 [メールの件名]
 ━━━━━━━━━━
-[メール本文の先頭500文字]
+[Claude HaikuがDS.INSIGHTメールを要約]
+- スキルプラスの認知変化
+- AI・副業・スキルアップ市場の動き
+- 新しいトレンドKW
+- 今すぐ動くべきことがあれば提案
 ```
 
 ### 隔週レポート（Claude Code + Chrome MCP）

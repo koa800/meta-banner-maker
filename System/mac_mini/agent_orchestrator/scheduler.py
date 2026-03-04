@@ -260,8 +260,38 @@ class TaskScheduler:
             else:
                 logger.warning(f"Mail notification failed for {account} after retry")
 
+    def _summarize_dsinsight_email(self, subject: str, body: str) -> str:
+        """DS.INSIGHTメールをClaude Haikuで要約し、甲原さんに必要な情報だけ抽出"""
+        import anthropic
+
+        try:
+            client = anthropic.Anthropic()
+            response = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=500,
+                system="""あなたはAddnessの広告マーケティング秘書です。
+DS.INSIGHT（Yahoo!検索データ分析ツール）からのメール通知を要約します。
+
+■ 甲原さんが知りたいこと:
+- 「スキルプラス」のブランド認知は伸びてる？落ちてる？
+- AI・副業・スキルアップ・リスキリング市場に変化はある？
+- 広告やコンテンツで今すぐ動くべきことはある？
+
+■ 要約ルール:
+- 甲原さんが知りたいことにダイレクトに答える
+- 数値変化は具体的に（↑12%、↓5%など）
+- 新しいトレンドKWは必ず記載
+- 「特に変化なし」なら1行で済ませる
+- 最後に「動くべきこと」があれば1行で提案""",
+                messages=[{"role": "user", "content": f"件名: {subject}\n\n{body[:2000]}"}]
+            )
+            return response.content[0].text.strip()
+        except Exception as e:
+            logger.warning(f"DS.INSIGHT要約失敗（生テキストで送信）: {e}")
+            return body[:500] if body else "(本文なし)"
+
     async def _check_dsinsight_emails(self):
-        """DS.INSIGHTからのメールをLINE転送（重複防止付き）"""
+        """DS.INSIGHTからのメールをAI要約してLINE転送（重複防止付き）"""
         import json
         from pathlib import Path
         from .notifier import send_line_notify
@@ -288,11 +318,11 @@ class TaskScheduler:
                 return
 
             for item in new_items:
-                body_summary = item["body"][:500] if item["body"] else ""
-                message = f"📊 DS.INSIGHT通知\n\n{item['subject']}\n━━━━━━━━━━\n{body_summary}"
+                summary = self._summarize_dsinsight_email(item["subject"], item["body"])
+                message = f"📊 DS.INSIGHT通知\n\n{item['subject']}\n━━━━━━━━━━\n{summary}"
                 send_line_notify(message)
                 forwarded_ids.add(item["id"])
-                logger.info(f"DS.INSIGHTメール転送: {item['subject']}")
+                logger.info(f"DS.INSIGHTメール転送（AI要約）: {item['subject']}")
 
             # 最大100件保持
             with open(forwarded_path, "w") as f:
