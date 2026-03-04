@@ -1,6 +1,6 @@
 # DS.INSIGHT 定期レポート
 
-最終更新: 2026-03-05
+最終更新: 2026-03-05（週次レポート統合・メール回収+金曜AI要約方式に変更）
 
 ## 概要
 
@@ -15,8 +15,9 @@ https://miro.com/app/board/uXjVG3QC6UU=/?focusWidget=3458764662214762145
 
 | 機能 | 実行タイミング | ステータス |
 |------|-------------|----------|
-| [x] 隔週レポート | 隔週日曜 11:30 | 稼働中 |
-| [x] メール転送（Basic/Trend） | 3時間ごと（mail_inbox_kohara内） | 稼働中 |
+| [x] 週次レポート（メールAI要約） | 金曜 10:00 | 稼働中 |
+| [x] メール回収（Basic/Trend） | 月火木 10:00（通知なし、蓄積のみ） | 稼働中 |
+| [x] 隔週レポート（Chrome直接取得） | 隔週日曜 11:30 | 稼働中 |
 
 ## 監視キーワード
 
@@ -59,17 +60,21 @@ DS.INSIGHT → メール配信 → k.kohara@addness.co.jp（お名前.com）
                     LINE秘書グループに通知 → 甲原さんに届く
 ```
 
-**LINE通知フォーマット（AI要約）:**
+**メール回収（月火木 10:00、通知なし）:**
 ```
-📊 DS.INSIGHT通知
+IMAP接続 → DS.INSIGHTメール取得 → ds_insight_weekly_pool.json に蓄積
+※ 失敗時は3時間後に自動リトライ
+```
 
-[メールの件名]
+**週次レポート（金曜 10:00、LINE通知）:**
+```
+📊 DS.INSIGHT 週次レポート
 ━━━━━━━━━━
-[Claude HaikuがDS.INSIGHTメールを要約]
-- スキルプラスの認知変化
-- AI・副業・スキルアップ市場の動き
-- 新しいトレンドKW
-- 今すぐ動くべきことがあれば提案
+[Claude Haikuが1週間分のメールをまとめて要約]
+- 今週のハイライト
+- 検索トレンド変化（↑↓で具体的に）
+- 注目の新規キーワード
+- 動くべきこと
 ```
 
 ### 隔週レポート（Claude Code + Chrome MCP）
@@ -100,6 +105,7 @@ DS.INSIGHT → メール配信 → k.kohara@addness.co.jp（お名前.com）
 | `System/mac_mini/agent_orchestrator/notifier.py` | `send_line_notify()`（LINE送信） |
 | `System/credentials/onamae_imap.json` | IMAP認証情報（gitignore済み） |
 | `System/data/ds_insight_forwarded_ids.json` | 転送済みMessage-ID管理（最大100件） |
+| `System/data/ds_insight_weekly_pool.json` | 週次レポート用メール蓄積プール（金曜送信後クリア） |
 | `System/data/ds_insight_last.json` | 隔週レポートの前回データ（前回比算出用） |
 | `Master/addness/ds_insight_evaluation.md` | ツール評価・運用ルール |
 
