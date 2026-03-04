@@ -258,14 +258,14 @@ def find_similar_emails(new_email, existing_emails, threshold=2):
     similar = []
 
     # ドメイン部分が同じものだけ比較（パフォーマンス最適化）
-    new_local, new_domain = new_lower.split("@") if "@" in new_lower else (new_lower, "")
+    new_local, new_domain = new_lower.split("@", 1) if "@" in new_lower else (new_lower, "")
 
     for existing in existing_emails:
         existing_lower = existing.strip().lower()
         if new_lower == existing_lower:
             continue  # 完全一致はスキップ
 
-        ex_local, ex_domain = existing_lower.split("@") if "@" in existing_lower else (existing_lower, "")
+        ex_local, ex_domain = existing_lower.split("@", 1) if "@" in existing_lower else (existing_lower, "")
 
         # 同じドメインのメールのみ比較
         if new_domain and ex_domain and new_domain == ex_domain:
@@ -279,12 +279,16 @@ def find_similar_emails(new_email, existing_emails, threshold=2):
 # ─── ユーティリティ ───────────────────────────────────
 
 def normalize_phone(phone):
-    """電話番号を正規化（ハイフン除去、+81→0変換）"""
+    """電話番号を正規化（ハイフン除去、+81→0変換、先頭0補完）"""
     if not phone:
         return ""
     phone = re.sub(r'[\s\-\(\)]', '', phone)
     if phone.startswith('+81'):
         phone = '0' + phone[3:]
+    # 10桁で先頭が0でない → 先頭0が欠落している可能性が高い
+    digits_only = re.sub(r'\D', '', phone)
+    if len(digits_only) == 10 and not digits_only.startswith('0'):
+        phone = '0' + digits_only
     return phone
 
 
@@ -373,6 +377,16 @@ def resolve_age(birth_date_str, survey_age_str):
     if survey_age_str and survey_age_str.strip():
         return survey_age_str.strip()
     return ""
+
+
+def _col_to_letter(col_num):
+    """1ベースの列番号をExcel形式の列文字に変換（1→A, 26→Z, 27→AA, ...）"""
+    result = ""
+    while col_num > 0:
+        col_num -= 1
+        result = chr(65 + col_num % 26) + result
+        col_num //= 26
+    return result
 
 
 # ─── メインクラス ─────────────────────────────────────
@@ -573,6 +587,13 @@ class CDPSync:
             if src_col in source_headers:
                 src_col_indices[cdp_col] = source_headers.index(src_col)
 
+        # カンマ区切りで追記するカラム（複数回の値を蓄積）
+        append_columns = {"セミナー予約日", "個別予約日", "個別着座日"}
+
+        # 日付信頼性フィルター: 個別予約日は2025/7/30以降のみ取り込む
+        reservation_date_cutoff = datetime(2025, 7, 30)
+        reservation_src_idx = src_col_indices.get("個別予約日")
+
         # 増分同期: 前回同期以降の行数差分のみ処理
         source_key = f"{source_url}#{tab_name}"
         start_row = 0
@@ -600,7 +621,17 @@ class CDPSync:
         }
 
         ws = self.ss.worksheet("顧客マスタ") if not dry_run else None
-        updates = []  # バッチ更新用
+
+        # ソースの行数に合わせてグリッドを事前拡張
+        if not dry_run:
+            current_rows = ws.row_count
+            needed_rows = len(self._master_data) + 2 + len(source_rows)
+            if needed_rows > current_rows:
+                add = needed_rows - current_rows + 500
+                ws.add_rows(add)
+                print(f"グリッド拡張: {current_rows} → {current_rows + add}行")
+        updates = []  # バッチ更新用（既存行の変更）
+        new_rows = []  # バッチ追加用（新規顧客）
 
         for row_idx in range(start_row, len(source_rows)):
             row = source_rows[row_idx]
@@ -625,8 +656,8 @@ class CDPSync:
                                     phone, normalized_phone, "バリデーション")
                 phone = normalized_phone
 
-            # メール類似検知
-            if email and email_lower not in email_index:
+            # メール類似検知（大量同期時はスキップ: O(n²)で遅いため）
+            if email and email_lower not in email_index and len(all_existing_emails) < 1000:
                 similar = find_similar_emails(email, all_existing_emails)
                 if similar:
                     stats["email_warnings"] += 1
@@ -660,6 +691,18 @@ class CDPSync:
                     if not new_val:
                         continue
 
+                    # 個別予約日は2025/7/30以前のデータをスキップ
+                    if cdp_col == "個別予約日" and reservation_src_idx is not None:
+                        try:
+                            date_str = new_val.split(" ")[0]  # "2025/01/01 0:00:00" → "2025/01/01"
+                            m = re.match(r'(\d{4})[/-](\d{1,2})[/-](\d{1,2})', date_str)
+                            if m:
+                                d = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+                                if d < reservation_date_cutoff:
+                                    continue  # 2025/7/30以前はスキップ
+                        except (ValueError, IndexError):
+                            pass
+
                     cdp_idx = self.get_col_index(cdp_col)
                     if cdp_idx is None:
                         continue
@@ -668,8 +711,21 @@ class CDPSync:
                     if cdp_idx < len(self._master_data[master_row_idx]):
                         old_val = self._master_data[master_row_idx][cdp_idx]
 
+                    # カンマ区切り追記カラム: 既存値に追記（重複チェック付き）
+                    if cdp_col in append_columns:
+                        if old_val:
+                            # 日付部分のみ抽出して比較（時刻部分を除去）
+                            normalized_new = normalize_date(new_val.split(" ")[0])
+                            existing_dates = {normalize_date(d.strip().split(" ")[0])
+                                              for d in old_val.split(",")}
+                            if normalized_new in existing_dates:
+                                continue  # 重複はスキップ
+                            new_val = f"{old_val}, {normalized_new}"
+                        else:
+                            new_val = normalize_date(new_val.split(" ")[0])
+
                     # 値が同じなら更新しない
-                    if old_val == new_val:
+                    elif old_val == new_val:
                         continue
 
                     # 空→値: 無条件で記録
@@ -681,10 +737,9 @@ class CDPSync:
                     if not dry_run:
                         # シートの行番号 = master_row_idx + 3（行1:グループ, 行2:カラム, 行3〜:データ）
                         sheet_row = master_row_idx + 3
-                        sheet_col = cdp_idx + 1
+                        col_letter = _col_to_letter(cdp_idx + 1)
                         updates.append({
-                            "range": f"{chr(65 + sheet_col)}{sheet_row}" if sheet_col < 26
-                                     else f"{chr(64 + sheet_col // 26)}{chr(65 + sheet_col % 26)}{sheet_row}",
+                            "range": f"{col_letter}{sheet_row}",
                             "values": [[new_val]],
                         })
                     updated_any = True
@@ -697,61 +752,97 @@ class CDPSync:
                 self.logger.log("insert", email or phone, "",
                                 "", "", f"{source_url}#{tab_name}")
 
+                # 新規行を構築（ドライラン含む。インメモリのインデックスは常に更新）
+                new_row = [""] * len(self._master_headers)
+                cid_idx = self.get_col_index("顧客ID")
+                if cid_idx is not None:
+                    new_row[cid_idx] = str(len(self._master_data) + 1)
+
+                create_idx = self.get_col_index("作成日")
+                if create_idx is not None:
+                    new_row[create_idx] = datetime.now().strftime("%Y/%m/%d")
+
+                email_cidx = self.get_col_index("メールアドレス")
+                if email_cidx is not None and email:
+                    new_row[email_cidx] = email
+
+                phone_cidx = self.get_col_index("電話番号")
+                if phone_cidx is not None and phone:
+                    new_row[phone_cidx] = phone
+
+                for cdp_col, src_idx in src_col_indices.items():
+                    if src_idx < len(row) and row[src_idx].strip():
+                        val = row[src_idx].strip()
+                        if cdp_col in append_columns:
+                            val = normalize_date(val.split(" ")[0])
+                        if cdp_col == "個別予約日":
+                            try:
+                                m2 = re.match(r'(\d{4})[/-](\d{1,2})[/-](\d{1,2})', val)
+                                if m2:
+                                    d = datetime(int(m2.group(1)), int(m2.group(2)), int(m2.group(3)))
+                                    if d < reservation_date_cutoff:
+                                        continue
+                            except (ValueError, IndexError):
+                                pass
+                        cdp_idx = self.get_col_index(cdp_col)
+                        if cdp_idx is not None:
+                            new_row[cdp_idx] = val
+
                 if not dry_run:
-                    new_row = [""] * len(self._master_headers)
-                    # 顧客ID（自動発番）
-                    cid_idx = self.get_col_index("顧客ID")
-                    if cid_idx is not None:
-                        new_row[cid_idx] = str(len(self._master_data) + 1)
+                    new_rows.append(new_row)
 
-                    # 作成日
-                    create_idx = self.get_col_index("作成日")
-                    if create_idx is not None:
-                        new_row[create_idx] = datetime.now().strftime("%Y/%m/%d")
-
-                    # メールアドレス
-                    email_cidx = self.get_col_index("メールアドレス")
-                    if email_cidx is not None and email:
-                        new_row[email_cidx] = email
-
-                    # 電話番号
-                    phone_cidx = self.get_col_index("電話番号")
-                    if phone_cidx is not None and phone:
-                        new_row[phone_cidx] = phone
-
-                    # マッピングされたカラム
-                    for cdp_col, src_idx in src_col_indices.items():
-                        if src_idx < len(row) and row[src_idx].strip():
-                            cdp_idx = self.get_col_index(cdp_col)
-                            if cdp_idx is not None:
-                                new_row[cdp_idx] = row[src_idx].strip()
-
-                    ws.append_row(new_row, value_input_option="USER_ENTERED")
-                    # インデックス更新
-                    self._master_data.append(new_row)
-                    if email_lower:
-                        email_index[email_lower] = len(self._master_data) - 1
-                        all_existing_emails.add(email_lower)
-                    if phone:
-                        phone_index[normalize_phone(phone)] = len(self._master_data) - 1
+                # インメモリのインデックス更新（名寄せ用。ドライランでも更新）
+                self._master_data.append(new_row)
+                if email_lower:
+                    email_index[email_lower] = len(self._master_data) - 1
+                    all_existing_emails.add(email_lower)
+                if phone:
+                    phone_index[normalize_phone(phone)] = len(self._master_data) - 1
             else:
                 stats["no_key"] += 1
 
-        # バッチ更新実行
-        if updates and not dry_run:
-            ws.batch_update(updates, value_input_option="USER_ENTERED")
-
-        # 最終更新日を更新（更新のあった行）
+        # バッチ書き込み実行
         if not dry_run:
-            update_idx = self.get_col_index("最終更新日")
-            if update_idx is not None:
-                now = datetime.now().strftime("%Y/%m/%d")
-                # 更新した行の最終更新日を一括更新
-                # （バッチ更新に含めることでAPI呼び出しを最小化）
+            import time
+            # 既存行の更新（チャンク分割: 500件ずつ）
+            if updates:
+                CHUNK = 500
+                for i in range(0, len(updates), CHUNK):
+                    chunk = updates[i:i + CHUNK]
+                    ws.batch_update(chunk, value_input_option="USER_ENTERED")
+                    if i + CHUNK < len(updates):
+                        time.sleep(1)  # API制限回避
+                print(f"既存行の更新: {len(updates)}セル書き込み完了")
 
-        # 増分同期の状態を保存
-        self.sync_state.update(source_key, len(source_rows))
-        self.sync_state.save()
+            # 新規行の追加（update()で範囲指定書き込み。グリッド膨張を防止）
+            if new_rows:
+                # 書き込み開始行 = ヘッダー2行 + 既存データ行数 + 1
+                # ※ self._master_data には今回追加分も含まれている
+                existing_before = len(self._master_data) - len(new_rows)
+                start_row = existing_before + 3  # 行1:グループ, 行2:カラム
+                # グリッドが足りなければ拡張
+                needed = start_row + len(new_rows)
+                if needed > ws.row_count:
+                    ws.add_rows(needed - ws.row_count + 100)
+                    print(f"  グリッド拡張 → {ws.row_count}行")
+                CHUNK = 500
+                last_col = _col_to_letter(len(self._master_headers))
+                for i in range(0, len(new_rows), CHUNK):
+                    chunk = new_rows[i:i + CHUNK]
+                    r1 = start_row + i
+                    r2 = r1 + len(chunk) - 1
+                    ws.update(range_name=f"A{r1}:{last_col}{r2}",
+                              values=chunk,
+                              value_input_option="USER_ENTERED")
+                    print(f"  新規追加: {i + len(chunk)}/{len(new_rows)}行")
+                    if i + CHUNK < len(new_rows):
+                        time.sleep(1)
+                print(f"新規行の追加: {len(new_rows)}行書き込み完了")
+
+        # 増分同期の状態を保存（ドライランでは保存しない）
+        if not dry_run:
+            self.sync_state.update(source_key, len(source_rows))
+            self.sync_state.save()
 
         # 変更ログ保存
         self.logger.save()
