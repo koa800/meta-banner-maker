@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>リダイレクト中...</title>
+  <script>
+    var messages = [
+      "今日からスキルプラスで勉強始めます！まずは動画編集から✨",
+      "スキルプラス始めてみた！とりあえず1ヶ月やってみる！",
+      "スキルプラスで学び始めました！副業できるくらいにはなりたい✨",
+      "スキルプラス登録した！何から手をつけるか迷うくらい講座ある！",
+      "スキルプラスで今日から勉強する！半年後には案件とれるようになりたいな！",
+      "前から気になってたスキルプラス始めた！コツコツやっていこう✨",
+      "スキルプラスでWebデザイン勉強し始めました！頑張る！",
+      "スキルプラスで新しいこと学び始めた！久しぶりにワクワクしてる✨",
+      "今日からスキルプラスで勉強開始！まずは毎日30分を習慣にする！",
+      "スキルプラス入会した！独学で挫折した分、今度はちゃんとやりきりたい！",
+      "スキルプラスで副業スキル身につける！来月には何か形にしたい✨",
+      "スキルプラス始めました！自分のペースで進められるのがいい！",
+      "スキルプラスでスキル身につけて、働き方の選択肢増やしたい✨",
+      "スキルプラス登録してきた！まずはカリキュラム通りに進めてみる！",
+      "今日からスキルプラスで学びます！やるって決めたからにはやる！",
+      "スキルプラスで勉強始めた！やっぱり新しいこと学ぶのは楽しい✨",
+      "スキルプラス始めてみました！まずは基礎からしっかりやっていく！",
+      "スキルプラスで動画編集学び始めた！できること増やしていきたい✨",
+      "スキルプラスに入会しました！本気でスキル身につけます！",
+      "スキルプラスで今日から頑張る！1年後の自分に期待✨"
+    ];
+
+    var text = messages[Math.floor(Math.random() * messages.length)];
+    var encoded = encodeURIComponent(text);
+
+    // メインURL（x.com）で遷移を試み、失敗時は旧ドメイン（twitter.com）にフォールバック
+    var mainUrl = "https://x.com/intent/post?text=" + encoded;
+    var fallbackUrl = "https://twitter.com/intent/tweet?text=" + encoded;
+
+    try {
+      window.location.replace(mainUrl);
+    } catch (e) {
+      window.location.replace(fallbackUrl);
+    }
+
+    // 3秒経ってもページに残っている場合はフォールバックURLへ
+    setTimeout(function() {
+      window.location.href = fallbackUrl;
+    }, 3000);
+  </script>
+  <!-- JavaScript無効時のフォールバック -->
+  <noscript>
+    <meta http-equiv="refresh" content="0;url=https://x.com/intent/post?text=%E3%82%B9%E3%82%AD%E3%83%AB%E3%83%97%E3%83%A9%E3%82%B9%E3%81%A7%E4%BB%8A%E6%97%A5%E3%81%8B%E3%82%89%E5%8B%89%E5%BC%B7%E5%A7%8B%E3%82%81%E3%81%BE%E3%81%99%EF%BC%81%E2%9C%A8">
+  </noscript>
+</head>
+<body></body>
+</html>
