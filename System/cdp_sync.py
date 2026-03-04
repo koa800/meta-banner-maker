@@ -326,6 +326,55 @@ def normalize_zipcode(zipcode):
     return zipcode
 
 
+def calculate_age(birth_date_str):
+    """生年月日から今日時点の年齢を計算する
+
+    Args:
+        birth_date_str: "YYYY/MM/DD" or "YYYY-MM-DD" 形式
+
+    Returns:
+        年齢（int）。パース不可なら None
+    """
+    if not birth_date_str:
+        return None
+    # YYYY/MM/DD or YYYY-MM-DD
+    m = re.match(r'^(\d{4})[/-](\d{1,2})[/-](\d{1,2})', birth_date_str.strip())
+    if not m:
+        return None
+    try:
+        from datetime import date
+        birth = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        today = date.today()
+        age = today.year - birth.year
+        if (today.month, today.day) < (birth.month, birth.day):
+            age -= 1
+        return age if age >= 0 else None
+    except ValueError:
+        return None
+
+
+def resolve_age(birth_date_str, survey_age_str):
+    """年齢を解決する（生年月日優先、なければアンケート年代）
+
+    優先順位:
+      1. 生年月日がある → 正確な年齢を計算（例: "35"）
+      2. 生年月日がない → アンケートの年代をそのまま使用（例: "30代"）
+
+    Args:
+        birth_date_str: 生年月日（"YYYY/MM/DD" 等）
+        survey_age_str: アンケート回答の年代（"30代" 等）
+
+    Returns:
+        年齢の文字列（"35" or "30代"）。どちらもなければ ""
+    """
+    age = calculate_age(birth_date_str)
+    if age is not None:
+        return str(age)
+    if survey_age_str and survey_age_str.strip():
+        return survey_age_str.strip()
+    return ""
+
+
 # ─── メインクラス ─────────────────────────────────────
 
 class CDPSync:
