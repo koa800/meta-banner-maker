@@ -4059,7 +4059,7 @@ PROACTIVE_RESULT:
     async def _run_monthly_invoice_submission(self):
         """毎月3日: 請求書作成・提出（INVOY → Google Forms → Drive）。
 
-        Skills/数値・業務/請求書提出_アドネス.md のワークフローに従い、
+        Skills/5_数値・業務/請求書提出_アドネス.md のワークフローに従い、
         Claude Code CLI + Chrome MCP でブラウザ操作を行う。
         甲原さんの承認ゲート（LINE OK返信）を含むため、
         承認待ちの間は中断し、承認後に手動再開が必要。
@@ -4145,7 +4145,7 @@ PROACTIVE_RESULT:
 {target_year}年{target_month}月分の請求書を2通（業務委託報酬・経費立替）作成し、甲原さんの承認を得てから提出する。
 
 ## スキルファイル
-詳細な手順は Skills/数値・業務/請求書提出_アドネス.md を必ず読んでから作業を開始してください。
+詳細な手順は Skills/5_数値・業務/請求書提出_アドネス.md を必ず読んでから作業を開始してください。
 
 ## 事前取得情報
 - 請求対象: {target_year}年{target_month}月分
@@ -4220,7 +4220,7 @@ for fname in ['{target_year}年{target_month}月請求書_甲原海人.pdf', '{t
 
 ### Step 4: 提出フォームで2回提出（承認後）
 Google Forms で業務委託報酬と経費立替をそれぞれ提出する。
-手順の詳細は Skills/数値・業務/請求書提出_アドネス.md の Step 5 を参照。
+手順の詳細は Skills/5_数値・業務/請求書提出_アドネス.md の Step 5 を参照。
 
 ===RESULT_START===
 請求書確認依頼をLINEに送信しました。甲原さんの「OK」返信を待っています。
