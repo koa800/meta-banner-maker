@@ -117,6 +117,7 @@ class TaskScheduler:
             "kpi_anomaly_check": self._run_kpi_anomaly_check,
             "monthly_invoice_submission": self._run_monthly_invoice_submission,
             "ds_insight_biweekly_report": self._run_ds_insight_biweekly_report,
+            "ds_insight_mail_forward": self._run_ds_insight_mail_forward,
         }
 
     def setup(self):
@@ -226,7 +227,9 @@ class TaskScheduler:
     async def _run_mail_kohara(self):
         result = await self._execute_tool("mail_inbox_kohara", tools.mail_run, account="kohara")
         await self._notify_mail_result(result, "kohara")
-        # DS.INSIGHTメール転送チェック
+
+    async def _run_ds_insight_mail_forward(self):
+        """DS.INSIGHTメール転送（独立スケジュール）"""
         await self._check_dsinsight_emails()
 
     async def _notify_mail_result(self, result: tools.ToolResult, account: str):
