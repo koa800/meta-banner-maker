@@ -31,6 +31,9 @@
 - 金曜 20:00: os_sync_session（秘書→甲原のOSすり合わせ）
 - 日曜 10:00: weekly_profile_learning / 10:30: weekly_hinata_memory / 11:00: video_knowledge_review（動画知識ライフサイクルレビュー）
 
+### 月次
+- 毎月3日 09:30: monthly_invoice_submission（請求書作成・提出。INVOY→承認→フォーム→Drive）
+
 ### 深夜
 - 03:00: log_rotate（ログ圧縮）
 

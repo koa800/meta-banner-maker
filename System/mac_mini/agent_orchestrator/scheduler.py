@@ -115,6 +115,7 @@ class TaskScheduler:
             "anthropic_credit_check": self._run_anthropic_credit_check,
             "looker_session_keepalive": self._run_looker_session_keepalive,
             "kpi_anomaly_check": self._run_kpi_anomaly_check,
+            "monthly_invoice_submission": self._run_monthly_invoice_submission,
         }
 
     def setup(self):
@@ -4054,3 +4055,174 @@ PROACTIVE_RESULT:
                 # カウントリセット（通知後は再カウント）
                 state["consecutive_failures"] = 0
                 self._save_goal_progress_state(state)
+
+    async def _run_monthly_invoice_submission(self):
+        """毎月3日: 請求書作成・提出（INVOY → Google Forms → Drive）。
+
+        Skills/skill_invoice_addness.md のワークフローに従い、
+        Claude Code CLI + Chrome MCP でブラウザ操作を行う。
+        甲原さんの承認ゲート（LINE OK返信）を含むため、
+        承認待ちの間は中断し、承認後に手動再開が必要。
+        """
+        import subprocess
+        from .notifier import send_line_notify
+        from datetime import date
+
+        logger.info("請求書提出: 開始")
+
+        # プリフライトチェック
+        ok, claude_cmd, secretary_config, project_root, preflight_err = self._ensure_claude_chrome_ready()
+        if not ok:
+            logger.error(f"請求書提出: プリフライト失敗 - {preflight_err}")
+            send_line_notify(f"請求書の自動提出を始めようとしましたが、準備段階で失敗しました。\n{preflight_err}")
+            return
+
+        today = date.today()
+        # 請求対象は前月
+        if today.month == 1:
+            target_year = today.year - 1
+            target_month = 12
+        else:
+            target_year = today.year
+            target_month = today.month - 1
+
+        # 支払月（当月）のヘッダー表記: YY/MM 末払い
+        payment_header = f"{today.year % 100}/{today.month:02d}"
+
+        # ── 事前計算: スプレッドシートから報酬単価を取得 ──
+        unit_price = None
+        price_err = None
+        try:
+            result = subprocess.run(
+                ["python3", "System/sheets_manager.py", "read",
+                 "1Bmbeglbhf62NeiJUHpai63DITrMDC3WSr09jJD8YhaM",
+                 "Sheet1", "A4:Z5"],
+                capture_output=True, text=True, timeout=30,
+                cwd=str(project_root),
+            )
+            if result.returncode == 0:
+                import re as _re
+                # ヘッダー行から該当月の列インデックスを探す
+                header_match = _re.search(r'行4:\s*(\[.*?\])', result.stdout)
+                data_match = _re.search(r'行5:\s*(\[.*?\])', result.stdout)
+                if header_match and data_match:
+                    import ast
+                    headers = ast.literal_eval(header_match.group(1))
+                    data = ast.literal_eval(data_match.group(1))
+                    for i, h in enumerate(headers):
+                        if payment_header in str(h):
+                            if i < len(data) and data[i]:
+                                unit_price = str(data[i]).replace(",", "").replace("¥", "").strip()
+                            break
+                    if unit_price:
+                        logger.info(f"請求書提出: 報酬単価 = {unit_price}")
+                    else:
+                        price_err = f"ヘッダー '{payment_header}' に対応する値が見つかりません"
+                else:
+                    price_err = "シートのパースに失敗"
+            else:
+                price_err = f"シート読み取り失敗: {result.stderr[:100]}"
+        except Exception as e:
+            price_err = str(e)
+            logger.error(f"請求書提出: 単価取得失敗 - {e}")
+
+        if price_err:
+            logger.warning(f"請求書提出: 単価事前取得失敗 - {price_err}")
+
+        # ── 単価情報の指示文 ──
+        if unit_price:
+            price_instruction = f"業務委託報酬の単価は事前取得済み: **¥{int(unit_price):,}**（税抜）。そのまま使用してください。"
+        else:
+            price_instruction = f"""業務委託報酬の単価は事前取得に失敗しました。以下で手動取得してください:
+1. ブラウザで請求金額管理シートを開く: https://docs.google.com/spreadsheets/d/1Bmbeglbhf62NeiJUHpai63DITrMDC3WSr09jJD8YhaM/edit
+2. 行4のヘッダーから「{payment_header} 末払い」の列を探す
+3. 行5（甲原海人）のその列の値を単価として使用"""
+
+        # ── CLI プロンプト ──
+        prompt = f"""あなたは甲原海人のAI秘書です。毎月の請求書を作成・提出してください。
+
+## タスク
+{target_year}年{target_month}月分の請求書を2通（業務委託報酬・経費立替）作成し、甲原さんの承認を得てから提出する。
+
+## スキルファイル
+詳細な手順は Skills/skill_invoice_addness.md を必ず読んでから作業を開始してください。
+
+## 事前取得情報
+- 請求対象: {target_year}年{target_month}月分
+- {price_instruction}
+- 経費立替: ¥2,000（Facebook広告代、毎月固定）
+
+## 実行手順
+
+### Step 1: INVOY で請求書作成
+1. ブラウザで INVOY にアクセス: https://www.invoy.jp/login?next=/dashboard/
+   - Google ログイン（koa800sea.nifs@gmail.com）が必要な場合がある
+2. 「発行」→「請求書」で **アドネス株式会社** のテンプレートを **複製**して2通作成:
+
+#### 業務委託報酬
+- 発行日: {today.strftime('%Y年%m月%d日')}（今日）
+- お支払い期限: {today.year}年{today.month}月末日
+- 件名: 業務委託報酬　{target_year}年{target_month:02d}月分
+- 品目明細の単価: {f'¥{int(unit_price):,}' if unit_price else '（スプレッドシートから取得）'}
+
+#### 経費立替
+- 発行日: {today.strftime('%Y年%m月%d日')}（今日）
+- お支払い期限: {today.year}年{today.month}月末日
+- 件名: 経費立替　{target_year}年{target_month:02d}月分
+- 品目明細の単価: ¥2,000
+
+3. 各請求書をPDFでダウンロード
+4. ファイル名をリネーム:
+   - `{target_year}年{target_month}月請求書_甲原海人.pdf`
+   - `{target_year}年{target_month}月経費建替_甲原海人.pdf`
+
+### Step 2: 甲原さんに確認依頼
+1. PDFをRenderにアップロード:
+```bash
+cd {project_root}
+curl -s -X POST https://line-mention-bot-mmzu.onrender.com/api/upload \\
+  -H "Authorization: Bearer $(cat System/config/line_bot_config.json | python3 -c 'import sys,json; print(json.load(sys.stdin).get(\"agent_token\",\"\"))')" \\
+  -F "file=@ダウンロードしたPDFのパス"
+```
+2. LINE秘書グループに確認依頼を送信:
+```bash
+curl -s -X POST https://line-mention-bot-mmzu.onrender.com/api/notify_owner \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer $(cat System/config/line_bot_config.json | python3 -c 'import sys,json; print(json.load(sys.stdin).get(\"agent_token\",\"\"))')" \\
+  -d '{{"message": "請求書を作成しました。確認をお願いします。\\n\\n1. 業務委託報酬（¥XXX）\\n2. 経費立替（¥2,200）\\n\\nPDF: [URL]\\n\\nOKであればこのメッセージに「OK」と返信してください。", "label": "請求書確認"}}'
+```
+
+**★ ここで処理を中断してください。甲原さんの承認を待ちます。★**
+
+===RESULT_START===
+請求書確認依頼をLINEに送信しました。甲原さんの「OK」返信を待っています。
+承認後、以下のコマンドで提出処理を再開してください:
+「請求書提出の続きをやって」
+===RESULT_END===
+
+## エラー時の対応
+- ブラウザ接続エラー → LINE通知して終了
+- INVOY ログイン失敗 → Google再ログインが必要な旨をLINE通知
+- スプレッドシート取得失敗 → ブラウザで直接確認
+
+{self._build_google_login_instructions()}
+
+## 重要ルール
+- **承認前に絶対にフォーム提出しない**
+- 業務委託と経費のPDFを取り違えないこと
+- 請求書の日付・件名・金額を必ず目視確認してからPDF化すること"""
+
+        success, output, error = self._execute_claude_code_task(
+            "請求書提出", claude_cmd, secretary_config, project_root,
+            prompt, max_turns=25, timeout=900, use_chrome=True,
+        )
+
+        if success:
+            self.memory.set_state("last_success_monthly_invoice", datetime.now().isoformat())
+            if "===RESULT_START===" in output and "===RESULT_END===" in output:
+                report = output.split("===RESULT_START===")[1].split("===RESULT_END===")[0].strip()
+                logger.info(f"請求書提出: 完了 - {report[:300]}")
+            else:
+                logger.info(f"請求書提出: 完了（マーカーなし）- {output[-300:]}")
+        else:
+            send_line_notify(f"請求書の自動提出が失敗しました。\n{error[:200]}")

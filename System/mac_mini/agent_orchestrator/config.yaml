@@ -92,6 +92,11 @@ schedule:
     cron: "0 22 * * *"           # 22:00  KPIキャッシュ再生成
     enabled: true
 
+  # === 月次 ===
+  monthly_invoice_submission:
+    cron: "30 9 3 * *"            # 毎月3日 09:30  請求書作成・提出（INVOY→フォーム→Drive）
+    enabled: true
+
   # === 週次 ===
   weekly_idea_proposal:
     cron: "0 9 * * 1"            # 月曜 09:00  アイデア提案
