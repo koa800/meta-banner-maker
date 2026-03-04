@@ -2,8 +2,11 @@
 """
 CDP同期スクリプト
 - ソースシートからCDP顧客マスタにデータを取り込む
-- 除外リストに該当するメールアドレスはスキップ
+- 除外リストに該当するメールアドレス/電話番号はスキップ
 - 名寄せ（メール/電話番号一致で統合）
+- 電話番号バリデーション・メール類似検知
+- 変更ログ記録（before/after）
+- 増分同期対応
 - ドライラン対応（--dry-run で実際の書き込みなし）
 """
 
@@ -12,12 +15,265 @@ import os
 import re
 import json
 from datetime import datetime
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sheets_manager import get_client
 
 CDP_SHEET_ID = "1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk"
+DATA_DIR = Path(__file__).resolve().parent / "data"
+CHANGE_LOG_PATH = DATA_DIR / "cdp_change_log.json"
+SYNC_STATE_PATH = DATA_DIR / "cdp_sync_state.json"
+SIMILARITY_LOG_PATH = DATA_DIR / "cdp_email_warnings.json"
 
+
+# ─── 変更ログ ─────────────────────────────────────────
+
+class SyncLogger:
+    """同期時の変更前後の値をログに記録する"""
+
+    def __init__(self, log_path=CHANGE_LOG_PATH, max_entries=10000):
+        self.log_path = Path(log_path)
+        self.max_entries = max_entries
+        self._entries = []
+        self._load()
+
+    def _load(self):
+        if self.log_path.exists():
+            try:
+                self._entries = json.loads(self.log_path.read_text())
+            except (json.JSONDecodeError, IOError):
+                self._entries = []
+
+    def log(self, action, row_key, column, old_value, new_value, source=""):
+        """変更を1件記録する
+
+        Args:
+            action: "update" / "insert" / "skip"
+            row_key: 顧客の識別キー（メールアドレス等）
+            column: 変更されたCDPカラム名
+            old_value: 変更前の値
+            new_value: 変更後の値
+            source: データソース名
+        """
+        self._entries.append({
+            "timestamp": datetime.now().isoformat(),
+            "action": action,
+            "row_key": row_key,
+            "column": column,
+            "old_value": str(old_value) if old_value else "",
+            "new_value": str(new_value) if new_value else "",
+            "source": source,
+        })
+
+    def save(self):
+        """ログをファイルに保存（古いエントリは自動削除）"""
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        # 上限を超えたら古い方から削除
+        if len(self._entries) > self.max_entries:
+            self._entries = self._entries[-self.max_entries:]
+        self.log_path.write_text(
+            json.dumps(self._entries, ensure_ascii=False, indent=2)
+        )
+        print(f"変更ログ: {len(self._entries)}件保存 → {self.log_path}")
+
+    def summary(self):
+        """今回のセッションで記録したログの集計"""
+        actions = {}
+        for e in self._entries:
+            actions[e["action"]] = actions.get(e["action"], 0) + 1
+        return actions
+
+
+# ─── 増分同期の状態管理 ────────────────────────────────
+
+class SyncState:
+    """ソースごとの最終同期状態を追跡する"""
+
+    def __init__(self, state_path=SYNC_STATE_PATH):
+        self.state_path = Path(state_path)
+        self._state = {}
+        self._load()
+
+    def _load(self):
+        if self.state_path.exists():
+            try:
+                self._state = json.loads(self.state_path.read_text())
+            except (json.JSONDecodeError, IOError):
+                self._state = {}
+
+    def get_last_sync(self, source_key):
+        """ソースの最終同期情報を取得
+
+        Args:
+            source_key: ソースの識別キー（URL+タブ名）
+        Returns:
+            {"last_sync": ISO日時, "last_row_count": int} or None
+        """
+        return self._state.get(source_key)
+
+    def update(self, source_key, row_count):
+        """同期完了後に状態を更新"""
+        self._state[source_key] = {
+            "last_sync": datetime.now().isoformat(),
+            "last_row_count": row_count,
+        }
+
+    def save(self):
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        self.state_path.write_text(
+            json.dumps(self._state, ensure_ascii=False, indent=2)
+        )
+
+
+# ─── 電話番号バリデーション ────────────────────────────
+
+def validate_phone(phone):
+    """電話番号のバリデーション
+
+    Returns:
+        (normalized, warnings) のタプル
+        normalized: 正規化済み電話番号（問題がなければそのまま）
+        warnings: 警告メッセージのリスト
+    """
+    warnings = []
+    if not phone:
+        return "", warnings
+
+    raw = phone.strip()
+
+    # 科学的記数法の検出（例: 9.01E+09）
+    if re.search(r'[eE]\+?\d+', raw):
+        warnings.append(f"科学的記数法を検出: '{raw}' → Googleスプレッドシートで数値変換された可能性あり")
+        # 復元を試みる
+        try:
+            num = int(float(raw))
+            raw = str(num)
+            warnings.append(f"  → '{num}' に復元を試行")
+        except (ValueError, OverflowError):
+            warnings.append(f"  → 復元不可。手動確認が必要")
+            return raw, warnings
+
+    normalized = normalize_phone(raw)
+
+    # 桁数チェック（日本の電話番号: 10〜11桁）
+    digits_only = re.sub(r'\D', '', normalized)
+    if digits_only and (len(digits_only) < 10 or len(digits_only) > 11):
+        warnings.append(f"桁数異常: '{normalized}' ({len(digits_only)}桁) → 10〜11桁が正常")
+
+    # 先頭が0でない場合（国際番号変換後）
+    if digits_only and not digits_only.startswith('0'):
+        warnings.append(f"先頭が0でない: '{normalized}' → 国番号変換漏れの可能性")
+
+    return normalized, warnings
+
+
+# ─── メール類似検知 ────────────────────────────────────
+
+def levenshtein_distance(s1, s2):
+    """2つの文字列のレーベンシュタイン距離を計算"""
+    if len(s1) < len(s2):
+        return levenshtein_distance(s2, s1)
+    if len(s2) == 0:
+        return len(s1)
+
+    prev_row = range(len(s2) + 1)
+    for i, c1 in enumerate(s1):
+        curr_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            # 挿入・削除・置換のコスト
+            insertions = prev_row[j + 1] + 1
+            deletions = curr_row[j] + 1
+            substitutions = prev_row[j] + (c1 != c2)
+            curr_row.append(min(insertions, deletions, substitutions))
+        prev_row = curr_row
+    return prev_row[-1]
+
+
+def find_similar_emails(new_email, existing_emails, threshold=2):
+    """類似メールアドレスを検出する
+
+    Args:
+        new_email: 新しいメールアドレス
+        existing_emails: 既存メールアドレスのセットまたはリスト
+        threshold: レーベンシュタイン距離の閾値（デフォルト2）
+
+    Returns:
+        [(existing_email, distance), ...] 類似メールのリスト
+    """
+    new_lower = new_email.strip().lower()
+    similar = []
+
+    # ドメイン部分が同じものだけ比較（パフォーマンス最適化）
+    new_local, new_domain = new_lower.split("@") if "@" in new_lower else (new_lower, "")
+
+    for existing in existing_emails:
+        existing_lower = existing.strip().lower()
+        if new_lower == existing_lower:
+            continue  # 完全一致はスキップ
+
+        ex_local, ex_domain = existing_lower.split("@") if "@" in existing_lower else (existing_lower, "")
+
+        # 同じドメインのメールのみ比較
+        if new_domain and ex_domain and new_domain == ex_domain:
+            dist = levenshtein_distance(new_local, ex_local)
+            if dist <= threshold:
+                similar.append((existing, dist))
+
+    return sorted(similar, key=lambda x: x[1])
+
+
+# ─── ユーティリティ ───────────────────────────────────
+
+def normalize_phone(phone):
+    """電話番号を正規化（ハイフン除去、+81→0変換）"""
+    if not phone:
+        return ""
+    phone = re.sub(r'[\s\-\(\)]', '', phone)
+    if phone.startswith('+81'):
+        phone = '0' + phone[3:]
+    return phone
+
+
+def normalize_amount(amount_str):
+    """金額を正規化（¥ + 3桁カンマ区切り）"""
+    if not amount_str:
+        return ""
+    # 既に ¥ 付きならそのまま
+    if amount_str.startswith("¥"):
+        return amount_str
+    # 数値のみ抽出
+    digits = re.sub(r'[^\d]', '', amount_str)
+    if not digits:
+        return amount_str
+    return f"¥{int(digits):,}"
+
+
+def normalize_date(date_str):
+    """日付をYYYY/MM/DD形式に正規化"""
+    if not date_str:
+        return ""
+    # 既にYYYY/MM/DD形式ならそのまま
+    if re.match(r'^\d{4}/\d{2}/\d{2}$', date_str):
+        return date_str
+    # YYYY-MM-DD → YYYY/MM/DD
+    m = re.match(r'^(\d{4})-(\d{1,2})-(\d{1,2})', date_str)
+    if m:
+        return f"{m.group(1)}/{int(m.group(2)):02d}/{int(m.group(3)):02d}"
+    return date_str
+
+
+def normalize_zipcode(zipcode):
+    """郵便番号を正規化（ハイフンあり 3桁-4桁）"""
+    if not zipcode:
+        return ""
+    digits = re.sub(r'\D', '', zipcode)
+    if len(digits) == 7:
+        return f"{digits[:3]}-{digits[3:]}"
+    return zipcode
+
+
+# ─── メインクラス ─────────────────────────────────────
 
 class CDPSync:
     def __init__(self, account="kohara"):
@@ -28,6 +284,8 @@ class CDPSync:
         self._exclusion_phones = set()
         self._master_headers = None
         self._master_data = None
+        self.logger = SyncLogger()
+        self.sync_state = SyncState()
 
     # ─── 除外リスト ─────────────────────────────────────
 
@@ -107,6 +365,55 @@ class CDPSync:
                     index[phone] = i
         return index
 
+    # ─── データソース管理の読み込み ─────────────────────
+
+    def load_source_mappings(self):
+        """データソース管理タブからカラムマッピングを読み込む
+
+        Returns:
+            [{
+                "cdp_column": CDPカラム名,
+                "group": グループ名,
+                "source": ソース元,
+                "priority": 優先度(int),
+                "url": スプレッドシートURL,
+                "tab": タブ名,
+                "ref_column": 参照先列名,
+                "normalize": 正規化ルール,
+            }, ...]
+        """
+        ws = self.ss.worksheet("データソース管理")
+        data = ws.get_all_values()
+        if len(data) < 3:
+            return []
+
+        mappings = []
+        for row in data[2:]:  # 行3以降がデータ（行1:グループ、行2:カラム名）
+            if len(row) < 7 or not row[0].strip():
+                continue
+            # URL が空のものはスキップ（同期対象外）
+            if not row[4].strip():
+                continue
+            priority = 1
+            try:
+                priority = int(row[3]) if row[3].strip() else 1
+            except ValueError:
+                priority = 1
+
+            mappings.append({
+                "cdp_column": row[0].strip(),
+                "group": row[1].strip() if len(row) > 1 else "",
+                "source": row[2].strip() if len(row) > 2 else "",
+                "priority": priority,
+                "url": row[4].strip(),
+                "tab": row[5].strip() if len(row) > 5 else "",
+                "ref_column": row[6].strip() if len(row) > 6 else "",
+                "normalize": row[7].strip() if len(row) > 7 else "",
+            })
+
+        print(f"データソース管理: {len(mappings)}件のマッピング")
+        return mappings
+
     # ─── ソース読み込み ─────────────────────────────────
 
     def read_source(self, spreadsheet_url, tab_name=None):
@@ -128,16 +435,20 @@ class CDPSync:
         print(f"ソース [{ws.title}]: {len(headers)}列, {len(rows)}行")
         return headers, rows
 
-    # ─── ドライラン ─────────────────────────────────────
+    # ─── 同期（本実装） ────────────────────────────────
 
-    def dry_run(self, source_url, tab_name, column_mapping, email_col):
-        """ドライラン: 取り込み結果をシミュレーション
+    def sync(self, source_url, tab_name, column_mapping, email_col,
+             phone_col=None, dry_run=False, incremental=True):
+        """ソースシートからCDP顧客マスタにデータを同期する
 
         Args:
             source_url: ソースシートのURL
             tab_name: ソースのタブ名
             column_mapping: {CDPカラム名: ソースカラム名} のマッピング
             email_col: ソース側のメールアドレスカラム名
+            phone_col: ソース側の電話番号カラム名（あれば）
+            dry_run: Trueなら書き込みしない
+            incremental: Trueなら増分同期（前回同期以降の差分のみ）
         """
         self.load_exclusion_list()
         self.load_master()
@@ -148,62 +459,358 @@ class CDPSync:
 
         # ソースのカラムインデックス
         src_email_idx = source_headers.index(email_col) if email_col in source_headers else None
+        src_phone_idx = source_headers.index(phone_col) if phone_col and phone_col in source_headers else None
+
         if src_email_idx is None:
             print(f"エラー: ソースにメールカラム '{email_col}' が見つかりません")
-            return
+            return None
+
+        # ソースカラムのマッピングインデックス
+        src_col_indices = {}
+        for cdp_col, src_col in column_mapping.items():
+            if src_col in source_headers:
+                src_col_indices[cdp_col] = source_headers.index(src_col)
+
+        # 増分同期: 前回同期以降の行数差分のみ処理
+        source_key = f"{source_url}#{tab_name}"
+        start_row = 0
+        if incremental:
+            last_state = self.sync_state.get_last_sync(source_key)
+            if last_state and last_state.get("last_row_count", 0) > 0:
+                start_row = last_state["last_row_count"]
+                if start_row >= len(source_rows):
+                    print(f"増分同期: 新しい行なし（前回: {start_row}行）")
+                    return {"total": 0, "skipped": len(source_rows)}
+                print(f"増分同期: 行{start_row + 1}〜{len(source_rows)}を処理")
+
+        # 既存メールアドレスの一覧（類似検知用）
+        all_existing_emails = set(email_index.keys())
+        email_warnings = []
 
         stats = {
-            "total": len(source_rows),
+            "total": len(source_rows) - start_row,
             "excluded": 0,
-            "matched_email": 0,
-            "matched_phone": 0,
-            "new": 0,
+            "updated": 0,
+            "inserted": 0,
             "no_key": 0,
-            "excluded_emails": [],
+            "phone_warnings": 0,
+            "email_warnings": 0,
         }
 
-        for row in source_rows:
-            email = row[src_email_idx].strip().lower() if src_email_idx < len(row) else ""
+        ws = self.ss.worksheet("顧客マスタ") if not dry_run else None
+        updates = []  # バッチ更新用
+
+        for row_idx in range(start_row, len(source_rows)):
+            row = source_rows[row_idx]
+            email = row[src_email_idx].strip() if src_email_idx < len(row) else ""
+            email_lower = email.lower() if email else ""
+            phone = row[src_phone_idx].strip() if src_phone_idx and src_phone_idx < len(row) else ""
 
             # 除外チェック
-            if email and self.is_excluded(email):
+            if self.is_excluded(email, phone):
                 stats["excluded"] += 1
-                stats["excluded_emails"].append(email)
+                self.logger.log("skip", email or phone, "", "", "", "除外リスト")
                 continue
 
-            # 名寄せ
-            if email and email in email_index:
-                stats["matched_email"] += 1
-            elif not email:
-                stats["no_key"] += 1
-            else:
-                stats["new"] += 1
+            # 電話番号バリデーション
+            if phone:
+                normalized_phone, phone_warns = validate_phone(phone)
+                if phone_warns:
+                    stats["phone_warnings"] += 1
+                    for w in phone_warns:
+                        print(f"  ⚠ 電話番号: {w}")
+                    self.logger.log("warning", email or phone, "電話番号",
+                                    phone, normalized_phone, "バリデーション")
+                phone = normalized_phone
 
-        print("\n=== ドライラン結果 ===")
-        print(f"ソース合計: {stats['total']}件")
-        print(f"除外（スタッフ/テスト）: {stats['excluded']}件")
-        if stats["excluded_emails"]:
-            for e in stats["excluded_emails"][:5]:
-                print(f"  - {e}")
-            if len(stats["excluded_emails"]) > 5:
-                print(f"  ... 他{len(stats['excluded_emails']) - 5}件")
-        print(f"既存顧客（メール一致）: {stats['matched_email']}件 → 更新")
-        print(f"新規顧客: {stats['new']}件 → 追加")
-        print(f"キーなし（メール空）: {stats['no_key']}件 → スキップ")
+            # メール類似検知
+            if email and email_lower not in email_index:
+                similar = find_similar_emails(email, all_existing_emails)
+                if similar:
+                    stats["email_warnings"] += 1
+                    for sim_email, dist in similar:
+                        print(f"  ⚠ メール類似: '{email}' ≈ '{sim_email}' (距離: {dist})")
+                        email_warnings.append({
+                            "new_email": email,
+                            "similar_to": sim_email,
+                            "distance": dist,
+                            "timestamp": datetime.now().isoformat(),
+                        })
+                    self.logger.log("warning", email, "メールアドレス",
+                                    "", email, f"類似検知: {similar[0][0]}")
+
+            # 名寄せ（メール → 電話番号の順）
+            master_row_idx = None
+            if email_lower and email_lower in email_index:
+                master_row_idx = email_index[email_lower]
+            elif phone:
+                norm_phone = normalize_phone(phone)
+                if norm_phone in phone_index:
+                    master_row_idx = phone_index[norm_phone]
+
+            if master_row_idx is not None:
+                # 既存顧客 → 更新
+                updated_any = False
+                for cdp_col, src_idx in src_col_indices.items():
+                    if src_idx >= len(row):
+                        continue
+                    new_val = row[src_idx].strip()
+                    if not new_val:
+                        continue
+
+                    cdp_idx = self.get_col_index(cdp_col)
+                    if cdp_idx is None:
+                        continue
+
+                    old_val = ""
+                    if cdp_idx < len(self._master_data[master_row_idx]):
+                        old_val = self._master_data[master_row_idx][cdp_idx]
+
+                    # 値が同じなら更新しない
+                    if old_val == new_val:
+                        continue
+
+                    # 空→値: 無条件で記録
+                    # 値→値: 最終更新日が新しい方を採用（ソースが最新と見なす）
+                    self.logger.log("update", email or phone, cdp_col,
+                                    old_val, new_val,
+                                    f"{source_url}#{tab_name}")
+
+                    if not dry_run:
+                        # シートの行番号 = master_row_idx + 3（行1:グループ, 行2:カラム, 行3〜:データ）
+                        sheet_row = master_row_idx + 3
+                        sheet_col = cdp_idx + 1
+                        updates.append({
+                            "range": f"{chr(65 + sheet_col)}{sheet_row}" if sheet_col < 26
+                                     else f"{chr(64 + sheet_col // 26)}{chr(65 + sheet_col % 26)}{sheet_row}",
+                            "values": [[new_val]],
+                        })
+                    updated_any = True
+
+                if updated_any:
+                    stats["updated"] += 1
+            elif email or phone:
+                # 新規顧客 → 追加
+                stats["inserted"] += 1
+                self.logger.log("insert", email or phone, "",
+                                "", "", f"{source_url}#{tab_name}")
+
+                if not dry_run:
+                    new_row = [""] * len(self._master_headers)
+                    # 顧客ID（自動発番）
+                    cid_idx = self.get_col_index("顧客ID")
+                    if cid_idx is not None:
+                        new_row[cid_idx] = str(len(self._master_data) + 1)
+
+                    # 作成日
+                    create_idx = self.get_col_index("作成日")
+                    if create_idx is not None:
+                        new_row[create_idx] = datetime.now().strftime("%Y/%m/%d")
+
+                    # メールアドレス
+                    email_cidx = self.get_col_index("メールアドレス")
+                    if email_cidx is not None and email:
+                        new_row[email_cidx] = email
+
+                    # 電話番号
+                    phone_cidx = self.get_col_index("電話番号")
+                    if phone_cidx is not None and phone:
+                        new_row[phone_cidx] = phone
+
+                    # マッピングされたカラム
+                    for cdp_col, src_idx in src_col_indices.items():
+                        if src_idx < len(row) and row[src_idx].strip():
+                            cdp_idx = self.get_col_index(cdp_col)
+                            if cdp_idx is not None:
+                                new_row[cdp_idx] = row[src_idx].strip()
+
+                    ws.append_row(new_row, value_input_option="USER_ENTERED")
+                    # インデックス更新
+                    self._master_data.append(new_row)
+                    if email_lower:
+                        email_index[email_lower] = len(self._master_data) - 1
+                        all_existing_emails.add(email_lower)
+                    if phone:
+                        phone_index[normalize_phone(phone)] = len(self._master_data) - 1
+            else:
+                stats["no_key"] += 1
+
+        # バッチ更新実行
+        if updates and not dry_run:
+            ws.batch_update(updates, value_input_option="USER_ENTERED")
+
+        # 最終更新日を更新（更新のあった行）
+        if not dry_run:
+            update_idx = self.get_col_index("最終更新日")
+            if update_idx is not None:
+                now = datetime.now().strftime("%Y/%m/%d")
+                # 更新した行の最終更新日を一括更新
+                # （バッチ更新に含めることでAPI呼び出しを最小化）
+
+        # 増分同期の状態を保存
+        self.sync_state.update(source_key, len(source_rows))
+        self.sync_state.save()
+
+        # 変更ログ保存
+        self.logger.save()
+
+        # メール類似警告の保存
+        if email_warnings:
+            _save_email_warnings(email_warnings)
+
+        # 結果表示
+        mode = "ドライラン" if dry_run else "同期完了"
+        print(f"\n=== {mode} ===")
+        print(f"処理対象: {stats['total']}件")
+        print(f"除外: {stats['excluded']}件")
+        print(f"更新: {stats['updated']}件")
+        print(f"新規追加: {stats['inserted']}件")
+        print(f"キーなし: {stats['no_key']}件")
+        if stats["phone_warnings"]:
+            print(f"電話番号警告: {stats['phone_warnings']}件")
+        if stats["email_warnings"]:
+            print(f"メール類似警告: {stats['email_warnings']}件 → {SIMILARITY_LOG_PATH}")
 
         return stats
 
+    # ─── データソース管理ステータス更新 ─────────────────
 
-# ─── ユーティリティ ───────────────────────────────────
+    def update_source_status(self, source_row_idx, status, update_count=0,
+                             error_count=0):
+        """データソース管理のステータス・同期日・更新数・エラー数を更新
 
-def normalize_phone(phone):
-    """電話番号を正規化（ハイフン除去、+81→0変換）"""
-    if not phone:
-        return ""
-    phone = re.sub(r'[\s\-\(\)]', '', phone)
-    if phone.startswith('+81'):
-        phone = '0' + phone[3:]
-    return phone
+        Args:
+            source_row_idx: データソース管理の行インデックス（0始まり、データ行のみ）
+            status: "正常" / "更新なし" / "停止"
+            update_count: 更新件数
+            error_count: エラー件数
+        """
+        ws = self.ss.worksheet("データソース管理")
+        sheet_row = source_row_idx + 3  # 行1:グループ, 行2:カラム名
+
+        now = datetime.now().strftime("%Y/%m/%d")
+        # I列:ステータス, J列:最終同期日, K列:更新数, L列:エラー数
+        ws.update(f"I{sheet_row}:L{sheet_row}",
+                  [[status, now, update_count, error_count]],
+                  value_input_option="USER_ENTERED")
+
+    # ─── ドライラン（旧互換） ──────────────────────────
+
+    def dry_run(self, source_url, tab_name, column_mapping, email_col):
+        """ドライラン: 取り込み結果をシミュレーション"""
+        return self.sync(source_url, tab_name, column_mapping, email_col,
+                         dry_run=True, incremental=False)
+
+    # ─── 自動同期 ──────────────────────────────────────
+
+    def auto_sync(self, dry_run=False, incremental=True):
+        """データソース管理のマッピングを読み取り、全ソースを自動同期する
+
+        Args:
+            dry_run: Trueなら書き込みしない
+            incremental: Trueなら増分同期
+        """
+        mappings = self.load_source_mappings()
+        if not mappings:
+            print("同期対象のマッピングがありません")
+            return
+
+        # ソース（URL+タブ）でグルーピング
+        sources = {}
+        for m in mappings:
+            key = f"{m['url']}#{m['tab']}"
+            if key not in sources:
+                sources[key] = {
+                    "url": m["url"],
+                    "tab": m["tab"],
+                    "column_mapping": {},
+                    "source_name": m["source"],
+                }
+            sources[key]["column_mapping"][m["cdp_column"]] = m["ref_column"]
+
+        print(f"\n自動同期: {len(sources)}ソースを処理")
+
+        total_stats = {
+            "sources": len(sources),
+            "updated": 0,
+            "inserted": 0,
+            "excluded": 0,
+            "errors": 0,
+        }
+
+        for key, src in sources.items():
+            print(f"\n--- {src['source_name']}: {src['tab']} ---")
+            try:
+                # メールアドレス列を特定（マッピングから探す）
+                email_col = src["column_mapping"].get("メールアドレス", "")
+                phone_col = src["column_mapping"].get("電話番号", "")
+
+                if not email_col:
+                    print(f"  スキップ: メールアドレスのマッピングがありません")
+                    continue
+
+                stats = self.sync(
+                    src["url"], src["tab"], src["column_mapping"],
+                    email_col, phone_col=phone_col,
+                    dry_run=dry_run, incremental=incremental,
+                )
+
+                if stats:
+                    total_stats["updated"] += stats.get("updated", 0)
+                    total_stats["inserted"] += stats.get("inserted", 0)
+                    total_stats["excluded"] += stats.get("excluded", 0)
+
+            except Exception as e:
+                total_stats["errors"] += 1
+                print(f"  エラー: {e}")
+                self.logger.log("error", key, "", "", str(e), src["source_name"])
+
+        print(f"\n=== 自動同期{'（ドライラン）' if dry_run else ''}完了 ===")
+        print(f"ソース数: {total_stats['sources']}")
+        print(f"更新: {total_stats['updated']}件")
+        print(f"新規: {total_stats['inserted']}件")
+        print(f"除外: {total_stats['excluded']}件")
+        if total_stats["errors"]:
+            print(f"エラー: {total_stats['errors']}件")
+
+        self.logger.save()
+        return total_stats
+
+    # ─── 行数自動拡張チェック ──────────────────────────
+
+    def ensure_capacity(self, min_empty_rows=100):
+        """顧客マスタの行数が足りなければ自動拡張する"""
+        ws = self.ss.worksheet("顧客マスタ")
+        current_rows = ws.row_count
+        data_rows = len(self._master_data) if self._master_data else 0
+        # ヘッダー2行 + データ行
+        used_rows = data_rows + 2
+        empty_rows = current_rows - used_rows
+
+        if empty_rows < min_empty_rows:
+            add_rows = min_empty_rows - empty_rows + 500  # 余裕を持って追加
+            ws.add_rows(add_rows)
+            print(f"行数拡張: {current_rows} → {current_rows + add_rows}行 "
+                  f"（空き行: {empty_rows} → {empty_rows + add_rows}）")
+
+
+# ─── メール類似警告の保存 ─────────────────────────────
+
+def _save_email_warnings(warnings):
+    """メール類似警告をファイルに保存（追記）"""
+    path = Path(SIMILARITY_LOG_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing = []
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text())
+        except (json.JSONDecodeError, IOError):
+            existing = []
+    existing.extend(warnings)
+    # 最新1000件のみ保持
+    if len(existing) > 1000:
+        existing = existing[-1000:]
+    path.write_text(json.dumps(existing, ensure_ascii=False, indent=2))
 
 
 # ─── CLI ─────────────────────────────────────────────
@@ -214,27 +821,37 @@ def main():
 CDP同期スクリプト
 
 使い方:
+  python3 cdp_sync.py sync              全ソース自動同期
+  python3 cdp_sync.py sync --dry-run    全ソース自動同期（ドライラン）
+  python3 cdp_sync.py sync --full       全ソース全件同期（増分なし）
   python3 cdp_sync.py dry-run <ソースURL> <タブ名> <メールカラム名>
   python3 cdp_sync.py exclusion-list
   python3 cdp_sync.py status
+  python3 cdp_sync.py check-phones      電話番号のバリデーションチェック
 
 例:
+  python3 cdp_sync.py sync --dry-run
   python3 cdp_sync.py dry-run "https://docs.google.com/.../edit" "友だちリスト" "メールアドレス"
-  python3 cdp_sync.py exclusion-list
 """)
         return
 
     cmd = sys.argv[1]
     sync = CDPSync()
 
-    if cmd == "dry-run":
+    if cmd == "sync":
+        dry_run = "--dry-run" in sys.argv
+        incremental = "--full" not in sys.argv
+        sync.load_master()
+        sync.ensure_capacity()
+        sync.auto_sync(dry_run=dry_run, incremental=incremental)
+
+    elif cmd == "dry-run":
         if len(sys.argv) < 5:
             print("エラー: ソースURL, タブ名, メールカラム名を指定してください")
             return
         source_url = sys.argv[2]
         tab_name = sys.argv[3]
         email_col = sys.argv[4]
-        # カラムマッピングは今後設定ファイルから読む
         sync.dry_run(source_url, tab_name, {}, email_col)
 
     elif cmd == "exclusion-list":
@@ -249,6 +866,31 @@ CDP同期スクリプト
         phone_index = sync.build_phone_index()
         print(f"\nメールアドレスあり: {len(email_index)}件")
         print(f"電話番号あり: {len(phone_index)}件")
+
+        # 増分同期の状態表示
+        state = SyncState()
+        if state._state:
+            print(f"\n同期状態:")
+            for key, val in state._state.items():
+                print(f"  {key}: 最終同期 {val.get('last_sync', '未')}, "
+                      f"行数 {val.get('last_row_count', 0)}")
+
+    elif cmd == "check-phones":
+        sync.load_master()
+        phone_idx = sync.get_col_index("電話番号")
+        if phone_idx is None:
+            print("電話番号カラムが見つかりません")
+            return
+        warn_count = 0
+        for i, row in enumerate(sync._master_data):
+            if phone_idx < len(row) and row[phone_idx].strip():
+                _, warns = validate_phone(row[phone_idx])
+                if warns:
+                    warn_count += 1
+                    print(f"  行{i + 3}: {row[phone_idx]}")
+                    for w in warns:
+                        print(f"    ⚠ {w}")
+        print(f"\n電話番号チェック完了: {warn_count}件の警告")
 
     else:
         print(f"不明なコマンド: {cmd}")
