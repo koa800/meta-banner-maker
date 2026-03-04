@@ -263,7 +263,22 @@ class TaskScheduler:
             send_line_notify(message)
             logger.info(f"DS.INSIGHT週次レポート送信完了（{len(pool)}件のメールを要約）")
 
-            # プールをクリア
+            # 永続蓄積（生データ + AI要約を日付付きで保存）
+            from datetime import date
+            archive_path = pool_path.parent / "ds_insight_archive.json"
+            archive = []
+            if archive_path.exists():
+                with open(archive_path) as f:
+                    archive = json.load(f)
+            archive.append({
+                "week": date.today().isoformat(),
+                "emails": pool,
+                "summary": summary,
+            })
+            with open(archive_path, "w") as f:
+                json.dump(archive, f, ensure_ascii=False)
+
+            # 週次プールをクリア（アーカイブ済みなので安全）
             pool_path.write_text("[]")
 
         except Exception as e:
