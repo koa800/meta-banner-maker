@@ -631,8 +631,14 @@ def _col_to_letter(col_num):
 # ─── メインクラス ─────────────────────────────────────
 
 class CDPSync:
-    # ARRAYFORMULA で自動計算されるカラム（直接書き込み禁止）
-    FORMULA_COLUMNS = {"セミナー予約合計", "個別予約合計", "累計購入回数"}
+    # 集計カラム（Python側で計算して直接書き込み。元ARRAYFORMULA→計算限界のため移行）
+    COMPUTED_COLUMNS = {"セミナー予約合計", "個別予約合計", "累計購入回数", "LTV"}
+    # カンマ区切りカラム → 対応する合計カラム
+    COUNT_COLUMN_MAP = {
+        "セミナー予約日": "セミナー予約合計",
+        "個別予約日": "個別予約合計",
+        "購入商品": "累計購入回数",
+    }
 
     def __init__(self, account="kohara"):
         self.client = get_client(account)
@@ -1217,8 +1223,8 @@ class CDPSync:
                     if cdp_col == "プラン":
                         new_val = normalize_plan(new_val)
 
-                    # ARRAYFORMULA列は直接書き込み禁止
-                    if cdp_col in self.FORMULA_COLUMNS:
+                    # 集計カラムはスキップ（後で自動計算）
+                    if cdp_col in self.COMPUTED_COLUMNS:
                         continue
 
                     cdp_idx = self.get_col_index(cdp_col)
@@ -1260,6 +1266,16 @@ class CDPSync:
                             "range": f"{col_letter}{sheet_row}",
                             "values": [[new_val]],
                         })
+                        # カンマ区切りカラム更新時 → 対応する合計列も自動計算
+                        if cdp_col in self.COUNT_COLUMN_MAP:
+                            count_col = self.COUNT_COLUMN_MAP[cdp_col]
+                            count_idx = self.get_col_index(count_col)
+                            if count_idx is not None:
+                                count_val = str(new_val.count(",") + 1) if new_val.strip() else ""
+                                updates.append({
+                                    "range": f"{_col_to_letter(count_idx + 1)}{sheet_row}",
+                                    "values": [[count_val]],
+                                })
                     updated_any = True
 
                 if updated_any:
@@ -1362,8 +1378,8 @@ class CDPSync:
                     new_row[phone_cidx] = phone
 
                 for cdp_col, src_idx in src_col_indices.items():
-                    # ARRAYFORMULA列は直接書き込み禁止
-                    if cdp_col in self.FORMULA_COLUMNS:
+                    # 集計カラムはスキップ（後で自動計算）
+                    if cdp_col in self.COMPUTED_COLUMNS:
                         continue
                     if src_idx < len(row) and row[src_idx].strip():
                         val = row[src_idx].strip()
@@ -1420,6 +1436,15 @@ class CDPSync:
                         if ks and km:
                             new_row[furi_sei_idx] = ks
                             new_row[furi_mei_idx] = km
+
+                # 新規行の集計カラムを自動計算
+                for src_col, count_col in self.COUNT_COLUMN_MAP.items():
+                    src_idx_local = self.get_col_index(src_col)
+                    count_idx_local = self.get_col_index(count_col)
+                    if src_idx_local is not None and count_idx_local is not None:
+                        src_val = new_row[src_idx_local] if src_idx_local < len(new_row) else ""
+                        if src_val.strip():
+                            new_row[count_idx_local] = str(src_val.count(",") + 1)
 
                 if not dry_run:
                     new_rows.append(new_row)
@@ -1607,12 +1632,20 @@ class CDPSync:
                 if lead_email_idx < len(row) and row[lead_email_idx].strip():
                     existing_lead_emails.add(row[lead_email_idx].strip().lower())
 
-        # 4. フィルタリング（マスタ除外 + 重複除外）
+        # 4. 除外リスト読み込み（CDPマスタの除外リストを共用）
+        if not hasattr(self, '_exclusion_emails') or self._exclusion_emails is None:
+            self.load_exclusion_list()
+
+        # 5. フィルタリング（除外リスト + マスタ除外 + 重複除外）
         skipped_master = 0
         skipped_dup = 0
+        skipped_excluded = 0
         new_rows = []
         seen = set()
         for date_val, email, route_name in all_entries:
+            if email in self._exclusion_emails:
+                skipped_excluded += 1
+                continue
             if email in master_emails:
                 skipped_master += 1
                 continue
@@ -1624,8 +1657,8 @@ class CDPSync:
             seen.add(email)
             new_rows.append([date_val, email, route_name])
 
-        print(f"  新規: {len(new_rows)} 件 / マスタ除外: {skipped_master} / "
-              f"重複除外: {skipped_dup}")
+        print(f"  新規: {len(new_rows)} 件 / 除外リスト: {skipped_excluded} / "
+              f"マスタ除外: {skipped_master} / 重複除外: {skipped_dup}")
 
         if not new_rows or dry_run:
             if dry_run and new_rows:
@@ -2144,6 +2177,7 @@ CDP同期スクリプト
   python3 cdp_sync.py status
   python3 cdp_sync.py sync-leads         経路別タブ→集客データシートの同期
   python3 cdp_sync.py check-phones      電話番号のバリデーションチェック
+  python3 cdp_sync.py backfill-computed  集計カラム（合計・LTV）を一括再計算
 
 例:
   python3 cdp_sync.py sync --dry-run
@@ -2201,6 +2235,87 @@ CDP同期スクリプト
         dry_run = "--dry-run" in sys.argv
         sync.load_master()
         sync.sync_route_tabs_to_lead(dry_run=dry_run)
+
+    elif cmd == "backfill-computed":
+        # 集計カラム（セミナー予約合計/個別予約合計/累計購入回数/LTV）を一括再計算
+        dry_run = "--dry-run" in sys.argv
+        sync.load_master()
+        ws = sync.ss.worksheet("顧客マスタ")
+        updates = []
+        count_map = {
+            "セミナー予約日": "セミナー予約合計",
+            "個別予約日": "個別予約合計",
+            "購入商品": "累計購入回数",
+        }
+        # カンマ区切り→合計
+        for src_col, count_col in count_map.items():
+            src_idx = sync.get_col_index(src_col)
+            count_idx = sync.get_col_index(count_col)
+            if src_idx is None or count_idx is None:
+                continue
+            count_letter = _col_to_letter(count_idx + 1)
+            fixed = 0
+            for i, row in enumerate(sync._master_data):
+                src_val = row[src_idx].strip() if src_idx < len(row) else ""
+                expected = str(src_val.count(",") + 1) if src_val else ""
+                current = row[count_idx].strip() if count_idx < len(row) else ""
+                if current != expected:
+                    sheet_row = i + 3
+                    updates.append({
+                        "range": f"{count_letter}{sheet_row}",
+                        "values": [[expected]],
+                    })
+                    fixed += 1
+            print(f"{count_col}: {fixed}件を更新")
+        # LTV = 着金売上 - 返金額
+        sales_idx = sync.get_col_index("着金売上")
+        refund_idx = sync.get_col_index("返金額")
+        ltv_idx = sync.get_col_index("LTV")
+        if sales_idx is not None and ltv_idx is not None:
+            ltv_letter = _col_to_letter(ltv_idx + 1)
+            ltv_fixed = 0
+            for i, row in enumerate(sync._master_data):
+                sales_str = row[sales_idx].strip() if sales_idx < len(row) else ""
+                refund_str = row[refund_idx].strip() if refund_idx is not None and refund_idx < len(row) else ""
+                if not sales_str:
+                    expected_ltv = ""
+                else:
+                    sales_val = int(re.sub(r'[^\d]', '', sales_str) or "0")
+                    refund_val = int(re.sub(r'[^\d]', '', refund_str) or "0") if refund_str else 0
+                    expected_ltv = normalize_amount(str(sales_val - refund_val))
+                current_ltv = row[ltv_idx].strip() if ltv_idx < len(row) else ""
+                if current_ltv != expected_ltv:
+                    sheet_row = i + 3
+                    updates.append({
+                        "range": f"{ltv_letter}{sheet_row}",
+                        "values": [[expected_ltv]],
+                    })
+                    ltv_fixed += 1
+            print(f"LTV: {ltv_fixed}件を更新")
+        # バッチ書き込み
+        if not dry_run and updates:
+            import time as _t
+            CHUNK = 2000
+            total_chunks = (len(updates) + CHUNK - 1) // CHUNK
+            for ci in range(0, len(updates), CHUNK):
+                chunk_num = ci // CHUNK + 1
+                for attempt in range(3):
+                    try:
+                        ws.batch_update(updates[ci:ci+CHUNK], value_input_option="USER_ENTERED")
+                        break
+                    except Exception as e:
+                        if "429" in str(e) and attempt < 2:
+                            wait = 30 * (attempt + 1)
+                            print(f"  rate limit - {wait}秒待機...")
+                            _t.sleep(wait)
+                        else:
+                            raise
+                print(f"  進捗: {chunk_num}/{total_chunks} チャンク ({min(ci+CHUNK, len(updates))}/{len(updates)}件)")
+                if chunk_num < total_chunks:
+                    _t.sleep(3)
+            print(f"合計 {len(updates)}件 書き込み完了")
+        elif dry_run:
+            print(f"[ドライラン] 合計 {len(updates)}件が更新対象")
 
     elif cmd == "check-phones":
         sync.load_master()
