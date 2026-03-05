@@ -193,7 +193,7 @@ def validate_phone(phone):
 
     Returns:
         (normalized, warnings) のタプル
-        normalized: 正規化済み電話番号（問題がなければそのまま）
+        normalized: 正規化済み電話番号（無効な場合は空文字）
         warnings: 警告メッセージのリスト
     """
     warnings = []
@@ -201,6 +201,17 @@ def validate_phone(phone):
         return "", warnings
 
     raw = phone.strip()
+
+    # 数字を含まない入力は即座に拒否（人名・テキスト等）
+    if not re.search(r'\d', raw):
+        warnings.append(f"電話番号でない値を拒否: '{raw}'")
+        return "", warnings
+
+    # 数字の割合が50%未満の場合も拒否（「20代」「30代」等の混入防止）
+    digits_in_raw = len(re.findall(r'\d', raw))
+    if digits_in_raw / len(raw) < 0.5:
+        warnings.append(f"電話番号でない値を拒否: '{raw}'（数字率{digits_in_raw}/{len(raw)}）")
+        return "", warnings
 
     # 科学的記数法の検出（例: 9.01E+09）
     if re.search(r'[eE]\+?\d+', raw):
@@ -212,17 +223,20 @@ def validate_phone(phone):
             warnings.append(f"  → '{num}' に復元を試行")
         except (ValueError, OverflowError):
             warnings.append(f"  → 復元不可。手動確認が必要")
-            return raw, warnings
+            return "", warnings
 
     normalized = normalize_phone(raw)
 
-    # 桁数チェック（日本の電話番号: 10〜11桁）
+    # 正規化後に数字のみ抽出
     digits_only = re.sub(r'\D', '', normalized)
-    if digits_only and (len(digits_only) < 10 or len(digits_only) > 11):
-        warnings.append(f"桁数異常: '{normalized}' ({len(digits_only)}桁) → 10〜11桁が正常")
 
-    # 先頭が0でない場合（国際番号変換後）
-    if digits_only and not digits_only.startswith('0'):
+    # 数字が10桁未満 or 12桁以上は無効
+    if not digits_only or len(digits_only) < 10 or len(digits_only) > 11:
+        warnings.append(f"桁数異常で拒否: '{raw}' → '{normalized}' ({len(digits_only)}桁)")
+        return "", warnings
+
+    # 先頭が0でない場合
+    if not digits_only.startswith('0'):
         warnings.append(f"先頭が0でない: '{normalized}' → 国番号変換漏れの可能性")
 
     return normalized, warnings
@@ -435,17 +449,22 @@ def normalize_phone(phone):
 
 
 def normalize_amount(amount_str):
-    """金額を正規化（¥ + 3桁カンマ区切り）"""
+    """金額を正規化（¥ + 3桁カンマ区切り。マイナス値対応）"""
     if not amount_str:
         return ""
     # 既に ¥ 付きならそのまま
-    if amount_str.startswith("¥"):
+    if amount_str.startswith("¥") or amount_str.startswith("-¥"):
         return amount_str
+    # マイナス符号を保持
+    is_negative = '-' in amount_str.split('.')[0] if '.' not in amount_str else amount_str.startswith('-')
     # 数値のみ抽出
     digits = re.sub(r'[^\d]', '', amount_str)
     if not digits:
         return amount_str
-    return f"¥{int(digits):,}"
+    value = int(digits)
+    if is_negative:
+        return f"-¥{value:,}"
+    return f"¥{value:,}"
 
 
 def normalize_date(date_str):
@@ -1495,14 +1514,29 @@ class CDPSync:
         # バッチ書き込み実行
         if not dry_run:
             import time
-            # 既存行の更新（チャンク分割: 500件ずつ）
+
+            def _batch_with_retry(ws_obj, data, chunk_size=500, **kwargs):
+                """リトライ付きバッチ書き込み"""
+                for i in range(0, len(data), chunk_size):
+                    chunk = data[i:i + chunk_size]
+                    for attempt in range(3):
+                        try:
+                            ws_obj.batch_update(chunk, **kwargs)
+                            break
+                        except Exception as e:
+                            if ("429" in str(e) or "500" in str(e)) and attempt < 2:
+                                wait = 30 * (attempt + 1)
+                                print(f"  API制限/エラー。{wait}秒待機... (attempt {attempt+1})")
+                                time.sleep(wait)
+                            else:
+                                raise
+                    if i + chunk_size < len(data):
+                        time.sleep(1.5)
+
+            # 既存行の更新
             if updates:
-                CHUNK = 500
-                for i in range(0, len(updates), CHUNK):
-                    chunk = updates[i:i + CHUNK]
-                    ws.batch_update(chunk, value_input_option="USER_ENTERED")
-                    if i + CHUNK < len(updates):
-                        time.sleep(1)  # API制限回避
+                _batch_with_retry(ws, updates, chunk_size=500,
+                                  value_input_option="USER_ENTERED")
                 print(f"既存行の更新: {len(updates)}セル書き込み完了")
 
             # 新規行の追加（update()で範囲指定書き込み。グリッド膨張を防止）
@@ -1522,12 +1556,22 @@ class CDPSync:
                     chunk = new_rows[i:i + CHUNK]
                     r1 = start_row + i
                     r2 = r1 + len(chunk) - 1
-                    ws.update(range_name=f"A{r1}:{last_col}{r2}",
-                              values=chunk,
-                              value_input_option="USER_ENTERED")
+                    for attempt in range(3):
+                        try:
+                            ws.update(range_name=f"A{r1}:{last_col}{r2}",
+                                      values=chunk,
+                                      value_input_option="USER_ENTERED")
+                            break
+                        except Exception as e:
+                            if ("429" in str(e) or "500" in str(e)) and attempt < 2:
+                                wait = 30 * (attempt + 1)
+                                print(f"  API制限/エラー。{wait}秒待機... (attempt {attempt+1})")
+                                time.sleep(wait)
+                            else:
+                                raise
                     print(f"  新規追加: {i + len(chunk)}/{len(new_rows)}行")
                     if i + CHUNK < len(new_rows):
-                        time.sleep(1)
+                        time.sleep(1.5)
                 print(f"新規行の追加: {len(new_rows)}行書き込み完了")
 
                 # 新規行に罫線を適用
@@ -1669,15 +1713,20 @@ class CDPSync:
         if not hasattr(self, '_exclusion_emails') or self._exclusion_emails is None:
             self.load_exclusion_list()
 
-        # 5. フィルタリング（除外リスト + マスタ除外 + 重複除外）
+        # 5. フィルタリング（除外リスト + スパム + マスタ除外 + 重複除外）
         skipped_master = 0
         skipped_dup = 0
         skipped_excluded = 0
+        skipped_spam = 0
         new_rows = []
         seen = set()
         for date_val, email, route_name in all_entries:
             if email in self._exclusion_emails:
                 skipped_excluded += 1
+                continue
+            spam_reason = is_spam_email(email) if email else None
+            if spam_reason:
+                skipped_spam += 1
                 continue
             if email in master_emails:
                 skipped_master += 1
@@ -1690,7 +1739,7 @@ class CDPSync:
             seen.add(email)
             new_rows.append([date_val, email, route_name])
 
-        print(f"  新規: {len(new_rows)} 件 / 除外リスト: {skipped_excluded} / "
+        print(f"  新規: {len(new_rows)} 件 / 除外リスト: {skipped_excluded} / スパム: {skipped_spam} / "
               f"マスタ除外: {skipped_master} / 重複除外: {skipped_dup}")
 
         if not new_rows or dry_run:
@@ -1699,14 +1748,26 @@ class CDPSync:
             return {"added": len(new_rows), "skipped_master": skipped_master,
                     "skipped_dup": skipped_dup}
 
-        # 5. 書き込み（500行チャンク）
+        # 5. 書き込み（500行チャンク + リトライ）
         start_row = len(lead_data) + 1
+        # グリッド拡張チェック
+        needed = start_row + len(new_rows)
+        if needed > lead_ws.row_count:
+            lead_ws.add_rows(needed - lead_ws.row_count + 500)
         chunk_size = 500
         for i in range(0, len(new_rows), chunk_size):
             chunk = new_rows[i:i + chunk_size]
             cell = f"A{start_row + i}"
-            lead_ws.update(cell, chunk, value_input_option="USER_ENTERED")
-            time.sleep(1)
+            for attempt in range(3):
+                try:
+                    lead_ws.update(cell, chunk, value_input_option="USER_ENTERED")
+                    break
+                except Exception as e:
+                    if ("429" in str(e) or "500" in str(e)) and attempt < 2:
+                        time.sleep(30 * (attempt + 1))
+                    else:
+                        raise
+            time.sleep(1.5)
 
         print(f"  {len(new_rows)} 件を集客データシートに追加")
         return {"added": len(new_rows), "skipped_master": skipped_master,
