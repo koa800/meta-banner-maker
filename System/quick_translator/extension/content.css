@@ -1,0 +1,34 @@
+/* Quick Translator — ポップアップUI */
+
+.qt-popup {
+  position: absolute;
+  z-index: 2147483647;
+  max-width: 400px;
+  padding: 8px 12px;
+  background: #1e1e2e;
+  color: #cdd6f4;
+  border: 1px solid #45475a;
+  border-radius: 8px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  animation: qt-fadein 0.15s ease-out;
+  pointer-events: auto;
+  word-wrap: break-word;
+  user-select: text;
+}
+
+.qt-fadeout {
+  animation: qt-fadeout 0.2s ease-in forwards;
+}
+
+@keyframes qt-fadein {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes qt-fadeout {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
