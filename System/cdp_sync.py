@@ -726,7 +726,7 @@ class CDPSync:
     # ─── 罫線の自動適用 ──────────────────────────────────
 
     # グループ境界の列位置（0-indexed）
-    _GROUP_BORDERS = [0, 3, 6, 20, 23, 30, 36, 45]
+    _GROUP_BORDERS = [0, 3, 6, 19, 22, 29, 36, 45]
 
     def apply_borders(self, start_row_idx, end_row_idx, num_cols=58):
         """新規追加行に罫線を適用し、交互色(banding)の範囲を拡張する
