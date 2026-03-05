@@ -276,6 +276,38 @@ def find_similar_emails(new_email, existing_emails, threshold=2):
     return sorted(similar, key=lambda x: x[1])
 
 
+# ─── メールアドレスのバリデーション・正規化 ─────────────
+
+_EMAIL_RE = re.compile(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$')
+
+
+def is_valid_email(email):
+    """メールアドレスが有効な形式かチェック"""
+    return bool(_EMAIL_RE.match(email.strip())) if email else False
+
+
+def clean_email(raw):
+    """メールアドレスセルをクリーンアップ。有効なメールのみカンマ区切りで返す"""
+    if not raw or not raw.strip():
+        return ""
+    s = raw.strip()
+    # 全角→半角
+    s = s.replace('＠', '@').replace('．', '.').replace('，', ',')
+    s = s.replace('mailto:', '')
+    s = s.rstrip("'").rstrip('"')
+    # @前後のスペース除去
+    s = re.sub(r'\s*@\s*', '@', s)
+    # 区切り文字を統一
+    s = s.replace('　', ',').replace('\n', ',')
+    s = re.sub(r'(\.[a-zA-Z]{2,})\s+([a-zA-Z0-9])', r'\1,\2', s)
+    # 括弧内のコメント除去
+    s = re.sub(r'[（(][^）)]*[）)]', '', s)
+    # 有効なメールのみ抽出
+    parts = [p.strip() for p in s.split(',') if p.strip()]
+    valid = [p for p in parts if _EMAIL_RE.match(p)]
+    return ', '.join(valid)
+
+
 # ─── ユーティリティ ───────────────────────────────────
 
 def normalize_phone(phone):
@@ -453,7 +485,9 @@ class CDPSync:
             return None
 
     def build_email_index(self):
-        """メールアドレスでインデックスを構築（名寄せ用）"""
+        """メールアドレスでインデックスを構築（名寄せ用）
+        カンマ区切りの複数メールにも対応（各メールを個別にインデックス）
+        """
         if self._master_data is None:
             self.load_master()
         email_idx = self.get_col_index("メールアドレス")
@@ -462,8 +496,10 @@ class CDPSync:
         index = {}
         for i, row in enumerate(self._master_data):
             if email_idx < len(row) and row[email_idx].strip():
-                email = row[email_idx].strip().lower()
-                index[email] = i
+                for email in row[email_idx].split(","):
+                    email = email.strip().lower()
+                    if email and is_valid_email(email):
+                        index[email] = i
         return index
 
     def build_phone_index(self):
@@ -635,7 +671,8 @@ class CDPSync:
 
         for row_idx in range(start_row, len(source_rows)):
             row = source_rows[row_idx]
-            email = row[src_email_idx].strip() if src_email_idx < len(row) else ""
+            raw_email = row[src_email_idx].strip() if src_email_idx < len(row) else ""
+            email = clean_email(raw_email)  # バリデーション + 正規化
             email_lower = email.lower() if email else ""
             phone = row[src_phone_idx].strip() if src_phone_idx and src_phone_idx < len(row) else ""
 
@@ -683,12 +720,39 @@ class CDPSync:
 
             if master_row_idx is not None:
                 # 既存顧客 → 更新
+                # 電話番号で名寄せされた場合、新しいメールを追記
+                if email and email_lower not in email_index:
+                    email_cidx = self.get_col_index("メールアドレス")
+                    if email_cidx is not None:
+                        existing_email = ""
+                        if email_cidx < len(self._master_data[master_row_idx]):
+                            existing_email = self._master_data[master_row_idx][email_cidx]
+                        existing_set = {e.strip().lower() for e in existing_email.split(",") if e.strip()}
+                        if email_lower not in existing_set:
+                            new_email = f"{existing_email}, {email}" if existing_email else email
+                            self._master_data[master_row_idx][email_cidx] = new_email
+                            email_index[email_lower] = master_row_idx
+                            all_existing_emails.add(email_lower)
+                            if not dry_run:
+                                sheet_row = master_row_idx + 3
+                                col_letter = _col_to_letter(email_cidx + 1)
+                                updates.append({
+                                    "range": f"{col_letter}{sheet_row}",
+                                    "values": [[new_email]],
+                                })
+                            self.logger.log("update", email, "メールアドレス",
+                                            existing_email, new_email,
+                                            f"{source_url}#{tab_name}")
+
                 updated_any = False
                 for cdp_col, src_idx in src_col_indices.items():
                     if src_idx >= len(row):
                         continue
                     new_val = row[src_idx].strip()
                     if not new_val:
+                        continue
+                    # メールアドレスは上のロジックで処理済み
+                    if cdp_col == "メールアドレス":
                         continue
 
                     # 個別予約日は2025/7/30以前のデータをスキップ
