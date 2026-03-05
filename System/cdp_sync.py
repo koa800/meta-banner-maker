@@ -1242,6 +1242,18 @@ class CDPSync:
                                         "values": [[nm]],
                                     })
             elif email or phone:
+                # マッピング対象の値が全部空なら追加しない（メールだけの空行防止）
+                has_mapped_value = False
+                for cdp_col, src_idx in src_col_indices.items():
+                    if cdp_col in ("メールアドレス", "電話番号"):
+                        continue
+                    if src_idx < len(row) and row[src_idx].strip():
+                        has_mapped_value = True
+                        break
+                if not has_mapped_value:
+                    stats["no_key"] += 1
+                    continue
+
                 # 新規顧客 → 追加
                 stats["inserted"] += 1
                 self.logger.log("insert", email or phone, "",
