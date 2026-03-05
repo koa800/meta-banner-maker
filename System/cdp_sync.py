@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sheets_manager import get_client
 
 CDP_SHEET_ID = "1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk"
+LEAD_SHEET_ID = "1iD3DGxNhZruyjYcA5n6oXRDk2ZGA3uMDOo0stQS9Y00"
 DATA_DIR = Path(__file__).resolve().parent / "data"
 CHANGE_LOG_PATH = DATA_DIR / "cdp_change_log.json"
 SYNC_STATE_PATH = DATA_DIR / "cdp_sync_state.json"
@@ -1019,6 +1020,7 @@ class CDPSync:
                 print(f"グリッド拡張: {current_rows} → {current_rows + add}行")
         updates = []  # バッチ更新用（既存行の変更）
         new_rows = []  # バッチ追加用（新規顧客）
+        new_emails = []  # 新規追加されたメールアドレス（集客データ掃除用）
 
         for row_idx in range(start_row, len(source_rows)):
             row = source_rows[row_idx]
@@ -1258,6 +1260,8 @@ class CDPSync:
                 stats["inserted"] += 1
                 self.logger.log("insert", email or phone, "",
                                 "", "", f"{source_url}#{tab_name}")
+                if email:
+                    new_emails.append(email.lower())
 
                 # 新規行を構築（ドライラン含む。インメモリのインデックスは常に更新）
                 new_row = [""] * len(self._master_headers)
@@ -1429,6 +1433,11 @@ class CDPSync:
         if email_warnings:
             _save_email_warnings(email_warnings)
 
+        # 集客データシートの掃除（マスタに追加したメールを削除）
+        lead_cleaned = 0
+        if not dry_run and new_emails:
+            lead_cleaned = self._clean_lead_sheet(new_emails)
+
         # 結果表示
         mode = "ドライラン" if dry_run else "同期完了"
         print(f"\n=== {mode} ===")
@@ -1437,6 +1446,8 @@ class CDPSync:
         print(f"更新: {stats['updated']}件")
         print(f"新規追加: {stats['inserted']}件")
         print(f"キーなし: {stats['no_key']}件")
+        if lead_cleaned:
+            print(f"集客データ掃除: {lead_cleaned}件削除")
         if stats["phone_warnings"]:
             print(f"電話番号警告: {stats['phone_warnings']}件")
         if stats["email_warnings"]:
@@ -1446,6 +1457,66 @@ class CDPSync:
             stats["alerts"] = alerts
 
         return stats
+
+    # ─── 集客データシートの掃除 ─────────────────────────
+
+    def _clean_lead_sheet(self, new_emails):
+        """マスタに追加されたメールアドレスを集客データシートから削除する
+
+        Args:
+            new_emails: マスタに新規追加されたメールアドレスのリスト（小文字）
+
+        Returns:
+            削除した行数
+        """
+        try:
+            lead_ss = self.client.open_by_key(LEAD_SHEET_ID)
+            lead_ws = lead_ss.worksheet("メール集客データ")
+        except Exception as e:
+            print(f"  集客データシートの読み込みスキップ: {e}")
+            return 0
+
+        lead_data = lead_ws.get_all_values()
+        if len(lead_data) <= 1:
+            return 0
+
+        # ヘッダーからメールアドレス列を特定
+        header = lead_data[0]
+        try:
+            email_col = header.index("メールアドレス")
+        except ValueError:
+            print("  集客データシートにメールアドレス列が見つかりません")
+            return 0
+
+        new_emails_set = set(new_emails)
+        # 削除対象の行インデックスを後ろから収集（後ろから削除しないとインデックスがずれる）
+        rows_to_delete = []
+        for i in range(1, len(lead_data)):
+            cell_email = lead_data[i][email_col].strip().lower() if email_col < len(lead_data[i]) else ""
+            if cell_email and cell_email in new_emails_set:
+                rows_to_delete.append(i + 1)  # シート上の行番号（1-indexed）
+
+        if not rows_to_delete:
+            return 0
+
+        # 後ろから削除（インデックスずれ防止）
+        sheet_id = lead_ws.id
+        requests = []
+        for row_num in sorted(rows_to_delete, reverse=True):
+            requests.append({
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "dimension": "ROWS",
+                        "startIndex": row_num - 1,  # 0-indexed
+                        "endIndex": row_num,
+                    }
+                }
+            })
+
+        lead_ss.batch_update({"requests": requests})
+        print(f"  集客データシートから{len(rows_to_delete)}行削除")
+        return len(rows_to_delete)
 
     # ─── データソース管理ステータス更新 ─────────────────
 
