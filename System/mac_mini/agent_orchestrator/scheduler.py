@@ -136,15 +136,15 @@ class TaskScheduler:
                     minute=parts[0], hour=parts[1], day=parts[2],
                     month=parts[3], day_of_week=parts[4]
                 )
-                self.scheduler.add_job(task_fn, trigger, id=task_name, name=task_name, replace_existing=True)
+                self.scheduler.add_job(task_fn, trigger, id=task_name, name=task_name, replace_existing=True, misfire_grace_time=60)
                 logger.info(f"Scheduled '{task_name}' with cron: {cfg['cron']}")
             elif "interval_seconds" in cfg:
                 trigger = IntervalTrigger(seconds=cfg["interval_seconds"])
-                self.scheduler.add_job(task_fn, trigger, id=task_name, name=task_name, replace_existing=True)
+                self.scheduler.add_job(task_fn, trigger, id=task_name, name=task_name, replace_existing=True, misfire_grace_time=30)
                 logger.info(f"Scheduled '{task_name}' every {cfg['interval_seconds']} seconds")
             elif "interval_minutes" in cfg:
                 trigger = IntervalTrigger(minutes=cfg["interval_minutes"])
-                self.scheduler.add_job(task_fn, trigger, id=task_name, name=task_name, replace_existing=True)
+                self.scheduler.add_job(task_fn, trigger, id=task_name, name=task_name, replace_existing=True, misfire_grace_time=120)
                 logger.info(f"Scheduled '{task_name}' every {cfg['interval_minutes']} minutes")
 
     def start(self):
