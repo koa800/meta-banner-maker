@@ -61,6 +61,8 @@ cursor/
 │   ├── line_bot/         # Render (Flask) サーバー（git サブモジュール）
 │   ├── line_bot_local/   # PC常駐エージェント
 │   ├── addness_mcp_server/ # Addness MCP サーバー（git サブモジュール）
+│   ├── quick_translator/  # Chrome拡張（テキスト選択→自動翻訳ポップアップ）
+│   ├── clip_translator/   # macOSメニューバーアプリ（Cmd+C→翻訳通知）
 │   └── mac_mini/         # Mac Mini Orchestrator（スケジューラ・ツール群）
 │       └── monitoring/   # 外部死活監視（MacBook → Mac Mini）
 └── Skills/               # ナレッジ・スキル定義

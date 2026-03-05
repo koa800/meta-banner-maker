@@ -4,6 +4,8 @@
 
 - `System/line_bot/` → Render (Flask) サーバー。**Gitサブモジュール**。デプロイは `cd System/line_bot && git push origin main`
 - `System/line_bot_local/` → PC常駐エージェント（ソース）
+- `System/quick_translator/` → Chrome拡張（テキスト選択→自動翻訳ポップアップ、Manifest V3）
+- `System/clip_translator/` → macOSメニューバー常駐アプリ（Cmd+C→翻訳通知、rumps + launchd自動起動）
 - `Master/people/profiles.json` → 58名のプロファイル（comm_profile含む）
 - `Master/learning/reply_feedback.json` → 返信修正フィードバック（correction/approval）
 - `Master/learning/style_rules.json` → 返信スタイルルール（weekly_profile_learningで自動生成）
