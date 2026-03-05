@@ -10,6 +10,7 @@ System/config/addness.json
 System/config/ai_news.json
 System/config/sns_analyzer.json
 System/config/miro.json
+System/config/mailchimp.json
 System/line_bot_local/config.json
 System/line_bot_local/logs/
 System/line_bot_local/qa_monitor_state.json
