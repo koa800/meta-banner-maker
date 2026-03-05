@@ -84,6 +84,12 @@
 - Mac Mini に Google API ライブラリ（`google-auth`, `google-api-python-client`）がシステムPythonにインストールされていない
 - `qa_monitor.py init` は MacBook で実行して state ファイルを scp するのが確実
 
+### 検知の仕組み（2026-03-05追加）
+
+- 毎朝08:25の `oauth_health_check` が Gmail トークン（personal/kohara）の存在と有効性を自動検証
+- トークン期限切れ・無効化・ファイル不在時はLINE通知（復旧コマンド付き）
+- 復旧手順: MacBook で `python3 System/mail_manager.py --account {account} run` → 再認証 → `scp` で Mac Mini に転送
+
 ## git_pull_sync が反映されない場合
 
 - bareリポジトリ (`~/agents/_repo/`) の fetch + rsync だが、rsyncエラーが出ることがある

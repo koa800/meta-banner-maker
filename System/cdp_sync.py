@@ -14,6 +14,7 @@ import sys
 import os
 import re
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from sheets_manager import get_client
 
 CDP_SHEET_ID = "1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk"
 LEAD_SHEET_ID = "1iD3DGxNhZruyjYcA5n6oXRDk2ZGA3uMDOo0stQS9Y00"
+CS_SHEET_ID = "1XOkJsXzEx4iV9h8F-cywg0FOS4Knf7IfekN78RZAr6I"
 DATA_DIR = Path(__file__).resolve().parent / "data"
 CHANGE_LOG_PATH = DATA_DIR / "cdp_change_log.json"
 SYNC_STATE_PATH = DATA_DIR / "cdp_sync_state.json"
@@ -726,25 +728,37 @@ class CDPSync:
 
     # ─── 罫線の自動適用 ──────────────────────────────────
 
-    # グループ境界の列位置（0-indexed）
-    _GROUP_BORDERS = [0, 3, 6, 19, 22, 29, 36, 45]
+    # タブ別の書式設定（グループ境界列・ヘッダー行数）
+    _TAB_FORMAT = {
+        "顧客マスタ": {
+            "group_borders": [0, 3, 6, 19, 21, 28, 35, 44],
+            "header_rows": 2,  # 行1:グループ名, 行2:カラム名
+        },
+        "除外リスト": {
+            "group_borders": [],
+            "header_rows": 1,  # 行1:カラム名のみ
+        },
+    }
 
-    def apply_borders(self, start_row_idx, end_row_idx, num_cols=58):
-        """新規追加行に罫線を適用し、交互色(banding)の範囲を拡張する
+    def apply_borders(self, start_row_idx, end_row_idx, num_cols=57,
+                      tab_name="顧客マスタ"):
+        """指定タブの行範囲に罫線を適用し、交互色(banding)の範囲を拡張する
 
         Args:
-            start_row_idx: 開始行（0-indexed、ヘッダー含む）
+            start_row_idx: 開始行（0-indexed）
             end_row_idx: 終了行（0-indexed、exclusive）
             num_cols: 列数
+            tab_name: 対象タブ名
         """
-        ws = self.ss.worksheet("顧客マスタ")
+        ws = self.ss.worksheet(tab_name)
         sheet_id = ws.id
+        tab_fmt = self._TAB_FORMAT.get(tab_name, {"group_borders": [], "header_rows": 2})
         black = {"red": 0, "green": 0, "blue": 0}
         thin = {"style": "SOLID", "width": 1, "color": black}
         medium = {"style": "SOLID_MEDIUM", "width": 2, "color": black}
 
         requests = [
-            # 全体の細い罫線
+            # 新規行の細い罫線
             {"updateBorders": {
                 "range": {"sheetId": sheet_id,
                           "startRowIndex": start_row_idx,
@@ -755,7 +769,7 @@ class CDPSync:
                 "left": thin, "right": thin,
                 "innerHorizontal": thin, "innerVertical": thin,
             }},
-            # 外枠の太線
+            # 外枠の太線（全体に適用して下辺を揃える）
             {"updateBorders": {
                 "range": {"sheetId": sheet_id,
                           "startRowIndex": 0,
@@ -764,9 +778,18 @@ class CDPSync:
                           "endColumnIndex": num_cols},
                 "bottom": medium, "left": medium, "right": medium,
             }},
+            # ヘッダー下の太線
+            {"updateBorders": {
+                "range": {"sheetId": sheet_id,
+                          "startRowIndex": tab_fmt["header_rows"] - 1,
+                          "endRowIndex": tab_fmt["header_rows"],
+                          "startColumnIndex": 0,
+                          "endColumnIndex": num_cols},
+                "bottom": medium,
+            }},
         ]
         # グループ境界の太い縦線
-        for col_idx in self._GROUP_BORDERS:
+        for col_idx in tab_fmt["group_borders"]:
             requests.append({"updateBorders": {
                 "range": {"sheetId": sheet_id,
                           "startRowIndex": start_row_idx,
@@ -791,7 +814,8 @@ class CDPSync:
                                 "bandedRangeId": banded["bandedRangeId"],
                                 "range": {
                                     "sheetId": sheet_id,
-                                    "startRowIndex": br.get("startRowIndex", 2),
+                                    "startRowIndex": br.get("startRowIndex",
+                                                            tab_fmt["header_rows"]),
                                     "endRowIndex": end_row_idx,
                                     "startColumnIndex": br.get("startColumnIndex", 0),
                                     "endColumnIndex": br.get("endColumnIndex", num_cols),
@@ -801,7 +825,31 @@ class CDPSync:
                         }})
 
         self.ss.batch_update({"requests": requests})
-        print(f"罫線適用: Row {start_row_idx + 1}〜{end_row_idx}")
+        print(f"罫線適用({tab_name}): Row {start_row_idx + 1}〜{end_row_idx}")
+
+    def ensure_borders(self):
+        """全タブの罫線を最終データ行まで保証する（sync完了時・手動実行時に呼ぶ）"""
+        for tab_name, fmt in self._TAB_FORMAT.items():
+            try:
+                ws = self.ss.worksheet(tab_name)
+            except Exception:
+                continue
+            data = ws.get_all_values()
+            # 最終データ行を検出
+            last_row = fmt["header_rows"]
+            for i in range(len(data) - 1, fmt["header_rows"] - 1, -1):
+                if any(cell.strip() for cell in data[i]):
+                    last_row = i + 1  # 1-indexed
+                    break
+            if last_row <= fmt["header_rows"]:
+                continue
+            num_cols = len(data[0]) if data else 1
+            self.apply_borders(
+                start_row_idx=fmt["header_rows"],
+                end_row_idx=last_row,
+                num_cols=num_cols,
+                tab_name=tab_name,
+            )
 
     # ─── データソース管理の読み込み ─────────────────────
 
@@ -1401,6 +1449,7 @@ class CDPSync:
                     start_row_idx=start_row - 1,  # 0-indexed
                     end_row_idx=start_row - 1 + len(new_rows),
                     num_cols=len(self._master_headers),
+                    tab_name="顧客マスタ",
                 )
 
                 # 生年月日がある新規行にDATEDIF数式を設定
@@ -1546,6 +1595,142 @@ class CDPSync:
         return self.sync(source_url, tab_name, column_mapping, email_col,
                          dry_run=True, incremental=False)
 
+    # ─── CS管理シートからの同期（クーリングオフ・中途解約） ──────
+
+    # CS管理シートのタブ→CDPカラム・フィルタ条件のマッピング
+    _CS_TABS = [
+        {
+            "tab": "管理用_2025.1.25-クーオフ",
+            "cdp_column": "クーリングオフ日",
+            "filter_f": "クーリングオフ",  # F列の値
+            "filter_g": "完了",             # G列の値
+        },
+        {
+            "tab": "管理用_20250125-中途解約",
+            "cdp_column": "中途解約日",
+            "filter_f": "中途解約",
+            "filter_g": "完了",
+        },
+    ]
+
+    def sync_cs_sheet(self, dry_run=False):
+        """CS管理シートからクーリングオフ日・中途解約日を同期する
+
+        ソースシート構造（共通）:
+            行2がヘッダー、B列=対応完了日、F列=区分、G列=ステータス、K列=メールアドレス
+            条件: F列=指定値 AND G列=完了 の行のみ対象
+            正規化: B列から時間を除去し日付のみ取得
+        """
+        try:
+            cs_ss = self.client.open_by_key(CS_SHEET_ID)
+        except Exception as e:
+            print(f"CS管理シートの読み込み失敗: {e}")
+            return {"error": str(e)}
+
+        # CDPマスタのメールインデックスを構築
+        ws_cdp = self.ss.worksheet("顧客マスタ")
+        cdp_data = ws_cdp.get_all_values()
+        headers = cdp_data[1]  # 行2 = ヘッダー
+
+        email_idx = {}
+        for i, row in enumerate(cdp_data[2:], start=3):
+            email = row[3].strip().lower() if len(row) > 3 else ""
+            if email:
+                email_idx[email] = i
+
+        total_updated = 0
+
+        for tab_cfg in self._CS_TABS:
+            tab_name = tab_cfg["tab"]
+            cdp_col_name = tab_cfg["cdp_column"]
+            filter_f = tab_cfg["filter_f"]
+            filter_g = tab_cfg["filter_g"]
+
+            print(f"\n--- CS同期: {cdp_col_name}（{tab_name}）---")
+
+            try:
+                ws_src = cs_ss.worksheet(tab_name)
+                src_data = ws_src.get_all_values()
+            except Exception as e:
+                print(f"  タブ読み込み失敗: {e}")
+                continue
+
+            # CDP側の列位置を特定
+            cdp_col_idx = None
+            for j, h in enumerate(headers):
+                if h.strip() == cdp_col_name:
+                    cdp_col_idx = j
+                    break
+            if cdp_col_idx is None:
+                print(f"  CDPマスタに「{cdp_col_name}」列が見つかりません")
+                continue
+
+            # ソースからデータ抽出（ヘッダー行2、データ行3〜）
+            # B列(1)=対応完了日, F列(5)=区分, G列(6)=ステータス, K列(10)=アドレス
+            date_map = {}
+            for row in src_data[2:]:
+                if len(row) <= 10:
+                    continue
+                email = row[10].strip().lower()
+                date_raw = row[1].strip()
+                category = row[5].strip()
+                status = row[6].strip()
+
+                if not email or not date_raw:
+                    continue
+                if category != filter_f or status != filter_g:
+                    continue
+
+                # 日付のみ抽出（時間除去）
+                date_only = date_raw.split(' ')[0].strip()
+                if not re.match(r'^\d{4}/\d{1,2}/\d{1,2}$', date_only):
+                    continue
+
+                # 同一メールなら最新日付を採用
+                if email not in date_map or date_only > date_map[email]:
+                    date_map[email] = date_only
+
+            print(f"  ソース: {len(date_map)}件（{filter_f}+{filter_g}）")
+
+            # CDPマスタと突合
+            import gspread
+            cells = []
+            already = 0
+            not_found = 0
+
+            for email, date in date_map.items():
+                if email in email_idx:
+                    row_num = email_idx[email]
+                    current = (cdp_data[row_num - 1][cdp_col_idx].strip()
+                               if len(cdp_data[row_num - 1]) > cdp_col_idx else "")
+                    if current:
+                        already += 1
+                    else:
+                        cells.append(gspread.Cell(
+                            row=row_num, col=cdp_col_idx + 1, value=date))
+                else:
+                    not_found += 1
+
+            print(f"  新規: {len(cells)}件, 既存: {already}件, "
+                  f"CDP未登録: {not_found}件")
+
+            if cells and not dry_run:
+                CHUNK = 500
+                for i in range(0, len(cells), CHUNK):
+                    ws_cdp.update_cells(cells[i:i + CHUNK])
+                    if i + CHUNK < len(cells):
+                        time.sleep(1)
+                # cdp_data のインメモリも更新
+                for c in cells:
+                    cdp_data[c.row - 1][cdp_col_idx] = c.value
+                total_updated += len(cells)
+
+        if total_updated:
+            print(f"\nCS同期完了: {total_updated}件更新")
+        else:
+            print(f"\nCS同期完了: 更新なし")
+        return {"updated": total_updated}
+
     # ─── 自動同期 ──────────────────────────────────────
 
     def auto_sync(self, dry_run=False, incremental=True):
@@ -1622,6 +1807,15 @@ class CDPSync:
                 print(f"  エラー: {e}")
                 self.logger.log("error", key, "", "", str(e), src["source_name"])
 
+        # CS管理シートからの同期（クーリングオフ日・中途解約日）
+        try:
+            cs_stats = self.sync_cs_sheet(dry_run=dry_run)
+            if cs_stats and cs_stats.get("updated", 0) > 0:
+                total_stats["updated"] += cs_stats["updated"]
+        except Exception as e:
+            total_stats["errors"] += 1
+            print(f"  CS同期エラー: {e}")
+
         print(f"\n=== 自動同期{'（ドライラン）' if dry_run else ''}完了 ===")
         print(f"ソース数: {total_stats['sources']}")
         print(f"更新: {total_stats['updated']}件")
@@ -1639,6 +1833,14 @@ class CDPSync:
                 print(f"  - {a}")
 
         self.logger.save()
+
+        # 全タブの罫線を保証（手動追加行も含めて漏れを防ぐ）
+        if not dry_run:
+            try:
+                self.ensure_borders()
+            except Exception as e:
+                print(f"罫線適用でエラー（データ同期は完了済み）: {e}")
+
         return total_stats
 
     # ─── 行数自動拡張チェック ──────────────────────────

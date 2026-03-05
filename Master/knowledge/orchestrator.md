@@ -8,7 +8,7 @@
 - 3日ごと 08:00: addness_fetch（Addnessゴールツリー取得）
 - 08:10: ai_news
 - 月曜 08:20: anthropic_credit_check（Anthropic APIクレジット残高チェック → 不足時LINE通知）
-- 08:25: oauth_health_check（Google + Claude Code OAuth 検査・自動リフレッシュ）
+- 08:25: oauth_health_check（Google + Gmail personal/kohara + Claude Code OAuth 検査・自動リフレッシュ）
 - 08:30: daily_addness_digest（朝ブリーフィング + カレンダー）
 - 08:40: daily_report_input（Chrome MCP。max_turns=40, timeout=15分）
 - 09:00: addness_goal_check
