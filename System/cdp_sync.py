@@ -697,19 +697,29 @@ class CDPSync:
     def build_email_index(self):
         """メールアドレスでインデックスを構築（名寄せ用）
         カンマ区切りの複数メールにも対応（各メールを個別にインデックス）
+        メールアドレス2も含めてインデックスする
         """
         if self._master_data is None:
             self.load_master()
         email_idx = self.get_col_index("メールアドレス")
+        email2_idx = self.get_col_index("メールアドレス2")
         if email_idx is None:
             return {}
         index = {}
         for i, row in enumerate(self._master_data):
+            # メールアドレス（主）
             if email_idx < len(row) and row[email_idx].strip():
                 for email in row[email_idx].split(","):
                     email = email.strip().lower()
                     if email and is_valid_email(email):
                         index[email] = i
+            # メールアドレス2（副）
+            if email2_idx is not None and email2_idx < len(row) and row[email2_idx].strip():
+                for email in row[email2_idx].split(","):
+                    email = email.strip().lower()
+                    if email and is_valid_email(email):
+                        if email not in index:
+                            index[email] = i
         return index
 
     def build_phone_index(self):
@@ -732,7 +742,7 @@ class CDPSync:
     # タブ別の書式設定（グループ境界列・ヘッダー行数）
     _TAB_FORMAT = {
         "顧客マスタ": {
-            "group_borders": [0, 3, 6, 19, 21, 28, 35, 44],
+            "group_borders": [0, 3, 7, 20, 22, 29, 36, 45],
             "header_rows": 2,  # 行1:グループ名, 行2:カラム名
         },
         "除外リスト": {
@@ -741,7 +751,7 @@ class CDPSync:
         },
     }
 
-    def apply_borders(self, start_row_idx, end_row_idx, num_cols=57,
+    def apply_borders(self, start_row_idx, end_row_idx, num_cols=58,
                       tab_name="顧客マスタ"):
         """指定タブの行範囲に罫線を適用し、交互色(banding)の範囲を拡張する
 
