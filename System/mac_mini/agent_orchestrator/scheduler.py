@@ -2027,6 +2027,38 @@ python3 System/line_notify.py "日報入力が完了しました。
         else:
             logger.info("OAuth health check OK")
 
+        # Gmail OAuthトークンもチェック（メール確認に必要）
+        gmail_tokens = {
+            "personal": os.path.expanduser("~/agents/System/credentials/token_gmail_personal.json"),
+            "kohara": os.path.expanduser("~/agents/System/credentials/token_gmail.json"),
+        }
+        for account_name, gmail_token_path in gmail_tokens.items():
+            if not os.path.exists(gmail_token_path):
+                send_line_notify(f"Gmail({account_name})のトークンファイルがありません。メール確認が動いていません。")
+                logger.error(f"Gmail token not found: {gmail_token_path}")
+                continue
+            try:
+                from google.oauth2.credentials import Credentials
+                from google.auth.transport.requests import Request
+                creds = Credentials.from_authorized_user_file(gmail_token_path)
+                if creds and creds.expired and creds.refresh_token:
+                    creds.refresh(Request())
+                    with open(gmail_token_path, "w") as f:
+                        f.write(creds.to_json())
+                    logger.info(f"Gmail({account_name}) token refreshed successfully")
+                elif creds and creds.valid:
+                    logger.info(f"Gmail({account_name}) token OK")
+                else:
+                    send_line_notify(f"Gmail({account_name})の認証が無効です。MacBookで再認証してください。\n`python3 System/mail_manager.py --account {account_name} run`")
+                    logger.error(f"Gmail({account_name}) token invalid (no refresh_token or not valid)")
+            except Exception as e:
+                err_msg = str(e)
+                if "invalid_grant" in err_msg or "revoked" in err_msg:
+                    send_line_notify(f"Gmail({account_name})のトークンが無効化されています。MacBookで再認証が必要です。\n`python3 System/mail_manager.py --account {account_name} run`")
+                else:
+                    send_line_notify(f"Gmail({account_name})のトークン検証でエラー: {err_msg[:100]}")
+                logger.error(f"Gmail({account_name}) token check failed: {err_msg[:200]}")
+
         # Claude Code OAuth トークンもチェック（日報自動入力に必要）
         from pathlib import Path
         secretary_config = Path.home() / ".claude-secretary"
