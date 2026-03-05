@@ -624,6 +624,9 @@ def _col_to_letter(col_num):
 # ─── メインクラス ─────────────────────────────────────
 
 class CDPSync:
+    # ARRAYFORMULA で自動計算されるカラム（直接書き込み禁止）
+    FORMULA_COLUMNS = {"セミナー予約合計", "個別予約合計", "累計購入回数"}
+
     def __init__(self, account="kohara"):
         self.client = get_client(account)
         self.ss = self.client.open_by_key(CDP_SHEET_ID)
@@ -720,7 +723,7 @@ class CDPSync:
     # ─── 罫線の自動適用 ──────────────────────────────────
 
     # グループ境界の列位置（0-indexed）
-    _GROUP_BORDERS = [0, 3, 7, 21, 24, 31, 37, 46]
+    _GROUP_BORDERS = [0, 3, 6, 20, 23, 30, 36, 45]
 
     def apply_borders(self, start_row_idx, end_row_idx, num_cols=58):
         """新規追加行に罫線を適用し、交互色(banding)の範囲を拡張する
@@ -1093,6 +1096,10 @@ class CDPSync:
                     if cdp_col == "プラン":
                         new_val = normalize_plan(new_val)
 
+                    # ARRAYFORMULA列は直接書き込み禁止
+                    if cdp_col in self.FORMULA_COLUMNS:
+                        continue
+
                     cdp_idx = self.get_col_index(cdp_col)
                     if cdp_idx is None:
                         continue
@@ -1220,6 +1227,9 @@ class CDPSync:
                     new_row[phone_cidx] = phone
 
                 for cdp_col, src_idx in src_col_indices.items():
+                    # ARRAYFORMULA列は直接書き込み禁止
+                    if cdp_col in self.FORMULA_COLUMNS:
+                        continue
                     if src_idx < len(row) and row[src_idx].strip():
                         val = row[src_idx].strip()
                         if cdp_col in append_columns:

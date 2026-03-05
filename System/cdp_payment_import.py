@@ -195,7 +195,7 @@ def import_to_cdp(customers, dry_run=False):
     col_indices = {}
     for col in ["姓", "名", "フリガナ（姓）", "フリガナ（名）", "LINE名",
                 "初回購入日", "初回購入商品", "最終購入日", "最終購入商品",
-                "累計購入回数", "購入商品", "着金売上", "返金額", "LTV", "最終更新日"]:
+                "購入商品", "着金売上", "返金額", "LTV", "最終更新日"]:
         col_indices[col] = cdp.get_col_index(col)
 
     # フリガナ辞書・姓辞書を構築
@@ -393,23 +393,31 @@ def import_to_cdp(customers, dry_run=False):
             if s_sei and s_mei:
                 kana_sei, kana_mei = s_sei, s_mei
 
-        row = [""] * 58
-        row[0] = str(max_id)
-        row[1] = today
-        row[2] = today
-        row[3] = email
-        row[5] = data["LINE名"]
-        row[7] = sei
-        row[8] = mei
-        row[9] = kana_sei
-        row[10] = kana_mei
-        row[37] = data["初回購入日"]
-        row[38] = data["初回購入商品"]
-        row[39] = data["最終購入日"]
-        row[40] = data["最終購入商品"]
-        row[42] = data["購入商品"]
-        row[43] = normalize_amount(str(data["着金売上"])) if data["着金売上"] > 0 else ""
-        row[45] = normalize_amount(str(data["着金売上"])) if data["着金売上"] > 0 else ""
+        num_cols = len(cdp._master_headers)
+        row = [""] * num_cols
+
+        def _set(col_name, val):
+            idx = cdp.get_col_index(col_name)
+            if idx is not None and val:
+                row[idx] = val
+
+        _set("顧客ID", str(max_id))
+        _set("作成日", today)
+        _set("最終更新日", today)
+        _set("メールアドレス", email)
+        _set("LINE名", data["LINE名"])
+        _set("姓", sei)
+        _set("名", mei)
+        _set("フリガナ（姓）", kana_sei)
+        _set("フリガナ（名）", kana_mei)
+        _set("初回購入日", data["初回購入日"])
+        _set("初回購入商品", data["初回購入商品"])
+        _set("最終購入日", data["最終購入日"])
+        _set("最終購入商品", data["最終購入商品"])
+        _set("購入商品", data["購入商品"])
+        amount = normalize_amount(str(data["着金売上"])) if data["着金売上"] > 0 else ""
+        _set("着金売上", amount)
+        _set("LTV", amount)
         new_rows.append(row)
         stats["new_added"] += 1
 
@@ -424,7 +432,8 @@ def import_to_cdp(customers, dry_run=False):
             chunk = new_rows[i:i + CHUNK]
             start_row = current_rows + 1 + i
             end_row = start_row + len(chunk) - 1
-            ws.update(range_name=f"A{start_row}:BF{end_row}",
+            last_col_letter = _col_to_letter(len(cdp._master_headers))
+            ws.update(range_name=f"A{start_row}:{last_col_letter}{end_row}",
                       values=chunk, value_input_option="USER_ENTERED")
             if i + CHUNK < len(new_rows):
                 time.sleep(1)
@@ -449,20 +458,26 @@ def import_to_cdp(customers, dry_run=False):
 
 
 def setup_formulas(dry_run=False):
-    """累計購入回数(AP)のARRAYFORMULAを設定"""
+    """累計購入回数のARRAYFORMULAを設定（カラム位置は動的に取得）"""
     if dry_run:
         print("\n[ドライラン] ARRAYFORMULA設定をスキップ")
         return
 
-    from sheets_manager import get_client
-    client = get_client("kohara")
-    ss = client.open_by_key("1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk")
-    ws = ss.worksheet("顧客マスタ")
+    cdp = CDPSync()
+    cdp.load_master()
+    ws = cdp.ss.worksheet("顧客マスタ")
 
-    # 累計購入回数(AP3) = 購入商品(AQ)のカンマ区切り数
-    formula = '=ARRAYFORMULA(IF(AQ3:AQ="","",LEN(AQ3:AQ)-LEN(SUBSTITUTE(AQ3:AQ,",",""))+1))'
-    ws.update(range_name="AP3", values=[[formula]], value_input_option="USER_ENTERED")
-    print("\n累計購入回数(AP3): ARRAYFORMULA設定完了")
+    count_idx = cdp.get_col_index("累計購入回数")
+    product_idx = cdp.get_col_index("購入商品")
+    if count_idx is None or product_idx is None:
+        print("累計購入回数 or 購入商品カラムが見つかりません")
+        return
+
+    count_col = _col_to_letter(count_idx + 1)
+    product_col = _col_to_letter(product_idx + 1)
+    formula = f'=ARRAYFORMULA(IF({product_col}3:{product_col}="","",LEN({product_col}3:{product_col})-LEN(SUBSTITUTE({product_col}3:{product_col},",",""))+1))'
+    ws.update(range_name=f"{count_col}3", values=[[formula]], value_input_option="USER_ENTERED")
+    print(f"\n累計購入回数({count_col}3): ARRAYFORMULA設定完了")
 
 
 # ─── CLI ─────────────────────────────────────────────────
