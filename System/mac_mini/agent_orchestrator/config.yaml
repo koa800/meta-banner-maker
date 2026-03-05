@@ -21,6 +21,9 @@ schedule:
   sheets_sync:
     cron: "30 6 * * *"           # 06:30  データ準備（他より先に実行）
     enabled: true
+  cdp_sync:
+    cron: "45 6 * * *"           # 06:45  CDP同期（sheets_syncの後に実行）
+    enabled: true
   addness_fetch:
     cron: "0 8 */3 * *"          # 08:00  Addnessゴールツリー取得（3日ごと）
     enabled: true

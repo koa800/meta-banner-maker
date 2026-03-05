@@ -24,6 +24,7 @@ from sheets_manager import get_client
 CDP_SHEET_ID = "1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk"
 LEAD_SHEET_ID = "1iD3DGxNhZruyjYcA5n6oXRDk2ZGA3uMDOo0stQS9Y00"
 CS_SHEET_ID = "1XOkJsXzEx4iV9h8F-cywg0FOS4Knf7IfekN78RZAr6I"
+ROUTE_TAB_SHEET_ID = "1l5yD6xUL-1ZC73KrMtCCkDsfhx8D8C4vhylaX3VOoL4"
 DATA_DIR = Path(__file__).resolve().parent / "data"
 CHANGE_LOG_PATH = DATA_DIR / "cdp_change_log.json"
 SYNC_STATE_PATH = DATA_DIR / "cdp_sync_state.json"
@@ -1507,6 +1508,117 @@ class CDPSync:
 
         return stats
 
+    # ─── 経路別タブ → 集客データシートの同期 ─────────────
+
+    def sync_route_tabs_to_lead(self, dry_run=False):
+        """経路別タブシートの新規メールを集客データシート（メール一覧）に同期する
+
+        経路別タブシート（27タブ、各タブ: 登録日/メールアドレス）から
+        集客データシート（メール集客データタブ: 登録日/メールアドレス/初回流入経路）に
+        新規メールアドレスを追加する。
+
+        - CDPマスタに既にいるメールは除外（マスタ昇格済み）
+        - 集客データシートに既にあるメールは重複追加しない
+
+        Returns:
+            dict: {"added": int, "skipped_master": int, "skipped_dup": int}
+        """
+        print("\n--- 経路別タブ → 集客データ同期 ---")
+
+        # 1. 経路別タブシートの全タブを読み込み
+        route_ss = self.client.open_by_key(ROUTE_TAB_SHEET_ID)
+        route_tabs = route_ss.worksheets()
+
+        all_entries = []  # [(登録日, メールアドレス, タブ名), ...]
+        for ws in route_tabs:
+            rows = ws.get_all_values()
+            if len(rows) <= 1:
+                continue
+            # ヘッダーからメールアドレス列を探す
+            header = rows[0]
+            try:
+                email_idx = next(i for i, h in enumerate(header)
+                                 if "メール" in h)
+            except StopIteration:
+                continue
+            date_idx = 0  # 登録日は1列目
+            for row in rows[1:]:
+                email = row[email_idx].strip().lower() if email_idx < len(row) else ""
+                if not email or "@" not in email:
+                    continue
+                date_val = row[date_idx].strip() if date_idx < len(row) else ""
+                all_entries.append((date_val, email, ws.title))
+
+        print(f"  経路別タブから {len(all_entries)} 件のメールアドレスを取得")
+
+        if not all_entries:
+            return {"added": 0, "skipped_master": 0, "skipped_dup": 0}
+
+        # 2. CDPマスタのメールアドレス一覧を取得
+        if not self._master_data:
+            self.load_master()
+        master_emails = set()
+        email_col_idx = self.get_col_index("メールアドレス")
+        if email_col_idx is not None:
+            for row in self._master_data:
+                if email_col_idx < len(row) and row[email_col_idx].strip():
+                    master_emails.add(row[email_col_idx].strip().lower())
+
+        # 3. 集客データシート（メール一覧）の既存メールを取得
+        lead_ss = self.client.open_by_key(LEAD_SHEET_ID)
+        lead_ws = lead_ss.worksheet("メール集客データ")
+        lead_data = lead_ws.get_all_values()
+        existing_lead_emails = set()
+        if len(lead_data) > 1:
+            lead_header = lead_data[0]
+            try:
+                lead_email_idx = next(i for i, h in enumerate(lead_header)
+                                      if "メール" in h)
+            except StopIteration:
+                lead_email_idx = 1  # デフォルト: B列
+            for row in lead_data[1:]:
+                if lead_email_idx < len(row) and row[lead_email_idx].strip():
+                    existing_lead_emails.add(row[lead_email_idx].strip().lower())
+
+        # 4. フィルタリング（マスタ除外 + 重複除外）
+        skipped_master = 0
+        skipped_dup = 0
+        new_rows = []
+        seen = set()
+        for date_val, email, route_name in all_entries:
+            if email in master_emails:
+                skipped_master += 1
+                continue
+            if email in existing_lead_emails:
+                skipped_dup += 1
+                continue
+            if email in seen:
+                continue
+            seen.add(email)
+            new_rows.append([date_val, email, route_name])
+
+        print(f"  新規: {len(new_rows)} 件 / マスタ除外: {skipped_master} / "
+              f"重複除外: {skipped_dup}")
+
+        if not new_rows or dry_run:
+            if dry_run and new_rows:
+                print(f"  ドライラン: {len(new_rows)} 件を書き込み予定")
+            return {"added": len(new_rows), "skipped_master": skipped_master,
+                    "skipped_dup": skipped_dup}
+
+        # 5. 書き込み（500行チャンク）
+        start_row = len(lead_data) + 1
+        chunk_size = 500
+        for i in range(0, len(new_rows), chunk_size):
+            chunk = new_rows[i:i + chunk_size]
+            cell = f"A{start_row + i}"
+            lead_ws.update(cell, chunk, value_input_option="USER_ENTERED")
+            time.sleep(1)
+
+        print(f"  {len(new_rows)} 件を集客データシートに追加")
+        return {"added": len(new_rows), "skipped_master": skipped_master,
+                "skipped_dup": skipped_dup}
+
     # ─── 集客データシートの掃除 ─────────────────────────
 
     def _clean_lead_sheet(self, new_emails):
@@ -1816,6 +1928,15 @@ class CDPSync:
             total_stats["errors"] += 1
             print(f"  CS同期エラー: {e}")
 
+        # 経路別タブ → 集客データシートの同期
+        try:
+            lead_stats = self.sync_route_tabs_to_lead(dry_run=dry_run)
+            if lead_stats:
+                total_stats["lead_added"] = lead_stats.get("added", 0)
+        except Exception as e:
+            total_stats["errors"] += 1
+            print(f"  集客データ同期エラー: {e}")
+
         print(f"\n=== 自動同期{'（ドライラン）' if dry_run else ''}完了 ===")
         print(f"ソース数: {total_stats['sources']}")
         print(f"更新: {total_stats['updated']}件")
@@ -1894,6 +2015,7 @@ CDP同期スクリプト
   python3 cdp_sync.py dry-run <ソースURL> <タブ名> <メールカラム名>
   python3 cdp_sync.py exclusion-list
   python3 cdp_sync.py status
+  python3 cdp_sync.py sync-leads         経路別タブ→集客データシートの同期
   python3 cdp_sync.py check-phones      電話番号のバリデーションチェック
 
 例:
@@ -1947,6 +2069,11 @@ CDP同期スクリプト
             for key, val in state._state.items():
                 print(f"  {key}: 最終同期 {val.get('last_sync', '未')}, "
                       f"行数 {val.get('last_row_count', 0)}")
+
+    elif cmd == "sync-leads":
+        dry_run = "--dry-run" in sys.argv
+        sync.load_master()
+        sync.sync_route_tabs_to_lead(dry_run=dry_run)
 
     elif cmd == "check-phones":
         sync.load_master()

@@ -96,6 +96,7 @@ class TaskScheduler:
             "looker_csv_download": self._run_looker_csv_download,
             "kpi_daily_import": self._run_kpi_daily_import,
             "sheets_sync": self._run_sheets_sync,
+            "cdp_sync": self._run_cdp_sync,
             "git_pull_sync": self._run_git_pull_sync,
             "daily_group_digest": self._run_daily_group_digest,
             "weekly_profile_learning": self._run_weekly_profile_learning,
@@ -2515,6 +2516,29 @@ head -3 "{csv_dir}/{csv_filename}"
                 send_line_notify(
                     "管理シートの同期はできましたが、KPIキャッシュの更新に失敗しました。秘書の数値が古い可能性があります。"
                 )
+
+    async def _run_cdp_sync(self):
+        """毎日6:45: CDP同期（データソース→マスタ + 経路別タブ→集客データ）"""
+        import subprocess
+        script = str(Path(__file__).resolve().parent.parent.parent / "cdp_sync.py")
+        try:
+            proc = subprocess.run(
+                ["python3", script, "sync"],
+                capture_output=True, text=True, timeout=600,
+                cwd=str(Path(script).parent),
+            )
+            output = proc.stdout[-500:] if proc.stdout else ""
+            if proc.returncode == 0:
+                logger.info(f"CDP sync completed: {output}")
+            else:
+                error = proc.stderr[-300:] if proc.stderr else ""
+                logger.warning(f"CDP sync failed: {error}")
+                from .notifier import send_line_notify
+                send_line_notify(f"CDP同期でエラーが発生しました: {error[:200]}")
+        except subprocess.TimeoutExpired:
+            logger.warning("CDP sync timed out after 10 minutes")
+            from .notifier import send_line_notify
+            send_line_notify("CDP同期がタイムアウトしました（10分）")
 
     async def _run_kpi_nightly_cache(self):
         """毎晩22:00: KPIキャッシュを再生成（AI秘書が夜間も最新データを参照できるように）"""
