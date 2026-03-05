@@ -294,9 +294,15 @@ def is_valid_email(email):
 
 
 def clean_email(raw):
-    """メールアドレスセルをクリーンアップ。有効なメールのみカンマ区切りで返す"""
+    """メールアドレスセルをクリーンアップ。最初の有効なメールのみ返す（2つ目以降はclean_email_allで取得）"""
+    emails = clean_email_all(raw)
+    return emails[0] if emails else ""
+
+
+def clean_email_all(raw):
+    """メールアドレスセルから有効なメールをすべて抽出してリストで返す"""
     if not raw or not raw.strip():
-        return ""
+        return []
     s = raw.strip()
     # 全角→半角
     s = s.replace('＠', '@').replace('．', '.').replace('，', ',')
@@ -311,8 +317,7 @@ def clean_email(raw):
     s = re.sub(r'[（(][^）)]*[）)]', '', s)
     # 有効なメールのみ抽出
     parts = [p.strip() for p in s.split(',') if p.strip()]
-    valid = [p for p in parts if _EMAIL_RE.match(p)]
-    return ', '.join(valid)
+    return [p for p in parts if _EMAIL_RE.match(p)]
 
 
 # ─── スパム/テストメール検知 ──────────────────────────
@@ -1090,7 +1095,9 @@ class CDPSync:
         for row_idx in range(start_row, len(source_rows)):
             row = source_rows[row_idx]
             raw_email = row[src_email_idx].strip() if src_email_idx < len(row) else ""
-            email = clean_email(raw_email)  # バリデーション + 正規化
+            all_emails = clean_email_all(raw_email)
+            email = all_emails[0] if all_emails else ""
+            email2_from_source = all_emails[1] if len(all_emails) >= 2 else ""
             email_lower = email.lower() if email else ""
             phone = row[src_phone_idx].strip() if src_phone_idx and src_phone_idx < len(row) else ""
 
@@ -1185,6 +1192,26 @@ class CDPSync:
                             self.logger.log("update", email, "メールアドレス",
                                             existing_email, email,
                                             f"{source_url}#{tab_name}")
+
+                # ソースにカンマ区切りで2つ目のメールがあった場合 → E列に書き込み（空の場合のみ）
+                if email2_from_source:
+                    email2_cidx = self.get_col_index("メールアドレス2")
+                    if email2_cidx is not None:
+                        existing_email2 = ""
+                        if email2_cidx < len(self._master_data[master_row_idx]):
+                            existing_email2 = self._master_data[master_row_idx][email2_cidx]
+                        if not existing_email2.strip():
+                            sheet_row = master_row_idx + 3
+                            self._master_data[master_row_idx][email2_cidx] = email2_from_source
+                            if not dry_run:
+                                col2_letter = _col_to_letter(email2_cidx + 1)
+                                updates.append({
+                                    "range": f"{col2_letter}{sheet_row}",
+                                    "values": [[email2_from_source]],
+                                })
+                            self.logger.log("update", email, "メールアドレス2",
+                                            "", email2_from_source,
+                                            f"ソース複数メール分離: {source_url}#{tab_name}")
 
                 updated_any = False
                 for cdp_col, src_idx in src_col_indices.items():
@@ -1372,6 +1399,12 @@ class CDPSync:
                 email_cidx = self.get_col_index("メールアドレス")
                 if email_cidx is not None and email:
                     new_row[email_cidx] = email
+
+                # ソースにカンマ区切りで2つ目のメールがあった場合 → E列に設定
+                if email2_from_source:
+                    email2_cidx = self.get_col_index("メールアドレス2")
+                    if email2_cidx is not None:
+                        new_row[email2_cidx] = email2_from_source
 
                 phone_cidx = self.get_col_index("電話番号")
                 if phone_cidx is not None and phone:
