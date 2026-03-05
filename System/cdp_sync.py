@@ -500,11 +500,11 @@ class CDPSync:
         """
         ws = self.ss.worksheet("データソース管理")
         data = ws.get_all_values()
-        if len(data) < 3:
+        if len(data) < 2:
             return []
 
         mappings = []
-        for row in data[2:]:  # 行3以降がデータ（行1:グループ、行2:カラム名）
+        for row in data[1:]:  # 行2以降がデータ（行1:カラム名）
             if len(row) < 7 or not row[0].strip():
                 continue
             # URL が空のものはスキップ（同期対象外）
@@ -879,7 +879,7 @@ class CDPSync:
             error_count: エラー件数
         """
         ws = self.ss.worksheet("データソース管理")
-        sheet_row = source_row_idx + 3  # 行1:グループ, 行2:カラム名
+        sheet_row = source_row_idx + 2  # 行1:カラム名
 
         now = datetime.now().strftime("%Y/%m/%d")
         # I列:ステータス, J列:最終同期日, K列:更新数, L列:エラー数
