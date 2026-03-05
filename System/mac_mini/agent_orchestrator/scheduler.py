@@ -2545,9 +2545,18 @@ head -3 "{csv_dir}/{csv_filename}"
                 m = _re.search(r"集客データシートから(\d+)行削除", output)
                 if m:
                     changes.append(f"集客データ {m.group(1)}件昇格削除")
+                # 未同期ソースの検出（鮮度チェック）
+                stale_match = _re.findall(r"未同期ソース検出:.*?件", output)
+                stale_lines = _re.findall(r"  - (.+)", output)
+                if stale_lines:
+                    changes.append(f"未同期ソース {len(stale_lines)}件")
                 if changes:
                     from .notifier import send_line_notify
-                    send_line_notify(f"CDP同期完了: {' / '.join(changes)}")
+                    msg = f"CDP同期完了: {' / '.join(changes)}"
+                    if stale_lines:
+                        msg += "\n\n⚠️ 未同期ソース:\n" + "\n".join(
+                            f"・{s}" for s in stale_lines[:5])
+                    send_line_notify(msg)
             else:
                 error = proc.stderr[-300:] if proc.stderr else ""
                 logger.warning(f"CDP sync failed: {error}")

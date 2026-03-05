@@ -1708,24 +1708,74 @@ class CDPSync:
 
     # ─── データソース管理ステータス更新 ─────────────────
 
-    def update_source_status(self, source_row_idx, status, update_count=0,
-                             error_count=0):
-        """データソース管理のステータス・同期日・更新数・エラー数を更新
+    def update_source_status(self, source_url, source_tab, status,
+                             update_count=0, error_count=0):
+        """データソース管理の該当行すべてのステータス・同期日・更新数・エラー数を更新
 
         Args:
-            source_row_idx: データソース管理の行インデックス（0始まり、データ行のみ）
-            status: "正常" / "更新なし" / "停止"
+            source_url: ソースのスプレッドシートURL
+            source_tab: ソースのタブ名
+            status: "正常" / "停止"
             update_count: 更新件数
             error_count: エラー件数
         """
         ws = self.ss.worksheet("データソース管理")
-        sheet_row = source_row_idx + 2  # 行1:カラム名
-
+        data = ws.get_all_values()
         now = datetime.now().strftime("%Y/%m/%d")
-        # J列:ステータス, K列:最終同期日, L列:更新数, M列:エラー数
-        ws.update(f"J{sheet_row}:M{sheet_row}",
-                  [[status, now, update_count, error_count]],
-                  value_input_option="USER_ENTERED")
+
+        updates = []
+        for i, row in enumerate(data[1:], 2):  # 行2〜
+            if len(row) < 6:
+                continue
+            row_url = row[4].strip()
+            row_tab = row[5].strip()
+            if row_url == source_url and row_tab == source_tab:
+                updates.append({
+                    "range": f"J{i}:M{i}",
+                    "values": [[status, now, update_count, error_count]],
+                })
+
+        if updates:
+            ws.batch_update(updates, value_input_option="USER_ENTERED")
+
+    def check_source_staleness(self):
+        """データソース管理の全ソースの鮮度をチェックし、異常を返す
+
+        Returns:
+            list[str]: 7日以上未同期のソース名リスト（空なら全て正常）
+        """
+        ws = self.ss.worksheet("データソース管理")
+        data = ws.get_all_values()
+        stale = []
+        seen = set()  # 同一ソースの重複チェック
+
+        for row in data[1:]:
+            if len(row) < 11 or not row[0].strip():
+                continue
+            cdp_col = row[0].strip()
+            source = row[2].strip()
+            tab = row[5].strip()
+            last_sync = row[10].strip()
+            status = row[9].strip()
+
+            source_key = f"{source}:{tab}"
+            if source_key in seen:
+                continue
+            seen.add(source_key)
+
+            if not last_sync:
+                stale.append(f"{cdp_col}（{source}/{tab}）: 未同期")
+                continue
+
+            try:
+                last_date = datetime.strptime(last_sync, "%Y/%m/%d")
+                days = (datetime.now() - last_date).days
+                if days >= 7:
+                    stale.append(f"{source}/{tab}: {days}日未同期")
+            except ValueError:
+                stale.append(f"{source}/{tab}: 日付不正（{last_sync}）")
+
+        return stale
 
     # ─── ドライラン（旧互換） ──────────────────────────
 
@@ -1932,10 +1982,20 @@ class CDPSync:
                         total_stats["aborted"].append(
                             f"{src['source_name']}({src['tab']}): {stats['error']}")
                         total_stats["errors"] += 1
+                        if not dry_run:
+                            self.update_source_status(
+                                src["url"], src["tab"], "停止",
+                                error_count=1)
                     else:
                         total_stats["updated"] += stats.get("updated", 0)
                         total_stats["inserted"] += stats.get("inserted", 0)
                         total_stats["excluded"] += stats.get("excluded", 0)
+                        # データソース管理のステータスを更新
+                        if not dry_run:
+                            count = stats.get("updated", 0) + stats.get("inserted", 0)
+                            self.update_source_status(
+                                src["url"], src["tab"], "正常",
+                                update_count=count)
                     if stats.get("alerts"):
                         for a in stats["alerts"]:
                             total_stats["alerts"].append(
@@ -1945,15 +2005,38 @@ class CDPSync:
                 total_stats["errors"] += 1
                 print(f"  エラー: {e}")
                 self.logger.log("error", key, "", "", str(e), src["source_name"])
+                if not dry_run:
+                    try:
+                        self.update_source_status(
+                            src["url"], src["tab"], "停止",
+                            error_count=1)
+                    except Exception:
+                        pass
 
         # CS管理シートからの同期（クーリングオフ日・中途解約日）
         try:
             cs_stats = self.sync_cs_sheet(dry_run=dry_run)
-            if cs_stats and cs_stats.get("updated", 0) > 0:
-                total_stats["updated"] += cs_stats["updated"]
+            cs_updated = cs_stats.get("updated", 0) if cs_stats else 0
+            if cs_updated > 0:
+                total_stats["updated"] += cs_updated
+            # CS同期のステータスも更新（CS_TABSの各タブ）
+            if not dry_run:
+                cs_url = f"https://docs.google.com/spreadsheets/d/{CS_SHEET_ID}/edit"
+                for cs_tab in self._CS_TABS:
+                    self.update_source_status(
+                        cs_url, cs_tab["tab"], "正常",
+                        update_count=cs_updated)
         except Exception as e:
             total_stats["errors"] += 1
             print(f"  CS同期エラー: {e}")
+            if not dry_run:
+                try:
+                    cs_url = f"https://docs.google.com/spreadsheets/d/{CS_SHEET_ID}/edit"
+                    for cs_tab in self._CS_TABS:
+                        self.update_source_status(
+                            cs_url, cs_tab["tab"], "停止", error_count=1)
+                except Exception:
+                    pass
 
         # 経路別タブ → 集客データシートの同期
         try:
@@ -1963,6 +2046,19 @@ class CDPSync:
         except Exception as e:
             total_stats["errors"] += 1
             print(f"  集客データ同期エラー: {e}")
+
+        # 鮮度チェック（7日以上未同期のソースを検出）
+        stale_sources = []
+        if not dry_run:
+            try:
+                stale_sources = self.check_source_staleness()
+                if stale_sources:
+                    print(f"\n⚠️ 未同期ソース検出: {len(stale_sources)}件")
+                    for s in stale_sources:
+                        print(f"  - {s}")
+                    total_stats["stale"] = stale_sources
+            except Exception as e:
+                print(f"  鮮度チェックエラー: {e}")
 
         print(f"\n=== 自動同期{'（ドライラン）' if dry_run else ''}完了 ===")
         print(f"ソース数: {total_stats['sources']}")
@@ -1979,6 +2075,10 @@ class CDPSync:
             print(f"\n⚠️ ソース変更アラート: {len(total_stats['alerts'])}件")
             for a in total_stats["alerts"]:
                 print(f"  - {a}")
+        if stale_sources:
+            print(f"\n⚠️ 未同期ソース: {len(stale_sources)}件")
+            for s in stale_sources:
+                print(f"  - {s}")
 
         self.logger.save()
 
