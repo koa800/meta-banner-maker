@@ -2545,17 +2545,29 @@ head -3 "{csv_dir}/{csv_filename}"
                 m = _re.search(r"集客データシートから(\d+)行削除", output)
                 if m:
                     changes.append(f"集客データ {m.group(1)}件昇格削除")
+                # ソースエラーの検出（個別ソースの停止）
+                error_lines = _re.findall(r"エラー: (\d+)件", output)
+                error_count = int(error_lines[0]) if error_lines else 0
+                aborted = _re.findall(r"ソース変更により中断: (\d+)件", output)
+                aborted_count = int(aborted[0]) if aborted else 0
+                if error_count > 0 or aborted_count > 0:
+                    changes.append(f"エラー {error_count + aborted_count}件")
                 # 未同期ソースの検出（鮮度チェック）
-                stale_match = _re.findall(r"未同期ソース検出:.*?件", output)
                 stale_lines = _re.findall(r"  - (.+)", output)
+                stale_lines = [s for s in stale_lines if "未同期" in s or "日未同期" in s]
                 if stale_lines:
                     changes.append(f"未同期ソース {len(stale_lines)}件")
                 if changes:
                     from .notifier import send_line_notify
                     msg = f"CDP同期完了: {' / '.join(changes)}"
+                    alerts = []
+                    if error_count > 0 or aborted_count > 0:
+                        alerts.append("🔴 ソースエラーが発生。データソース管理のステータスを確認してください")
                     if stale_lines:
-                        msg += "\n\n⚠️ 未同期ソース:\n" + "\n".join(
-                            f"・{s}" for s in stale_lines[:5])
+                        alerts.append("⚠️ 未同期ソース:\n" + "\n".join(
+                            f"・{s}" for s in stale_lines[:5]))
+                    if alerts:
+                        msg += "\n\n" + "\n\n".join(alerts)
                     send_line_notify(msg)
             else:
                 error = proc.stderr[-300:] if proc.stderr else ""
