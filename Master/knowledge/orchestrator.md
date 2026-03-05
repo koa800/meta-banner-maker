@@ -4,7 +4,7 @@
 
 ### 朝の流れ
 - 06:30: sheets_sync（データ準備）
-- 06:45: cdp_sync（CDP同期: データソース→マスタ + 経路別タブ→集客データ）
+- 2時間ごと: cdp_sync（CDP同期: データソース→マスタ + 経路別タブ→集客データ。変更時LINE通知）
 - 07:00: looker_session_keepalive（CDP でLooker Studioを開いてGoogleセッション維持）
 - 3日ごと 08:00: addness_fetch（Addnessゴールツリー取得）
 - 08:10: ai_news

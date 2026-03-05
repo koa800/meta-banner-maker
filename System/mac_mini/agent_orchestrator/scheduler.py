@@ -2518,8 +2518,9 @@ head -3 "{csv_dir}/{csv_filename}"
                 )
 
     async def _run_cdp_sync(self):
-        """毎日6:45: CDP同期（データソース→マスタ + 経路別タブ→集客データ）"""
+        """2時間ごと: CDP同期（データソース→マスタ + 経路別タブ→集客データ）"""
         import subprocess
+        import re as _re
         script = str(Path(__file__).resolve().parent.parent.parent / "cdp_sync.py")
         try:
             proc = subprocess.run(
@@ -2527,9 +2528,26 @@ head -3 "{csv_dir}/{csv_filename}"
                 capture_output=True, text=True, timeout=600,
                 cwd=str(Path(script).parent),
             )
-            output = proc.stdout[-500:] if proc.stdout else ""
+            output = proc.stdout if proc.stdout else ""
             if proc.returncode == 0:
-                logger.info(f"CDP sync completed: {output}")
+                logger.info(f"CDP sync completed: {output[-500:]}")
+                # 同期結果を解析してLINE通知（変更があった場合のみ）
+                changes = []
+                m = _re.search(r"更新: (\d+)件", output)
+                if m and int(m.group(1)) > 0:
+                    changes.append(f"マスタ更新 {m.group(1)}件")
+                m = _re.search(r"新規: (\d+)件", output)
+                if m and int(m.group(1)) > 0:
+                    changes.append(f"マスタ新規 {m.group(1)}件")
+                m = _re.search(r"(\d+) 件を集客データシートに追加", output)
+                if m:
+                    changes.append(f"集客データ {m.group(1)}件追加")
+                m = _re.search(r"集客データシートから(\d+)行削除", output)
+                if m:
+                    changes.append(f"集客データ {m.group(1)}件昇格削除")
+                if changes:
+                    from .notifier import send_line_notify
+                    send_line_notify(f"CDP同期完了: {' / '.join(changes)}")
             else:
                 error = proc.stderr[-300:] if proc.stderr else ""
                 logger.warning(f"CDP sync failed: {error}")
