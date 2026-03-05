@@ -308,6 +308,104 @@ def clean_email(raw):
     return ', '.join(valid)
 
 
+# ─── スパム/テストメール検知 ──────────────────────────
+
+_FREE_MAIL_DOMAINS = {
+    "gmail.com", "yahoo.co.jp", "yahoo.com", "hotmail.com",
+    "outlook.com", "icloud.com", "docomo.ne.jp", "softbank.ne.jp",
+    "au.com", "ezweb.ne.jp",
+}
+
+
+def is_spam_email(email):
+    """テスト・いたずらメールアドレスを検知する
+
+    Returns:
+        理由の文字列（スパムの場合）、Noneなら正常
+    """
+    if not email or "@" not in email:
+        return None
+    local = email.split("@")[0].lower()
+    domain = email.split("@")[1].lower()
+
+    # test系（test, test1, test123 等）
+    if re.match(r'^test\d*$', local):
+        return "test系"
+
+    # テスト用ドメイン
+    if domain in ("example.com", "example.co.jp", "test.com", "test.co.jp"):
+        return "テストドメイン"
+
+    # 1文字ローカル on フリーメール（a@gmail.com 等）
+    if len(local) == 1 and domain in _FREE_MAIL_DOMAINS:
+        return "1文字ローカル"
+
+    # いたずら系（abc, aaa, xxx 等 on フリーメール）
+    if local in ("abc", "aaa", "bbb", "ccc", "xxx", "zzz") and domain in _FREE_MAIL_DOMAINS:
+        return "いたずら"
+
+    # 全体が同一文字の繰り返し（aaaa@, 1111@ 等）on フリーメール
+    if len(local) >= 3 and len(set(local)) == 1 and domain in _FREE_MAIL_DOMAINS:
+        return "同一文字繰り返し"
+
+    return None
+
+
+# ─── 姓名分割 ────────────────────────────────────────
+
+def build_surname_dict(master_data, sei_idx, mei_idx):
+    """既存の正しく分割されたデータから姓辞書を構築する
+
+    Returns:
+        set: 姓の集合（漢字・ひらがな・カタカナ）
+    """
+    surnames = set()
+    for row in master_data:
+        sei = row[sei_idx].strip() if sei_idx < len(row) else ""
+        mei = row[mei_idx].strip() if mei_idx < len(row) else ""
+        if sei and mei:
+            surnames.add(sei)
+    return surnames
+
+
+def split_japanese_name(fullname, surname_dict):
+    """日本人名のフルネームを姓名に分割する
+
+    既存データの姓辞書を使い、長い姓から順にマッチングする。
+
+    Args:
+        fullname: フルネーム（例: "山田太郎"）
+        surname_dict: build_surname_dict() で構築した姓の集合
+
+    Returns:
+        (姓, 名) タプル。分割不可なら (fullname, "")
+    """
+    if not fullname:
+        return "", ""
+    fullname = fullname.strip()
+
+    # スペース区切りがあればそのまま分割
+    parts = re.split(r'[\s　]+', fullname)
+    if len(parts) >= 2:
+        return parts[0], " ".join(parts[1:])
+
+    # 漢字・ひらがな・カタカナのみ（英数字混在はスキップ）
+    if not re.match(r'^[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ffー]+$', fullname):
+        return fullname, ""
+
+    # 2文字以下は姓のみとみなす
+    if len(fullname) <= 2:
+        return fullname, ""
+
+    # 長い姓から順にマッチ（3文字→2文字→1文字）
+    for slen in range(min(4, len(fullname) - 1), 0, -1):
+        candidate = fullname[:slen]
+        if candidate in surname_dict:
+            return candidate, fullname[slen:]
+
+    return fullname, ""
+
+
 # ─── ユーティリティ ───────────────────────────────────
 
 def normalize_phone(phone):
@@ -389,6 +487,108 @@ def calculate_age(birth_date_str):
         return None
 
 
+def is_valid_age(age_str):
+    """年齢値が有効かチェック（例: "35", "30代", "40歳"）
+    電話番号+代 のような不正値を除外する"""
+    if not age_str or not age_str.strip():
+        return False
+    s = age_str.strip()
+    # 数字1-3桁 + optional "代" or "歳"
+    return bool(re.match(r'^\d{1,3}(代|歳)?$', s))
+
+
+def is_valid_url(url_str):
+    """URL形式が有効かチェック（収録URL等のバリデーション用）
+    http/https で始まるURLのみ許可"""
+    if not url_str or not url_str.strip():
+        return False
+    s = url_str.strip()
+    return bool(re.match(r'^https?://', s))
+
+
+def clean_url_field(val):
+    """URL系フィールドからURLのみ抽出し、テキストを除去する"""
+    if not val or not val.strip():
+        return ""
+    urls = re.findall(r'https?://\S+', val)
+    clean = [re.sub(r'[）)」】　]+$', '', u) for u in urls]
+    return '\n'.join(clean)
+
+
+# プラン名の自動変換マップ
+PLAN_NAME_MAP = {
+    "スタンダード": "オールインワン",
+}
+
+
+def normalize_plan(plan_str):
+    """プラン名を正規化する"""
+    if not plan_str:
+        return ""
+    s = plan_str.strip()
+    return PLAN_NAME_MAP.get(s, s)
+
+
+def build_furigana_dict(master_data, sei_idx, furigana_sei_idx, furigana_mei_idx):
+    """既存データから 漢字姓→フリガナ姓 の辞書を構築する
+
+    Returns:
+        (sei_reading, kanji_len_median)
+        sei_reading: {漢字姓: {フリガナ読みセット}}
+        kanji_len_median: {漢字文字数: フリガナ文字数の中央値}
+    """
+    sei_reading = {}
+    kanji_len_to_kana_lens = {}
+
+    for row in master_data:
+        h = row[sei_idx].strip() if sei_idx < len(row) else ''
+        j = row[furigana_sei_idx].strip() if furigana_sei_idx < len(row) else ''
+        k = row[furigana_mei_idx].strip() if furigana_mei_idx < len(row) else ''
+        if h and j and k and re.match(r'^[\u3040-\u309F\u30A0-\u30FFー]+$', j):
+            sei_reading.setdefault(h, set()).add(j.lower())
+            kanji_len_to_kana_lens.setdefault(len(h), []).append(len(j))
+
+    kanji_len_median = {}
+    for kl, lens in kanji_len_to_kana_lens.items():
+        lens.sort()
+        kanji_len_median[kl] = lens[len(lens) // 2]
+
+    return sei_reading, kanji_len_median
+
+
+def split_furigana(full_kana, sei_kanji, mei_kanji, sei_reading, kanji_len_median):
+    """フルネームのフリガナを姓名に分割する
+
+    Args:
+        full_kana: フリガナ全体（例: "やまもとゆうき"）
+        sei_kanji: 漢字姓（例: "山本"）
+        mei_kanji: 漢字名（例: "悠貴"）
+        sei_reading: build_furigana_dict() で構築した辞書
+        kanji_len_median: build_furigana_dict() で構築した中央値マップ
+
+    Returns:
+        (kana_sei, kana_mei) or (None, None) 分割不可の場合
+    """
+    if not full_kana or not re.match(r'^[\u3040-\u309F\u30A0-\u30FFー]+$', full_kana):
+        return None, None
+
+    full_lower = full_kana.lower()
+
+    # 方法1: 辞書マッチ
+    if sei_kanji:
+        for r in sei_reading.get(sei_kanji, set()):
+            if full_lower.startswith(r) and len(full_lower) > len(r):
+                return full_kana[:len(r)], full_kana[len(r):]
+
+    # 方法2: 漢字文字数の中央値で推定
+    if sei_kanji and mei_kanji:
+        median_len = kanji_len_median.get(len(sei_kanji))
+        if median_len and median_len < len(full_kana):
+            return full_kana[:median_len], full_kana[median_len:]
+
+    return None, None
+
+
 def resolve_age(birth_date_str, survey_age_str):
     """年齢を解決する（生年月日優先、なければアンケート年代）
 
@@ -406,7 +606,7 @@ def resolve_age(birth_date_str, survey_age_str):
     age = calculate_age(birth_date_str)
     if age is not None:
         return str(age)
-    if survey_age_str and survey_age_str.strip():
+    if survey_age_str and is_valid_age(survey_age_str):
         return survey_age_str.strip()
     return ""
 
@@ -517,6 +717,85 @@ class CDPSync:
                     index[phone] = i
         return index
 
+    # ─── 罫線の自動適用 ──────────────────────────────────
+
+    # グループ境界の列位置（0-indexed）
+    _GROUP_BORDERS = [0, 3, 7, 21, 24, 31, 37, 46]
+
+    def apply_borders(self, start_row_idx, end_row_idx, num_cols=58):
+        """新規追加行に罫線を適用し、交互色(banding)の範囲を拡張する
+
+        Args:
+            start_row_idx: 開始行（0-indexed、ヘッダー含む）
+            end_row_idx: 終了行（0-indexed、exclusive）
+            num_cols: 列数
+        """
+        ws = self.ss.worksheet("顧客マスタ")
+        sheet_id = ws.id
+        black = {"red": 0, "green": 0, "blue": 0}
+        thin = {"style": "SOLID", "width": 1, "color": black}
+        medium = {"style": "SOLID_MEDIUM", "width": 2, "color": black}
+
+        requests = [
+            # 全体の細い罫線
+            {"updateBorders": {
+                "range": {"sheetId": sheet_id,
+                          "startRowIndex": start_row_idx,
+                          "endRowIndex": end_row_idx,
+                          "startColumnIndex": 0,
+                          "endColumnIndex": num_cols},
+                "top": thin, "bottom": thin,
+                "left": thin, "right": thin,
+                "innerHorizontal": thin, "innerVertical": thin,
+            }},
+            # 外枠の太線
+            {"updateBorders": {
+                "range": {"sheetId": sheet_id,
+                          "startRowIndex": 0,
+                          "endRowIndex": end_row_idx,
+                          "startColumnIndex": 0,
+                          "endColumnIndex": num_cols},
+                "bottom": medium, "left": medium, "right": medium,
+            }},
+        ]
+        # グループ境界の太い縦線
+        for col_idx in self._GROUP_BORDERS:
+            requests.append({"updateBorders": {
+                "range": {"sheetId": sheet_id,
+                          "startRowIndex": start_row_idx,
+                          "endRowIndex": end_row_idx,
+                          "startColumnIndex": col_idx,
+                          "endColumnIndex": col_idx + 1},
+                "left": medium,
+            }})
+
+        # 交互色(banding)の範囲を拡張
+        metadata = self.ss.fetch_sheet_metadata({
+            "includeGridData": False,
+            "fields": "sheets(properties.sheetId,bandedRanges)",
+        })
+        for sheet in metadata.get("sheets", []):
+            if sheet.get("properties", {}).get("sheetId") == sheet_id:
+                for banded in sheet.get("bandedRanges", []):
+                    br = banded.get("range", {})
+                    if br.get("endRowIndex", 0) < end_row_idx:
+                        requests.append({"updateBandingProperties": {
+                            "bandedRange": {
+                                "bandedRangeId": banded["bandedRangeId"],
+                                "range": {
+                                    "sheetId": sheet_id,
+                                    "startRowIndex": br.get("startRowIndex", 2),
+                                    "endRowIndex": end_row_idx,
+                                    "startColumnIndex": br.get("startColumnIndex", 0),
+                                    "endColumnIndex": br.get("endColumnIndex", num_cols),
+                                },
+                            },
+                            "fields": "range",
+                        }})
+
+        self.ss.batch_update({"requests": requests})
+        print(f"罫線適用: Row {start_row_idx + 1}〜{end_row_idx}")
+
     # ─── データソース管理の読み込み ─────────────────────
 
     def load_source_mappings(self):
@@ -561,6 +840,7 @@ class CDPSync:
                 "tab": row[5].strip() if len(row) > 5 else "",
                 "ref_column": row[6].strip() if len(row) > 6 else "",
                 "normalize": row[7].strip() if len(row) > 7 else "",
+                "input_condition": row[8].strip() if len(row) > 8 else "",
             })
 
         print(f"データソース管理: {len(mappings)}件のマッピング")
@@ -626,6 +906,31 @@ class CDPSync:
         # カンマ区切りで追記するカラム（複数回の値を蓄積）
         append_columns = {"セミナー予約日", "個別予約日", "個別着座日"}
 
+        # URLバリデーション対象カラム
+        url_columns = {"収録URL", "サポートURL", "CRリンク"}
+
+        # フリガナ自動分割用
+        sei_idx = self.get_col_index("姓")
+        mei_idx = self.get_col_index("名")
+        furi_sei_idx = self.get_col_index("フリガナ（姓）")
+        furi_mei_idx = self.get_col_index("フリガナ（名）")
+        _furi_dict, _furi_median = build_furigana_dict(
+            self._master_data, sei_idx, furi_sei_idx, furi_mei_idx
+        ) if all(x is not None for x in [sei_idx, furi_sei_idx, furi_mei_idx]) else ({}, {})
+
+        # 姓名分割用の姓辞書
+        _surname_dict = build_surname_dict(
+            self._master_data, sei_idx, mei_idx
+        ) if sei_idx is not None and mei_idx is not None else set()
+
+        # 最終更新日のインデックス
+        update_date_idx = self.get_col_index("最終更新日")
+
+        # 年齢自動計算用（生年月日がある行はDATEDIF数式を設定）
+        birth_col_idx = self.get_col_index("生年月日")
+        age_col_idx = self.get_col_index("年齢")
+        birth_col_letter = _col_to_letter(birth_col_idx + 1) if birth_col_idx is not None else None
+
         # 日付信頼性フィルター: 個別予約日は2025/7/30以降のみ取り込む
         reservation_date_cutoff = datetime(2025, 7, 30)
         reservation_src_idx = src_col_indices.get("個別予約日")
@@ -680,6 +985,13 @@ class CDPSync:
             if self.is_excluded(email, phone):
                 stats["excluded"] += 1
                 self.logger.log("skip", email or phone, "", "", "", "除外リスト")
+                continue
+
+            # スパム/テストメール検知
+            spam_reason = is_spam_email(email) if email else None
+            if spam_reason:
+                stats["excluded"] += 1
+                self.logger.log("skip", email, "", "", "", f"スパム検知: {spam_reason}")
                 continue
 
             # 電話番号バリデーション
@@ -767,6 +1079,20 @@ class CDPSync:
                         except (ValueError, IndexError):
                             pass
 
+                    # URLカラムはURLのみ抽出（テキスト混入防止）
+                    if cdp_col in url_columns:
+                        new_val = clean_url_field(new_val)
+                        if not new_val:
+                            continue
+
+                    # 年齢は形式チェック
+                    if cdp_col == "年齢" and not is_valid_age(new_val):
+                        continue
+
+                    # プラン名の自動変換
+                    if cdp_col == "プラン":
+                        new_val = normalize_plan(new_val)
+
                     cdp_idx = self.get_col_index(cdp_col)
                     if cdp_idx is None:
                         continue
@@ -810,6 +1136,61 @@ class CDPSync:
 
                 if updated_any:
                     stats["updated"] += 1
+                    sheet_row = master_row_idx + 3
+                    if not dry_run:
+                        # 最終更新日を自動更新
+                        if update_date_idx is not None:
+                            today = datetime.now().strftime("%Y/%m/%d")
+                            col_letter = _col_to_letter(update_date_idx + 1)
+                            updates.append({
+                                "range": f"{col_letter}{sheet_row}",
+                                "values": [[today]],
+                            })
+                        # 生年月日がある行は年齢をDATEDIF数式に
+                        if birth_col_idx is not None and age_col_idx is not None:
+                            birth_val = ""
+                            if birth_col_idx < len(self._master_data[master_row_idx]):
+                                birth_val = self._master_data[master_row_idx][birth_col_idx].strip()
+                            if birth_val and re.match(r'^\d{4}[/-]\d{1,2}[/-]\d{1,2}$', birth_val):
+                                age_letter = _col_to_letter(age_col_idx + 1)
+                                updates.append({
+                                    "range": f"{age_letter}{sheet_row}",
+                                    "values": [[f'=DATEDIF({birth_col_letter}{sheet_row},TODAY(),"Y")']],
+                                })
+                        # フリガナ自動分割（J列にフルネーム & K列が空 → 分割）
+                        if furi_sei_idx is not None and furi_mei_idx is not None:
+                            rd = self._master_data[master_row_idx]
+                            fj = rd[furi_sei_idx].strip() if furi_sei_idx < len(rd) else ""
+                            fk = rd[furi_mei_idx].strip() if furi_mei_idx < len(rd) else ""
+                            if fj and not fk:
+                                h = rd[sei_idx].strip() if sei_idx is not None and sei_idx < len(rd) else ""
+                                m = rd[mei_idx].strip() if mei_idx is not None and mei_idx < len(rd) else ""
+                                ks, km = split_furigana(fj, h, m, _furi_dict, _furi_median)
+                                if ks and km:
+                                    updates.append({
+                                        "range": f"{_col_to_letter(furi_sei_idx + 1)}{sheet_row}",
+                                        "values": [[ks]],
+                                    })
+                                    updates.append({
+                                        "range": f"{_col_to_letter(furi_mei_idx + 1)}{sheet_row}",
+                                        "values": [[km]],
+                                    })
+                        # 姓名自動分割（H列にフルネーム & I列が空 → 分割）
+                        if sei_idx is not None and mei_idx is not None and _surname_dict:
+                            rd = self._master_data[master_row_idx]
+                            h = rd[sei_idx].strip() if sei_idx < len(rd) else ""
+                            m = rd[mei_idx].strip() if mei_idx < len(rd) else ""
+                            if h and not m:
+                                ns, nm = split_japanese_name(h, _surname_dict)
+                                if nm:
+                                    updates.append({
+                                        "range": f"{_col_to_letter(sei_idx + 1)}{sheet_row}",
+                                        "values": [[ns]],
+                                    })
+                                    updates.append({
+                                        "range": f"{_col_to_letter(mei_idx + 1)}{sheet_row}",
+                                        "values": [[nm]],
+                                    })
             elif email or phone:
                 # 新規顧客 → 追加
                 stats["inserted"] += 1
@@ -825,6 +1206,10 @@ class CDPSync:
                 create_idx = self.get_col_index("作成日")
                 if create_idx is not None:
                     new_row[create_idx] = datetime.now().strftime("%Y/%m/%d")
+
+                # 新規追加時も最終更新日を設定
+                if update_date_idx is not None:
+                    new_row[update_date_idx] = datetime.now().strftime("%Y/%m/%d")
 
                 email_cidx = self.get_col_index("メールアドレス")
                 if email_cidx is not None and email:
@@ -848,9 +1233,48 @@ class CDPSync:
                                         continue
                             except (ValueError, IndexError):
                                 pass
+                        # URLカラムはURLのみ抽出
+                        if cdp_col in url_columns:
+                            val = clean_url_field(val)
+                            if not val:
+                                continue
+                        # 年齢は形式チェック
+                        if cdp_col == "年齢" and not is_valid_age(val):
+                            continue
+                        # プラン名の自動変換
+                        if cdp_col == "プラン":
+                            val = normalize_plan(val)
                         cdp_idx = self.get_col_index(cdp_col)
                         if cdp_idx is not None:
                             new_row[cdp_idx] = val
+
+                # 生年月日があれば年齢はDATEDIF数式用にマーク
+                if birth_col_idx is not None and age_col_idx is not None:
+                    birth_val = new_row[birth_col_idx] if birth_col_idx < len(new_row) else ""
+                    if birth_val and re.match(r'^\d{4}[/-]\d{1,2}[/-]\d{1,2}$', birth_val):
+                        new_row[age_col_idx] = "__DATEDIF__"  # 後でDATEDIF数式に置換
+
+                # 姓名自動分割（新規行）
+                if sei_idx is not None and mei_idx is not None and _surname_dict:
+                    h = new_row[sei_idx] if sei_idx < len(new_row) else ""
+                    m_name = new_row[mei_idx] if mei_idx < len(new_row) else ""
+                    if h and not m_name:
+                        ns, nm = split_japanese_name(h, _surname_dict)
+                        if nm:
+                            new_row[sei_idx] = ns
+                            new_row[mei_idx] = nm
+
+                # フリガナ自動分割（新規行）
+                if furi_sei_idx is not None and furi_mei_idx is not None:
+                    fj = new_row[furi_sei_idx] if furi_sei_idx < len(new_row) else ""
+                    fk = new_row[furi_mei_idx] if furi_mei_idx < len(new_row) else ""
+                    if fj and not fk:
+                        h = new_row[sei_idx] if sei_idx is not None and sei_idx < len(new_row) else ""
+                        m_name = new_row[mei_idx] if mei_idx is not None and mei_idx < len(new_row) else ""
+                        ks, km = split_furigana(fj, h, m_name, _furi_dict, _furi_median)
+                        if ks and km:
+                            new_row[furi_sei_idx] = ks
+                            new_row[furi_mei_idx] = km
 
                 if not dry_run:
                     new_rows.append(new_row)
@@ -903,6 +1327,30 @@ class CDPSync:
                         time.sleep(1)
                 print(f"新規行の追加: {len(new_rows)}行書き込み完了")
 
+                # 新規行に罫線を適用
+                self.apply_borders(
+                    start_row_idx=start_row - 1,  # 0-indexed
+                    end_row_idx=start_row - 1 + len(new_rows),
+                    num_cols=len(self._master_headers),
+                )
+
+                # 生年月日がある新規行にDATEDIF数式を設定
+                if birth_col_idx is not None and age_col_idx is not None:
+                    age_formulas = []
+                    age_letter = _col_to_letter(age_col_idx + 1)
+                    for j, nr in enumerate(new_rows):
+                        if age_col_idx < len(nr) and nr[age_col_idx] == "__DATEDIF__":
+                            sr = start_row + j
+                            age_formulas.append({
+                                "range": f"{age_letter}{sr}",
+                                "values": [[f'=DATEDIF({birth_col_letter}{sr},TODAY(),"Y")']],
+                            })
+                    if age_formulas:
+                        for i in range(0, len(age_formulas), 500):
+                            ws.batch_update(age_formulas[i:i + 500],
+                                            value_input_option="USER_ENTERED")
+                        print(f"  年齢DATEDIF数式: {len(age_formulas)}行")
+
         # 増分同期の状態を保存（ドライランでは保存しない）
         if not dry_run:
             self.sync_state.update(source_key, len(source_rows))
@@ -946,8 +1394,8 @@ class CDPSync:
         sheet_row = source_row_idx + 2  # 行1:カラム名
 
         now = datetime.now().strftime("%Y/%m/%d")
-        # I列:ステータス, J列:最終同期日, K列:更新数, L列:エラー数
-        ws.update(f"I{sheet_row}:L{sheet_row}",
+        # J列:ステータス, K列:最終同期日, L列:更新数, M列:エラー数
+        ws.update(f"J{sheet_row}:M{sheet_row}",
                   [[status, now, update_count, error_count]],
                   value_input_option="USER_ENTERED")
 
