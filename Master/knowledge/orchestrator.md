@@ -30,7 +30,7 @@
 - 月曜 9:00: weekly_idea_proposal / 9:30: weekly_stats
 - 水曜 10:00: weekly_content_suggestions
 - 金曜 20:00: os_sync_session（秘書→甲原のOSすり合わせ）
-- 日曜 10:00: weekly_profile_learning / 10:30: weekly_hinata_memory / 11:00: video_knowledge_review（動画知識ライフサイクルレビュー） / 11:30: ds_insight_biweekly_report（隔週。DS.INSIGHTデータ取得→レポート→LINE通知）
+- 日曜 10:00: weekly_profile_learning / ~~10:30: weekly_hinata_memory~~（日向停止中） / 11:00: video_knowledge_review（動画知識ライフサイクルレビュー） / 11:30: ds_insight_biweekly_report（隔週。DS.INSIGHTデータ取得→レポート→LINE通知）
 
 ### 月次
 - 毎月3日 09:30: monthly_invoice_submission（請求書作成・提出。INVOY→承認→フォーム→Drive）
@@ -40,8 +40,8 @@
 
 ### 常時
 - 5分ごと: health_check + git_pull_sync（学習データ自動push付き）
-- 15秒ごと: slack_dispatch + slack_hinata_auto_reply
-- 30分ごと: ~~repair_check~~（2026-03-02無効化。代替: イベント駆動の自動修復。`_check_task_health` がタスク実行直後に健全性チェック→異常時のみ日向に修復投入） + render_health_check + video_learning_reminder（承認待ち動画知識リマインド）
+- ~~15秒ごと: slack_dispatch + slack_hinata_auto_reply~~（2026-03-06 日向一時停止。スキル整備後に再開）
+- 30分ごと: ~~repair_check~~（2026-03-02無効化） + render_health_check + video_learning_reminder（承認待ち動画知識リマインド）
 
 ## Looker Studio / 日報
 

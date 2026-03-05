@@ -118,7 +118,7 @@ schedule:
     enabled: true
   weekly_hinata_memory:
     cron: "30 10 * * 0"          # 日曜 10:30  日向の記憶統合（profile_learningの後）
-    enabled: true
+    enabled: false               # 2026-03-06 日向一時停止
   video_knowledge_review:
     cron: "0 11 * * 0"           # 日曜 11:00  動画知識ライフサイクルレビュー（hinata_memoryの後）
     enabled: true
@@ -157,10 +157,10 @@ schedule:
   # === Slack連携（秘書が監視・日向に指示を渡す） ===
   slack_dispatch:
     interval_seconds: 15         # Slack #ai-team 監視 → 日向タスクキューへ
-    enabled: true
+    enabled: false               # 2026-03-06 日向一時停止（スキル整備後に再開）
   slack_hinata_auto_reply:
     interval_seconds: 15         # 日向のSlack報告に秘書が返答
-    enabled: true
+    enabled: false               # 2026-03-06 日向一時停止
 
   # === 無効化済み ===
   slack_ai_team_check:
