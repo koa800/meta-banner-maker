@@ -1139,28 +1139,45 @@ class CDPSync:
 
             if master_row_idx is not None:
                 # 既存顧客 → 更新
-                # 電話番号で名寄せされた場合、新しいメールを追記
+                # 電話番号で名寄せされた場合、新メールをD列に、旧メールをE列に退避
                 if email and email_lower not in email_index:
                     email_cidx = self.get_col_index("メールアドレス")
+                    email2_cidx = self.get_col_index("メールアドレス2")
                     if email_cidx is not None:
                         existing_email = ""
                         if email_cidx < len(self._master_data[master_row_idx]):
                             existing_email = self._master_data[master_row_idx][email_cidx]
                         existing_set = {e.strip().lower() for e in existing_email.split(",") if e.strip()}
                         if email_lower not in existing_set:
-                            new_email = f"{existing_email}, {email}" if existing_email else email
-                            self._master_data[master_row_idx][email_cidx] = new_email
+                            sheet_row = master_row_idx + 3
+                            # 旧メールをメールアドレス2に退避（E列が空の場合のみ）
+                            if existing_email and email2_cidx is not None:
+                                existing_email2 = ""
+                                if email2_cidx < len(self._master_data[master_row_idx]):
+                                    existing_email2 = self._master_data[master_row_idx][email2_cidx]
+                                if not existing_email2.strip():
+                                    self._master_data[master_row_idx][email2_cidx] = existing_email
+                                    if not dry_run:
+                                        col2_letter = _col_to_letter(email2_cidx + 1)
+                                        updates.append({
+                                            "range": f"{col2_letter}{sheet_row}",
+                                            "values": [[existing_email]],
+                                        })
+                                    self.logger.log("update", email, "メールアドレス2",
+                                                    "", existing_email,
+                                                    f"{source_url}#{tab_name}")
+                            # 新メールをメールアドレス（D列）に設定
+                            self._master_data[master_row_idx][email_cidx] = email
                             email_index[email_lower] = master_row_idx
                             all_existing_emails.add(email_lower)
                             if not dry_run:
-                                sheet_row = master_row_idx + 3
                                 col_letter = _col_to_letter(email_cidx + 1)
                                 updates.append({
                                     "range": f"{col_letter}{sheet_row}",
-                                    "values": [[new_email]],
+                                    "values": [[email]],
                                 })
                             self.logger.log("update", email, "メールアドレス",
-                                            existing_email, new_email,
+                                            existing_email, email,
                                             f"{source_url}#{tab_name}")
 
                 updated_any = False
@@ -1170,8 +1187,8 @@ class CDPSync:
                     new_val = row[src_idx].strip()
                     if not new_val:
                         continue
-                    # メールアドレスは上のロジックで処理済み
-                    if cdp_col == "メールアドレス":
+                    # メールアドレス/メールアドレス2は上のロジックで処理済み
+                    if cdp_col in ("メールアドレス", "メールアドレス2"):
                         continue
 
                     # 個別予約日は2025/7/30以前のデータをスキップ
