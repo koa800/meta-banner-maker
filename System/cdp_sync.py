@@ -165,12 +165,15 @@ class SyncState:
         """
         return self._state.get(source_key)
 
-    def update(self, source_key, row_count):
+    def update(self, source_key, row_count, headers=None):
         """同期完了後に状態を更新"""
-        self._state[source_key] = {
+        entry = {
             "last_sync": datetime.now().isoformat(),
             "last_row_count": row_count,
         }
+        if headers is not None:
+            entry["headers"] = headers
+        self._state[source_key] = entry
 
     def save(self):
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -892,7 +895,48 @@ class CDPSync:
 
         source_headers, source_rows = self.read_source(source_url, tab_name)
 
-        # ソースのカラムインデックス
+        # ─── ソース変更検知 ─────────────────────────────
+        source_key = f"{source_url}#{tab_name}"
+        last_state = self.sync_state.get_last_sync(source_key)
+        alerts = []
+
+        if last_state:
+            # ヘッダー変更検知
+            prev_headers = last_state.get("headers")
+            if prev_headers and prev_headers != source_headers:
+                removed = set(prev_headers) - set(source_headers)
+                added = set(source_headers) - set(prev_headers)
+                if removed:
+                    alerts.append(f"列が削除されました: {removed}")
+                if added:
+                    alerts.append(f"列が追加されました: {added}")
+                # マッピング対象の列が消えた場合は危険 → 中断
+                mapped_cols = set(column_mapping.values()) | {email_col}
+                if phone_col:
+                    mapped_cols.add(phone_col)
+                missing_mapped = mapped_cols - set(source_headers)
+                if missing_mapped:
+                    msg = (f"[同期中断] ソース '{tab_name}' のマッピング対象列が"
+                           f"消失しました: {missing_mapped}")
+                    print(f"\n⚠️ {msg}")
+                    for a in alerts:
+                        print(f"  - {a}")
+                    return {"error": msg, "alerts": alerts}
+
+            # 行数の急減検知（50%以上減少 かつ 100行以上あった場合）
+            prev_rows = last_state.get("last_row_count", 0)
+            curr_rows = len(source_rows)
+            if prev_rows >= 100 and curr_rows < prev_rows * 0.5:
+                alerts.append(
+                    f"行数が急減しました: {prev_rows:,}行 → {curr_rows:,}行"
+                    f"（{curr_rows / prev_rows * 100:.0f}%）")
+
+        if alerts:
+            print(f"\n⚠️ ソース変更アラート [{tab_name}]:")
+            for a in alerts:
+                print(f"  - {a}")
+
+        # ─── ソースのカラムインデックス ─────────────────
         src_email_idx = source_headers.index(email_col) if email_col in source_headers else None
         src_phone_idx = source_headers.index(phone_col) if phone_col and phone_col in source_headers else None
 
@@ -939,7 +983,6 @@ class CDPSync:
         reservation_src_idx = src_col_indices.get("個別予約日")
 
         # 増分同期: 前回同期以降の行数差分のみ処理
-        source_key = f"{source_url}#{tab_name}"
         start_row = 0
         if incremental:
             last_state = self.sync_state.get_last_sync(source_key)
@@ -1363,7 +1406,8 @@ class CDPSync:
 
         # 増分同期の状態を保存（ドライランでは保存しない）
         if not dry_run:
-            self.sync_state.update(source_key, len(source_rows))
+            self.sync_state.update(source_key, len(source_rows),
+                                   headers=source_headers)
             self.sync_state.save()
 
         # 変更ログ保存
@@ -1385,6 +1429,9 @@ class CDPSync:
             print(f"電話番号警告: {stats['phone_warnings']}件")
         if stats["email_warnings"]:
             print(f"メール類似警告: {stats['email_warnings']}件 → {SIMILARITY_LOG_PATH}")
+        if alerts:
+            print(f"ソース変更アラート: {len(alerts)}件")
+            stats["alerts"] = alerts
 
         return stats
 
@@ -1451,6 +1498,8 @@ class CDPSync:
             "inserted": 0,
             "excluded": 0,
             "errors": 0,
+            "alerts": [],
+            "aborted": [],
         }
 
         for key, src in sources.items():
@@ -1471,9 +1520,19 @@ class CDPSync:
                 )
 
                 if stats:
-                    total_stats["updated"] += stats.get("updated", 0)
-                    total_stats["inserted"] += stats.get("inserted", 0)
-                    total_stats["excluded"] += stats.get("excluded", 0)
+                    if "error" in stats:
+                        # ソース変更により同期中断
+                        total_stats["aborted"].append(
+                            f"{src['source_name']}({src['tab']}): {stats['error']}")
+                        total_stats["errors"] += 1
+                    else:
+                        total_stats["updated"] += stats.get("updated", 0)
+                        total_stats["inserted"] += stats.get("inserted", 0)
+                        total_stats["excluded"] += stats.get("excluded", 0)
+                    if stats.get("alerts"):
+                        for a in stats["alerts"]:
+                            total_stats["alerts"].append(
+                                f"{src['source_name']}({src['tab']}): {a}")
 
             except Exception as e:
                 total_stats["errors"] += 1
@@ -1487,6 +1546,14 @@ class CDPSync:
         print(f"除外: {total_stats['excluded']}件")
         if total_stats["errors"]:
             print(f"エラー: {total_stats['errors']}件")
+        if total_stats["aborted"]:
+            print(f"\n⚠️ ソース変更により中断: {len(total_stats['aborted'])}件")
+            for a in total_stats["aborted"]:
+                print(f"  - {a}")
+        if total_stats["alerts"]:
+            print(f"\n⚠️ ソース変更アラート: {len(total_stats['alerts'])}件")
+            for a in total_stats["alerts"]:
+                print(f"  - {a}")
 
         self.logger.save()
         return total_stats
