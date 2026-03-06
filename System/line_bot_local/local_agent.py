@@ -945,7 +945,7 @@ except ImportError:
 CONFIG_FILE = _RUNTIME_DATA_DIR / "config.json"
 DEFAULT_CONFIG = {
     "server_url": "https://line-ai-secretary.onrender.com",
-    "poll_interval": 30,  # 秒
+    "poll_interval": 5,  # 秒
     "agent_token": "",    # 認証トークン（Render側と同じ値を設定）
     "cursor_workspace": str(Path(__file__).parent.parent.parent),  # /Users/koa800/Desktop/cursor
     "anthropic_api_key": "",  # Anthropic APIキー
