@@ -2323,8 +2323,23 @@ python3 System/line_notify.py "日報入力が完了しました。
             if ok:
                 logger.info(f"Special reminder sent: {label} in {delta} days")
 
+    def _find_missing_csv_dates(self, csv_dir, lookback_days=7):
+        """直近N日間でCSVが不足している日付リストを返す（古い順）。"""
+        from pathlib import Path
+        from datetime import date, timedelta
+
+        csv_dir = Path(csv_dir)
+        missing = []
+        for i in range(lookback_days, 1, -1):  # lookback_days日前 → 2日前（古い順）
+            d = date.today() - timedelta(days=i)
+            d_str = d.strftime("%Y-%m-%d")
+            csv_path = csv_dir / f"{d_str}_アドネス全体数値_媒体・ファネル別データ_表.csv"
+            if not csv_path.exists() or csv_path.stat().st_size <= 100:
+                missing.append(d)
+        return missing
+
     async def _run_looker_csv_download(self):
-        """毎日11:30: Looker Studio CSVダウンロード（前々日分）。秘書がClaude Code + Chrome MCPで実行。"""
+        """毎日11:30: Looker Studio CSVダウンロード（前々日分 + 不足分バックフィル）。秘書がClaude Code + Chrome MCPで実行。"""
         from pathlib import Path
         from datetime import date, timedelta
         from .notifier import send_line_notify
@@ -2338,24 +2353,48 @@ python3 System/line_notify.py "日報入力が完了しました。
             send_line_notify(f"Looker CSVのダウンロード準備で失敗しました。\n{preflight_err}")
             return
 
-        target_date = date.today() - timedelta(days=2)
-        target_str = target_date.strftime("%Y-%m-%d")
-        csv_filename = f"{target_str}_アドネス全体数値_媒体・ファネル別データ_表.csv"
         csv_dir = Path.home() / "Desktop" / "Looker Studio CSV"
         csv_dir.mkdir(parents=True, exist_ok=True)
 
-        # 既にCSVが存在する場合はスキップ
-        csv_path = csv_dir / csv_filename
-        if csv_path.exists() and csv_path.stat().st_size > 100:
-            logger.info(f"Looker CSV ダウンロード: {csv_filename} は既に存在 → スキップ")
-            # シート同期だけ実行（まだ元データに反映されていない可能性があるため）
+        # 直近7日間の不足日付を検出（バックフィル）
+        missing_dates = self._find_missing_csv_dates(csv_dir, lookback_days=7)
+
+        if not missing_dates:
+            logger.info("Looker CSV ダウンロード: 不足なし → シート同期のみ実行")
             await self._run_csv_sheet_sync_after_download(project_root)
             return
+
+        logger.info(f"Looker CSV ダウンロード: 不足 {len(missing_dates)} 日分 → {[d.isoformat() for d in missing_dates]}")
+
+        # 複数日分のダウンロード手順を生成
+        date_steps = ""
+        for idx, d in enumerate(missing_dates, 1):
+            d_str = d.strftime("%Y-%m-%d")
+            csv_filename = f"{d_str}_アドネス全体数値_媒体・ファネル別データ_表.csv"
+            date_steps += f"""
+### 日付 {idx}: {d.strftime('%Y年%m月%d日')}
+1. 日付フィルターをクリック → 詳細設定で開始日・終了日を両方「{d_str}」に設定 → 適用
+2. テーブルを右クリック → 「グラフをエクスポート」または「データのエクスポート」→ CSV → エクスポート
+3. ダウンロード完了を待つ
+4. ファイル移動:
+```bash
+latest_csv=$(ls -t ~/Downloads/*.csv 2>/dev/null | head -1)
+if [ -n "$latest_csv" ]; then
+    mv "$latest_csv" "{csv_dir}/{csv_filename}"
+    echo "移動完了: {csv_dir}/{csv_filename}"
+fi
+```
+5. 確認:
+```bash
+ls -la "{csv_dir}/{csv_filename}"
+head -3 "{csv_dir}/{csv_filename}"
+```
+"""
 
         prompt = f"""あなたは甲原海人のAI秘書です。Looker StudioからCSVをダウンロードしてください。
 
 ## タスク
-{target_date.strftime('%Y年%m月%d日')}（前々日）のLooker Studio CSVをダウンロードする。
+不足している {len(missing_dates)} 日分のCSVをダウンロードする。
 
 ## 手順
 
@@ -2364,36 +2403,9 @@ python3 System/line_notify.py "日報入力が完了しました。
 - ページ名: 媒体・ファネル別データ
 - ブラウザで開いて読み込み完了を待つ
 
-### Step 2: 日付フィルターを変更
-- ページ上部の日付フィルターをクリック
-- 詳細設定で開始日・終了日を両方「{target_str}」に設定
-- 適用をクリック
-
-### Step 3: CSVエクスポート
-- テーブルを右クリック → 「グラフをエクスポート」または「データのエクスポート」を選択
-- CSV形式を選択
-- 「エクスポート」をクリック
-- ダウンロード完了を待つ
-
-### Step 4: ファイル移動・リネーム
-- ダウンロードされたファイル（~/Downloads/ に保存される）を以下に移動:
-```bash
-mkdir -p "{csv_dir}"
-# ダウンロードされたCSVファイルを特定して移動
-latest_csv=$(ls -t ~/Downloads/*.csv 2>/dev/null | head -1)
-if [ -n "$latest_csv" ]; then
-    mv "$latest_csv" "{csv_dir}/{csv_filename}"
-    echo "移動完了: {csv_dir}/{csv_filename}"
-else
-    echo "CSVファイルが見つかりません"
-fi
-```
-
-### Step 5: 確認
-```bash
-ls -la "{csv_dir}/{csv_filename}"
-head -3 "{csv_dir}/{csv_filename}"
-```
+### Step 2: 以下の日付ごとにCSVをダウンロード
+**重要: 1日分ダウンロードしたら、同じページのまま日付フィルターだけ変更して次をダウンロードする。ページ遷移不要。**
+{date_steps}
 
 ## エラー時の対応
 
@@ -2410,15 +2422,21 @@ head -3 "{csv_dir}/{csv_filename}"
 - CSVエクスポートボタンが見つからない場合:
   → スクショを撮影して画面状態をログに記録
   → テーブル上のメニューアイコンやShift+右クリックなど代替手段を試す
+- **1日分が失敗しても、残りの日付は続行してください**
 
 ## 出力形式
 ===RESULT_START===
-（ダウンロード結果: ファイルパス・行数。エラーならエラー内容を明記）
+（ダウンロード結果: 各日付のファイルパス・行数。エラーがあった日付はエラー内容を明記）
 ===RESULT_END==="""
+
+        # 複数日ダウンロードの場合はターン数・タイムアウトを増やす
+        extra_turns = min(len(missing_dates) - 1, 4) * 8  # 追加日分のターン
+        max_turns = 25 + extra_turns
+        timeout = 480 + min(len(missing_dates) - 1, 4) * 180  # 追加日分のタイムアウト
 
         success, output, error = self._execute_claude_code_task(
             "Looker CSVダウンロード", claude_cmd, secretary_config, project_root,
-            prompt, max_turns=25, timeout=480, use_chrome=True,
+            prompt, max_turns=max_turns, timeout=timeout, use_chrome=True,
         )
 
         if success:
@@ -2428,12 +2446,18 @@ head -3 "{csv_dir}/{csv_filename}"
                 logger.info(f"Looker CSV ダウンロード: 完了 - {report[:300]}")
                 if "エラー" in report:
                     send_line_notify(f"Looker CSVダウンロードでエラーがありました。\n{report[:300]}")
-                else:
-                    # ダウンロード成功 → csv_sheet_sync で元データ更新
-                    await self._run_csv_sheet_sync_after_download(project_root)
+                # エラーの有無に関わらずシート同期を実行（一部成功している可能性）
+                await self._run_csv_sheet_sync_after_download(project_root)
             else:
                 logger.info(f"Looker CSV ダウンロード: 完了（マーカーなし）- {output[-300:]}")
                 await self._run_csv_sheet_sync_after_download(project_root)
+
+            # ダウンロード後に残っている不足を確認 → 通知
+            still_missing = self._find_missing_csv_dates(csv_dir, lookback_days=7)
+            if still_missing:
+                dates_str = ", ".join(d.isoformat() for d in still_missing)
+                send_line_notify(f"Looker CSVダウンロード後も {len(still_missing)} 日分が不足: {dates_str}")
+                logger.warning(f"Looker CSV: still missing after download: {dates_str}")
         else:
             send_line_notify(f"Looker CSVのダウンロードがリトライ後も失敗しました。\n{error[:200]}")
 
@@ -2460,45 +2484,31 @@ head -3 "{csv_dir}/{csv_filename}"
             send_line_notify("CSVからシートへの同期中にエラーが出ました。")
 
     async def _run_kpi_daily_import(self):
-        """毎日12:00: 元データの完了チェック → 投入 or リマインド"""
+        """毎日12:00: 元データの全未処理分を投入（day-2に限らずバックフィル）"""
         from .notifier import send_line_notify
-        from datetime import date, timedelta
 
-        target_date = (date.today() - timedelta(days=2)).isoformat()
-
-        # まず完了チェック
-        check = await self._execute_tool("kpi_check_today", tools.kpi_check_today)
-        if check.success and check.output.startswith("ok:"):
-            # 完了 → 日別/月別に投入
-            result = await self._execute_tool("kpi_process", tools.kpi_process)
-            if result.success and "投入完了" in result.output:
-                # KPIキャッシュも再生成（AI秘書が最新データを参照できるように）
-                cache_result = await self._execute_tool("kpi_cache_build", tools.kpi_cache_build)
-                cache_status = ""
-                if cache_result.success:
-                    logger.info(f"KPI cache rebuilt after import: {cache_result.output[:200]}")
-                else:
-                    cache_status = "\n⚠️ KPIキャッシュ再生成に失敗（AI秘書のデータが古い可能性あり）"
-                    logger.warning(f"KPI cache build failed after import: {cache_result.error[:200] if cache_result.error else 'unknown'}")
-                send_line_notify(
-                    f"KPIデータの更新が完了しました。{cache_status}"
-                )
-            elif result.success and "投入対象なし" in result.output:
-                logger.info(f"KPI process: already up to date for {target_date}")
+        # process は元データの「完了」エントリを全て検出して日別に投入する
+        result = await self._execute_tool("kpi_process", tools.kpi_process)
+        if result.success and "投入完了" in result.output:
+            # KPIキャッシュも再生成（AI秘書が最新データを参照できるように）
+            cache_result = await self._execute_tool("kpi_cache_build", tools.kpi_cache_build)
+            cache_status = ""
+            if cache_result.success:
+                logger.info(f"KPI cache rebuilt after import: {cache_result.output[:200]}")
             else:
-                # 投入失敗を通知
-                logger.warning(f"KPI process result: {result.output[:200]}")
-                send_line_notify(
-                    f"KPIデータの投入でエラーが出ました（対象日: {target_date}）"
-                )
-        else:
-            # 未完了 → リマインド送信
-            status = check.output if check.success else "チェック失敗"
+                cache_status = "\n⚠️ KPIキャッシュ再生成に失敗（AI秘書のデータが古い可能性あり）"
+                logger.warning(f"KPI cache build failed after import: {cache_result.error[:200] if cache_result.error else 'unknown'}")
             send_line_notify(
-                f"{target_date}分のKPIデータがまだ入っていません。\n"
-                f"11:30のCSVダウンロードが失敗した可能性があります。"
+                f"KPIデータの更新が完了しました。{cache_status}"
             )
-            logger.warning(f"KPI data not ready for {target_date}: {status}")
+        elif result.success and "投入対象なし" in result.output:
+            logger.info(f"KPI process: no pending entries to import")
+        else:
+            # 投入失敗を通知
+            logger.warning(f"KPI process result: {result.output[:200]}")
+            send_line_notify(
+                f"KPIデータの投入でエラーが出ました。\n{result.output[:200] if result.output else result.error[:200] if result.error else '不明'}"
+            )
 
     async def _run_sheets_sync(self):
         """毎日6:30: 管理シートのCSVキャッシュを更新 → KPIキャッシュも再構築"""
