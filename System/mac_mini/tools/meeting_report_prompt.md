@@ -107,8 +107,8 @@
 
 ## 注意事項
 
-- スクリーンショットは必ずzoomで内容確認してから使う
-- screencaptureの座標計算: MCP座標 × (1890/1552) × 1.6 + Chrome UIオフセット(422px)
+- スクリーンショットは「全画面キャプチャ→PILでcrop」方式を使う（MCP座標→screencapture座標変換は不安定なため非推奨）
+- 切り取った画像は必ずReadツールで確認してから貼り付ける
 - Google Docs APIは `System/credentials/token.json` を使用（scopes: documents, drive, spreadsheets）
 - KPI優先度: ①着金売上 ②ROAS(300%=OK) ③集客数 ④CPA(3000以下=良)
 - フィルター変更はJavaScriptのnativeInputValueSetterパターンで行う
