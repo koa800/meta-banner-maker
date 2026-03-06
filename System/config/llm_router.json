@@ -1,5 +1,5 @@
 {
-  "engine_version": "v1",
+  "engine_version": "v2",
   "default_model": {
     "provider": "openai",
     "model": "gpt-4.1",
