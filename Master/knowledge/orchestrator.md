@@ -29,6 +29,7 @@
 ### 週次
 - 月曜 9:00: weekly_idea_proposal / 9:30: weekly_stats
 - 水曜 10:00: weekly_content_suggestions
+- 金曜 15:00: meeting_report（経営会議資料自動作成。Chrome MCP。max_turns=40, timeout=15分）
 - 金曜 20:00: os_sync_session（秘書→甲原のOSすり合わせ）
 - 日曜 10:00: weekly_profile_learning / ~~10:30: weekly_hinata_memory~~（日向停止中） / 11:00: video_knowledge_review（動画知識ライフサイクルレビュー） / 11:30: ds_insight_biweekly_report（隔週。DS.INSIGHTデータ取得→レポート→LINE通知）
 

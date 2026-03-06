@@ -120,6 +120,7 @@ class TaskScheduler:
             "ds_insight_biweekly_report": self._run_ds_insight_biweekly_report,
             "ds_insight_mail_collect": self._run_ds_insight_mail_collect,
             "ds_insight_weekly_digest": self._run_ds_insight_weekly_digest,
+            "meeting_report": self._run_meeting_report,
         }
 
     def setup(self):
@@ -4678,3 +4679,148 @@ Google Forms で業務委託報酬と経費立替をそれぞれ提出する。
                 logger.info(f"請求書提出: 完了（マーカーなし）- {output[-300:]}")
         else:
             send_line_notify(f"請求書の自動提出が失敗しました。\n{error[:200]}")
+
+    # ================================================================
+    # 経営会議資料 自動作成（毎週金曜 15:00）
+    # ================================================================
+    async def _run_meeting_report(self):
+        """経営会議資料を自動作成: Lookerスクショ取得→数値読取→Google Docs挿入→LINE通知"""
+        from .notifier import send_line_notify
+        from datetime import date, timedelta
+
+        logger.info("経営会議資料: 開始")
+
+        ok, claude_cmd, secretary_config, project_root, err = self._ensure_claude_chrome_ready()
+        if not ok:
+            logger.error(f"経営会議資料: プリフライト失敗 - {err}")
+            send_line_notify(f"経営会議資料の自動作成を開始しましたが、準備に失敗しました。\n{err}")
+            return
+
+        # 日付計算
+        today = date.today()
+        meeting_date = today  # 金曜日=会議当日
+        # 月次期間: 当月1日〜会議2日前（水曜）
+        month_start = today.replace(day=1)
+        month_end = today - timedelta(days=2)  # 水曜日
+        # 週次期間: 木曜〜水曜（7日間）
+        week_end = today - timedelta(days=2)  # 水曜日
+        week_start = week_end - timedelta(days=6)  # 木曜日
+
+        # Lookerフィルターのオフセット計算（今日からの日数差）
+        month_offset_start = (today - month_start).days
+        month_offset_end = (today - month_end).days
+        week_offset_start = (today - week_start).days
+        week_offset_end = (today - week_end).days
+
+        meeting_md = f"{meeting_date.month}/{meeting_date.day}"
+        month_start_md = f"{month_start.month}/{month_start.day}"
+        month_end_md = f"{month_end.month}/{month_end.day}"
+        week_start_md = f"{week_start.month}/{week_start.day}"
+        week_end_md = f"{week_end.month}/{week_end.day}"
+
+        prompt = f"""あなたは甲原海人のAI秘書です。経営会議資料を自動作成してください。
+
+## 概要
+毎週金曜の経営会議に向けた広告チーム報告資料を Google Docs に作成します。
+
+## 日付情報
+- 今日: {today.strftime('%Y/%m/%d')}（金曜日・会議当日）
+- 月次期間: {month_start.strftime('%Y/%m/%d')}〜{month_end.strftime('%Y/%m/%d')}
+- 週次期間: {week_start.strftime('%Y/%m/%d')}〜{week_end.strftime('%Y/%m/%d')}
+- Google Doc ID: 18D5fgk5G2xjgmpM7fORQuwcnD6oemZrNzPeDWNozO7s
+
+## 手順
+
+### Step 1: Looker Studioからスクショ取得
+
+#### 1-1. 月次KPI
+1. ブラウザで Looker Studio を開く: https://lookerstudio.google.com/u/1/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_ghqtl90f1d
+2. 日付フィルターをクリック
+3. javascript_tool でオフセット変更:
+```javascript
+const inputs = document.querySelectorAll('input[type="number"]');
+const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+setter.call(inputs[0], '{month_offset_start}');
+inputs[0].dispatchEvent(new Event('input', {{ bubbles: true }}));
+inputs[0].dispatchEvent(new Event('change', {{ bubbles: true }}));
+setter.call(inputs[1], '{month_offset_end}');
+inputs[1].dispatchEvent(new Event('input', {{ bubbles: true }}));
+inputs[1].dispatchEvent(new Event('change', {{ bubbles: true }}));
+```
+4. 「適用」ボタンをクリック → 3秒待機
+5. macOS screencaptureでKPIカード領域を切り取り → /tmp/meeting_monthly_kpi.png
+   - 座標計算: MCP座標 × (1890/1552) × 1.6 でCSS→Retina変換、Y座標はChrome UIオフセット(422 retina px)を加算
+
+#### 1-2. 12週グラフ
+1. 左メニュー「過去12週実績」をクリック
+2. 4グラフ（集客数・個別予約数・広告費・CPA）をscreencaptureで切り取り → /tmp/meeting_12week.png
+
+#### 1-3. 週次KPI（7日間）
+1. 「広告チーム報告」のコピーに戻る
+2. フィルターを7日間に変更（開始={week_offset_start}、終了={week_offset_end}）
+3. 「適用」→ 3秒待機
+4. KPIカード領域を切り取り → /tmp/meeting_weekly_kpi.png
+5. フィルターを元に戻す（開始={month_offset_start}に変更→適用）
+
+### Step 2: 数値読み取り
+スクショから月次・週次のKPI数値を読み取る:
+- 集客数、個別予約数、着金売上、ROAS（前期比%付き）
+- 広告費、CPA、個別予約CPO、粗利、返金額
+
+### Step 3: Google Docs に資料作成
+`System/mac_mini/tools/meeting_report_v4.py` の create_report() をベースに:
+1. 前回セクション削除（delete_current_section）
+2. テキスト・テーブル挿入
+3. フォーマット適用
+4. セル内容を実際の数値で埋める
+
+タイトル: {today.strftime('%Y/%m/%d')}　アドネス経営会議
+月次進捗期間: ({month_start_md}〜{month_end_md})
+過去7日間期間: ({week_start_md}〜{week_end_md})
+
+### Step 4: スクショ画像の貼り付け
+各プレースホルダーテキストを画像で置き換え:
+```bash
+osascript -e 'set the clipboard to (read (POSIX file "/tmp/meeting_monthly_kpi.png") as «class PNGf»)'
+```
+→ Google Docsで「[月次KPIスクショ]」テキストを選択 → Cmd+V
+→ 同様に12週グラフ、7日間KPIも貼り付け
+
+### Step 5: AI判定
+読み取った数値から:
+- **5段階評価**: 月目標（着金売上4億円/月、集客4万人/月）に対する達成ペースで判定
+  - 5=大幅超過, 4=達成ペース, 3=ギリギリ, 2=やや未達, 1=全然ダメ
+- **着地予想**: (実績 / 経過日数) × 月の日数
+- **プロジェクト評価**: 数値推定。判断不能なら「（確認）」
+- **ボトルネック**: 数値悪化ポイント
+
+KPI基準: ①着金売上（最重要）②ROAS（300%=OK, 350%=良）③集客数 ④CPA（3000以下=良）
+
+### Step 6: LINE報告
+```bash
+cd {project_root}
+python3 System/line_notify.py "経営会議資料の下書きができました
+→ https://docs.google.com/document/d/18D5fgk5G2xjgmpM7fORQuwcnD6oemZrNzPeDWNozO7s/edit
+
+総評: X/5 — 〇〇〇
+補足・修正があれば返信してください"
+```
+
+{self._build_google_login_instructions()}
+
+## 注意事項
+- screenshotの結果をそのまま貼り付けない。必ずscreencaptureで切り取ってから使う
+- 画像貼り付けはクリップボード経由（osascript → Cmd+V）
+- エラー時はLINE通知して終了"""
+
+        success, output, error = self._execute_claude_code_task(
+            "経営会議資料", claude_cmd, secretary_config, project_root,
+            prompt, max_turns=40, timeout=900, use_chrome=True,
+        )
+
+        if success:
+            self.memory.set_state("last_success_meeting_report", datetime.now().isoformat())
+            logger.info(f"経営会議資料: 完了")
+        else:
+            send_line_notify(f"経営会議資料の自動作成が失敗しました。\n{error[:200]}")
+            logger.error(f"経営会議資料: 失敗 - {error[:300]}")

@@ -101,6 +101,10 @@ schedule:
     enabled: true
 
   # === 週次 ===
+  meeting_report:
+    cron: "0 15 * * 5"            # 金曜 15:00  経営会議資料自動作成（Chrome MCP, max_turns=40, timeout=15分）
+    enabled: true
+
   weekly_idea_proposal:
     cron: "0 9 * * 1"            # 月曜 09:00  アイデア提案
     enabled: true
