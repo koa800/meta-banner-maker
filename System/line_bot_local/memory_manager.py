@@ -232,6 +232,53 @@ def initialize_memory_from_existing():
 # 棚卸し（日次で呼び出す）
 # ---------------------------------------------------------------------------
 
+def run_daily_cleanup():
+    """
+    日次の記憶棚卸し。
+    LLMに現在の記憶を渡して、統合・削除を判断させる。
+    Orchestrator の日次ジョブから呼び出す。
+    """
+    memory = load_long_term_memory()
+    if not memory.strip():
+        return "記憶が空のためスキップ"
+
+    lines = memory.strip().split("\n")
+    if len(lines) <= MAX_MEMORY_LINES // 2:
+        return f"記憶が{len(lines)}行（上限の半分以下）のためスキップ"
+
+    try:
+        import llm_router
+
+        prompt = f"""以下は秘書の長期記憶です。この記憶を整理してください。
+
+【整理ルール】
+- 重複する情報は1つに統合する
+- 完了して1週間以上経った単発タスクは削除する
+- 時間が経って状況が変わった古い情報は更新 or 削除する
+- セクション構造（## 見出し）は維持する
+- 上限{MAX_MEMORY_LINES}行以内に収める
+- 重要な方針・意思決定は絶対に削除しない
+
+【現在の記憶】
+{memory}
+
+整理後の記憶をそのまま出力してください。説明は不要です。"""
+
+        response = llm_router.chat(
+            system="あなたは記憶の整理係です。与えられた記憶を整理して返してください。",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        cleaned = response.get("text", "")
+        if cleaned and len(cleaned) > 50:
+            save_long_term_memory(cleaned)
+            new_lines = len(cleaned.strip().split("\n"))
+            return f"棚卸し完了: {len(lines)}行 → {new_lines}行"
+        return "棚卸し結果が短すぎるためスキップ"
+    except Exception as e:
+        logger.error(f"棚卸しエラー: {e}")
+        return f"棚卸しエラー: {e}"
+
+
 def get_memory_stats() -> dict:
     """記憶の統計情報を返す"""
     memory = load_long_term_memory()

@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年3月2日（API→CLI移行・ゴール進行モード追加） |
+| 最終更新 | 2026年3月7日（秘書v2エンジン実装・会話型AI秘書） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -32,23 +32,24 @@
                                │  ~/agents/line_bot_local/      │
                                │  local_agent.py                │
                                │                                │
-                               │  【v3】Claude Code 自律モード   │
+                               │  【v2会話エンジン】(2026-03-07) │
+                               │  - conversation.py: 会話ループ  │
+                               │  - llm_router.py: モデル切替     │
+                               │  - memory_manager.py: 記憶管理   │
+                               │  - GPT-5.4/Opus対応・フォールバック│
+                               │  - tool_use で自律的にツール選択  │
+                               │  - 長期記憶 + 短期記憶（チャネル別）│
+                               │  - engine_version: v1/v2 切替    │
+                               │                                │
+                               │  【Claude Code 自律モード】      │
                                │  - claude -p --chrome で自律実行 │
                                │  - Chrome MCP: ブラウザ操作可能  │
-                               │  - 返信案: プロファイル自動検索  │
-                               │  - タスク: スクリプト・Web・ブラウザ│
-                               │  - Bash/WebSearch/Read/Grep 全解放│
-                               │  - ~/.claude-secretary/ で認証分離│
-                               │  - 失敗時: 既存API/Coordinator │
-                               │    にフォールバック              │
+                               │  - 失敗時: v2エンジンに          │
+                               │    フォールバック                │
                                │                                │
-                               │  【v2】Coordinator（司令塔）    │
+                               │  【Coordinator（司令塔）】       │
                                │  - coordinator.py              │
-                               │  - handler_runner.py           │
-                               │  - tool_registry.json (15ツール)│
                                │  - ゴール→分解→委任→統合→報告  │
-                               │  → 詳細: Project/4_AI基盤/ゴール実行 │
-                               │    エンジン設計.md              │
                                └──────────────────────────────┘
                                               │
                                launchd常駐    │ データ参照

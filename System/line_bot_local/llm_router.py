@@ -141,7 +141,12 @@ def _call_openai(
     client = OpenAI(api_key=_get_api_key("openai"))
     oai_messages = [{"role": "system", "content": system}]
     for msg in messages:
-        oai_messages.append(_convert_message_to_openai(msg))
+        converted = _convert_message_to_openai(msg)
+        # tool_result の場合は複数メッセージに展開される
+        if isinstance(converted, list):
+            oai_messages.extend(converted)
+        else:
+            oai_messages.append(converted)
 
     kwargs = {
         "model": model,
@@ -200,15 +205,18 @@ def _convert_message_to_openai(msg: dict) -> dict:
                 result["tool_calls"] = tool_calls
             return result
 
-        # user の tool_result ブロック
+        # user の tool_result ブロック → OpenAIでは各resultが個別のtoolメッセージ
         if role == "user":
+            tool_msgs = []
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "tool_result":
-                    return {
+                    tool_msgs.append({
                         "role": "tool",
                         "tool_call_id": block["tool_use_id"],
                         "content": block.get("content", ""),
-                    }
+                    })
+            if tool_msgs:
+                return tool_msgs  # リストとして返す（呼び出し元でextend）
 
     return {"role": role, "content": str(content)}
 
