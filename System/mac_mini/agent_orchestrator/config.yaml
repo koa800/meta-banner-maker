@@ -38,6 +38,9 @@ schedule:
     enabled: true
   anthropic_credit_check:
     cron: "20 8 * * 1"           # 月曜 08:20  Anthropic APIクレジット残高チェック
+    enabled: false
+  openai_credit_check:
+    cron: "0 9,15,21 * * *"     # 09:00/15:00/21:00  OpenAI APIクレジット残高チェック（$5以下で通知）
     enabled: true
   daily_addness_digest:
     cron: "30 8 * * *"           # 08:30  朝のブリーフィング

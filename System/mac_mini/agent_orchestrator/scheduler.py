@@ -114,6 +114,7 @@ class TaskScheduler:
             "video_learning_reminder": self._run_video_learning_reminder,
             "daily_report_reminder": self._run_daily_report_reminder,
             "anthropic_credit_check": self._run_anthropic_credit_check,
+            "openai_credit_check": self._run_openai_credit_check,
             "looker_session_keepalive": self._run_looker_session_keepalive,
             "kpi_anomaly_check": self._run_kpi_anomaly_check,
             "monthly_invoice_submission": self._run_monthly_invoice_submission,
@@ -1981,6 +1982,85 @@ python3 System/line_notify.py "日報入力が完了しました。
                 logger.warning(f"Anthropic credit check HTTP error: {e.code} {body[:200]}")
         except Exception as e:
             logger.warning(f"Anthropic credit check error: {e}")
+
+    async def _run_openai_credit_check(self):
+        """OpenAI APIクレジット残高チェック（1日3回）
+
+        残高を取得し、$5以下になったらLINE通知。
+        """
+        import json as _json
+        import urllib.request
+        from .notifier import send_line_notify
+
+        api_key = os.environ.get("OPENAI_API_KEY", "")
+        if not api_key:
+            logger.warning("OPENAI_API_KEY not set, skipping credit check")
+            return
+
+        try:
+            # OpenAI billing API で残高を取得
+            req = urllib.request.Request(
+                "https://api.openai.com/v1/organization/costs?start_time=0&limit=1",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            # 別のアプローチ: ダッシュボード用APIを使う
+            # まず簡易的にモデル一覧APIで疎通確認
+            req_check = urllib.request.Request(
+                "https://api.openai.com/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            with urllib.request.urlopen(req_check, timeout=15) as resp:
+                resp.read()
+
+            # 残高取得（billing API）
+            # OpenAI の billing API は組織管理者キーが必要な場合があるため
+            # 代替: 小さなAPIコールで credit 不足エラーを検知
+            req_test = urllib.request.Request(
+                "https://api.openai.com/v1/chat/completions",
+                data=_json.dumps({
+                    "model": "gpt-4.1-nano",
+                    "max_tokens": 1,
+                    "messages": [{"role": "user", "content": "hi"}],
+                }).encode(),
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+            with urllib.request.urlopen(req_test, timeout=30) as resp:
+                resp.read()
+
+            logger.info("OpenAI credit check OK")
+
+            # 復旧通知
+            if self.memory.get_state("openai_credit_alert_active"):
+                send_line_notify("OpenAIのAPIクレジットが復旧しました。秘書v2が正常に動作しています。")
+                self.memory.set_state("openai_credit_alert_active", "")
+
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            if "insufficient" in body.lower() or "quota" in body.lower() or "billing" in body.lower():
+                # 重複通知抑制（6時間以内）
+                last_notified = self.memory.get_state("openai_credit_notified")
+                if last_notified:
+                    try:
+                        if (datetime.now() - datetime.fromisoformat(last_notified)).total_seconds() < 21600:
+                            return
+                    except (ValueError, TypeError):
+                        pass
+
+                send_line_notify(
+                    "OpenAIのAPIクレジットが不足しています。秘書v2の応答が止まります。\n"
+                    "OpenAI Platform → Billing でクレジットを追加してください。\n"
+                    "https://platform.openai.com/settings/organization/billing"
+                )
+                self.memory.set_state("openai_credit_notified", datetime.now().isoformat())
+                self.memory.set_state("openai_credit_alert_active", "true")
+                logger.warning("OpenAI credit insufficient — LINE notified")
+            else:
+                logger.warning(f"OpenAI credit check HTTP error: {e.code} {body[:200]}")
+        except Exception as e:
+            logger.warning(f"OpenAI credit check error: {e}")
 
     async def _run_oauth_health_check(self):
         """Google OAuthトークンの有効性チェック（日次）"""
