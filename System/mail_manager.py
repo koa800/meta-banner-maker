@@ -689,6 +689,20 @@ def run_once(account=None, openai_api_key=None):
         if m["id"] in held_ids:
             continue
 
+        # 学習済み送信者はAI判定に関係なく自動削除（ラベル付きは保護）
+        if sender in auto_delete and not has_custom_label:
+            trash_message(service, m["id"])
+            count_map[sender] = count_map.get(sender, 0) + 1
+            auto_deleted += 1
+            print(f"  [自動削除] {sender} - {m['subject'][:40]}... (学習済み)")
+
+            if count_map[sender] >= NOT_NEEDED_THRESHOLD:
+                if sender not in state.get("blocked_senders", []):
+                    if create_block_filter(service, sender):
+                        state.setdefault("blocked_senders", []).append(sender)
+                        print(f"  → 送信者をブロックしました: {sender}")
+            continue
+
         if has_custom_label and not need:
             need = True
             reason = "ラベル付きのため保護"
@@ -711,31 +725,19 @@ def run_once(account=None, openai_api_key=None):
             label_mark = " [ラベル付]" if has_custom_label else ""
             print(f"  [返信必要{label_mark}] {sender} - {m['subject'][:40]}...")
         else:
-            if sender in auto_delete:
-                trash_message(service, m["id"])
-                count_map[sender] = count_map.get(sender, 0) + 1
-                auto_deleted += 1
-                print(f"  [自動削除] {sender} - {m['subject'][:40]}... (学習済み)")
-
-                if count_map[sender] >= NOT_NEEDED_THRESHOLD:
-                    if sender not in state.get("blocked_senders", []):
-                        if create_block_filter(service, sender):
-                            state.setdefault("blocked_senders", []).append(sender)
-                            print(f"  → 送信者をブロックしました: {sender}")
-            else:
-                if m["id"] not in delete_review_ids:
-                    delete_review.append({
-                        "message_id": m["id"],
-                        "thread_id": m["thread_id"],
-                        "from": m["from"],
-                        "subject": m["subject"],
-                        "snippet": m["snippet"],
-                        "reason": reason,
-                        "date": m.get("date", ""),
-                    })
-                    delete_review_ids.add(m["id"])
-                    new_delete_review += 1
-                print(f"  [削除確認待ち] {sender} - {m['subject'][:40]}... (理由: {reason})")
+            if m["id"] not in delete_review_ids:
+                delete_review.append({
+                    "message_id": m["id"],
+                    "thread_id": m["thread_id"],
+                    "from": m["from"],
+                    "subject": m["subject"],
+                    "snippet": m["snippet"],
+                    "reason": reason,
+                    "date": m.get("date", ""),
+                })
+                delete_review_ids.add(m["id"])
+                new_delete_review += 1
+            print(f"  [削除確認待ち] {sender} - {m['subject'][:40]}... (理由: {reason})")
 
     # 新規返信待ちメールの返信案を一括生成
     if new_pending_items:

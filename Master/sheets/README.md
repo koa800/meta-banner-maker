@@ -8,6 +8,8 @@
 |---|---|---|---|---|
 | `1FOh_XGZWaEisfFEngiN848kSm2E6HotAZiMDTmO7BNA` | 【アドネス全体】数値管理シート | [リンク](https://docs.google.com/spreadsheets/d/1FOh_XGZWaEisfFEngiN848kSm2E6HotAZiMDTmO7BNA/edit) | 事業KPI・会社全体の重要数値。集客数・売上・会員数等を知りたいときに参照 | ✅ 02/22 08:33 (6182行) |
 | `16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk` | 【広告チーム】報告シート | [リンク](https://docs.google.com/spreadsheets/d/16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk/edit) | チーム報告シート（日報・週報・月報・年報）。目標と現状のギャップ把握→アクション導出用。**毎日使用** | ✅ 02/22 08:33 (96行) |
+| `1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk` | 【アドネス株式会社】顧客データ（複数イベント） | [リンク](https://docs.google.com/spreadsheets/d/1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk/edit) | CDP顧客マスタ。イベント発生者（セミナー予約・購入等）の統合データ | ※大容量のためキャッシュなし |
+| `1iD3DGxNhZruyjYcA5n6oXRDk2ZGA3uMDOo0stQS9Y00` | 【アドネス株式会社】顧客データ（メールアドレスのみ） | [リンク](https://docs.google.com/spreadsheets/d/1iD3DGxNhZruyjYcA5n6oXRDk2ZGA3uMDOo0stQS9Y00/edit) | リードプール。メールアドレスのみのリード（イベント未発生） | ※大容量のためキャッシュなし |
 
 ## ディレクトリ構成
 
@@ -52,6 +54,42 @@ python3 System/sheets_manager.py read "1FOh_XGZWaEisfFEngiN848kSm2E6HotAZiMDTmO7
 # データ取得コマンド
 python3 System/sheets_manager.py read "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "日報"
 python3 System/sheets_manager.py read "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk" "週報"
+```
+
+---
+
+### 【アドネス株式会社】顧客データ（複数イベント）＝ CDPマスタ
+
+イベント発生者（セミナー予約・購入・アンケート回答等）の顧客データを統合管理するマスターシート。
+
+| タブ名 | 内容 |
+|---|---|
+| 顧客マスタ | 約57,750行×58列。全顧客の統合データ |
+| データソース管理 | カラムマッピング（CDPカラム→参照先） |
+| マスター追加ルール | 登録・名寄せ・更新のルール |
+| 除外リスト | スタッフ・テストデータの除外対象 |
+| 定義 | 各カラムの定義・データソース |
+
+```bash
+# 同期コマンド（cdp_sync.py経由）
+python3 System/cdp_sync.py sync
+python3 System/cdp_sync.py status
+```
+
+### 【アドネス株式会社】顧客データ（メールアドレスのみ）＝ リードプール
+
+CDPマスタに未登録のリード（メールアドレスのみ・イベント未発生）を格納。
+
+| タブ名 | 内容 |
+|---|---|
+| メール集客データ | 約278,000行×3列。登録日/メールアドレス/初回流入経路 |
+| データソース管理 | ソースマッピング |
+| データ追加ルール | 追加条件・削除ルール |
+| 定義 | カラム定義 |
+
+```bash
+# 同期コマンド（経路別タブ→メール一覧）
+python3 System/cdp_sync.py sync-leads
 ```
 
 ---
