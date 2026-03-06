@@ -13,6 +13,20 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "llm_router.json"
+USAGE_PATH = Path(__file__).resolve().parent.parent / "data" / "api_usage.json"
+
+# モデル別の料金（$/1M tokens）
+_PRICING = {
+    "gpt-5.4-pro": {"input": 30.0, "output": 180.0},
+    "gpt-5.4": {"input": 2.5, "output": 20.0},
+    "gpt-4.1": {"input": 1.0, "output": 4.0},
+    "gpt-4.1-nano": {"input": 0.1, "output": 0.4},
+    "o3": {"input": 10.0, "output": 40.0},
+    "claude-opus-4-6": {"input": 15.0, "output": 75.0},
+    "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
+    "claude-haiku-4-5-20251001": {"input": 0.8, "output": 4.0},
+}
+_LOW_BALANCE_THRESHOLD = 5.0  # $5以下で通知
 
 
 def _load_config() -> dict:
@@ -25,6 +39,106 @@ def _save_config(config: dict):
     """設定ファイルを書き込む"""
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
+
+
+def _load_usage() -> dict:
+    """使用量データを読み込む"""
+    USAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if USAGE_PATH.exists():
+        try:
+            return json.loads(USAGE_PATH.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {"initial_balance": 19.92, "total_spent": 0.0, "daily": {}, "last_notified": ""}
+
+
+def _save_usage(data: dict):
+    """使用量データを保存"""
+    USAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    USAGE_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _track_usage(model: str, input_tokens: int, output_tokens: int):
+    """API呼び出しのコストを記録し、残高が低ければ通知"""
+    pricing = _PRICING.get(model, {"input": 5.0, "output": 20.0})
+    cost = (input_tokens * pricing["input"] + output_tokens * pricing["output"]) / 1_000_000
+
+    usage = _load_usage()
+    usage["total_spent"] = usage.get("total_spent", 0.0) + cost
+
+    today = time.strftime("%Y-%m-%d")
+    daily = usage.get("daily", {})
+    daily[today] = daily.get(today, 0.0) + cost
+    usage["daily"] = daily
+
+    # 古い日次データを削除（30日分だけ保持）
+    sorted_days = sorted(daily.keys())
+    if len(sorted_days) > 30:
+        for old_day in sorted_days[:-30]:
+            del daily[old_day]
+
+    _save_usage(usage)
+
+    # 残高チェック
+    estimated_balance = usage.get("initial_balance", 20.0) - usage["total_spent"]
+    if estimated_balance <= _LOW_BALANCE_THRESHOLD:
+        _notify_low_balance(usage, estimated_balance)
+
+    logger.info(f"API使用: {model} in={input_tokens} out={output_tokens} cost=${cost:.4f} balance≈${estimated_balance:.2f}")
+
+
+def _notify_low_balance(usage: dict, balance: float):
+    """残高が低いときにLINE通知"""
+    # 重複通知抑制（12時間以内）
+    last = usage.get("last_notified", "")
+    if last:
+        try:
+            elapsed = time.time() - time.mktime(time.strptime(last, "%Y-%m-%d %H:%M"))
+            if elapsed < 43200:
+                return
+        except (ValueError, TypeError):
+            pass
+
+    # 日次平均を計算して残り日数を推定
+    daily = usage.get("daily", {})
+    recent_days = sorted(daily.keys())[-7:]  # 直近7日
+    if recent_days:
+        avg_daily = sum(daily[d] for d in recent_days) / len(recent_days)
+        days_left = balance / avg_daily if avg_daily > 0 else 999
+        pace_info = f"\n直近の消費ペース: 1日あたり約${avg_daily:.2f}（残り約{days_left:.0f}日）"
+    else:
+        pace_info = ""
+
+    try:
+        # LINE通知（send_line_notifyを動的にインポート）
+        import subprocess, sys
+        notify_script = Path(__file__).resolve().parent.parent / "mac_mini" / "agent_orchestrator" / "notifier.py"
+        msg = (
+            f"OpenAI APIの残高が少なくなっています。\n"
+            f"推定残高: ${balance:.2f}{pace_info}\n"
+            f"チャージ: https://platform.openai.com/settings/organization/billing"
+        )
+        subprocess.Popen(
+            [sys.executable, "-c",
+             f"import sys; sys.path.insert(0, '{notify_script.parent}');"
+             f"from notifier import send_line_notify; send_line_notify('''{msg}''')"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        usage["last_notified"] = time.strftime("%Y-%m-%d %H:%M")
+        _save_usage(usage)
+        logger.warning(f"OpenAI残高低下通知: ${balance:.2f}")
+    except Exception as e:
+        logger.error(f"残高通知エラー: {e}")
+
+
+def set_initial_balance(balance: float):
+    """残高をリセット（チャージ後に呼ぶ）"""
+    usage = _load_usage()
+    usage["initial_balance"] = balance
+    usage["total_spent"] = 0.0
+    usage["last_notified"] = ""
+    _save_usage(usage)
+    logger.info(f"残高を${balance:.2f}にリセットしました")
 
 
 def get_engine_version() -> str:
@@ -114,6 +228,10 @@ def _call_anthropic(
         kwargs["tools"] = tools
     response = client.messages.create(**kwargs)
 
+    # 使用量トラッキング
+    if hasattr(response, "usage") and response.usage:
+        _track_usage(model, response.usage.input_tokens, response.usage.output_tokens)
+
     # 統一フォーマットに変換
     result = {"text": None, "tool_calls": [], "stop_reason": response.stop_reason}
     for block in response.content:
@@ -157,6 +275,11 @@ def _call_openai(
         kwargs["tools"] = _convert_tools_to_openai(tools)
 
     response = client.chat.completions.create(**kwargs)
+
+    # 使用量トラッキング
+    if hasattr(response, "usage") and response.usage:
+        _track_usage(model, response.usage.prompt_tokens, response.usage.completion_tokens)
+
     choice = response.choices[0]
 
     result = {"text": None, "tool_calls": [], "stop_reason": choice.finish_reason}
