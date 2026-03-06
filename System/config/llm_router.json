@@ -7,8 +7,9 @@
   },
   "fallback_order": [
     {"provider": "openai", "model": "gpt-5.4"},
-    {"provider": "openai", "model": "gpt-4.1"},
-    {"provider": "anthropic", "model": "claude-sonnet-4-6"}
+    {"provider": "anthropic", "model": "claude-opus-4-6"},
+    {"provider": "anthropic", "model": "claude-sonnet-4-6"},
+    {"provider": "openai", "model": "gpt-4.1"}
   ],
   "providers": {
     "anthropic": {
