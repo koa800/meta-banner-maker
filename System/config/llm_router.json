@@ -18,7 +18,7 @@
     },
     "openai": {
       "api_key_env": "OPENAI_API_KEY",
-      "models": ["gpt-5.4", "gpt-4.1", "o3"]
+      "models": ["gpt-5.4-pro", "gpt-5.4", "gpt-4.1", "o3"]
     }
   },
   "context_limits": {
