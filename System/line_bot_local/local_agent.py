@@ -26,6 +26,18 @@ try:
 except ImportError:
     pass
 
+# v2 会話エンジン
+_V2_AVAILABLE = False
+try:
+    from conversation import process_message as _v2_process_message
+    from conversation import register_tool_handler as _v2_register_tool
+    from llm_router import get_engine_version as _get_engine_version
+    from memory_manager import initialize_memory_from_existing as _init_memory
+    _V2_AVAILABLE = True
+except ImportError as _v2_err:
+    print(f"⚠️ v2エンジン読み込みスキップ: {_v2_err}")
+    pass
+
 # ---- プロファイルパス ----
 _AGENT_DIR = Path(__file__).parent
 # 環境変数 → Desktop自動解決 → Mac Mini自動解決 の順でプロジェクトルートを探す
@@ -3354,6 +3366,180 @@ def write_approved_answers_to_sheet(sheets_service):
 
 # ===== メインループ =====
 
+# ---------------------------------------------------------------------------
+# v2 エンジン統合
+# ---------------------------------------------------------------------------
+
+# v2 で処理するタスク種別（これ以外は v1 のまま）
+_V2_TASK_TYPES = frozenset({
+    "kpi_query", "context_query", "execute_goal",
+    "generate_reply_suggestion", "capture_feedback",
+    "mail_check", "orchestrator_status", "qa_status",
+    "who_to_ask", "addness_sync",
+})
+
+
+def _setup_v2_tools():
+    """v2ツールハンドラを既存関数で登録"""
+    if not _V2_AVAILABLE:
+        return
+
+    def _handle_get_kpi(args):
+        data = fetch_addness_kpi()
+        return data or "KPIデータを取得できませんでした。"
+
+    def _handle_get_calendar(args):
+        try:
+            r = subprocess.run(
+                [sys.executable, str(_SYSTEM_DIR / "mail_manager.py"), "--account", "personal", "calendar"],
+                capture_output=True, text=True, timeout=30
+            )
+            return r.stdout.strip() if r.returncode == 0 else f"カレンダー取得エラー: {r.stderr[:200]}"
+        except Exception as e:
+            return f"カレンダー取得エラー: {e}"
+
+    def _handle_check_email(args):
+        account = args.get("account", "personal")
+        try:
+            r = subprocess.run(
+                [sys.executable, str(_SYSTEM_DIR / "mail_manager.py"), "--account", account, "status"],
+                capture_output=True, text=True, timeout=30
+            )
+            return r.stdout.strip() if r.returncode == 0 else f"メール確認エラー: {r.stderr[:200]}"
+        except Exception as e:
+            return f"メール確認エラー: {e}"
+
+    def _handle_read_spreadsheet(args):
+        sheet_id = args.get("sheet_id", "")
+        tab_name = args.get("tab_name", "")
+        try:
+            cmd = [sys.executable, str(_SYSTEM_DIR / "sheets_manager.py"), "read", sheet_id]
+            if tab_name:
+                cmd.append(tab_name)
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            return r.stdout.strip()[:3000] if r.returncode == 0 else f"シート読み取りエラー: {r.stderr[:200]}"
+        except Exception as e:
+            return f"シート読み取りエラー: {e}"
+
+    def _handle_search_knowledge(args):
+        query = args.get("query", "")
+        results = []
+        search_dirs = [
+            _PROJECT_ROOT / "Skills",
+            _PROJECT_ROOT / "Master" / "knowledge",
+            _PROJECT_ROOT / "Master" / "addness",
+        ]
+        for search_dir in search_dirs:
+            if not search_dir.exists():
+                continue
+            for md_file in search_dir.rglob("*.md"):
+                try:
+                    content = md_file.read_text(encoding="utf-8")
+                    if query.lower() in content.lower():
+                        # ファイル名とマッチ周辺を返す
+                        rel_path = md_file.relative_to(_PROJECT_ROOT)
+                        idx = content.lower().index(query.lower())
+                        snippet = content[max(0, idx - 100):idx + 300]
+                        results.append(f"【{rel_path}】\n{snippet}\n")
+                except Exception:
+                    continue
+        return "\n---\n".join(results[:5]) if results else f"「{query}」に該当するナレッジが見つかりませんでした。"
+
+    def _handle_search_qa(args):
+        question = args.get("question", "")
+        try:
+            qa_handler_path = _SYSTEM_DIR / "line_bot" / "qa_handler.py"
+            if qa_handler_path.exists():
+                r = subprocess.run(
+                    [sys.executable, str(qa_handler_path), "search", question],
+                    capture_output=True, text=True, timeout=30
+                )
+                return r.stdout.strip()[:3000] if r.returncode == 0 else "Q&A検索エラー"
+        except Exception:
+            pass
+        return "Q&A検索機能は利用できません。"
+
+    def _handle_generate_image(args):
+        prompt = args.get("prompt", "")
+        return f"画像生成はv1のパイプラインで処理します。プロンプト: {prompt}"
+
+    _v2_register_tool("get_kpi_data", _handle_get_kpi)
+    _v2_register_tool("get_calendar", _handle_get_calendar)
+    _v2_register_tool("check_email", _handle_check_email)
+    _v2_register_tool("read_spreadsheet", _handle_read_spreadsheet)
+    _v2_register_tool("search_knowledge", _handle_search_knowledge)
+    _v2_register_tool("search_qa", _handle_search_qa)
+    _v2_register_tool("generate_image", _handle_generate_image)
+    print("   v2ツールハンドラを登録しました")
+
+
+def _process_task_v2(task: dict) -> tuple:
+    """v2エンジンでタスクを処理する。戻り値: (success, result, extra)"""
+    function_name = task.get("function", "")
+    arguments = task.get("arguments", {})
+    original_text = task.get("original_text", "")
+    sender_name = (
+        arguments.get("sender_name")
+        or arguments.get("sender_display_name")
+        or task.get("sender_name")
+        or ""
+    )
+
+    # メッセージ内容を特定
+    message = (
+        arguments.get("question")
+        or arguments.get("goal")
+        or arguments.get("instruction")
+        or original_text
+        or str(arguments)
+    )
+
+    # チャネルタイプの判定
+    if function_name == "generate_reply_suggestion":
+        channel_type = "mention"
+    elif function_name in ("qa_status",):
+        channel_type = "qa"
+    else:
+        channel_type = "secretary_group"
+
+    # チャネルID（グループIDがあれば使う、なければ function_name）
+    channel_id = arguments.get("group_id", f"secretary_{sender_name or 'default'}")
+
+    # 送信者コンテキスト（メンション返信時に使用）
+    sender_context = ""
+    if channel_type == "mention" and sender_name:
+        sender_context = build_sender_context(sender_name) if callable(globals().get("build_sender_context", None)) else ""
+        try:
+            sender_context = build_sender_context(sender_name)
+        except Exception:
+            sender_context = f"送信者: {sender_name}"
+
+    try:
+        result = _v2_process_message(
+            message=message,
+            channel_id=channel_id,
+            channel_type=channel_type,
+            sender_name=sender_name,
+            sender_context=sender_context,
+        )
+
+        # generate_reply_suggestion の場合は extra にメタ情報を付加
+        extra = {}
+        if function_name == "generate_reply_suggestion":
+            extra = {
+                "raw_reply": arguments.get("_raw_reply", ""),
+                "source_message_id": arguments.get("message_id", ""),
+            }
+
+        return True, result, extra
+
+    except Exception as e:
+        import traceback
+        print(f"   ❌ v2エンジンエラー: {e}")
+        traceback.print_exc()
+        return False, f"v2エンジンエラー: {e}", {}
+
+
 def run_agent():
     """エージェントを実行（完全自動モード）"""
     auto_mode = config.get("auto_mode", "claude")
@@ -3395,6 +3581,20 @@ def run_agent():
 
     # 行動ルール（OS）を Render サーバーに同期
     _sync_execution_rules_to_render()
+
+    # v2エンジン初期化
+    _engine_version = "v1"
+    if _V2_AVAILABLE:
+        try:
+            _engine_version = _get_engine_version()
+            _init_memory()  # 初期記憶がなければ生成
+            _setup_v2_tools()
+            print(f"🧠 エンジンバージョン: {_engine_version}")
+        except Exception as _v2_init_err:
+            print(f"⚠️ v2初期化エラー（v1で動作します）: {_v2_init_err}")
+            _engine_version = "v1"
+    else:
+        print("🧠 エンジンバージョン: v1（v2モジュール未読み込み）")
 
     # Q&A監視用のGoogle Sheets接続
     sheets_service = None
@@ -3470,9 +3670,24 @@ def run_agent():
                             print(f"   ❌ 画像生成エラー: {result}")
                         continue
 
+                    # ===== v2エンジンで処理 =====
+                    if _engine_version == "v2" and _V2_AVAILABLE and function_name in _V2_TASK_TYPES:
+                        print(f"   🧠 v2エンジンで処理中...")
+                        show_notification("🧠 LINE AI秘書 v2", f"処理中: {instruction[:40]}")
+                        success, result, extra = _process_task_v2(task)
+                        if success:
+                            complete_task(task_id, True, result, None, extra or None)
+                            print(f"   ✅ v2完了 → LINEに結果を送信しました")
+                        else:
+                            # v2失敗時はv1にフォールバック
+                            print(f"   ⚠️ v2失敗、v1にフォールバック: {result}")
+                            success, result, extra = execute_task_with_claude(task)
+                            complete_task(task_id, success, result if success else "処理に失敗しました", None if success else result, extra or None)
+                        continue
+
                     # Claude APIが使えない場合はCursorで処理
                     use_cursor = (auto_mode == "cursor") or (not claude_api_available)
-                    
+
                     if not use_cursor:
                         # ===== Claude APIで自動処理 =====
                         show_notification(
