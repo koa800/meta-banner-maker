@@ -1,16 +1,16 @@
 #!/bin/bash
 # ai - Claude Code / Codex CLI シームレス切り替えラッパー
 #
-# 使い方:
-#   ai "広告CRの競合分析して"       → 自動判別（上流→Codex / 下流→Claude Code）
-#   ai codex "企画を練りたい"       → 明示的にCodex指定
-#   ai claude "これ実装して"        → 明示的にClaude Code指定
-#   ai switch                      → 現在のツールから反対側に切り替え（コンテキスト引き継ぎ）
-#   ai status                      → 現在のコンテキスト状態を表示
+# 設計思想:
+#   モデルは「もう一人の担当者」。引き継ぎは人間同士と同じレベルで行う。
+#   伝達率を1%も落とさないために、引き継ぎを構造化・自動化する。
 #
-# コンテキスト引き継ぎ:
-#   ~/.ai_handoff.md に作業状態が自動保存される。
-#   切り替え先のツールが起動時にこのファイルを読み込み、続きから作業できる。
+# 使い方:
+#   ai "広告CRの競合分析して"       → 自動判別で起動
+#   ai codex "企画を練りたい"       → 明示的にCodex
+#   ai claude "これ実装して"        → 明示的にClaude Code
+#   ai switch                      → ツール間切り替え（自動引き継ぎ）
+#   ai status                      → 現在の状態を表示
 
 set -euo pipefail
 
@@ -20,7 +20,9 @@ HANDOFF_FILE="$HOME/.ai_handoff.md"
 STATE_FILE="$HOME/.ai_state.json"
 PROJECT_DIR="/Users/koa800/Desktop/cursor"
 
-# --- 状態管理 ---
+# ============================================================
+# 状態管理
+# ============================================================
 get_current_tool() {
     if [ -f "$STATE_FILE" ]; then
         python3 -c "import json; print(json.load(open('$STATE_FILE')).get('current_tool','none'))" 2>/dev/null || echo "none"
@@ -44,11 +46,96 @@ json.dump(state, open('$STATE_FILE', 'w'), ensure_ascii=False, indent=2)
 "
 }
 
-# --- 上流/下流の自動判別 ---
+# ============================================================
+# 自動引き継ぎコンテキスト生成
+# ツールに「書き出して」と頼むのではなく、スクリプトが自動で収集する
+# ============================================================
+generate_auto_context() {
+    cd "$PROJECT_DIR"
+
+    local context=""
+
+    # 1. git の変更状態（何が変わったか）
+    local git_status
+    git_status=$(git status --short 2>/dev/null || echo "git status unavailable")
+    local git_diff_stat
+    git_diff_stat=$(git diff --stat 2>/dev/null | tail -5 || echo "")
+
+    # 2. 最近のコミット（何をやったか）
+    local recent_commits
+    recent_commits=$(git log --oneline -5 2>/dev/null || echo "")
+
+    # 3. 引き継ぎファイルがあれば含める（前のツールが書き出したもの）
+    local handoff_content=""
+    if [ -f "$HANDOFF_FILE" ]; then
+        handoff_content=$(cat "$HANDOFF_FILE")
+    fi
+
+    # 4. 状態ファイルから前回の情報
+    local prev_tool="unknown"
+    local switched_at=""
+    if [ -f "$STATE_FILE" ]; then
+        prev_tool=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('current_tool','unknown'))" 2>/dev/null || echo "unknown")
+        switched_at=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('switched_at',''))" 2>/dev/null || echo "")
+    fi
+
+    # コンテキストを構造化して組み立て
+    cat <<CONTEXT
+# 引き継ぎコンテキスト
+
+## 前の担当ツール
+${prev_tool}（切替時刻: ${switched_at:-不明}）
+
+## 作業ディレクトリの状態
+\`\`\`
+${git_status}
+\`\`\`
+
+## 変更の概要
+\`\`\`
+${git_diff_stat}
+\`\`\`
+
+## 直近のコミット
+\`\`\`
+${recent_commits}
+\`\`\`
+
+CONTEXT
+
+    # 前ツールが書き出した引き継ぎメモがあれば追加
+    if [ -n "$handoff_content" ]; then
+        cat <<HANDOFF
+
+## 前の担当からの引き継ぎメモ
+${handoff_content}
+
+HANDOFF
+    fi
+
+    cat <<INSTRUCTION
+
+## あなたへの指示
+1. 上記のコンテキストを踏まえて作業を続けてください
+2. 作業を終了する前に、必ず以下を ~/.ai_handoff.md に書き出してください:
+   - **目的**: 何のためにこの作業をしていたか
+   - **完了したこと**: 具体的に何を終わらせたか
+   - **未完了**: 残っているタスク
+   - **判断とその理由**: なぜその選択をしたか（これが最重要）
+   - **変更したファイル**: パスと変更内容の概要
+   - **次の担当へ**: 次にやるべきこと、注意点
+3. この引き継ぎメモなしにセッションを終了しないでください
+
+INSTRUCTION
+}
+
+# ============================================================
+# 上流/下流の自動判別
+# ============================================================
 classify_task() {
     local prompt="$1"
     # 上流キーワード（戦略・リサーチ・企画・分析・レビュー・壁打ち）
-    if echo "$prompt" | grep -qiE '戦略|分析|リサーチ|企画|設計|レビュー|壁打ち|競合|市場|訴求|優先順位|方針|P&L|KPI.*解釈|判断|提案|アイデア|フレームワーク|思考|考え|意思決定|施策|研究|調査|比較|評価|inspect|review|analyze|research|strategy|plan'; then
+    if echo "$prompt" | grep -qiE '戦略|分析|リサーチ|企画|設計|レビュー|壁打ち|競合|市場|訴求|優先順位|方針|P&L|KPI.*解釈|判断|提案|アイデア|フレームワーク|思考|考え|意思決定|施策|研究|調査|比較|評価|ライティング|コピー|inspect|review|analyze|research|strategy|plan|writing'; then
         echo "codex"
     # 下流キーワード（実装・ブラウザ・修正・デプロイ・操作）
     elif echo "$prompt" | grep -qiE '実装|コード|修正|バグ|デプロイ|ブラウザ|Looker|Addness|Chrome|ファイル|git|コミット|push|スクリプト|API接続|日報|KPI取得|メール確認|CSV|同期|インストール|設定変更|fix|implement|build|deploy|browse'; then
@@ -59,63 +146,88 @@ classify_task() {
     fi
 }
 
-# --- ハンドオフファイル生成 ---
-create_handoff_prompt() {
-    local from_tool="$1"
-    local to_tool="$2"
+# ============================================================
+# ツール起動（引き継ぎコンテキスト自動注入）
+# ============================================================
+launch_codex() {
+    local prompt="${1:-}"
+    local context
+    context=$(generate_auto_context)
+    set_current_tool "codex"
+    cd "$PROJECT_DIR"
 
-    if [ -f "$HANDOFF_FILE" ]; then
-        cat <<PROMPT
-以下は前のツール（${from_tool}）からの引き継ぎコンテキストです。この内容を踏まえて作業を続けてください。
+    if [ -n "$prompt" ]; then
+        exec $CODEX_CMD "${context}
 
----引き継ぎコンテキスト---
-$(cat "$HANDOFF_FILE")
----引き継ぎここまで---
+---
 
-PROMPT
+ユーザーからの指示: ${prompt}"
+    else
+        exec $CODEX_CMD "$context"
     fi
 }
 
-# --- メインロジック ---
+launch_claude() {
+    local prompt="${1:-}"
+    local context
+    context=$(generate_auto_context)
+    set_current_tool "claude"
+    cd "$PROJECT_DIR"
+
+    if [ -n "$prompt" ]; then
+        exec $CLAUDE_CMD -p "${context}
+
+---
+
+ユーザーからの指示: ${prompt}"
+    else
+        exec $CLAUDE_CMD -p "$context"
+    fi
+}
+
+# ============================================================
+# メインロジック
+# ============================================================
 case "${1:-}" in
     switch)
         current=$(get_current_tool)
         if [ "$current" = "codex" ]; then
             echo "🔄 Codex → Claude Code に切り替えます"
             echo ""
-            echo "⚠️  Codexのセッションで以下を実行してから終了してください:"
-            echo "   「今の作業状態を ~/.ai_handoff.md に書き出して」"
-            echo ""
-            echo "書き出し後、Enterで Claude Code を起動します..."
-            read -r
-            set_current_tool "claude"
-            handoff=$(create_handoff_prompt "Codex" "Claude Code")
-            cd "$PROJECT_DIR"
-            if [ -n "$handoff" ]; then
-                exec $CLAUDE_CMD --resume -p "$handoff"
+            # 自動でgit状態を収集するので、手動書き出し不要
+            # ただし、前ツールが引き継ぎメモを書いてくれていれば最高
+            if [ ! -f "$HANDOFF_FILE" ]; then
+                echo "⚠️  引き継ぎメモ（~/.ai_handoff.md）がありません。"
+                echo "   Codex セッションで「引き継ぎメモを書いて」と言ってから終了するのがベストです。"
+                echo "   ただし、git状態は自動で引き継がれます。"
+                echo ""
             else
-                exec $CLAUDE_CMD
+                echo "✅ 引き継ぎメモあり（$(wc -l < "$HANDOFF_FILE" | tr -d ' ') 行）"
+                echo ""
             fi
+            echo "Enter で Claude Code を起動..."
+            read -r
+            launch_claude ""
         elif [ "$current" = "claude" ]; then
             echo "🔄 Claude Code → Codex に切り替えます"
             echo ""
-            echo "⚠️  Claude Codeのセッションで以下を実行してから終了してください:"
-            echo "   「今の作業状態を ~/.ai_handoff.md に書き出して」"
-            echo ""
-            echo "書き出し後、Enterで Codex を起動します..."
-            read -r
-            set_current_tool "codex"
-            handoff=$(create_handoff_prompt "Claude Code" "Codex")
-            cd "$PROJECT_DIR"
-            if [ -n "$handoff" ]; then
-                exec $CODEX_CMD "$handoff"
+            if [ ! -f "$HANDOFF_FILE" ]; then
+                echo "⚠️  引き継ぎメモ（~/.ai_handoff.md）がありません。"
+                echo "   Claude Code セッションで「引き継ぎメモを書いて」と言ってから終了するのがベストです。"
+                echo "   ただし、git状態は自動で引き継がれます。"
+                echo ""
             else
-                exec $CODEX_CMD
+                echo "✅ 引き継ぎメモあり（$(wc -l < "$HANDOFF_FILE" | tr -d ' ') 行）"
+                echo ""
             fi
+            echo "Enter で Codex を起動..."
+            read -r
+            launch_codex ""
         else
             echo "現在アクティブなツールがありません。"
             echo "  ai codex  → Codex を起動"
             echo "  ai claude → Claude Code を起動"
+            echo "  ai        → デフォルト（Codex）を起動"
         fi
         ;;
 
@@ -126,106 +238,68 @@ case "${1:-}" in
         if [ -f "$STATE_FILE" ]; then
             echo "最終切替: $(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('switched_at','?'))" 2>/dev/null)"
         fi
+        echo ""
         if [ -f "$HANDOFF_FILE" ]; then
-            echo "引き継ぎファイル: あり ($(wc -l < "$HANDOFF_FILE") 行)"
-            echo "---"
-            head -5 "$HANDOFF_FILE"
-            echo "..."
+            echo "📋 引き継ぎメモ: あり ($(wc -l < "$HANDOFF_FILE" | tr -d ' ') 行)"
+            echo "━━━━━━━━━━━━━━━━━━"
+            cat "$HANDOFF_FILE"
+            echo "━━━━━━━━━━━━━━━━━━"
         else
-            echo "引き継ぎファイル: なし"
+            echo "📋 引き継ぎメモ: なし"
         fi
+        echo ""
+        echo "=== Git 状態 ==="
+        cd "$PROJECT_DIR"
+        git status --short 2>/dev/null || echo "git unavailable"
         ;;
 
     codex)
         shift
-        set_current_tool "codex"
-        cd "$PROJECT_DIR"
-        handoff=$(create_handoff_prompt "Claude Code" "Codex")
-        if [ -n "${1:-}" ]; then
-            if [ -n "$handoff" ]; then
-                exec $CODEX_CMD "${handoff}${1}"
-            else
-                exec $CODEX_CMD "$1"
-            fi
-        else
-            if [ -n "$handoff" ]; then
-                exec $CODEX_CMD "$handoff"
-            else
-                exec $CODEX_CMD
-            fi
-        fi
+        launch_codex "${*:-}"
         ;;
 
     claude)
         shift
-        set_current_tool "claude"
-        cd "$PROJECT_DIR"
-        handoff=$(create_handoff_prompt "Codex" "Claude Code")
-        if [ -n "${1:-}" ]; then
-            if [ -n "$handoff" ]; then
-                exec $CLAUDE_CMD -p "${handoff}${1}"
-            else
-                exec $CLAUDE_CMD -p "$1"
-            fi
-        else
-            if [ -n "$handoff" ]; then
-                exec $CLAUDE_CMD --resume -p "$handoff"
-            else
-                exec $CLAUDE_CMD
-            fi
-        fi
+        launch_claude "${*:-}"
         ;;
 
     help|--help|-h)
-        echo "ai - Claude Code / Codex CLI シームレス切り替え"
-        echo ""
-        echo "使い方:"
-        echo "  ai \"タスク内容\"         自動判別で適切なツールを起動"
-        echo "  ai codex \"タスク\"       Codex CLI を起動"
-        echo "  ai claude \"タスク\"      Claude Code を起動"
-        echo "  ai switch              ツール間切り替え（コンテキスト引き継ぎ）"
-        echo "  ai status              現在の状態を表示"
-        echo ""
-        echo "自動判別ルール:"
-        echo "  上流（→Codex）: 戦略/分析/リサーチ/企画/設計/レビュー/壁打ち"
-        echo "  下流（→Claude）: 実装/コード/修正/ブラウザ/デプロイ/日報/CSV"
-        echo "  デフォルト: Codex"
+        cat <<'HELP'
+ai - Claude Code / Codex CLI シームレス切り替え
+
+使い方:
+  ai "タスク内容"         自動判別で適切なツールを起動
+  ai codex "タスク"       Codex CLI を起動
+  ai claude "タスク"      Claude Code を起動
+  ai switch              ツール間切り替え（自動引き継ぎ）
+  ai status              現在の状態 + 引き継ぎメモを表示
+
+自動判別ルール:
+  上流（→Codex）: 戦略/分析/リサーチ/企画/設計/レビュー/壁打ち/ライティング
+  下流（→Claude）: 実装/コード/修正/ブラウザ/デプロイ/日報/CSV
+  デフォルト: Codex
+
+引き継ぎの仕組み:
+  1. git状態（status/diff/最近のcommit）は自動で引き継がれる
+  2. 判断の背景・次にやるべきことは ~/.ai_handoff.md に書き出す
+  3. 各ツールにはセッション終了時の引き継ぎメモ作成が指示される
+HELP
         ;;
 
     "")
         # 引数なし → デフォルトでCodexを起動
-        set_current_tool "codex"
-        cd "$PROJECT_DIR"
-        handoff=$(create_handoff_prompt "Claude Code" "Codex")
-        if [ -n "$handoff" ]; then
-            exec $CODEX_CMD "$handoff"
-        else
-            exec $CODEX_CMD
-        fi
+        launch_codex ""
         ;;
 
     *)
         # タスク内容から自動判別
         tool=$(classify_task "$*")
-        set_current_tool "$tool"
-        cd "$PROJECT_DIR"
-        handoff=""
         if [ "$tool" = "codex" ]; then
-            handoff=$(create_handoff_prompt "Claude Code" "Codex")
             echo "🧠 → Codex (上流: 戦略・分析)"
-            if [ -n "$handoff" ]; then
-                exec $CODEX_CMD "${handoff}$*"
-            else
-                exec $CODEX_CMD "$*"
-            fi
+            launch_codex "$*"
         else
-            handoff=$(create_handoff_prompt "Codex" "Claude Code")
             echo "🔧 → Claude Code (下流: 実装・操作)"
-            if [ -n "$handoff" ]; then
-                exec $CLAUDE_CMD -p "${handoff}$*"
-            else
-                exec $CLAUDE_CMD -p "$*"
-            fi
+            launch_claude "$*"
         fi
         ;;
 esac
