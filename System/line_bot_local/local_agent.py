@@ -3372,6 +3372,7 @@ def write_approved_answers_to_sheet(sheets_service):
 
 # v2 で処理するタスク種別（これ以外は v1 のまま）
 _V2_TASK_TYPES = frozenset({
+    "v2_conversation",
     "kpi_query", "context_query", "execute_goal",
     "generate_reply_suggestion", "capture_feedback",
     "mail_check", "orchestrator_status", "qa_status",
@@ -3487,7 +3488,8 @@ def _process_task_v2(task: dict) -> tuple:
 
     # メッセージ内容を特定
     message = (
-        arguments.get("question")
+        arguments.get("message")
+        or arguments.get("question")
         or arguments.get("goal")
         or arguments.get("instruction")
         or original_text
@@ -3495,7 +3497,9 @@ def _process_task_v2(task: dict) -> tuple:
     )
 
     # チャネルタイプの判定
-    if function_name == "generate_reply_suggestion":
+    if function_name == "v2_conversation":
+        channel_type = arguments.get("channel_type", "secretary_group")
+    elif function_name == "generate_reply_suggestion":
         channel_type = "mention"
     elif function_name in ("qa_status",):
         channel_type = "qa"
