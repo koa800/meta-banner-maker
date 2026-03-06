@@ -1836,14 +1836,14 @@ class CDPSync:
     # ─── データソース管理ステータス更新 ─────────────────
 
     def update_source_status(self, source_url, source_tab, status,
-                             update_count=0, error_count=0):
-        """データソース管理の該当行すべてのステータス・同期日・更新数・エラー数を更新
+                             error_count=0):
+        """データソース管理の該当行すべてのステータス・同期日・エラー数を更新
+        ※ L列（更新数）はrefresh_source_counts()で実ソースデータ件数を書き込むため、ここでは触らない
 
         Args:
             source_url: ソースのスプレッドシートURL
             source_tab: ソースのタブ名
             status: "正常" / "停止"
-            update_count: 更新件数
             error_count: エラー件数
         """
         ws = self.ss.worksheet("データソース管理")
@@ -1857,13 +1857,85 @@ class CDPSync:
             row_url = row[4].strip()
             row_tab = row[5].strip()
             if row_url == source_url and row_tab == source_tab:
-                updates.append({
-                    "range": f"J{i}:M{i}",
-                    "values": [[status, now, update_count, error_count]],
-                })
+                # J=ステータス, K=最終同期日, M=エラー数（L列は触らない）
+                updates.append({"range": f"J{i}:K{i}", "values": [[status, now]]})
+                updates.append({"range": f"M{i}", "values": [[error_count]]})
 
         if updates:
             ws.batch_update(updates, value_input_option="USER_ENTERED")
+
+    def refresh_source_counts(self):
+        """データソース管理の更新数を、各行のソーススプレッドシート（E列）を
+        実際に参照し、参照先列（G列）の非空セル数をカウントして書き込む。
+        同じソース+タブはキャッシュして重複読み込みを避ける。
+        """
+        from sheets_manager import extract_spreadsheet_id
+
+        ws = self.ss.worksheet("データソース管理")
+        data = ws.get_all_values()
+
+        # ソースデータのキャッシュ: (sheet_id, tab_name) → (headers, rows)
+        source_cache = {}
+        updates = []
+
+        for i, row in enumerate(data[1:], 2):  # 行2〜
+            if len(row) < 7 or not row[0].strip():
+                continue
+            source_url = row[4].strip()  # E列: スプレッドシートURL
+            tab_name = row[5].strip()    # F列: タブ名
+            ref_col = row[6].strip()     # G列: 参照先列
+
+            if not source_url or not ref_col:
+                continue
+
+            try:
+                sheet_id, gid = extract_spreadsheet_id(source_url)
+                cache_key = (sheet_id, tab_name)
+
+                if cache_key not in source_cache:
+                    source_ss = self.client.open_by_key(sheet_id)
+                    if tab_name:
+                        src_ws = source_ss.worksheet(tab_name)
+                    elif gid is not None:
+                        src_ws = next(
+                            (w for w in source_ss.worksheets() if w.id == gid),
+                            source_ss.sheet1)
+                    else:
+                        src_ws = source_ss.sheet1
+                    src_data = src_ws.get_all_values()
+                    src_headers = src_data[0] if src_data else []
+                    src_rows = src_data[1:] if len(src_data) > 1 else []
+                    source_cache[cache_key] = (src_headers, src_rows)
+                    print(f"  ソース読み込み: {tab_name or sheet_id}（{len(src_rows)}行）")
+
+                headers, rows = source_cache[cache_key]
+
+                # 参照先列のインデックスを探す
+                col_idx = None
+                for idx, h in enumerate(headers):
+                    if h.strip() == ref_col:
+                        col_idx = idx
+                        break
+
+                if col_idx is None:
+                    print(f"  ⚠️ 行{i}: 参照先列「{ref_col}」が見つかりません")
+                    continue
+
+                # 非空セル数をカウント
+                count = sum(1 for r in rows
+                            if col_idx < len(r) and r[col_idx].strip())
+
+                updates.append({
+                    "range": f"L{i}",
+                    "values": [[count]],
+                })
+            except Exception as e:
+                print(f"  ⚠️ 行{i}: ソース読み込みエラー: {e}")
+                continue
+
+        if updates:
+            ws.batch_update(updates, value_input_option="USER_ENTERED")
+            print(f"更新数を実ソースデータ件数で反映: {len(updates)}行")
 
     def check_source_staleness(self):
         """データソース管理の全ソースの鮮度をチェックし、異常を返す
@@ -2119,10 +2191,8 @@ class CDPSync:
                         total_stats["excluded"] += stats.get("excluded", 0)
                         # データソース管理のステータスを更新
                         if not dry_run:
-                            count = stats.get("updated", 0) + stats.get("inserted", 0)
                             self.update_source_status(
-                                src["url"], src["tab"], "正常",
-                                update_count=count)
+                                src["url"], src["tab"], "正常")
                     if stats.get("alerts"):
                         for a in stats["alerts"]:
                             total_stats["alerts"].append(
@@ -2151,8 +2221,7 @@ class CDPSync:
                 cs_url = f"https://docs.google.com/spreadsheets/d/{CS_SHEET_ID}/edit"
                 for cs_tab in self._CS_TABS:
                     self.update_source_status(
-                        cs_url, cs_tab["tab"], "正常",
-                        update_count=cs_updated)
+                        cs_url, cs_tab["tab"], "正常")
         except Exception as e:
             total_stats["errors"] += 1
             print(f"  CS同期エラー: {e}")
@@ -2208,6 +2277,13 @@ class CDPSync:
                 print(f"  - {s}")
 
         self.logger.save()
+
+        # データソース管理の更新数を実データ件数で反映
+        if not dry_run:
+            try:
+                self.refresh_source_counts()
+            except Exception as e:
+                print(f"更新数反映でエラー（データ同期は完了済み）: {e}")
 
         # 全タブの罫線を保証（手動追加行も含めて漏れを防ぐ）
         if not dry_run:
