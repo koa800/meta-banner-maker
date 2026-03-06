@@ -14,7 +14,7 @@
 | 承認 | 事前承認（企画案を甲原が確認してから制作に進む） |
 | 前工程 | **B5 広告リサーチ（Skills/1_広告/広告リサーチ.md）** |
 | 後工程 | C2 動画CR制作（Skills/1_広告/動画広告クリエイティブ制作フロー.md） |
-| 参照知識 | Skills/1_広告/広告リサーチ.md, Skills/1_広告/広告クリエイティブ制作.md, Skills/2_導線/コンセプトメイク・市場リサーチ.md, Master/addness/meta_ads_大当たりCR分析.md, Master/addness/funnel_structure.md |
+| 参照知識 | Skills/1_広告/広告リサーチ.md, Skills/1_広告/広告クリエイティブの思想.md, Skills/2_導線/コンセプトメイク・市場リサーチ.md, Master/addness/meta_ads_大当たりCR分析.md, Master/addness/funnel_structure.md |
 | 最終更新 | 2026-03-04 |
 
 ## このスキルが解く問題
@@ -40,7 +40,7 @@
 | 競合CRデータ | DPro（ブラウザ操作） | トレンド・切り口の発見 |
 | Meta広告ライブラリ | ブラウザ操作 | 競合の現行CR確認 |
 | KPI実績 | System/data/kpi_summary.json | どのファネル・媒体が良いか |
-| 既存フレームワーク | Skills/1_広告/広告クリエイティブ制作.md 他 | 企画の思考プロセス |
+| 既存フレームワーク | Skills/1_広告/広告クリエイティブの思想.md 他 | 企画の思考プロセス |
 
 ## 手順
 
