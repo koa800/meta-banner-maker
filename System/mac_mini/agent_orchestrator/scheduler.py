@@ -4733,6 +4733,32 @@ Google Forms で業務委託報酬と経費立替をそれぞれ提出する。
 
 ### Step 1: Looker Studioからスクショ取得
 
+#### スクショ取得の共通手順（全スクショ共通）
+
+**screencaptureの座標計算は不安定なので使わない。以下の「全画面キャプチャ→PILでcrop」方式を必ず使うこと。**
+
+1. Chromeをアクティブにして全画面キャプチャ:
+```bash
+osascript -e 'tell application "Google Chrome" to activate' && sleep 1.5 && screencapture -x -o /tmp/chrome_fullscreen.png
+```
+2. PILでKPIカード領域をcrop:
+```python
+from PIL import Image
+img = Image.open('/tmp/chrome_fullscreen.png')
+# KPIカード2行（上段4枚+下段5枚）のみを切り取る
+# サイドバー右端〜ランキング左端、カードラベル上〜カード値下
+crop = img.crop((560, 760, 2280, 1210))
+crop.save('/tmp/output.png')
+```
+3. 切り取った画像をReadツールで確認し、以下を検証:
+   - 9枚のカードが全て含まれているか（左端の「集客数」、右端の「返金額」）
+   - 余計な要素（「重要数値」ヘッダー、注釈テキスト、集客数推移グラフ、ランキング）が入っていないか
+   - 切れていたらcrop座標を調整して再実行
+4. crop座標の目安（3024x1964 全画面の場合）:
+   - KPIカード: x=560〜2280, y=760〜1210
+   - 12週グラフ: 4グラフ全体が収まる範囲（ページ遷移後に同様に撮影→確認→crop）
+   - 画面サイズが異なる場合はMCP screenshotで位置を確認してから調整
+
 #### 1-1. 月次KPI
 1. ブラウザで Looker Studio を開く: https://lookerstudio.google.com/u/1/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_ghqtl90f1d
 2. 日付フィルターをクリック
@@ -4748,19 +4774,18 @@ inputs[1].dispatchEvent(new Event('input', {{ bubbles: true }}));
 inputs[1].dispatchEvent(new Event('change', {{ bubbles: true }}));
 ```
 4. 「適用」ボタンをクリック → 3秒待機
-5. macOS screencaptureでKPIカード領域を切り取り → /tmp/meeting_monthly_kpi.png
-   - 座標計算: MCP座標 × (1890/1552) × 1.6 でCSS→Retina変換、Y座標はChrome UIオフセット(422 retina px)を加算
+5. 上記の共通手順で全画面キャプチャ → PILでKPIカード領域をcrop → /tmp/meeting_monthly_kpi.png
 
 #### 1-2. 12週グラフ
 1. 左メニュー「過去12週実績」をクリック
-2. 4グラフ（集客数・個別予約数・広告費・CPA）をscreencaptureで切り取り → /tmp/meeting_12week.png
+2. 上記の共通手順で全画面キャプチャ → PILで4グラフ領域をcrop → /tmp/meeting_12week.png
 
 #### 1-3. 週次KPI（7日間）
 1. 「広告チーム報告」のコピーに戻る
 2. フィルターを7日間に変更（開始={week_offset_start}、終了={week_offset_end}）
 3. 「適用」→ 3秒待機
-4. KPIカード領域を切り取り → /tmp/meeting_weekly_kpi.png
-5. フィルターを元に戻す（開始={month_offset_start}に変更→適用）
+4. 上記の共通手順で全画面キャプチャ → PILでKPIカード領域をcrop → /tmp/meeting_weekly_kpi.png
+5. フィルターを元に戻す（リセットボタンをクリック）
 
 ### Step 2: 数値読み取り
 スクショから月次・週次のKPI数値を読み取る:
@@ -4809,8 +4834,10 @@ python3 System/line_notify.py "経営会議資料の下書きができました
 {self._build_google_login_instructions()}
 
 ## 注意事項
-- screenshotの結果をそのまま貼り付けない。必ずscreencaptureで切り取ってから使う
+- screenshotの結果をそのまま貼り付けない。必ず「全画面キャプチャ→PILでcrop」で切り取ってから使う
+- MCP座標からのscreencapture座標計算は不安定なので使わない
 - 画像貼り付けはクリップボード経由（osascript → Cmd+V）
+- 切り取った画像は必ずReadツールで確認してから貼り付ける
 - エラー時はLINE通知して終了"""
 
         success, output, error = self._execute_claude_code_task(
