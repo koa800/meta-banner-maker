@@ -3386,8 +3386,25 @@ def _setup_v2_tools():
         return
 
     def _handle_get_kpi(args):
-        data = fetch_addness_kpi()
-        return data or "KPIデータを取得できませんでした。"
+        """KPIデータを【アドネス全体】数値管理シートから直接取得（日報シートは使わない）"""
+        sheets_manager_path = _SYSTEM_DIR / "sheets_manager.py"
+        if not sheets_manager_path.exists():
+            # フォールバック: キャッシュ経由
+            data = fetch_addness_kpi()
+            return data or "KPIデータを取得できませんでした。"
+        try:
+            r = subprocess.run(
+                [sys.executable, str(sheets_manager_path), "read",
+                 ADDNESS_KPI_SHEET_ID, ADDNESS_KPI_MONTHLY_TAB],
+                capture_output=True, text=True, timeout=30, encoding="utf-8"
+            )
+            if r.returncode != 0 or not r.stdout.strip():
+                data = fetch_addness_kpi()
+                return data or "KPIデータを取得できませんでした。"
+            return f"【アドネス全体】数値管理シート「スキルプラス（月別）」の生データです。質問に応じて分析してください。\n\n{r.stdout.strip()}"
+        except Exception as e:
+            data = fetch_addness_kpi()
+            return data or f"KPIデータ取得エラー: {e}"
 
     def _handle_get_calendar(args):
         try:
