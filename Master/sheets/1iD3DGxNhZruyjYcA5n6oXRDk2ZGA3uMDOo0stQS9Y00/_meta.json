@@ -1,0 +1,12 @@
+{
+  "id": "1iD3DGxNhZruyjYcA5n6oXRDk2ZGA3uMDOo0stQS9Y00",
+  "title": "【アドネス株式会社】顧客データ（メールアドレスのみ）",
+  "synced": false,
+  "note": "データ量が大きいためCSVキャッシュは作成しない。APIで都度取得（cdp_sync.py）",
+  "tabs": [
+    {"title": "メール集客データ", "rows": 278000, "cols": 3},
+    {"title": "データソース管理", "rows": 20, "cols": 10},
+    {"title": "データ追加ルール", "rows": 15, "cols": 5},
+    {"title": "定義", "rows": 10, "cols": 4}
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "id": "1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk",
+  "title": "【アドネス株式会社】顧客データ（複数イベント）",
+  "synced": false,
+  "note": "データ量が大きいためCSVキャッシュは作成しない。APIで都度取得（cdp_sync.py）",
+  "tabs": [
+    {"title": "顧客マスタ", "rows": 57750, "cols": 58},
+    {"title": "データソース管理", "rows": 21, "cols": 14},
+    {"title": "マスター追加ルール", "rows": 13, "cols": 5},
+    {"title": "除外リスト", "rows": 536, "cols": 5},
+    {"title": "定義", "rows": 59, "cols": 4}
+  ]
+}

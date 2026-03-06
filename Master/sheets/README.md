@@ -6,18 +6,21 @@
 
 | ID | シート名 | URL | 用途 | 同期 |
 |---|---|---|---|---|
-| `1FOh_XGZWaEisfFEngiN848kSm2E6HotAZiMDTmO7BNA` | 【アドネス全体】数値管理シート | [リンク](https://docs.google.com/spreadsheets/d/1FOh_XGZWaEisfFEngiN848kSm2E6HotAZiMDTmO7BNA/edit) | 事業KPI・会社全体の重要数値。集客数・売上・会員数等を知りたいときに参照 | ✅ 02/22 08:33 (6182行) |
-| `16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk` | 【広告チーム】報告シート | [リンク](https://docs.google.com/spreadsheets/d/16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk/edit) | チーム報告シート（日報・週報・月報・年報）。目標と現状のギャップ把握→アクション導出用。**毎日使用** | ✅ 02/22 08:33 (96行) |
-| `1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk` | 【アドネス株式会社】顧客データ（複数イベント） | [リンク](https://docs.google.com/spreadsheets/d/1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk/edit) | CDP顧客マスタ。イベント発生者（セミナー予約・購入等）の統合データ | ※大容量のためキャッシュなし |
-| `1iD3DGxNhZruyjYcA5n6oXRDk2ZGA3uMDOo0stQS9Y00` | 【アドネス株式会社】顧客データ（メールアドレスのみ） | [リンク](https://docs.google.com/spreadsheets/d/1iD3DGxNhZruyjYcA5n6oXRDk2ZGA3uMDOo0stQS9Y00/edit) | リードプール。メールアドレスのみのリード（イベント未発生） | ※大容量のためキャッシュなし |
+| `1FOh_XGZWaEisfFEngiN848kSm2E6HotAZiMDTmO7BNA` | 【アドネス全体】数値管理シート | [リンク](https://docs.google.com/spreadsheets/d/1FOh_XGZWaEisfFEngiN848kSm2E6HotAZiMDTmO7BNA/edit) | 事業KPI・会社全体の重要数値。集客数・売上・会員数等を知りたいときに参照 | API経由で都度取得 |
+| `16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk` | 【広告チーム】報告シート | [リンク](https://docs.google.com/spreadsheets/d/16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk/edit) | チーム報告シート（日報・週報・月報・年報）。目標と現状のギャップ把握→アクション導出用。**毎日使用** | API経由で都度取得 |
+| `1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk` | 【アドネス株式会社】顧客データ（複数イベント） | [リンク](https://docs.google.com/spreadsheets/d/1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk/edit) | CDP顧客マスタ。イベント発生者（セミナー予約・購入等）の統合データ | API経由で都度取得 |
+| `1iD3DGxNhZruyjYcA5n6oXRDk2ZGA3uMDOo0stQS9Y00` | 【アドネス株式会社】顧客データ（メールアドレスのみ） | [リンク](https://docs.google.com/spreadsheets/d/1iD3DGxNhZruyjYcA5n6oXRDk2ZGA3uMDOo0stQS9Y00/edit) | リードプール。メールアドレスのみのリード（イベント未発生） | API経由で都度取得 |
 
 ## ディレクトリ構成
 
 ```
 sheets/
-├── README.md           ← このファイル（シート一覧・用途）
-└── {シートID}/         ← シートごとのキャッシュ・同期データ（今後追加）
+├── README.md           ← このファイル（シート一覧・用途・取得コマンド）
+└── {シートID}/
+    └── _meta.json      ← シートのメタ情報（タブ名・行数・列数）
 ```
+
+> **CSVキャッシュは置かない。** 数値データは常にAPI経由で最新を取得する。古いキャッシュを「最新」と誤認するリスクを排除するため。
 
 ## シート詳細
 
