@@ -14,6 +14,7 @@
 - `System/registries/agent_registry.json` → 人間 / AI / shell / brain の実行主体 registry
 - `Master/learning/reply_feedback.json` → 返信修正フィードバック（correction/approval）
 - `Master/learning/style_rules.json` → 返信スタイルルール（weekly_profile_learningで自動生成）
+- `Master/self_clone/kohara/USER.md` → 甲原クローンの判断スタンス。再利用可能な業務原理の正本は `Skills/` に置き、ここには「何を重く見るか」だけを残す
 - `Project/4_AI基盤/AI秘書作成.md` → AI秘書システムのメインドキュメント
 
 ## 積み上がる学習（Phase 7, 2026-02-25 実装完了）
