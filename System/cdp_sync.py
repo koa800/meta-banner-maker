@@ -15,6 +15,7 @@ import os
 import re
 import json
 import time
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 
@@ -481,6 +482,95 @@ def normalize_date(date_str):
     return date_str
 
 
+def extract_date_only(date_str):
+    """日時文字列から日付部分のみを YYYY/MM/DD で抽出"""
+    if not date_str:
+        return ""
+    m = re.search(r'(\d{4})[/-](\d{1,2})[/-](\d{1,2})', date_str.strip())
+    if not m:
+        return ""
+    return f"{m.group(1)}/{int(m.group(2)):02d}/{int(m.group(3)):02d}"
+
+
+def normalize_customer_text(text):
+    """突合用の文字列正規化（NFKC + 小文字化 + 空白除去）"""
+    if not text:
+        return ""
+    normalized = unicodedata.normalize("NFKC", text).strip().lower()
+    return re.sub(r'[\s\u3000]+', '', normalized)
+
+
+def normalize_customer_name_key(text):
+    """氏名・LINE名のゆれ吸収用キー（記号・絵文字を除去）"""
+    normalized = normalize_customer_text(text)
+    if not normalized:
+        return ""
+    return "".join(ch for ch in normalized if ch.isalnum() or ch == "ー")
+
+
+def is_usable_line_match(text):
+    """LINE名の fallback 突合に使ってよいキーかを判定"""
+    key = normalize_customer_name_key(text)
+    if not key:
+        return False
+    if key.isdigit():
+        return False
+    return len(key) >= 3
+
+
+def _extract_rgb(text_format):
+    """textFormat から RGB を取得"""
+    if not text_format:
+        return {}
+    style_rgb = text_format.get("foregroundColorStyle", {}).get("rgbColor", {})
+    if style_rgb:
+        return style_rgb
+    return text_format.get("foregroundColor", {})
+
+
+def is_red_text_format(text_format):
+    """文字色が赤系かを判定"""
+    rgb = _extract_rgb(text_format)
+    if not rgb:
+        return False
+    red = rgb.get("red", 0)
+    green = rgb.get("green", 0)
+    blue = rgb.get("blue", 0)
+    return red >= 0.8 and green <= 0.35 and blue <= 0.35
+
+
+def extract_red_amount_from_cell(cell):
+    """セルから赤文字の金額のみを抽出"""
+    if not cell:
+        return ""
+
+    formatted = cell.get("formattedValue", "") or ""
+    user_value = cell.get("userEnteredValue", {}) or {}
+    text = user_value.get("stringValue") or formatted
+
+    runs = cell.get("textFormatRuns") or []
+    if runs and text:
+        boundaries = [run.get("startIndex", 0) for run in runs] + [len(text)]
+        for i, run in enumerate(runs):
+            start = boundaries[i]
+            end = boundaries[i + 1]
+            if not is_red_text_format(run.get("format", {})):
+                continue
+            segment = text[start:end]
+            m = re.search(r'-?¥?\s*\d[\d,]*', segment)
+            if m:
+                return normalize_amount(m.group(0))
+
+    candidate = formatted or user_value.get("stringValue", "")
+    if candidate:
+        user_fmt = cell.get("userEnteredFormat", {}).get("textFormat", {})
+        effective_fmt = cell.get("effectiveFormat", {}).get("textFormat", {})
+        if is_red_text_format(user_fmt) or is_red_text_format(effective_fmt):
+            return normalize_amount(candidate)
+
+    return ""
+
+
 def normalize_zipcode(zipcode):
     """郵便番号を正規化（ハイフンあり 3桁-4桁）"""
     if not zipcode:
@@ -672,6 +762,7 @@ class CDPSync:
         self._exclusion_phones = set()
         self._master_headers = None
         self._master_data = None
+        self._sheets_service = None
         self.logger = SyncLogger()
         self.sync_state = SyncState()
 
@@ -774,6 +865,10 @@ class CDPSync:
         "顧客マスタ": {
             "group_borders": [0, 3, 7, 20, 22, 29, 36, 45],
             "header_rows": 2,  # 行1:グループ名, 行2:カラム名
+        },
+        "データソース管理": {
+            "group_borders": [],
+            "header_rows": 1,  # 行1:カラム名のみ
         },
         "除外リスト": {
             "group_borders": [],
@@ -1876,6 +1971,7 @@ class CDPSync:
 
         # ソースデータのキャッシュ: (sheet_id, tab_name) → (headers, rows)
         source_cache = {}
+        special_count_cache = {}
         updates = []
 
         for i, row in enumerate(data[1:], 2):  # 行2〜
@@ -1891,6 +1987,20 @@ class CDPSync:
             try:
                 sheet_id, gid = extract_spreadsheet_id(source_url)
                 cache_key = (sheet_id, tab_name)
+
+                if sheet_id == CS_SHEET_ID:
+                    special_key = (tab_name, ref_col)
+                    if special_key not in special_count_cache:
+                        special_count_cache[special_key] = self._count_cs_special_source_rows(
+                            tab_name, ref_col
+                        )
+                    special_count = special_count_cache[special_key]
+                    if special_count is not None:
+                        updates.append({
+                            "range": f"L{i}",
+                            "values": [[special_count]],
+                        })
+                        continue
 
                 if cache_key not in source_cache:
                     source_ss = self.client.open_by_key(sheet_id)
@@ -1983,6 +2093,211 @@ class CDPSync:
         return self.sync(source_url, tab_name, column_mapping, email_col,
                          dry_run=True, incremental=False)
 
+    def _get_sheets_service(self):
+        """Google Sheets API v4 サービスを取得"""
+        if self._sheets_service is None:
+            from googleapiclient.discovery import build
+            self._sheets_service = build(
+                "sheets", "v4", credentials=self.client.http_client.auth
+            )
+        return self._sheets_service
+
+    def _build_customer_lookup(self):
+        """返金同期用の顧客突合インデックスを構築"""
+        if self._master_data is None:
+            self.load_master()
+
+        line_idx = self.get_col_index("LINE名")
+        sei_idx = self.get_col_index("姓")
+        mei_idx = self.get_col_index("名")
+
+        lookup = {
+            "email": self.build_email_index(),
+            "line_strict": {},
+            "line_loose": {},
+            "name_strict": {},
+            "name_loose": {},
+        }
+
+        def add(mapping, key, row_idx):
+            if key:
+                mapping.setdefault(key, set()).add(row_idx)
+
+        for row_idx, row in enumerate(self._master_data):
+            line_name = row[line_idx].strip() if line_idx is not None and line_idx < len(row) else ""
+            sei = row[sei_idx].strip() if sei_idx is not None and sei_idx < len(row) else ""
+            mei = row[mei_idx].strip() if mei_idx is not None and mei_idx < len(row) else ""
+            full_name = f"{sei}{mei}" if mei else sei
+
+            add(lookup["line_strict"], normalize_customer_text(line_name), row_idx)
+            add(lookup["line_loose"], normalize_customer_name_key(line_name), row_idx)
+            add(lookup["name_strict"], normalize_customer_text(full_name), row_idx)
+            add(lookup["name_loose"], normalize_customer_name_key(full_name), row_idx)
+
+        return lookup
+
+    def _find_unique_row(self, mapping, key):
+        """単一の顧客行に解決できるキーのみ返す"""
+        if not key:
+            return None
+        rows = mapping.get(key, set())
+        if len(rows) == 1:
+            return next(iter(rows))
+        return None
+
+    def _find_cdp_row_by_customer(self, lookup, email="", line_name="", full_name=""):
+        """メール→LINE名→本名の順でCDP行を特定"""
+        email_key = clean_email(email).lower() if email else ""
+        if email_key and email_key in lookup["email"]:
+            return lookup["email"][email_key], "email"
+
+        candidates = []
+        if is_usable_line_match(line_name):
+            candidates.extend([
+                ("line", lookup["line_strict"], normalize_customer_text(line_name)),
+                ("line", lookup["line_loose"], normalize_customer_name_key(line_name)),
+            ])
+        candidates.extend([
+            ("name", lookup["name_strict"], normalize_customer_text(full_name)),
+            ("name", lookup["name_loose"], normalize_customer_name_key(full_name)),
+        ])
+
+        for match_type, mapping, key in candidates:
+            row_idx = self._find_unique_row(mapping, key)
+            if row_idx is not None:
+                return row_idx, match_type
+
+        return None, ""
+
+    def _extract_red_amount_map(self, tab_name, start_row, end_row, column_letter):
+        """指定列の赤文字金額を行番号→金額の辞書で返す"""
+        if end_row < start_row:
+            return {}
+
+        service = self._get_sheets_service()
+        range_a1 = f"{tab_name}!{column_letter}{start_row}:{column_letter}{end_row}"
+        resp = service.spreadsheets().get(
+            spreadsheetId=CS_SHEET_ID,
+            ranges=[range_a1],
+            includeGridData=True,
+            fields=(
+                "sheets(data(rowData(values("
+                "formattedValue,userEnteredValue,textFormatRuns,"
+                "userEnteredFormat(textFormat),effectiveFormat(textFormat)"
+                "))))"
+            ),
+        ).execute()
+
+        result = {}
+        for sheet in resp.get("sheets", []):
+            for data in sheet.get("data", []):
+                for offset, row in enumerate(data.get("rowData", []), start=0):
+                    sheet_row = start_row + offset
+                    cell = (row.get("values") or [{}])[0]
+                    amount = extract_red_amount_from_cell(cell)
+                    if amount:
+                        result[sheet_row] = amount
+        return result
+
+    def _load_cs_refund_source_rows(self, cs_ss, tab_cfg):
+        """CS管理シートから返金同期対象行を抽出"""
+        ws_src = cs_ss.worksheet(tab_cfg["tab"])
+        src_data = ws_src.get_all_values()
+        red_amount_map = {}
+        if tab_cfg.get("red_only"):
+            red_amount_map = self._extract_red_amount_map(
+                tab_cfg["tab"], tab_cfg["data_start_row"], len(src_data), tab_cfg["refund_col_letter"]
+            )
+
+        rows = []
+        match_cols = tab_cfg["match_cols"]
+        for local_idx, row in enumerate(src_data[tab_cfg["header_row"]:], start=tab_cfg["data_start_row"]):
+            if tab_cfg.get("status_col") is not None:
+                status = row[tab_cfg["status_col"]].strip() if len(row) > tab_cfg["status_col"] else ""
+                if status != tab_cfg["status_value"]:
+                    continue
+
+            if tab_cfg.get("required_date_col") is not None:
+                required_date = row[tab_cfg["required_date_col"]].strip() if len(row) > tab_cfg["required_date_col"] else ""
+                if not required_date:
+                    continue
+            else:
+                required_date = ""
+
+            if tab_cfg.get("red_only"):
+                amount = red_amount_map.get(local_idx, "")
+            else:
+                raw_amount = row[tab_cfg["refund_col"]].strip() if len(row) > tab_cfg["refund_col"] else ""
+                if not raw_amount:
+                    continue
+                amount = normalize_amount(raw_amount)
+
+            if not amount:
+                continue
+
+            email = row[match_cols["email"]].strip() if len(row) > match_cols["email"] else ""
+            line_name = row[match_cols["line_name"]].strip() if len(row) > match_cols["line_name"] else ""
+            full_name = row[match_cols["full_name"]].strip() if len(row) > match_cols["full_name"] else ""
+            if not any([email, line_name, full_name]):
+                continue
+
+            sort_key = extract_date_only(required_date)
+            if not sort_key and len(row) > 1:
+                sort_key = extract_date_only(row[1])
+
+            rows.append({
+                "sheet_row": local_idx,
+                "email": email,
+                "line_name": line_name,
+                "full_name": full_name,
+                "amount": amount,
+                "sort_key": sort_key or "0000/00/00",
+                "tab": tab_cfg["tab"],
+            })
+
+        return rows
+
+    def _batch_update_ranges(self, ws, updates, chunk_size=500):
+        """範囲更新をチャンク分割して実行"""
+        if not updates:
+            return
+        for i in range(0, len(updates), chunk_size):
+            ws.batch_update(updates[i:i + chunk_size], value_input_option="USER_ENTERED")
+            if i + chunk_size < len(updates):
+                time.sleep(1)
+
+    def _append_ltv_update(self, row_idx, sheet_row, updates):
+        """返金額変更に連動してLTVを更新"""
+        sales_idx = self.get_col_index("着金売上")
+        refund_idx = self.get_col_index("返金額")
+        ltv_idx = self.get_col_index("LTV")
+        if sales_idx is None or refund_idx is None or ltv_idx is None:
+            return False
+
+        row = self._master_data[row_idx]
+        sales_str = row[sales_idx].strip() if sales_idx < len(row) else ""
+        refund_str = row[refund_idx].strip() if refund_idx < len(row) else ""
+        current_ltv = row[ltv_idx].strip() if ltv_idx < len(row) else ""
+
+        if not sales_str:
+            expected_ltv = ""
+        else:
+            sales_val = int(re.sub(r'[^\d]', '', sales_str) or "0")
+            refund_val = int(re.sub(r'[^\d]', '', refund_str) or "0") if refund_str else 0
+            expected_ltv = normalize_amount(str(sales_val - refund_val))
+
+        if current_ltv == expected_ltv:
+            return False
+
+        updates.append({
+            "range": f"{_col_to_letter(ltv_idx + 1)}{sheet_row}",
+            "values": [[expected_ltv]],
+        })
+        while len(row) <= ltv_idx:
+            row.append("")
+        row[ltv_idx] = expected_ltv
+        return True
+
     # ─── CS管理シートからの同期（クーリングオフ・中途解約） ──────
 
     # CS管理シートのタブ→CDPカラム・フィルタ条件のマッピング
@@ -1998,6 +2313,35 @@ class CDPSync:
             "cdp_column": "中途解約日",
             "filter_f": "中途解約",
             "filter_g": "完了",
+        },
+    ]
+    _CS_REFUND_TABS = [
+        {
+            "tab": "管理用_クーオフ・中途解約以外",
+            "header_row": 2,
+            "data_start_row": 3,
+            "match_cols": {"full_name": 6, "line_name": 7, "email": 8},
+            "status_col": 5,
+            "status_value": "完了",
+            "refund_col": 15,
+        },
+        {
+            "tab": "管理用_2025.1.25-クーオフ",
+            "header_row": 2,
+            "data_start_row": 3,
+            "match_cols": {"full_name": 8, "line_name": 9, "email": 10},
+            "required_date_col": 23,  # X列 返金予定日
+            "refund_col": 19,         # T列 返金額
+        },
+        {
+            "tab": "管理用_20250125-中途解約",
+            "header_row": 2,
+            "data_start_row": 3,
+            "match_cols": {"full_name": 8, "line_name": 9, "email": 10},
+            "required_date_col": 27,     # AB列 返金日
+            "refund_col": 23,            # X列 返金額/請求額
+            "refund_col_letter": "X",
+            "red_only": True,
         },
     ]
 
@@ -2119,6 +2463,168 @@ class CDPSync:
             print(f"\nCS同期完了: 更新なし")
         return {"updated": total_updated}
 
+    def sync_cs_refunds(self, dry_run=False):
+        """CS管理シートから返金額を同期する"""
+        try:
+            cs_ss = self.client.open_by_key(CS_SHEET_ID)
+        except Exception as e:
+            print(f"CS管理シートの読み込み失敗（返金同期）: {e}")
+            return {"error": str(e)}
+
+        if self._master_data is None:
+            self.load_master()
+
+        refund_idx = self.get_col_index("返金額")
+        update_date_idx = self.get_col_index("最終更新日")
+        email_idx = self.get_col_index("メールアドレス")
+        if refund_idx is None:
+            print("CDPマスタに「返金額」列が見つかりません")
+            return {"error": "返金額列なし"}
+
+        lookup = self._build_customer_lookup()
+        resolved_rows = set()
+        selected_rows = {}
+        stats = {"updated": 0, "eligible": 0, "matched": 0, "not_found": 0, "tabs": {}}
+
+        for tab_cfg in self._CS_REFUND_TABS:
+            tab_name = tab_cfg["tab"]
+            print(f"\n--- CS返金同期: {tab_name} ---")
+            source_rows = self._load_cs_refund_source_rows(cs_ss, tab_cfg)
+            stats["eligible"] += len(source_rows)
+
+            tab_stats = {
+                "eligible": len(source_rows),
+                "matched": 0,
+                "not_found": 0,
+                "selected": 0,
+            }
+            per_customer = {}
+
+            for src in source_rows:
+                row_idx, match_type = self._find_cdp_row_by_customer(
+                    lookup,
+                    email=src["email"],
+                    line_name=src["line_name"],
+                    full_name=src["full_name"],
+                )
+                if row_idx is None:
+                    tab_stats["not_found"] += 1
+                    continue
+
+                tab_stats["matched"] += 1
+                if row_idx in resolved_rows:
+                    continue
+
+                current = per_customer.get(row_idx)
+                if current is None or src["sort_key"] >= current["sort_key"]:
+                    src["match_type"] = match_type
+                    per_customer[row_idx] = src
+
+            for row_idx, src in per_customer.items():
+                resolved_rows.add(row_idx)
+                selected_rows[row_idx] = src
+                tab_stats["selected"] += 1
+
+            stats["matched"] += tab_stats["matched"]
+            stats["not_found"] += tab_stats["not_found"]
+            stats["tabs"][tab_name] = tab_stats
+            print(
+                f"  対象: {tab_stats['eligible']}件, 突合: {tab_stats['matched']}件, "
+                f"採用: {tab_stats['selected']}件, CDP未一致: {tab_stats['not_found']}件"
+            )
+
+        updates = []
+        today = datetime.now().strftime("%Y/%m/%d")
+
+        for row_idx, src in sorted(selected_rows.items()):
+            sheet_row = row_idx + 3
+            row = self._master_data[row_idx]
+            while len(row) <= refund_idx:
+                row.append("")
+
+            current_refund = row[refund_idx].strip()
+            row_changed = False
+
+            if current_refund != src["amount"]:
+                updates.append({
+                    "range": f"{_col_to_letter(refund_idx + 1)}{sheet_row}",
+                    "values": [[src["amount"]]],
+                })
+                row[refund_idx] = src["amount"]
+                master_key = row[email_idx].strip() if email_idx is not None and email_idx < len(row) else src["email"] or src["line_name"] or src["full_name"]
+                self.logger.log(
+                    "update",
+                    master_key,
+                    "返金額",
+                    current_refund,
+                    src["amount"],
+                    f"{src['tab']}!{src['sheet_row']}",
+                )
+                row_changed = True
+
+            if self._append_ltv_update(row_idx, sheet_row, updates):
+                row_changed = True
+
+            if row_changed:
+                if update_date_idx is not None:
+                    updates.append({
+                        "range": f"{_col_to_letter(update_date_idx + 1)}{sheet_row}",
+                        "values": [[today]],
+                    })
+                    while len(row) <= update_date_idx:
+                        row.append("")
+                    row[update_date_idx] = today
+                stats["updated"] += 1
+
+        if updates and not dry_run:
+            ws_cdp = self.ss.worksheet("顧客マスタ")
+            self._batch_update_ranges(ws_cdp, updates)
+
+        print(f"\nCS返金同期完了: {stats['updated']}件更新")
+        return stats
+
+    def _count_cs_special_source_rows(self, source_tab, ref_col, cs_ss=None):
+        """CS管理シートの特殊同期行の更新数を返す"""
+        cs_ss = cs_ss or self.client.open_by_key(CS_SHEET_ID)
+
+        if source_tab == "管理用_クーオフ・中途解約以外" and ref_col == "返金額":
+            cfg = next(c for c in self._CS_REFUND_TABS if c["tab"] == source_tab)
+            return len(self._load_cs_refund_source_rows(cs_ss, cfg))
+
+        if source_tab == "管理用_2025.1.25-クーオフ":
+            ws = cs_ss.worksheet(source_tab)
+            data = ws.get_all_values()
+            if ref_col == "対応完了日":
+                return sum(
+                    1 for row in data[2:]
+                    if len(row) > 10
+                    and row[10].strip()
+                    and row[5].strip() == "クーリングオフ"
+                    and row[6].strip() == "完了"
+                    and extract_date_only(row[1])
+                )
+            if ref_col == "返金額":
+                cfg = next(c for c in self._CS_REFUND_TABS if c["tab"] == source_tab)
+                return len(self._load_cs_refund_source_rows(cs_ss, cfg))
+
+        if source_tab == "管理用_20250125-中途解約":
+            ws = cs_ss.worksheet(source_tab)
+            data = ws.get_all_values()
+            if ref_col == "対応完了日":
+                return sum(
+                    1 for row in data[2:]
+                    if len(row) > 10
+                    and row[10].strip()
+                    and row[5].strip() == "中途解約"
+                    and row[6].strip() == "完了"
+                    and extract_date_only(row[1])
+                )
+            if ref_col in {"返金額", "返金額/請求額"}:
+                cfg = next(c for c in self._CS_REFUND_TABS if c["tab"] == source_tab)
+                return len(self._load_cs_refund_source_rows(cs_ss, cfg))
+
+        return None
+
     # ─── 自動同期 ──────────────────────────────────────
 
     def auto_sync(self, dry_run=False, incremental=True):
@@ -2231,6 +2737,29 @@ class CDPSync:
                     for cs_tab in self._CS_TABS:
                         self.update_source_status(
                             cs_url, cs_tab["tab"], "停止", error_count=1)
+                except Exception:
+                    pass
+
+        # CS管理シートからの返金額同期
+        try:
+            refund_stats = self.sync_cs_refunds(dry_run=dry_run)
+            refund_updated = refund_stats.get("updated", 0) if refund_stats else 0
+            if refund_updated > 0:
+                total_stats["updated"] += refund_updated
+            if not dry_run:
+                cs_url = f"https://docs.google.com/spreadsheets/d/{CS_SHEET_ID}/edit"
+                for cs_tab in self._CS_REFUND_TABS:
+                    self.update_source_status(cs_url, cs_tab["tab"], "正常")
+        except Exception as e:
+            total_stats["errors"] += 1
+            print(f"  CS返金同期エラー: {e}")
+            if not dry_run:
+                try:
+                    cs_url = f"https://docs.google.com/spreadsheets/d/{CS_SHEET_ID}/edit"
+                    for cs_tab in self._CS_REFUND_TABS:
+                        self.update_source_status(
+                            cs_url, cs_tab["tab"], "停止", error_count=1
+                        )
                 except Exception:
                     pass
 
