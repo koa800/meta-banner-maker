@@ -2252,23 +2252,29 @@ def call_claude_api(instruction: str, task: dict):
             task.setdefault("arguments", {})["_raw_reply"] = reply_suggestion
 
             # 秘書グループ向けの整形済みメッセージを生成
-            platform_tag = "[CW] " if platform == "chatwork" else ""
-            sender_label = f"{sender_name}（{category_line.strip()}）" if category_line.strip() else sender_name
-            quoted_line = ""
             if quoted_text:
-                q_preview = quoted_text[:50] + "..." if len(quoted_text) > 50 else quoted_text
-                quoted_line = f"引用: 「{q_preview}」\n"
-            result = (
-                f"{'引用返信案' if quoted_text else '返信案'} {platform_tag}\n"
-                f"{sender_label} / {group_name}\n"
-                f"「{original_message[:80]}{'...' if len(original_message) > 80 else ''}」\n"
-                f"{quoted_line}"
-                f"\n"
-                f"{reply_suggestion}\n"
-                f"\n"
-                f"リプライで操作:\n"
-                f"1 → 承認  2 [内容] → 編集"
-            )
+                result = (
+                    f"{sender_name}への返信案\n"
+                    f"\n"
+                    f"{reply_suggestion}\n"
+                    f"\n"
+                    f"リプライで承認お願いいたします！\n"
+                    f"1→承認\n"
+                    f"2→編集して送信"
+                )
+            else:
+                platform_tag = "[CW] " if platform == "chatwork" else ""
+                sender_label = f"{sender_name}（{category_line.strip()}）" if category_line.strip() else sender_name
+                result = (
+                    f"返信案 {platform_tag}\n"
+                    f"{sender_label} / {group_name}\n"
+                    f"「{original_message[:80]}{'...' if len(original_message) > 80 else ''}」\n"
+                    f"\n"
+                    f"{reply_suggestion}\n"
+                    f"\n"
+                    f"リプライで操作:\n"
+                    f"1 → 承認  2 [内容] → 編集"
+                )
             # 接触記録を更新（フォローアップ追跡用 + 会話記憶）
             if sender_name:
                 _contact_state_path = _RUNTIME_DATA_DIR / "contact_state.json"
