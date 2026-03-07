@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年3月7日（clone brain / shared context / registry分離基盤追加、通知・グループ要約改善） |
+| 最終更新 | 2026年3月7日（clone brain / shared context / registry分離基盤追加、通知・グループ要約改善、Cursorワークスペース活用とCDP既知修復を強化） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -152,7 +152,7 @@
 24. **Addness KPI自動参照**: アドネス関連の会話を自動検知し、KPIキャッシュ→CSV再構築→Sheets APIの4段階フォールバックで自動注入。**目標KPI対比**（`config/addness.json`の`kpi_targets`）・**異常値検知**（ROAS<0%等）・**stale警告**（24h超で警告・7日超で拒否）付き。外部パートナー・未登録者にはKPI非開示
 25. **KPI日次パイプライン**: Looker StudioからCSVダウンロード→元データシート→日別/月別自動投入。毎日12:00にOrchestratorが完了チェック→投入成功時はKPIキャッシュも再生成→未完了ならLINEリマインド。毎晩22:00にもキャッシュ再生成（1日3回更新）
 26. **遠隔エージェント再起動**: LINEから「再起動」と送信するとMac Mini上の`local_agent.py`が`launchctl unload/load`で自動再起動。コード更新後の反映やエラー回復に使用
-27. **自動再起動改善**: `git_pull_sync.sh`が`line_bot_local/`配下の`.py`ファイル変更を検知すると自動で`local_agent`を再起動し、LINEに通知（変更ファイル名・コミットハッシュ・時刻を含む）
+27. **自動再起動改善**: `git_pull_sync.sh`が`line_bot_local/`配下の`.py`ファイル変更を検知すると自動で`local_agent`を再起動。成功通知は送らず、手動確認が必要な異常だけLINE通知してノイズを抑制
 28. **plistパス自動修正**: `git_pull_sync.sh`が毎回実行時にlaunchctl plistのパス整合性をチェック。Library版（`~/Library/LineBot/`）など古いパスを参照していた場合、正しいデプロイ先（`~/agents/line_bot_local/`）に自動修正＆再起動。config.jsonも旧パスから自動マイグレーション
 
 ### Phase 8: Claude Code 自律モード（完了）
@@ -162,6 +162,8 @@
 36. **認証分離**: `~/.claude-secretary/`（秘書アカウント koa800.secretary@gmail.com MAX 5x）で日向エージェント（`~/.claude/`）と完全分離。`CLAUDE_CONFIG_DIR`環境変数でsubprocess起動時に切り替え
 37. **bypassPermissions**: `~/.claude-secretary/settings.json`でBash/WebSearch/Read等の全ツール解放。rm/sudo/kill/force-push等の破壊的操作のみask制限
 38. **人名ハルシネーション防止**: profiles.jsonから全メンバー名を抽出し「社内メンバー一覧」としてプロンプトに注入。「人名ルール: profiles.jsonに存在する正確な名前のみ使用」を出力ルールに追加
+- **Cursorワークスペース優先**: 秘書のClaude Codeプロンプトに、`cursor/` 配下の `AGENTS.md` / `CLAUDE.md` / `Skills/` / `Project/` / `Master/` / `System/` を正本として読むルールを追加。MacBookのCursorで作業するのと同じ流れで、調査→修復→検証→報告まで一気通貫で行う
+- **既知エラーの先回り修復**: ルールが固まっていて可逆な修復は、報告の前に秘書が自分で実行する方針に変更。CDPの列名揺れ補正のような定型エラーは、まず自動修復を試みる
 
 ### Phase 9: 画像生成（実装完了）
 39. **Gemini API（Nano Banana Pro）**: Google の最高品質画像生成モデル `nano-banana-pro-preview` を API 経由で直接利用。ブラウザ操作不要、API1回で生成完了（約20円/枚）

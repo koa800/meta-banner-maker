@@ -5,14 +5,65 @@ work together correctly without external dependencies.
 """
 
 import json
+import asyncio
+import importlib
 import os
 import sys
 import tempfile
 import shutil
+import types
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+
+def _load_scheduler_module():
+    """apscheduler 非依存で scheduler モジュールを読み込む。"""
+    fake_apscheduler = types.ModuleType("apscheduler")
+    fake_schedulers = types.ModuleType("apscheduler.schedulers")
+    fake_asyncio = types.ModuleType("apscheduler.schedulers.asyncio")
+    fake_triggers = types.ModuleType("apscheduler.triggers")
+    fake_cron = types.ModuleType("apscheduler.triggers.cron")
+    fake_interval = types.ModuleType("apscheduler.triggers.interval")
+
+    class DummyScheduler:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+            self.jobs = []
+
+        def add_job(self, *args, **kwargs):
+            self.jobs.append({"args": args, "kwargs": kwargs})
+
+        def start(self):
+            return None
+
+        def shutdown(self):
+            return None
+
+    class DummyTrigger:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+    fake_asyncio.AsyncIOScheduler = DummyScheduler
+    fake_cron.CronTrigger = DummyTrigger
+    fake_interval.IntervalTrigger = DummyTrigger
+
+    module_map = {
+        "apscheduler": fake_apscheduler,
+        "apscheduler.schedulers": fake_schedulers,
+        "apscheduler.schedulers.asyncio": fake_asyncio,
+        "apscheduler.triggers": fake_triggers,
+        "apscheduler.triggers.cron": fake_cron,
+        "apscheduler.triggers.interval": fake_interval,
+    }
+
+    with patch.dict(sys.modules, module_map):
+        sys.modules.pop("agent_orchestrator.scheduler", None)
+        return importlib.import_module("agent_orchestrator.scheduler")
 
 
 def test_shared_logger_writes_jsonl():
@@ -96,6 +147,114 @@ def test_notifier_without_token():
     print("  [PASS] notifier handles missing token")
 
 
+def test_scheduler_formats_cdp_sync_success_message():
+    """CDP同期の成功通知は要点だけを短く返す。"""
+    scheduler_module = _load_scheduler_module()
+
+    output = """
+=== 自動同期完了 ===
+更新: 12件
+新規: 3件
+5 件を集客データシートに追加
+集客データシートから2行削除
+自動修復: 1件
+"""
+    message = scheduler_module._build_cdp_sync_message(output)
+
+    assert message is not None
+    assert "CDP同期が終わりました" in message
+    assert "・マスタ更新 12件" in message
+    assert "・マスタ新規 3件" in message
+    assert "・集客データ追加 5件" in message
+    assert "・集客データ昇格削除 2件" in message
+    assert "・自動修復 1件" in message
+    assert "次に見てほしいこと" not in message
+    print("  [PASS] scheduler formats compact CDP success message")
+
+
+def test_cdp_sync_finds_best_header_match():
+    """CDP列名の小変更は自動修復候補を推定できる。"""
+    from cdp_sync import find_best_header_match
+
+    headers = [
+        "登録日時",
+        "【メールアドレス】",
+        "電話番号を教えてください",
+        "お名前（フルネーム）",
+    ]
+
+    assert find_best_header_match("メールアドレス", headers, "メールアドレス") == "【メールアドレス】"
+    assert find_best_header_match("電話番号", headers, "電話番号") == "電話番号を教えてください"
+    print("  [PASS] cdp_sync finds best header match")
+
+
+def test_scheduler_formats_cdp_sync_attention_message():
+    """CDP同期の確認依頼はリンクと次アクションを含める。"""
+    scheduler_module = _load_scheduler_module()
+
+    output = """
+=== 自動同期完了 ===
+更新: 8件
+エラー: 1件
+
+⚠️ 未同期ソース: 1件
+  - UTAGE/友だちリスト: 7日未同期
+"""
+
+    with patch.object(
+        scheduler_module,
+        "_build_cdp_attention_links",
+        return_value=[
+            ("CDP / データソース管理", "https://example.com/cdp"),
+            ("UTAGE / 友だちリスト（7日未同期）", "https://example.com/source"),
+        ],
+    ):
+        message = scheduler_module._build_cdp_sync_message(output)
+
+    assert message is not None
+    assert "CDP同期で確認が必要です" in message
+    assert "・エラー 1件" in message
+    assert "・未同期ソース 1件" in message
+    assert "次に見てほしいこと" in message
+    assert "https://example.com/cdp" in message
+    assert "https://example.com/source" in message
+    print("  [PASS] scheduler formats actionable CDP attention message")
+
+
+def test_scheduler_normalizes_cron_weekday_for_apscheduler():
+    """週次cronの曜日番号は通常cron基準で解釈する。"""
+    scheduler_module = _load_scheduler_module()
+
+    trigger = scheduler_module._build_cron_trigger_from_expr("0 15 * * 5")
+    weekday_trigger = scheduler_module._build_cron_trigger_from_expr("0 12 * * 1-5")
+
+    assert trigger.kwargs["day_of_week"] == "fri"
+    assert weekday_trigger.kwargs["day_of_week"] == "mon-fri"
+    assert str(trigger.kwargs["timezone"]) == "Asia/Tokyo"
+    print("  [PASS] scheduler normalizes cron weekday and timezone")
+
+
+def test_meeting_report_skips_outside_friday():
+    """経営会議資料は金曜以外なら実行前に止める。"""
+    scheduler_module = _load_scheduler_module()
+
+    class FakeDateTime:
+        @classmethod
+        def now(cls, tz=None):
+            from datetime import datetime
+
+            return datetime(2026, 3, 7, 15, 0, tzinfo=tz)
+
+    scheduler = scheduler_module.TaskScheduler({"schedule": {}}, MagicMock())
+    scheduler._ensure_claude_chrome_ready = MagicMock(return_value=(True, "", {}, "", ""))
+
+    with patch.object(scheduler_module, "datetime", FakeDateTime):
+        asyncio.run(scheduler._run_meeting_report())
+
+    scheduler._ensure_claude_chrome_ready.assert_not_called()
+    print("  [PASS] meeting_report skips on non-Friday")
+
+
 def test_repair_agent_no_errors():
     """RepairAgent returns None when there are no errors."""
     from agent_orchestrator.memory import MemoryStore
@@ -161,6 +320,11 @@ if __name__ == "__main__":
     test_code_tools_safety_rejects_secrets()
     test_code_tools_tool_dispatch()
     test_notifier_without_token()
+    test_scheduler_formats_cdp_sync_success_message()
+    test_cdp_sync_finds_best_header_match()
+    test_scheduler_formats_cdp_sync_attention_message()
+    test_scheduler_normalizes_cron_weekday_for_apscheduler()
+    test_meeting_report_skips_outside_friday()
     test_repair_agent_no_errors()
     test_repair_agent_dedup()
     print("\n✓ All integration tests passed!")

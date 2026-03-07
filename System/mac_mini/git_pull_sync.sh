@@ -328,12 +328,6 @@ if echo "$CHANGED" | grep -qE "line_bot_local/.*\.py"; then
   launchctl unload "$PLIST" 2>/dev/null || true
   sleep 2
   launchctl load "$PLIST" 2>/dev/null || true
-  COMMIT_SHORT=$(echo "$REMOTE_HEAD" | cut -c1-7)
-  notify_line "🔄 ローカルエージェント自動再起動
-━━━━━━━━━━━━
-変更: ${CHANGED_PY}
-コミット: ${COMMIT_SHORT}
-時刻: $(date '+%H:%M')"
 fi
 
 # 遠隔再起動シグナルファイル（local_agentが作成 → ここで検知）
@@ -344,8 +338,6 @@ if [ -f "$RESTART_SIGNAL" ]; then
   launchctl unload "$PLIST" 2>/dev/null || true
   sleep 2
   launchctl load "$PLIST" 2>/dev/null || true
-  notify_line "🔄 ローカルエージェント遠隔再起動完了
-時刻: $(date '+%H:%M')"
 fi
 
 ORCH_PLIST=~/Library/LaunchAgents/com.addness.agent-orchestrator.plist

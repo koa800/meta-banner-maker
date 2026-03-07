@@ -37,7 +37,7 @@ schedule:
     cron: "25 8 * * *"           # 08:25  認証チェック（Google + Claude Code OAuth）※日報入力(08:40)の前に実行
     enabled: true
   anthropic_credit_check:
-    cron: "20 8 * * 1"           # 月曜 08:20  Anthropic APIクレジット残高チェック
+    cron: "20 8 * * mon"         # 月曜 08:20  Anthropic APIクレジット残高チェック
     enabled: false
   openai_credit_check:
     cron: "0 9,15,21 * * *"     # 不要（llm_routerが毎回の呼び出し時に自動チェック）
@@ -59,7 +59,7 @@ schedule:
 
   # === 秘書自律ワーク ===
   secretary_proactive_work:
-    cron: "0 10,14,17 * * 1-5"   # 平日 10:00/14:00/17:00（secretary_goal_progress に統合）
+    cron: "0 10,14,17 * * mon-fri"  # 平日 10:00/14:00/17:00（secretary_goal_progress に統合）
     enabled: false
   secretary_goal_progress:
     interval_minutes: 30         # 30分ごとに発火（空き時間判定あり）
@@ -67,7 +67,7 @@ schedule:
 
   # === 日報リマインド ===
   daily_report_reminder:
-    cron: "0 12,19 * * 1-5"        # 平日 12:00/19:00 チームメンバーの日報未記入リマインド
+    cron: "0 12,19 * * mon-fri"    # 平日 12:00/19:00 チームメンバーの日報未記入リマインド
     enabled: true
 
   # === 日中 ===
@@ -105,38 +105,38 @@ schedule:
 
   # === 週次 ===
   meeting_report:
-    cron: "0 15 * * 5"            # 金曜 15:00  経営会議資料自動作成（Chrome MCP, max_turns=40, timeout=15分）
+    cron: "0 15 * * fri"          # 金曜 15:00  経営会議資料自動作成（Chrome MCP, max_turns=40, timeout=15分）
     enabled: true
 
   weekly_idea_proposal:
-    cron: "0 9 * * 1"            # 月曜 09:00  アイデア提案
+    cron: "0 9 * * mon"          # 月曜 09:00  アイデア提案
     enabled: true
   weekly_stats:
-    cron: "30 9 * * 1"           # 月曜 09:30  週次レポート
+    cron: "30 9 * * mon"         # 月曜 09:30  週次レポート
     enabled: true
   weekly_content_suggestions:
-    cron: "0 10 * * 3"           # 水曜 10:00  コンテンツ提案
+    cron: "0 10 * * wed"         # 水曜 10:00  コンテンツ提案
     enabled: true
   weekly_profile_learning:
-    cron: "0 10 * * 0"           # 日曜 10:00  プロファイル学習
+    cron: "0 10 * * sun"         # 日曜 10:00  プロファイル学習
     enabled: true
   os_sync_session:
-    cron: "0 20 * * 5"           # 金曜 20:00  OSすり合わせ（秘書→甲原）
+    cron: "0 20 * * fri"         # 金曜 20:00  OSすり合わせ（秘書→甲原）
     enabled: true
   weekly_hinata_memory:
-    cron: "30 10 * * 0"          # 日曜 10:30  日向の記憶統合（profile_learningの後）
+    cron: "30 10 * * sun"        # 日曜 10:30  日向の記憶統合（profile_learningの後）
     enabled: false               # 2026-03-06 日向一時停止
   video_knowledge_review:
-    cron: "0 11 * * 0"           # 日曜 11:00  動画知識ライフサイクルレビュー（hinata_memoryの後）
+    cron: "0 11 * * sun"         # 日曜 11:00  動画知識ライフサイクルレビュー（hinata_memoryの後）
     enabled: true
   ds_insight_biweekly_report:
-    cron: "30 11 * * 0"          # 日曜 11:30  DS.INSIGHTレポート（Python側で隔週判定）
+    cron: "30 11 * * sun"        # 日曜 11:30  DS.INSIGHTレポート（Python側で隔週判定）
     enabled: true
   ds_insight_mail_collect:
     cron: "0 10 * * 1,2,4"      # 月火木 10:00  DS.INSIGHTメール回収（通知なし、失敗時3h後リトライ）
     enabled: true
   ds_insight_weekly_digest:
-    cron: "0 10 * * 5"           # 金曜 10:00  DS.INSIGHT週次レポート（1週間分まとめてAI要約→LINE通知）
+    cron: "0 10 * * fri"         # 金曜 10:00  DS.INSIGHT週次レポート（1週間分まとめてAI要約→LINE通知）
     enabled: true
   video_learning_reminder:
     interval_minutes: 30         # 承認待ち動画知識のリマインド（1時間経過でLINE通知）

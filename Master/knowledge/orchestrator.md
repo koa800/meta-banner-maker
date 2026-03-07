@@ -33,6 +33,11 @@
 - 金曜 20:00: os_sync_session（秘書→甲原のOSすり合わせ）
 - 日曜 10:00: weekly_profile_learning / ~~10:30: weekly_hinata_memory~~（日向停止中） / 11:00: video_knowledge_review（動画知識ライフサイクルレビュー） / 11:30: ds_insight_biweekly_report（隔週。DS.INSIGHTデータ取得→レポート→LINE通知）
 
+### スケジュール運用メモ
+- `config.yaml` の曜日指定 cron は曜日名（`mon` / `mon-fri` / `wed` / `fri` / `sun`）で管理する
+- scheduler 側でも通常 cron の曜日番号を APScheduler 向けに正規化しており、曜日指定ジョブは日本時間 `Asia/Tokyo` で実行する
+- `meeting_report` は金曜以外に起動要求が来ても実行前にスキップし、不要な開始通知を送らない
+
 ### 月次
 - 毎月3日 09:30: monthly_invoice_submission（請求書作成・提出。INVOY→承認→フォーム→Drive）
 

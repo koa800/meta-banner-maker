@@ -11,8 +11,10 @@ from apscheduler.triggers.interval import IntervalTrigger
 import os
 import re
 import sys
+from functools import lru_cache
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from . import tools
 from .memory import MemoryStore
@@ -21,9 +23,303 @@ from .shared_logger import get_logger
 logger = get_logger("scheduler")
 
 _repair_agent_ref = None
+_SCHEDULER_TIMEZONE = ZoneInfo("Asia/Tokyo")
+_CRON_WEEKDAY_MAP = {
+    "0": "sun",
+    "1": "mon",
+    "2": "tue",
+    "3": "wed",
+    "4": "thu",
+    "5": "fri",
+    "6": "sat",
+    "7": "sun",
+}
 
 # ---- execution_rules.json 読み込み（簡潔フォーマット・キャッシュ付き） ----
 _execution_rules_compact_cache: str | None = None
+
+_CDP_SHEET_ID = "1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk"
+_CDP_SOURCE_MANAGEMENT_TAB = "データソース管理"
+
+
+def _ensure_system_path() -> None:
+    """System/ 配下のモジュールを import できるようにする。"""
+    system_dir = Path(__file__).resolve().parents[2]
+    system_dir_str = str(system_dir)
+    if system_dir_str not in sys.path:
+        sys.path.insert(0, system_dir_str)
+
+
+@lru_cache(maxsize=64)
+def _resolve_sheet_gid(spreadsheet_id: str, tab_name: str) -> int | None:
+    """シートIDとタブ名から gid を解決する。失敗時は None。"""
+    if not tab_name:
+        return None
+
+    try:
+        _ensure_system_path()
+        from sheets_manager import get_client
+
+        spreadsheet = get_client().open_by_key(spreadsheet_id)
+        return spreadsheet.worksheet(tab_name).id
+    except Exception as e:
+        logger.warning(
+            f"sheet gid resolve failed: spreadsheet={spreadsheet_id}, tab={tab_name}, error={e}"
+        )
+        return None
+
+
+def _build_sheet_url(url_or_id: str, tab_name: str = "") -> str:
+    """スプレッドシートURL/IDをクリックしやすいURLに正規化する。"""
+    try:
+        _ensure_system_path()
+        from sheets_manager import extract_spreadsheet_id
+
+        spreadsheet_id, gid = extract_spreadsheet_id(url_or_id)
+        resolved_gid = gid if gid is not None else (
+            _resolve_sheet_gid(spreadsheet_id, tab_name) if tab_name else None
+        )
+        base_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit"
+        if resolved_gid is None:
+            return base_url
+        return f"{base_url}?gid={resolved_gid}"
+    except Exception:
+        return url_or_id
+
+
+def _to_int(value: str) -> int:
+    digits = re.sub(r"[^\d-]", "", str(value or ""))
+    if not digits:
+        return 0
+    try:
+        return int(digits)
+    except ValueError:
+        return 0
+
+
+def _normalize_cron_day_of_week(raw: str) -> str:
+    """通常の cron 曜日表記を APScheduler 向けに正規化する。"""
+    value = (raw or "").strip().lower()
+    if not value or value == "*" or "/" in value:
+        return value
+    if "," in value:
+        return ",".join(_normalize_cron_day_of_week(part) for part in value.split(","))
+    if "-" in value:
+        start, end = value.split("-", 1)
+        return f"{_normalize_cron_day_of_week(start)}-{_normalize_cron_day_of_week(end)}"
+    return _CRON_WEEKDAY_MAP.get(value, value)
+
+
+def _build_cron_trigger_from_expr(expr: str) -> CronTrigger:
+    """config.yaml の cron 文字列から日本時間の CronTrigger を組み立てる。"""
+    parts = expr.split()
+    if len(parts) != 5:
+        raise ValueError(f"invalid cron expression: {expr}")
+    return CronTrigger(
+        minute=parts[0],
+        hour=parts[1],
+        day=parts[2],
+        month=parts[3],
+        day_of_week=_normalize_cron_day_of_week(parts[4]),
+        timezone=_SCHEDULER_TIMEZONE,
+    )
+
+
+def _load_cdp_source_catalog() -> list[dict]:
+    """データソース管理から通知用の参照情報を読み込む。"""
+    try:
+        _ensure_system_path()
+        from sheets_manager import get_client
+
+        spreadsheet = get_client().open_by_key(_CDP_SHEET_ID)
+        ws = spreadsheet.worksheet(_CDP_SOURCE_MANAGEMENT_TAB)
+        data = ws.get_all_values()
+    except Exception as e:
+        logger.warning(f"cdp source catalog load failed: {e}")
+        return []
+
+    rows: list[dict] = []
+    for row in data[1:]:
+        if len(row) < 6 or not row[0].strip():
+            continue
+
+        rows.append({
+            "cdp_column": row[0].strip(),
+            "source_name": row[2].strip() if len(row) > 2 else "",
+            "url": row[4].strip() if len(row) > 4 else "",
+            "tab": row[5].strip() if len(row) > 5 else "",
+            "status": row[9].strip() if len(row) > 9 else "",
+            "last_sync": row[10].strip() if len(row) > 10 else "",
+            "error_count": _to_int(row[12] if len(row) > 12 else ""),
+        })
+
+    return rows
+
+
+def _format_line_message(
+    title: str,
+    summary_lines: list[str] | None = None,
+    action_lines: list[str] | None = None,
+    links: list[tuple[str, str]] | None = None,
+) -> str:
+    sections = [title.strip()]
+
+    if summary_lines:
+        sections.append("\n".join(f"・{line}" for line in summary_lines if line))
+
+    if action_lines:
+        sections.append(
+            "次に見てほしいこと\n"
+            + "\n".join(f"・{line}" for line in action_lines if line)
+        )
+
+    if links:
+        link_lines = []
+        for label, url in links:
+            if not url:
+                continue
+            if label:
+                link_lines.append(f"・{label}\n{url}")
+            else:
+                link_lines.append(url)
+        if link_lines:
+            sections.append("開く場所\n" + "\n".join(link_lines))
+
+    return "\n\n".join(section for section in sections if section)
+
+
+def _build_cdp_attention_links(stale_lines: list[str]) -> list[tuple[str, str]]:
+    links: list[tuple[str, str]] = [
+        (
+            "CDP / データソース管理",
+            _build_sheet_url(_CDP_SHEET_ID, _CDP_SOURCE_MANAGEMENT_TAB),
+        )
+    ]
+
+    source_rows = _load_cdp_source_catalog()
+    if not source_rows:
+        return links
+
+    seen_urls = {links[0][1]}
+    tab_states: dict[tuple[str, str], dict] = {}
+    stale_lookup: dict[str, dict] = {}
+
+    for row in source_rows:
+        if not row["url"] or not row["tab"]:
+            continue
+
+        key = (row["url"], row["tab"])
+        state = tab_states.setdefault(key, {
+            "source_name": row["source_name"] or "スプレッドシート",
+            "url": row["url"],
+            "tab": row["tab"],
+            "stopped": False,
+            "error_count": 0,
+        })
+        state["stopped"] = state["stopped"] or row["status"] == "停止"
+        state["error_count"] = max(state["error_count"], row["error_count"])
+
+        source_key = f"{row['source_name']}/{row['tab']}"
+        stale_lookup.setdefault(source_key, row)
+        stale_lookup.setdefault(f"{row['cdp_column']}（{source_key}）", row)
+
+    for state in tab_states.values():
+        if not state["stopped"] and state["error_count"] <= 0:
+            continue
+        url = _build_sheet_url(state["url"], state["tab"])
+        if url in seen_urls:
+            continue
+
+        reasons = []
+        if state["stopped"]:
+            reasons.append("停止")
+        if state["error_count"] > 0:
+            reasons.append(f"エラー{state['error_count']}件")
+
+        links.append((
+            f"{state['source_name']} / {state['tab']}（{' / '.join(reasons)}）",
+            url,
+        ))
+        seen_urls.add(url)
+        if len(links) >= 5:
+            return links
+
+    for stale in stale_lines:
+        source_key, _, reason = stale.partition(":")
+        row = stale_lookup.get(source_key.strip())
+        if not row:
+            continue
+
+        url = _build_sheet_url(row["url"], row["tab"])
+        if url in seen_urls:
+            continue
+
+        label = f"{row['source_name'] or 'スプレッドシート'} / {row['tab']}"
+        if reason.strip():
+            label += f"（{reason.strip()}）"
+
+        links.append((label, url))
+        seen_urls.add(url)
+        if len(links) >= 5:
+            break
+
+    return links
+
+
+def _build_cdp_sync_message(output: str) -> str | None:
+    summary_lines = []
+
+    match = re.search(r"更新: (\d+)件", output)
+    if match and int(match.group(1)) > 0:
+        summary_lines.append(f"マスタ更新 {match.group(1)}件")
+
+    match = re.search(r"新規: (\d+)件", output)
+    if match and int(match.group(1)) > 0:
+        summary_lines.append(f"マスタ新規 {match.group(1)}件")
+
+    match = re.search(r"(\d+) 件を集客データシートに追加", output)
+    if match:
+        summary_lines.append(f"集客データ追加 {match.group(1)}件")
+
+    match = re.search(r"集客データシートから(\d+)行削除", output)
+    if match:
+        summary_lines.append(f"集客データ昇格削除 {match.group(1)}件")
+
+    match = re.search(r"自動修復: (\d+)件", output)
+    if match and int(match.group(1)) > 0:
+        summary_lines.append(f"自動修復 {match.group(1)}件")
+
+    error_lines = re.findall(r"エラー: (\d+)件", output)
+    error_count = int(error_lines[0]) if error_lines else 0
+    aborted = re.findall(r"ソース変更により中断: (\d+)件", output)
+    aborted_count = int(aborted[0]) if aborted else 0
+    if error_count > 0 or aborted_count > 0:
+        summary_lines.append(f"エラー {error_count + aborted_count}件")
+
+    stale_lines = re.findall(r"  - (.+)", output)
+    stale_lines = [line for line in stale_lines if "未同期" in line or "日未同期" in line]
+    if stale_lines:
+        summary_lines.append(f"未同期ソース {len(stale_lines)}件")
+
+    if not summary_lines:
+        return None
+
+    needs_attention = error_count > 0 or aborted_count > 0 or bool(stale_lines)
+    if not needs_attention:
+        return _format_line_message("CDP同期が終わりました", summary_lines=summary_lines)
+
+    action_lines = []
+    if error_count > 0 or aborted_count > 0:
+        action_lines.append("データソース管理で「停止」または「エラー数 > 0」の行だけ確認してください")
+    if stale_lines:
+        action_lines.append("未同期ソースが一時停止か恒久停止かだけ確認してください")
+
+    return _format_line_message(
+        "CDP同期で確認が必要です",
+        summary_lines=summary_lines,
+        action_lines=action_lines,
+        links=_build_cdp_attention_links(stale_lines),
+    )
 
 
 def _build_execution_rules_compact() -> str:
@@ -75,7 +371,7 @@ class TaskScheduler:
     def __init__(self, config: dict, memory: MemoryStore):
         self.config = config
         self.memory = memory
-        self.scheduler = AsyncIOScheduler()
+        self.scheduler = AsyncIOScheduler(timezone=_SCHEDULER_TIMEZONE)
         self._task_map = {
             "addness_fetch": self._run_addness_fetch,
             "ai_news": self._run_ai_news,
@@ -134,11 +430,7 @@ class TaskScheduler:
                 continue
 
             if "cron" in cfg:
-                parts = cfg["cron"].split()
-                trigger = CronTrigger(
-                    minute=parts[0], hour=parts[1], day=parts[2],
-                    month=parts[3], day_of_week=parts[4]
-                )
+                trigger = _build_cron_trigger_from_expr(cfg["cron"])
                 self.scheduler.add_job(task_fn, trigger, id=task_name, name=task_name, replace_existing=True, misfire_grace_time=60)
                 logger.info(f"Scheduled '{task_name}' with cron: {cfg['cron']}")
             elif "interval_seconds" in cfg:
@@ -2801,7 +3093,6 @@ head -3 "{csv_dir}/{csv_filename}"
     async def _run_cdp_sync(self):
         """2時間ごと: CDP同期（データソース→マスタ + 経路別タブ→集客データ）"""
         import subprocess
-        import re as _re
         script = str(Path(__file__).resolve().parent.parent.parent / "cdp_sync.py")
         try:
             proc = subprocess.run(
@@ -2812,53 +3103,47 @@ head -3 "{csv_dir}/{csv_filename}"
             output = proc.stdout if proc.stdout else ""
             if proc.returncode == 0:
                 logger.info(f"CDP sync completed: {output[-500:]}")
-                # 同期結果を解析してLINE通知（変更があった場合のみ）
-                changes = []
-                m = _re.search(r"更新: (\d+)件", output)
-                if m and int(m.group(1)) > 0:
-                    changes.append(f"マスタ更新 {m.group(1)}件")
-                m = _re.search(r"新規: (\d+)件", output)
-                if m and int(m.group(1)) > 0:
-                    changes.append(f"マスタ新規 {m.group(1)}件")
-                m = _re.search(r"(\d+) 件を集客データシートに追加", output)
-                if m:
-                    changes.append(f"集客データ {m.group(1)}件追加")
-                m = _re.search(r"集客データシートから(\d+)行削除", output)
-                if m:
-                    changes.append(f"集客データ {m.group(1)}件昇格削除")
-                # ソースエラーの検出（個別ソースの停止）
-                error_lines = _re.findall(r"エラー: (\d+)件", output)
-                error_count = int(error_lines[0]) if error_lines else 0
-                aborted = _re.findall(r"ソース変更により中断: (\d+)件", output)
-                aborted_count = int(aborted[0]) if aborted else 0
-                if error_count > 0 or aborted_count > 0:
-                    changes.append(f"エラー {error_count + aborted_count}件")
-                # 未同期ソースの検出（鮮度チェック）
-                stale_lines = _re.findall(r"  - (.+)", output)
-                stale_lines = [s for s in stale_lines if "未同期" in s or "日未同期" in s]
-                if stale_lines:
-                    changes.append(f"未同期ソース {len(stale_lines)}件")
-                if changes:
+                message = _build_cdp_sync_message(output)
+                if message:
                     from .notifier import send_line_notify
-                    msg = f"CDP同期完了: {' / '.join(changes)}"
-                    alerts = []
-                    if error_count > 0 or aborted_count > 0:
-                        alerts.append("🔴 ソースエラーが発生。データソース管理のステータスを確認してください")
-                    if stale_lines:
-                        alerts.append("⚠️ 未同期ソース:\n" + "\n".join(
-                            f"・{s}" for s in stale_lines[:5]))
-                    if alerts:
-                        msg += "\n\n" + "\n\n".join(alerts)
-                    send_line_notify(msg)
+                    send_line_notify(message)
             else:
                 error = proc.stderr[-300:] if proc.stderr else ""
                 logger.warning(f"CDP sync failed: {error}")
                 from .notifier import send_line_notify
-                send_line_notify(f"CDP同期でエラーが発生しました: {error[:200]}")
+                send_line_notify(
+                    _format_line_message(
+                        "CDP同期が止まりました",
+                        summary_lines=[error[:200] or "標準エラーの取得に失敗しました"],
+                        action_lines=[
+                            "データソース管理を開いて、直近で停止した行だけ確認してください"
+                        ],
+                        links=[
+                            (
+                                "CDP / データソース管理",
+                                _build_sheet_url(_CDP_SHEET_ID, _CDP_SOURCE_MANAGEMENT_TAB),
+                            )
+                        ],
+                    )
+                )
         except subprocess.TimeoutExpired:
             logger.warning("CDP sync timed out after 10 minutes")
             from .notifier import send_line_notify
-            send_line_notify("CDP同期がタイムアウトしました（10分）")
+            send_line_notify(
+                _format_line_message(
+                    "CDP同期がタイムアウトしました",
+                    summary_lines=["10分経っても完了しませんでした"],
+                    action_lines=[
+                        "データソース管理を開いて、停止しているソースがないか確認してください"
+                    ],
+                    links=[
+                        (
+                            "CDP / データソース管理",
+                            _build_sheet_url(_CDP_SHEET_ID, _CDP_SOURCE_MANAGEMENT_TAB),
+                        )
+                    ],
+                )
+            )
 
     async def _run_kpi_nightly_cache(self):
         """毎晩22:00: KPIキャッシュを再生成（AI秘書が夜間も最新データを参照できるように）"""
@@ -4937,7 +5222,12 @@ Google Forms で業務委託報酬と経費立替をそれぞれ提出する。
     async def _run_meeting_report(self):
         """経営会議資料を自動作成: Lookerスクショ取得→数値読取→Google Docs挿入→LINE通知"""
         from .notifier import send_line_notify
-        from datetime import date, timedelta
+        from datetime import timedelta
+
+        today = datetime.now(_SCHEDULER_TIMEZONE).date()
+        if today.weekday() != 4:
+            logger.warning(f"経営会議資料: 金曜以外のためスキップ - today={today.isoformat()}")
+            return
 
         logger.info("経営会議資料: 開始")
 
@@ -4948,7 +5238,6 @@ Google Forms で業務委託報酬と経費立替をそれぞれ提出する。
             return
 
         # 日付計算
-        today = date.today()
         meeting_date = today  # 金曜日=会議当日
         # 月次期間: 当月1日〜会議2日前（水曜）
         month_start = today.replace(day=1)

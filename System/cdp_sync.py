@@ -15,6 +15,7 @@ import os
 import re
 import json
 import time
+import difflib
 import unicodedata
 from datetime import datetime
 from pathlib import Path
@@ -32,6 +33,103 @@ SYNC_STATE_PATH = DATA_DIR / "cdp_sync_state.json"
 SIMILARITY_LOG_PATH = DATA_DIR / "cdp_email_warnings.json"
 LOCK_FILE_PATH = DATA_DIR / "cdp_sync.lock"
 LOCK_TIMEOUT_SECONDS = 600  # 10分でロックタイムアウト
+
+_HEADER_AUTOFIX_HINTS = {
+    "メールアドレス": (
+        "メールアドレス", "【メールアドレス】", "メールアドレス_メールアドレス",
+        "メールアドレスを教えてください", "email", "e-mail", "mail",
+    ),
+    "電話番号": (
+        "電話番号", "【電話番号（任意）】", "電話番号を教えてください",
+        "携帯番号", "tel", "phone",
+    ),
+    "姓": ("姓", "名字"),
+    "名": ("名",),
+    "LINE名": ("LINE名", "LINE表示名", "ライン名"),
+    "フルネーム": ("氏名", "お名前", "回答者名", "フルネーム"),
+}
+
+
+def _normalize_header_text(value):
+    """列名比較用に記号・空白揺れを吸収する。"""
+    text = unicodedata.normalize("NFKC", str(value or "")).strip().lower()
+    if not text:
+        return ""
+    text = re.sub(r"^\d+[\)\].．:：\-_ ]*", "", text)
+    text = re.sub(r"\s+", "", text)
+    text = re.sub(r"[【】\[\]\(\)（）「」『』<>〈〉《》]", "", text)
+    text = re.sub(r"[!！?？:：,，.。/_\-~〜]", "", text)
+    return text
+
+
+def _header_hint_key(value):
+    normalized = _normalize_header_text(value)
+    if "メールアドレス" in normalized or normalized in {"email", "mail", "e-mail"}:
+        return "メールアドレス"
+    if "電話番号" in normalized or normalized in {"tel", "phone", "携帯番号"}:
+        return "電話番号"
+    if normalized in {"姓", "名字"}:
+        return "姓"
+    if normalized == "名":
+        return "名"
+    if "line" in normalized or "ライン名" in normalized:
+        return "LINE名"
+    if normalized in {"氏名", "お名前", "回答者名", "フルネーム"}:
+        return "フルネーム"
+    return ""
+
+
+def find_best_header_match(expected_header, source_headers, cdp_column=""):
+    """消えた列名に対して、現在ヘッダーから安全に推定できる代替列を返す。"""
+    normalized_expected = _normalize_header_text(expected_header)
+    if not normalized_expected:
+        return None
+
+    hint_keys = [_header_hint_key(expected_header), _header_hint_key(cdp_column)]
+    hint_patterns = {normalized_expected, _normalize_header_text(cdp_column)}
+    for hint_key in hint_keys:
+        if hint_key:
+            hint_patterns.update(
+                _normalize_header_text(pattern)
+                for pattern in _HEADER_AUTOFIX_HINTS.get(hint_key, ())
+            )
+    hint_patterns = {pattern for pattern in hint_patterns if pattern}
+
+    candidates = []
+    for header in source_headers:
+        normalized_header = _normalize_header_text(header)
+        if not normalized_header:
+            continue
+
+        score = 0.0
+        if normalized_header == normalized_expected:
+            score = 100.0
+        else:
+            for pattern in hint_patterns:
+                if normalized_header == pattern:
+                    score = max(score, 98.0)
+                elif pattern in normalized_header or normalized_header in pattern:
+                    score = max(score, 90.0 - abs(len(normalized_header) - len(pattern)) * 0.5)
+
+            similarity = difflib.SequenceMatcher(
+                None, normalized_expected, normalized_header
+            ).ratio()
+            score = max(score, similarity * 80.0)
+
+        if score >= 70.0:
+            candidates.append((score, abs(len(normalized_header) - len(normalized_expected)), header))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: (-item[0], item[1], len(item[2])))
+    best = candidates[0]
+    if len(candidates) >= 2:
+        second = candidates[1]
+        if second[0] >= best[0] - 1.0 and second[1] == best[1]:
+            return None
+
+    return best[2]
 
 
 # ─── 排他制御（簡易ロック） ────────────────────────────
@@ -1037,6 +1135,91 @@ class CDPSync:
         print(f"データソース管理: {len(mappings)}件のマッピング")
         return mappings
 
+    def _persist_header_repairs(self, source_url, source_tab, repairs):
+        """自動修復した列名をデータソース管理へ書き戻す。"""
+        if not repairs:
+            return
+
+        ws = self.ss.worksheet("データソース管理")
+        data = ws.get_all_values()
+        repair_map = {
+            (repair["cdp_column"], repair["old_header"]): repair["new_header"]
+            for repair in repairs
+        }
+        updates = []
+
+        for i, row in enumerate(data[1:], 2):
+            if len(row) < 7:
+                continue
+            if row[4].strip() != source_url or row[5].strip() != source_tab:
+                continue
+
+            key = (row[0].strip(), row[6].strip())
+            new_header = repair_map.get(key)
+            if not new_header or new_header == row[6].strip():
+                continue
+            updates.append({"range": f"G{i}", "values": [[new_header]]})
+
+        if updates:
+            ws.batch_update(updates, value_input_option="USER_ENTERED")
+
+    def repair_source_headers(self, source_url, source_tab, source_headers,
+                              column_mapping, email_col, phone_col=None, dry_run=False):
+        """消えた列名を現在のヘッダーから安全に推定し、自動修復する。"""
+        repaired_mapping = dict(column_mapping)
+        repaired_email_col = email_col
+        repaired_phone_col = phone_col
+        repairs = []
+
+        expected_columns = []
+        if email_col:
+            expected_columns.append(("メールアドレス", email_col))
+        if phone_col:
+            expected_columns.append(("電話番号", phone_col))
+        expected_columns.extend(repaired_mapping.items())
+
+        seen_pairs = set()
+        for cdp_col, expected_header in expected_columns:
+            if not expected_header or expected_header in source_headers:
+                continue
+
+            pair = (cdp_col, expected_header)
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+
+            new_header = find_best_header_match(expected_header, source_headers, cdp_col)
+            if not new_header or new_header == expected_header:
+                continue
+
+            repairs.append({
+                "cdp_column": cdp_col,
+                "old_header": expected_header,
+                "new_header": new_header,
+            })
+
+            if cdp_col == "メールアドレス":
+                repaired_email_col = new_header
+            elif cdp_col == "電話番号":
+                repaired_phone_col = new_header
+
+            if cdp_col in repaired_mapping and repaired_mapping[cdp_col] == expected_header:
+                repaired_mapping[cdp_col] = new_header
+
+            self.logger.log(
+                "auto_repair",
+                f"{source_url}#{source_tab}",
+                cdp_col,
+                expected_header,
+                new_header,
+                "header_alias",
+            )
+
+        if repairs and not dry_run:
+            self._persist_header_repairs(source_url, source_tab, repairs)
+
+        return repaired_mapping, repaired_email_col, repaired_phone_col, repairs
+
     # ─── ソース読み込み ─────────────────────────────────
 
     def read_source(self, spreadsheet_url, tab_name=None):
@@ -1079,6 +1262,16 @@ class CDPSync:
         phone_index = self.build_phone_index()
 
         source_headers, source_rows = self.read_source(source_url, tab_name)
+        column_mapping = dict(column_mapping)
+        column_mapping, email_col, phone_col, repairs = self.repair_source_headers(
+            source_url,
+            tab_name,
+            source_headers,
+            column_mapping,
+            email_col,
+            phone_col=phone_col,
+            dry_run=dry_run,
+        )
 
         # ─── ソース変更検知 ─────────────────────────────
         source_key = f"{source_url}#{tab_name}"
@@ -1104,9 +1297,16 @@ class CDPSync:
                     msg = (f"[同期中断] ソース '{tab_name}' のマッピング対象列が"
                            f"消失しました: {missing_mapped}")
                     print(f"\n⚠️ {msg}")
+                    if repairs:
+                        print(f"  自動修復済み: {len(repairs)}件")
+                        for repair in repairs:
+                            print(
+                                f"    - {repair['cdp_column']}: "
+                                f"{repair['old_header']} → {repair['new_header']}"
+                            )
                     for a in alerts:
                         print(f"  - {a}")
-                    return {"error": msg, "alerts": alerts}
+                    return {"error": msg, "alerts": alerts, "repairs": repairs}
 
             # 行数の急減検知（50%以上減少 かつ 100行以上あった場合）
             prev_rows = last_state.get("last_row_count", 0)
@@ -1121,13 +1321,25 @@ class CDPSync:
             for a in alerts:
                 print(f"  - {a}")
 
+        if repairs:
+            print(f"\n🔧 自動修復 [{tab_name}]:")
+            for repair in repairs:
+                print(
+                    f"  - {repair['cdp_column']}: "
+                    f"{repair['old_header']} → {repair['new_header']}"
+                )
+
         # ─── ソースのカラムインデックス ─────────────────
         src_email_idx = source_headers.index(email_col) if email_col in source_headers else None
         src_phone_idx = source_headers.index(phone_col) if phone_col and phone_col in source_headers else None
 
         if src_email_idx is None:
             print(f"エラー: ソースにメールカラム '{email_col}' が見つかりません")
-            return None
+            return {
+                "error": f"メールカラム消失: {email_col}",
+                "alerts": alerts,
+                "repairs": repairs,
+            }
 
         # ソースカラムのマッピングインデックス
         src_col_indices = {}
@@ -1190,6 +1402,7 @@ class CDPSync:
             "no_key": 0,
             "phone_warnings": 0,
             "email_warnings": 0,
+            "repairs": repairs,
         }
 
         ws = self.ss.worksheet("顧客マスタ") if not dry_run else None
@@ -1729,6 +1942,8 @@ class CDPSync:
         if alerts:
             print(f"ソース変更アラート: {len(alerts)}件")
             stats["alerts"] = alerts
+        if repairs:
+            print(f"自動修復: {len(repairs)}件")
 
         return stats
 
@@ -2662,6 +2877,7 @@ class CDPSync:
             "errors": 0,
             "alerts": [],
             "aborted": [],
+            "repairs": [],
         }
 
         for key, src in sources.items():
@@ -2682,6 +2898,13 @@ class CDPSync:
                 )
 
                 if stats:
+                    if stats.get("repairs"):
+                        for repair in stats["repairs"]:
+                            total_stats["repairs"].append(
+                                f"{src['source_name']}({src['tab']}) "
+                                f"{repair['cdp_column']}: "
+                                f"{repair['old_header']} → {repair['new_header']}"
+                            )
                     if "error" in stats:
                         # ソース変更により同期中断
                         total_stats["aborted"].append(
@@ -2790,12 +3013,18 @@ class CDPSync:
         print(f"更新: {total_stats['updated']}件")
         print(f"新規: {total_stats['inserted']}件")
         print(f"除外: {total_stats['excluded']}件")
+        if total_stats["repairs"]:
+            print(f"自動修復: {len(total_stats['repairs'])}件")
         if total_stats["errors"]:
             print(f"エラー: {total_stats['errors']}件")
         if total_stats["aborted"]:
             print(f"\n⚠️ ソース変更により中断: {len(total_stats['aborted'])}件")
             for a in total_stats["aborted"]:
                 print(f"  - {a}")
+        if total_stats["repairs"]:
+            print(f"\n🔧 自動修復一覧: {len(total_stats['repairs'])}件")
+            for repair in total_stats["repairs"][:10]:
+                print(f"  - {repair}")
         if total_stats["alerts"]:
             print(f"\n⚠️ ソース変更アラート: {len(total_stats['alerts'])}件")
             for a in total_stats["alerts"]:
