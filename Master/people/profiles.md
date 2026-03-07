@@ -1,5 +1,9 @@
 # 人物プロファイル集
 
+> 位置づけ: このファイルは `Master/people/profiles.json` の人間向け表示レイヤー。正本ではない。  
+> 会社共通で見る人物情報の正規レイヤーは `Master/company/people_public.json`、  
+> 甲原クローン脳だけが持つ私的人物理解は `Master/brains/kohara/people_private.json` を使う。
+
 | | |
 |---|---|
 | 最終更新 | 2026/02/22 |

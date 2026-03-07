@@ -1,0 +1,1163 @@
+{
+  "version": "2026-03-07",
+  "generated_from": "Master/people/profiles.json",
+  "entities": {
+    "kohara_clone_brain": {
+      "name": "kohara_clone_brain",
+      "type": "brain",
+      "brain_kind": "kohara_clone",
+      "manifest_path": "Master/brains/kohara/brain_manifest.json",
+      "update_policy": "user_only",
+      "shared_context": "global"
+    },
+    "hinata_brain": {
+      "name": "hinata_brain",
+      "type": "brain",
+      "brain_kind": "hinata",
+      "manifest_path": "Master/brains/hinata/brain_manifest.json",
+      "update_policy": "verified_facts_only_to_company",
+      "shared_context": "global"
+    },
+    "line_secretary": {
+      "name": "line_secretary",
+      "type": "shell",
+      "brain": "kohara_clone_brain",
+      "role": "secretary",
+      "role_description": "情報整理、数値確認、内部メンバーへの軽い確認、返信案作成、甲原名義での送信、スケジュール調整、マネジメント上の対策を担う。",
+      "channels": [
+        "line",
+        "chatwork"
+      ],
+      "shared_context": "global",
+      "authority": {
+        "mode": "staged_autonomy",
+        "approved_actions": [
+          "情報整理",
+          "数値確認",
+          "内部メンバーへの軽い確認",
+          "返信案作成",
+          "甲原名義での送信",
+          "スケジュール調整",
+          "マネジメント上の対策"
+        ]
+      }
+    },
+    "cursor_clone": {
+      "name": "cursor_clone",
+      "type": "shell",
+      "brain": "kohara_clone_brain",
+      "role": "strategic_clone",
+      "role_description": "甲原そのものとして思考し、構造化、設計、判断、実装推進を担う。",
+      "channels": [
+        "cursor"
+      ],
+      "shared_context": "global",
+      "authority": {
+        "mode": "target_full_autonomy",
+        "approved_actions": [
+          "調査",
+          "設計",
+          "ドキュメント更新",
+          "コード変更",
+          "コミット",
+          "push",
+          "意思決定の代行"
+        ]
+      }
+    },
+    "hinata_shell": {
+      "name": "hinata_shell",
+      "type": "shell",
+      "brain": "hinata_brain",
+      "role": "execution_manager",
+      "role_description": "進捗管理、障害除去、事実ベースの共有に集中する。",
+      "channels": [
+        "slack",
+        "addness"
+      ],
+      "shared_context": "global",
+      "authority": {
+        "mode": "verified_facts_only",
+        "approved_actions": [
+          "確認済み事実の共有",
+          "タスク推進",
+          "進捗確認"
+        ]
+      }
+    },
+    "三上 功太": {
+      "name": "三上 功太",
+      "type": "human",
+      "category": "上司",
+      "relationship": "上司",
+      "best_for": [
+        "AI・自動化",
+        "数値管理・分析",
+        "エンジニアリング・実装"
+      ],
+      "domains": [
+        "AI・自動化",
+        "数値管理・分析",
+        "エンジニアリング・実装",
+        "企画・戦略",
+        "採用・組織"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "KENTA": {
+      "name": "KENTA",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "広告・クリエイティブ"
+      ],
+      "domains": [
+        "広告・クリエイティブ"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "鈴木織大": {
+      "name": "鈴木織大",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "広告・クリエイティブ",
+        "数値管理・分析",
+        "マーケティング・導線設計"
+      ],
+      "domains": [
+        "広告・クリエイティブ",
+        "数値管理・分析",
+        "マーケティング・導線設計",
+        "LP・ライティング",
+        "AI・自動化"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "五月女隆真": {
+      "name": "五月女隆真",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "マーケティング・導線設計"
+      ],
+      "domains": [
+        "マーケティング・導線設計"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "NOBUTERU CHIBA": {
+      "name": "NOBUTERU CHIBA",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "広告・クリエイティブ",
+        "マーケティング・導線設計",
+        "AI・自動化"
+      ],
+      "domains": [
+        "広告・クリエイティブ",
+        "マーケティング・導線設計",
+        "AI・自動化",
+        "人間理解・インサイト"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "三井瑛登": {
+      "name": "三井瑛登",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "LP・ライティング",
+        "広告・クリエイティブ",
+        "マーケティング・導線設計"
+      ],
+      "domains": [
+        "LP・ライティング",
+        "広告・クリエイティブ",
+        "マーケティング・導線設計"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "富田悠斗": {
+      "name": "富田悠斗",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [],
+      "domains": [],
+      "status": "active",
+      "source": "people_public"
+    },
+    "宮代優成": {
+      "name": "宮代優成",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "マーケティング・導線設計",
+        "LP・ライティング",
+        "AI・自動化"
+      ],
+      "domains": [
+        "マーケティング・導線設計",
+        "LP・ライティング",
+        "AI・自動化",
+        "広告・クリエイティブ",
+        "エンジニアリング・実装"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "宮本寧々": {
+      "name": "宮本寧々",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "AI・自動化",
+        "マーケティング・導線設計",
+        "コンテンツ・教材"
+      ],
+      "domains": [
+        "AI・自動化",
+        "マーケティング・導線設計",
+        "コンテンツ・教材",
+        "企画・戦略"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "森本雄紀": {
+      "name": "森本雄紀",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "マーケティング・導線設計",
+        "数値管理・分析",
+        "広告・クリエイティブ"
+      ],
+      "domains": [
+        "マーケティング・導線設計",
+        "数値管理・分析",
+        "広告・クリエイティブ",
+        "AI・自動化",
+        "営業・セールス"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "金谷美依": {
+      "name": "金谷美依",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "マーケティング・導線設計",
+        "企画・戦略"
+      ],
+      "domains": [
+        "マーケティング・導線設計",
+        "企画・戦略"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "山田優斗": {
+      "name": "山田優斗",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "営業・セールス",
+        "数値管理・分析",
+        "採用・組織"
+      ],
+      "domains": [
+        "営業・セールス",
+        "数値管理・分析",
+        "採用・組織",
+        "企画・戦略",
+        "動画・映像"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "橋本陸": {
+      "name": "橋本陸",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "営業・セールス",
+        "AI・自動化",
+        "採用・組織"
+      ],
+      "domains": [
+        "営業・セールス",
+        "AI・自動化",
+        "採用・組織",
+        "数値管理・分析",
+        "企画・戦略"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "長屋友美": {
+      "name": "長屋友美",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "営業・セールス",
+        "数値管理・分析",
+        "採用・組織"
+      ],
+      "domains": [
+        "営業・セールス",
+        "数値管理・分析",
+        "採用・組織",
+        "企画・戦略",
+        "AI・自動化"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "坂井柾駿": {
+      "name": "坂井柾駿",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "広告・クリエイティブ",
+        "コンテンツ・教材",
+        "LP・ライティング"
+      ],
+      "domains": [
+        "広告・クリエイティブ",
+        "コンテンツ・教材",
+        "LP・ライティング",
+        "マーケティング・導線設計",
+        "動画・映像"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "小澤 和樹": {
+      "name": "小澤 和樹",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "動画・映像",
+        "採用・組織",
+        "数値管理・分析"
+      ],
+      "domains": [
+        "動画・映像",
+        "採用・組織",
+        "数値管理・分析",
+        "AI・自動化",
+        "CS・受講生対応"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "内田裕樹": {
+      "name": "内田裕樹",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "コンテンツ・教材",
+        "数値管理・分析",
+        "マーケティング・導線設計"
+      ],
+      "domains": [
+        "コンテンツ・教材",
+        "数値管理・分析",
+        "マーケティング・導線設計",
+        "企画・戦略",
+        "CS・受講生対応"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "小笠原龍一(たつひと)": {
+      "name": "小笠原龍一(たつひと)",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "AI・自動化",
+        "CS・受講生対応",
+        "マーケティング・導線設計"
+      ],
+      "domains": [
+        "AI・自動化",
+        "CS・受講生対応",
+        "マーケティング・導線設計",
+        "数値管理・分析",
+        "コンテンツ・教材"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "川口健輔": {
+      "name": "川口健輔",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "動画・映像",
+        "コンテンツ・教材",
+        "CS・受講生対応"
+      ],
+      "domains": [
+        "動画・映像",
+        "コンテンツ・教材",
+        "CS・受講生対応",
+        "デザイン",
+        "LP・ライティング"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "鞘野 緑": {
+      "name": "鞘野 緑",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [],
+      "domains": [],
+      "status": "active",
+      "source": "people_public"
+    },
+    "宮本 楓": {
+      "name": "宮本 楓",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "広告・クリエイティブ",
+        "マーケティング・導線設計",
+        "企画・戦略"
+      ],
+      "domains": [
+        "広告・クリエイティブ",
+        "マーケティング・導線設計",
+        "企画・戦略",
+        "数値管理・分析",
+        "コンテンツ・教材"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "駒井志帆": {
+      "name": "駒井志帆",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "コンテンツ・教材",
+        "広告・クリエイティブ",
+        "数値管理・分析"
+      ],
+      "domains": [
+        "コンテンツ・教材",
+        "広告・クリエイティブ",
+        "数値管理・分析",
+        "採用・組織",
+        "企画・戦略"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "しおり": {
+      "name": "しおり",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "広告・クリエイティブ",
+        "数値管理・分析",
+        "営業・セールス"
+      ],
+      "domains": [
+        "広告・クリエイティブ",
+        "数値管理・分析",
+        "営業・セールス"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "田邊雄大": {
+      "name": "田邊雄大",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "動画・映像",
+        "企画・戦略"
+      ],
+      "domains": [
+        "動画・映像",
+        "企画・戦略"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "中里真美": {
+      "name": "中里真美",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "企画・戦略",
+        "採用・組織"
+      ],
+      "domains": [
+        "企画・戦略",
+        "採用・組織"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "三浦拓実": {
+      "name": "三浦拓実",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "AI・自動化",
+        "数値管理・分析",
+        "マーケティング・導線設計"
+      ],
+      "domains": [
+        "AI・自動化",
+        "数値管理・分析",
+        "マーケティング・導線設計",
+        "企画・戦略",
+        "広告・クリエイティブ"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "横江菜月": {
+      "name": "横江菜月",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "デザイン"
+      ],
+      "domains": [
+        "デザイン"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "落合真琴": {
+      "name": "落合真琴",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "デザイン"
+      ],
+      "domains": [
+        "デザイン"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "鎌田由布子": {
+      "name": "鎌田由布子",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [],
+      "domains": [],
+      "status": "active",
+      "source": "people_public"
+    },
+    "荻野豪太": {
+      "name": "荻野豪太",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "広告・クリエイティブ",
+        "マーケティング・導線設計",
+        "AI・自動化"
+      ],
+      "domains": [
+        "広告・クリエイティブ",
+        "マーケティング・導線設計",
+        "AI・自動化"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "ジェイン　可菜": {
+      "name": "ジェイン　可菜",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [],
+      "domains": [],
+      "status": "active",
+      "source": "people_public"
+    },
+    "山口 桜介（やまぐち おうすけ）": {
+      "name": "山口 桜介（やまぐち おうすけ）",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [],
+      "domains": [],
+      "status": "active",
+      "source": "people_public"
+    },
+    "MAYANK JAIN": {
+      "name": "MAYANK JAIN",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "LP・ライティング",
+        "広告・クリエイティブ",
+        "デザイン"
+      ],
+      "domains": [
+        "LP・ライティング",
+        "広告・クリエイティブ",
+        "デザイン",
+        "マーケティング・導線設計",
+        "エンジニアリング・実装"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "NAOKI": {
+      "name": "NAOKI",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "採用・組織",
+        "数値管理・分析",
+        "広告・クリエイティブ"
+      ],
+      "domains": [
+        "採用・組織",
+        "数値管理・分析",
+        "広告・クリエイティブ",
+        "AI・自動化",
+        "コンテンツ・教材"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "新井 知之": {
+      "name": "新井 知之",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "数値管理・分析",
+        "マーケティング・導線設計",
+        "採用・組織"
+      ],
+      "domains": [
+        "数値管理・分析",
+        "マーケティング・導線設計",
+        "採用・組織",
+        "AI・自動化",
+        "コンテンツ・教材"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "山内悠人": {
+      "name": "山内悠人",
+      "type": "human",
+      "category": "横（並列）",
+      "relationship": "横（並列）",
+      "best_for": [],
+      "domains": [],
+      "status": "active",
+      "source": "people_public"
+    },
+    "Maeda Nobumi": {
+      "name": "Maeda Nobumi",
+      "type": "human",
+      "category": "横（並列）",
+      "relationship": "横（並列）",
+      "best_for": [
+        "採用・組織",
+        "AI・自動化"
+      ],
+      "domains": [
+        "採用・組織",
+        "AI・自動化"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "竹内翼": {
+      "name": "竹内翼",
+      "type": "human",
+      "category": "横（並列）",
+      "relationship": "横（並列）",
+      "best_for": [
+        "AI・自動化",
+        "採用・組織",
+        "コンテンツ・教材"
+      ],
+      "domains": [
+        "AI・自動化",
+        "採用・組織",
+        "コンテンツ・教材",
+        "LP・ライティング",
+        "広告・クリエイティブ"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "西村優月": {
+      "name": "西村優月",
+      "type": "human",
+      "category": "横（並列）",
+      "relationship": "横（並列）",
+      "best_for": [
+        "広告・クリエイティブ",
+        "マーケティング・導線設計"
+      ],
+      "domains": [
+        "広告・クリエイティブ",
+        "マーケティング・導線設計"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "大塚蔵人": {
+      "name": "大塚蔵人",
+      "type": "human",
+      "category": "横（並列）",
+      "relationship": "横（並列）",
+      "best_for": [
+        "営業・セールス",
+        "採用・組織",
+        "数値管理・分析"
+      ],
+      "domains": [
+        "営業・セールス",
+        "採用・組織",
+        "数値管理・分析",
+        "企画・戦略",
+        "AI・自動化"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "創太": {
+      "name": "創太",
+      "type": "human",
+      "category": "横（並列）",
+      "relationship": "横（並列）",
+      "best_for": [
+        "企画・戦略",
+        "広告・クリエイティブ"
+      ],
+      "domains": [
+        "企画・戦略",
+        "広告・クリエイティブ"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "三上大慈": {
+      "name": "三上大慈",
+      "type": "human",
+      "category": "横（並列）",
+      "relationship": "横（並列）",
+      "best_for": [
+        "営業・セールス"
+      ],
+      "domains": [
+        "営業・セールス"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "小川幸一（おがわこういち）": {
+      "name": "小川幸一（おがわこういち）",
+      "type": "human",
+      "category": "横（並列）",
+      "relationship": "横（並列）",
+      "best_for": [
+        "AI・自動化",
+        "数値管理・分析",
+        "広告・クリエイティブ"
+      ],
+      "domains": [
+        "AI・自動化",
+        "数値管理・分析",
+        "広告・クリエイティブ",
+        "動画・映像",
+        "マーケティング・導線設計"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "野口颯斗": {
+      "name": "野口颯斗",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [],
+      "domains": [],
+      "status": "active",
+      "source": "people_public"
+    },
+    "髙橋海斗": {
+      "name": "髙橋海斗",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [],
+      "domains": [],
+      "status": "active",
+      "source": "people_public"
+    },
+    "楢木野萌": {
+      "name": "楢木野萌",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [],
+      "domains": [],
+      "status": "active",
+      "source": "people_public"
+    },
+    "伊藤開己": {
+      "name": "伊藤開己",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "マーケティング・導線設計",
+        "AI・自動化"
+      ],
+      "domains": [
+        "マーケティング・導線設計",
+        "AI・自動化"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "崎原大地": {
+      "name": "崎原大地",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [],
+      "domains": [],
+      "status": "active",
+      "source": "people_public"
+    },
+    "伴亮太": {
+      "name": "伴亮太",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "マーケティング・導線設計",
+        "広告・クリエイティブ"
+      ],
+      "domains": [
+        "マーケティング・導線設計",
+        "広告・クリエイティブ"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "園部優士【本物】": {
+      "name": "園部優士【本物】",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "数値管理・分析",
+        "マーケティング・導線設計"
+      ],
+      "domains": [
+        "数値管理・分析",
+        "マーケティング・導線設計"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "浅田 輝哉": {
+      "name": "浅田 輝哉",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [],
+      "domains": [],
+      "status": "active",
+      "source": "people_public"
+    },
+    "NAMI NKAMEME": {
+      "name": "NAMI NKAMEME",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [
+        "数値管理・分析"
+      ],
+      "domains": [
+        "数値管理・分析"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "西畑宏哉": {
+      "name": "西畑宏哉",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー",
+      "best_for": [],
+      "domains": [],
+      "status": "active",
+      "source": "people_public"
+    },
+    "甲原海人": {
+      "name": "甲原海人",
+      "type": "human",
+      "category": "本人",
+      "relationship": "本人",
+      "best_for": [
+        "広告・クリエイティブ",
+        "LP・ライティング",
+        "マーケティング・導線設計"
+      ],
+      "domains": [
+        "広告・クリエイティブ",
+        "LP・ライティング",
+        "マーケティング・導線設計",
+        "コンテンツ・教材",
+        "CS・受講生対応"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "小林真之": {
+      "name": "小林真之",
+      "type": "human",
+      "category": "外部パートナー",
+      "relationship": "顧問（Web広告・アフィリエイト）",
+      "best_for": [
+        "Web広告",
+        "アフィリエイト",
+        "広告運用"
+      ],
+      "domains": [
+        "Web広告",
+        "アフィリエイト",
+        "広告運用",
+        "メディア運営"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "池本まい": {
+      "name": "池本まい",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "",
+      "best_for": [],
+      "domains": [],
+      "status": "active",
+      "source": "people_public"
+    },
+    "佐々木まなみ": {
+      "name": "佐々木まなみ",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "",
+      "best_for": [],
+      "domains": [],
+      "status": "active",
+      "source": "people_public"
+    },
+    "日向": {
+      "name": "日向",
+      "type": "human",
+      "category": "直下メンバー",
+      "relationship": "直下メンバー（AI実行マネージャー）",
+      "best_for": [
+        "タスク推進・進捗管理",
+        "ゴールツリー分析",
+        "ブラウザ自動化"
+      ],
+      "domains": [
+        "タスク推進・進捗管理",
+        "ゴールツリー分析",
+        "ブラウザ自動化",
+        "チームマネジメント"
+      ],
+      "status": "active",
+      "source": "people_public"
+    },
+    "Claude Sonnet": {
+      "name": "Claude Sonnet",
+      "type": "ai",
+      "category": "AI・常駐",
+      "interface": {
+        "method": "api_call",
+        "config": {
+          "provider": "anthropic",
+          "model_id": "claude-sonnet-4-6",
+          "api_key_env": "ANTHROPIC_API_KEY",
+          "max_tokens_default": 600
+        }
+      },
+      "capabilities": [
+        "日本語文章生成",
+        "データ分析",
+        "口調再現",
+        "コード生成",
+        "要約",
+        "翻訳"
+      ],
+      "best_for": [
+        "返信案生成",
+        "KPI分析",
+        "LP構成案",
+        "メール下書き",
+        "議事録要約"
+      ],
+      "constraints": {
+        "speed": "秒単位",
+        "cost": "低",
+        "availability": "24/7"
+      },
+      "transfer": {},
+      "status": "active",
+      "source": "legacy_profiles"
+    },
+    "Claude Haiku": {
+      "name": "Claude Haiku",
+      "type": "ai",
+      "category": "AI・常駐",
+      "interface": {
+        "method": "api_call",
+        "config": {
+          "provider": "anthropic",
+          "model_id": "claude-haiku-4-5-20251001",
+          "api_key_env": "ANTHROPIC_API_KEY",
+          "max_tokens_default": 1200
+        }
+      },
+      "capabilities": [
+        "意図理解",
+        "振り分け",
+        "要約",
+        "軽量分析",
+        "データ整形"
+      ],
+      "best_for": [
+        "Coordinator司令塔",
+        "簡単な分析",
+        "結果統合",
+        "分類・ルーティング"
+      ],
+      "constraints": {
+        "speed": "秒単位",
+        "cost": "低",
+        "availability": "24/7"
+      },
+      "transfer": {},
+      "status": "active",
+      "source": "legacy_profiles"
+    },
+    "Perplexity": {
+      "name": "Perplexity",
+      "type": "ai",
+      "category": "AI・常駐",
+      "interface": {
+        "method": "api_call",
+        "config": {
+          "provider": "perplexity",
+          "model": "llama-3.1-sonar-large-128k-online",
+          "api_key_env": "PERPLEXITY_API_KEY",
+          "endpoint": "https://api.perplexity.ai/chat/completions"
+        }
+      },
+      "capabilities": [
+        "リアルタイムWeb検索",
+        "ソース付き調査",
+        "競合分析",
+        "ニュース要約"
+      ],
+      "best_for": [
+        "企業調査",
+        "市場動向",
+        "最新ニュース",
+        "技術トレンド"
+      ],
+      "constraints": {
+        "speed": "秒単位",
+        "cost": "低",
+        "availability": "24/7"
+      },
+      "transfer": {},
+      "status": "active",
+      "source": "legacy_profiles"
+    },
+    "Lubert": {
+      "name": "Lubert",
+      "type": "ai",
+      "category": "AI・クリエイティブ",
+      "interface": {
+        "method": "api_call",
+        "config": {
+          "provider": "lubert",
+          "api_key_env": "LUBERT_API_KEY"
+        }
+      },
+      "capabilities": [
+        "画像生成",
+        "バナー制作",
+        "広告ビジュアル"
+      ],
+      "best_for": [
+        "広告バナー",
+        "LP素材",
+        "SNS投稿画像"
+      ],
+      "constraints": {
+        "speed": "秒単位",
+        "cost": "中",
+        "availability": "24/7"
+      },
+      "transfer": {},
+      "status": "active",
+      "source": "legacy_profiles"
+    }
+  }
+}

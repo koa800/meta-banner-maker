@@ -90,7 +90,7 @@ schedule:
   # === 夜の流れ ===
   daily_report:
     cron: "0 21 * * *"           # 21:00  日次レポート
-    enabled: true
+    enabled: false
   daily_group_digest:
     cron: "10 21 * * *"          # 21:10  グループLINEダイジェスト
     enabled: true

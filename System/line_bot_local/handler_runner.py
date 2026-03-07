@@ -9,7 +9,7 @@ handler_type:
   - function:           local_agent.py から渡されたコールバック関数を実行
   - file_read:          ファイルを読み込んで返す
   - action:             L3+ 確認が必要な操作。実行せず提案テキストを返す
-  - api_call:           profiles.json の preferred_agent → interface.config に従って外部API呼び出し
+  - api_call:           agent_registry.json の preferred_agent → interface.config に従って外部API呼び出し
   - workflow_endpoint:  ワークフローエンドポイント（Mac Mini Orchestrator等）にHTTP POST
   - mcp:                MCP プロトコル呼び出し（将来用）
 """
@@ -21,6 +21,8 @@ import sys
 from pathlib import Path
 
 import requests
+
+from clone_registry import get_agent_config, get_agent_transfer
 
 
 class HandlerRunner:
@@ -42,14 +44,11 @@ class HandlerRunner:
             self._registry = json.load(f)
         self._tool_map = {t["name"]: t for t in self._registry.get("tools", [])}
 
-        # profiles.json 読み込み（api_call / workflow_endpoint で使用）
-        self._profiles = self._load_profiles()
-
         # subprocess 用の環境変数を構築（config.json から APIキーを注入）
         self._subprocess_env = self._build_subprocess_env()
 
     def _load_profiles(self) -> dict:
-        """profiles.json を読み込む"""
+        """legacy profiles.json を読み込む（後方互換用）"""
         profiles_path = self.project_root / "Master" / "people" / "profiles.json"
         if not profiles_path.exists():
             return {}
@@ -73,14 +72,12 @@ class HandlerRunner:
         return env
 
     def _get_agent_config(self, agent_name: str) -> dict:
-        """profiles.json からエージェントの interface.config を取得する"""
-        profile = self._profiles.get(agent_name, {})
-        return profile.get("latest", {}).get("interface", {}).get("config", {})
+        """agent_registry からエージェントの interface.config を取得する"""
+        return get_agent_config(agent_name)
 
     def _get_agent_transfer(self, agent_name: str) -> dict:
-        """profiles.json からエージェントの transfer 情報を取得する"""
-        profile = self._profiles.get(agent_name, {})
-        return profile.get("latest", {}).get("transfer", {})
+        """agent_registry からエージェントの transfer 情報を取得する"""
+        return get_agent_transfer(agent_name)
 
     def run(self, tool_name: str, arguments: dict) -> str:
         """ツールを実行して結果テキストを返す"""
@@ -333,7 +330,7 @@ class HandlerRunner:
         return "\n".join(results) if results else "検索結果が取得できませんでした"
 
     # ------------------------------------------------------------------
-    # api_call: profiles.json の preferred_agent に基づく外部API呼び出し
+    # api_call: agent_registry の preferred_agent に基づく外部API呼び出し
     # ------------------------------------------------------------------
     def _run_api_call(self, tool_def: dict, arguments: dict) -> str:
         agent_name = tool_def.get("preferred_agent") or ""
@@ -341,14 +338,14 @@ class HandlerRunner:
         if not agent_name:
             return (
                 f"ツール '{tool_name}' の担当 AI が未設定です。"
-                f"profiles.json にエージェントを登録し、"
+                f"agent_registry.json にエージェントを登録し、"
                 f"tool_registry.json の preferred_agent を設定してください"
             )
 
         config = self._get_agent_config(agent_name)
         if not config:
             return (
-                f"エージェント '{agent_name}' の接続設定が profiles.json に見つかりません。"
+                f"エージェント '{agent_name}' の接続設定が agent_registry.json に見つかりません。"
                 f"interface.config を確認してください"
             )
 
@@ -416,7 +413,7 @@ class HandlerRunner:
         if not endpoint:
             return (
                 f"エージェント '{agent_name}' の API エンドポイントが未設定です。"
-                f"profiles.json の interface.config.endpoint を設定してください"
+                f"agent_registry.json の interface.config.endpoint を設定してください"
             )
 
         headers = {"Content-Type": "application/json"}
@@ -527,5 +524,5 @@ class HandlerRunner:
         agent_name = tool_def.get("preferred_agent", "")
         return (
             f"MCP ツール（{agent_name or '未指定'}）は現在準備中です。\n"
-            f"profiles.json に MCP 接続情報を設定後、利用可能になります"
+            f"agent_registry.json に MCP 接続情報を設定後、利用可能になります"
         )

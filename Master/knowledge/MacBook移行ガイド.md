@@ -197,12 +197,12 @@ scp System/token_calendar_personal.json koa800@mac-mini-agent.local:~/agents/Sys
 | **Orchestrator** | 5分ごと | `git_pull_sync`（GitHubからpull→ローカルデプロイ→サービス再起動） |
 | **Orchestrator** | 5分ごと | `health_check`（API使用量・Q&A・local_agent停止を検知してLINE警告） |
 | **Orchestrator** | 30分ごと | `repair_check`（ログエラー検知・修復提案）, `render_health_check`（Render死活） |
-| **Orchestrator** | 毎時 :00 / :30 | `mail_inbox_personal` / `mail_inbox_kohara`（メール取得・分類・返信待ちLINE通知） |
+| **Orchestrator** | 3時間ごと :00 / :05 | `mail_inbox_personal` / `mail_inbox_kohara`（メール取得・分類。返信待ちLINE通知は12時間クールダウン） |
 | **Orchestrator** | 毎朝 8:00 | `ai_news`（AIニュース要約・通知）, `addness_fetch`（3日ごと: ゴールツリー取得） |
 | **Orchestrator** | 毎朝 8:30 / 9:00 | `daily_addness_digest`（期限超過通知）, `addness_goal_check`（actionable再生成）, `oauth_health_check` |
 | **Orchestrator** | 毎週月 9:00 / 9:30 | `weekly_idea_proposal`, `weekly_stats`（週次サマリーLINE） |
 | **Orchestrator** | 毎週水 10:00 | `weekly_content_suggestions`（AIニュース分析・コンテンツ提案） |
-| **Orchestrator** | 毎夜 21:00 | `daily_report`（日次タスク集計LINE） |
+| **Orchestrator** | 毎夜 21:10 | `daily_group_digest`（グループ名ベースの会話要約・秘書メモLINE） |
 | **MacBook側** | コミット時 | post-commit フック → `git push origin main`（Mac Miniは5分以内にpullして反映） |
 | **LINE秘書** | 常駐 | local_agent がRenderをポーリング・返信案生成・Claude API呼び出し |
 | **その他** | — | Q&A自動回答（検知→回答案→承認→L-step送信）, OAuth refresh_token 自動更新 |

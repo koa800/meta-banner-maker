@@ -1,0 +1,4 @@
+interface:
+  display_name: "人を動かす設計"
+  short_description: "人が動く仕組みを使って相手起点で依頼文や提案文を設計する"
+  default_prompt: "Use $human-action-design to rewrite this request so the receiver wants to act."

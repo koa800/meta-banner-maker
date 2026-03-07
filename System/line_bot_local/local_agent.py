@@ -98,7 +98,8 @@ BRAIN_OS_MD = _tcc_safe_path(
 _RUNTIME_DATA_DIR = Path.home() / "agents" / "data"
 _RUNTIME_DATA_DIR.mkdir(parents=True, exist_ok=True)
 OS_SYNC_STATE_FILE = _RUNTIME_DATA_DIR / "os_sync_state.json"
-_SKILLS_DIR = _SYSTEM_DIR / "line_bot" / "skills"
+_SKILLS_ROOT = _PROJECT_ROOT / "Skills"
+_LEGACY_SKILLS_DIR = _SYSTEM_DIR / "line_bot" / "skills"
 
 # Claude Code CLI（AI秘書の自律モード）
 # 秘書アカウント（koa800.secretary@gmail.com）で実行
@@ -112,19 +113,34 @@ _skills_cache_mtime: float = 0
 
 
 def _load_skills_knowledge() -> str:
-    """Skillsディレクトリから甲原海人の専門知識を読み込み（5分キャッシュ）"""
+    """Skills/ を正本として専門知識を読み込む（5分キャッシュ）"""
     global _skills_cache, _skills_cache_mtime
     now = time.time()
     if _skills_cache and (now - _skills_cache_mtime) < 300:
         return _skills_cache
 
     parts = []
-    if _SKILLS_DIR.exists():
-        for fp in sorted(_SKILLS_DIR.glob("*.md")):
+    skill_files = []
+    if _SKILLS_ROOT.exists():
+        skill_files = sorted(
+            fp for fp in _SKILLS_ROOT.rglob("*.md")
+            if fp.is_file() and fp.name != "_skill_template.md"
+        )
+    elif _LEGACY_SKILLS_DIR.exists():
+        skill_files = sorted(fp for fp in _LEGACY_SKILLS_DIR.glob("*.md") if fp.is_file())
+
+    for fp in skill_files:
+        try:
             try:
-                parts.append(f"【{fp.stem}】\n{fp.read_text(encoding='utf-8')}")
-            except Exception as e:
-                print(f"Skills読み込みエラー: {fp.name} - {e}")
+                label = str(fp.relative_to(_PROJECT_ROOT))
+            except ValueError:
+                label = fp.stem
+            parts.append(f"【{label}】\n{fp.read_text(encoding='utf-8')}")
+        except Exception as e:
+            print(f"Skills読み込みエラー: {fp.name} - {e}")
+
+    if not skill_files:
+        print("⚠️ Skills知識の読み込み対象が見つかりませんでした")
 
     _skills_cache = "\n\n".join(parts) if parts else ""
     _skills_cache_mtime = now
@@ -202,7 +218,7 @@ def _generate_reply_with_claude_code(
 1. **スタイルルール**: `Master/learning/style_rules.json`（小さいファイル、読み込みOK）
 2. **返信修正例**: `Master/learning/reply_feedback.json` で {sender_name} をGrep
 3. **会話記憶**: `System/line_bot_local/contact_state.json` で {sender_name} をGrep
-4. **専門知識**: `System/line_bot/skills/` 内の .md ファイル
+4. **専門知識の正本**: `Skills/` 配下の .md ファイル
 5. **ゴール・タスク情報**: `Master/addness/goal-tree.md`（540KB）→ Grepでキーワード検索のみ
 6. **チームメンバー確認**: `Master/people/profiles.json`（324KB）→ Grepで人名検索のみ。全件読み込み禁止
 
@@ -258,21 +274,21 @@ def _generate_reply_with_claude_code(
 
         # マーカーから返信文を抽出
         if "===REPLY_START===" in output and "===REPLY_END===" in output:
-            reply = output.split("===REPLY_START===")[1].split("===REPLY_END===")[0].strip()
+            start = output.find("===REPLY_START===") + len("===REPLY_START===")
+            end = output.find("===REPLY_END===", start)
+            reply = output[start:end].strip()
             if reply:
                 reply = _strip_markdown_for_line(reply)
-                print(f"   ✅ Claude Code 返信生成完了（{len(reply)}文字）")
+                print(f"   ✅ Claude Code 返信生成成功: {len(reply)}文字")
                 return reply
 
-        # マーカーがない場合 → フォールバックに任せる
-        print(f"   ⚠️ Claude Code 出力にマーカーなし（{len(output)}文字）、フォールバックへ")
+        print("   ⚠️ Claude Code出力から返信文を抽出できませんでした")
         return None
-
     except subprocess.TimeoutExpired:
-        print(f"   ⚠️ Claude Code タイムアウト（120秒）、フォールバックへ")
+        print("   ⚠️ Claude Code タイムアウト (180秒)")
         return None
     except Exception as e:
-        print(f"   ⚠️ Claude Code 実行失敗: {e}、フォールバックへ")
+        print(f"   ⚠️ Claude Code実行エラー: {e}")
         return None
 
 
@@ -304,9 +320,10 @@ def _execute_with_claude_code(
 
 ### データ・ファイル
 - `Master/people/profiles.json` — 社内メンバーのプロファイル（58名。category, active_goals, comm_profile, group_insights含む）
+- `Master/company/people_public.json` — 会社共通で参照してよい人物情報の正規レイヤー
 - `Master/addness/goal-tree.md` — ゴール・タスク一覧（巨大ファイル。Grepで人名検索して該当部分だけ読むこと）
 - `Master/self_clone/kohara/` — 甲原海人の情報
-- `System/line_bot/skills/` — マーケティング・ビジネスの専門知識
+- `Skills/` — マーケティング・ビジネスの専門知識の正本
 - `System/line_bot_local/contact_state.json` — 各メンバーとの過去の会話記録
 
 ### 人物の状況確認（「○○って今どんな感じ？」系）の場合
@@ -443,6 +460,16 @@ def load_feedback_examples() -> list:
 def save_feedback_example(fb: dict):
     """フィードバックを保存（最大50件、古いものを削除）"""
     try:
+        sender_name = fb.get("sender_name", "")
+        chatwork_account_id = str(fb.get("chatwork_account_id", "") or "")
+        matched_key, profile, aliases = _resolve_person_identity(sender_name, chatwork_account_id)
+        if matched_key and not fb.get("sender_key"):
+            fb["sender_key"] = matched_key
+        if aliases and not fb.get("sender_aliases"):
+            fb["sender_aliases"] = sorted(aliases)
+        if profile and not fb.get("sender_category"):
+            fb["sender_category"] = profile.get("category", "")
+
         examples = load_feedback_examples()
         examples.append(fb)
         examples = examples[-50:]
@@ -852,17 +879,52 @@ def build_feedback_prompt_section(sender_name: str = "", sender_category: str = 
     if not examples:
         return ""
 
+    _, _, sender_aliases = _resolve_person_identity(sender_name)
+    normalized_lookup_keys = {
+        normalized
+        for normalized in (_normalize_person_name(alias) for alias in sender_aliases | ({sender_name} if sender_name else set()))
+        if normalized
+    }
+
+    def _feedback_match_score(fb: dict) -> int:
+        feedback_keys = []
+        if fb.get("sender_key"):
+            feedback_keys.append(fb.get("sender_key", ""))
+        if fb.get("sender_name"):
+            feedback_keys.append(fb.get("sender_name", ""))
+        for alias in fb.get("sender_aliases", []) or []:
+            feedback_keys.append(alias)
+
+        normalized_feedback_keys = {
+            normalized
+            for normalized in (_normalize_person_name(alias) for alias in feedback_keys)
+            if normalized
+        }
+        if normalized_lookup_keys and normalized_feedback_keys & normalized_lookup_keys:
+            return 3
+        if sender_category and fb.get("sender_category") == sender_category:
+            return 2
+        if not normalized_feedback_keys:
+            return 1
+        return 0
+
+    def _select_ranked_feedback(items: list[dict], limit: int) -> list[dict]:
+        ranked = [
+            (_feedback_match_score(fb), fb)
+            for fb in items
+        ]
+        ranked.sort(key=lambda item: (item[0], item[1].get("timestamp", "")), reverse=True)
+        positive = [fb for score, fb in ranked if score > 0]
+        selected = positive if positive else [fb for _, fb in ranked]
+        return selected[:limit]
+
     note_parts = []
     for fb in examples:
         if fb.get("type") == "note":
             note_parts.append(f"・{fb.get('note', '')}")
 
     corrections = [f for f in examples if f.get("type") == "correction"]
-    sorted_corrections = sorted(
-        corrections,
-        key=lambda f: (f.get("sender_name") == sender_name, f.get("timestamp", "")),
-        reverse=True
-    )[:5]
+    sorted_corrections = _select_ranked_feedback(corrections, 5)
 
     correction_parts = []
     for i, fb in enumerate(sorted_corrections, 1):
@@ -879,11 +941,7 @@ def build_feedback_prompt_section(sender_name: str = "", sender_category: str = 
 
     # 承認例（AI案がそのまま採用された成功パターン）
     approvals = [f for f in examples if f.get("type") == "approval"]
-    sorted_approvals = sorted(
-        approvals,
-        key=lambda f: (f.get("sender_name") == sender_name, f.get("timestamp", "")),
-        reverse=True
-    )[:3]
+    sorted_approvals = _select_ranked_feedback(approvals, 3)
 
     approval_parts = []
     for i, fb in enumerate(sorted_approvals, 1):
@@ -1192,38 +1250,89 @@ def _load_json_safe(path: Path) -> dict:
     return {}
 
 
-def lookup_sender_profile(sender_name: str, chatwork_account_id: str = ""):
-    """送信者名またはChatwork account_idからプロファイルを逆引き。Noneなら未登録。"""
+def _normalize_person_name(value: str) -> str:
+    """人物名比較用に空白揺れを吸収する。"""
+    if not value:
+        return ""
+    return re.sub(r"[\s\u3000]+", "", str(value)).casefold()
+
+
+def _resolve_person_identity(sender_name: str = "", chatwork_account_id: str = "") -> tuple[str | None, dict | None, set[str]]:
+    """送信者の canonical 名・プロファイル・別名候補を返す。"""
     if not sender_name and not chatwork_account_id:
-        return None
+        return None, None, set()
 
     identities = _load_json_safe(PEOPLE_IDENTITIES_JSON)
     profiles = _load_json_safe(PEOPLE_PROFILES_JSON)
 
+    normalized_sender = _normalize_person_name(sender_name)
     matched_key = None
+    matched_identity = {}
 
-    # chatwork_account_id で逆引き（Chatworkメンションの場合）
     if chatwork_account_id:
         for addness_name, info in identities.items():
             if str(info.get("chatwork_account_id", "")) == str(chatwork_account_id):
                 matched_key = addness_name
+                matched_identity = info
                 break
 
-    # identities で line_display_name / line_my_name → Addness名 を逆引き
-    if not matched_key and sender_name:
+    if not matched_key and normalized_sender:
         for addness_name, info in identities.items():
-            if sender_name in (info.get("line_display_name", ""), info.get("line_my_name", ""),
-                               info.get("chatwork_display_name", "")):
+            alias_candidates = (
+                addness_name,
+                info.get("line_display_name", ""),
+                info.get("line_my_name", ""),
+                info.get("chatwork_display_name", ""),
+                info.get("real_name", ""),
+                info.get("katakana", ""),
+            )
+            normalized_aliases = {_normalize_person_name(alias) for alias in alias_candidates if alias}
+            if normalized_sender in normalized_aliases:
                 matched_key = addness_name
+                matched_identity = info
                 break
 
-    # identitiesで見つからなければAddness名と直接比較
-    if not matched_key and sender_name and sender_name in profiles:
-        matched_key = sender_name
+    if not matched_key and normalized_sender:
+        for profile_key in profiles.keys():
+            if normalized_sender == _normalize_person_name(profile_key):
+                matched_key = profile_key
+                break
 
+    if matched_key and not matched_identity:
+        matched_identity = identities.get(matched_key, {})
+
+    profile = None
     if matched_key and matched_key in profiles:
-        return profiles[matched_key].get("latest", {})
-    return None
+        profile = profiles[matched_key].get("latest", {})
+
+    aliases = {sender_name} if sender_name else set()
+    if matched_key:
+        aliases.add(matched_key)
+    for alias in (
+        matched_identity.get("line_display_name", ""),
+        matched_identity.get("line_my_name", ""),
+        matched_identity.get("chatwork_display_name", ""),
+        matched_identity.get("real_name", ""),
+        matched_identity.get("katakana", ""),
+    ):
+        if alias:
+            aliases.add(alias)
+    if profile:
+        for alias in (
+            profile.get("line_display_name", ""),
+            profile.get("line_my_name", ""),
+            profile.get("name", ""),
+        ):
+            if alias:
+                aliases.add(alias)
+
+    return matched_key, profile, {alias for alias in aliases if alias}
+
+
+def lookup_sender_profile(sender_name: str, chatwork_account_id: str = ""):
+    """送信者名またはChatwork account_idからプロファイルを逆引き。Noneなら未登録。"""
+    _, profile, _ = _resolve_person_identity(sender_name, chatwork_account_id)
+    return profile
 
 
 # ===== 情報開示ルール =====

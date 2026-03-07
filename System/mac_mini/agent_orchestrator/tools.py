@@ -443,6 +443,35 @@ def fetch_group_log(date: str = None) -> ToolResult:
         return ToolResult(success=False, output="", error=str(e))
 
 
+def fetch_group_names(group_ids: list[str]) -> ToolResult:
+    """RenderサーバーからグループID→グループ名の対応を取得"""
+    import json as _json
+    import requests as _requests
+
+    server_url = os.environ.get("LINE_BOT_SERVER_URL", "https://line-mention-bot-mmzu.onrender.com")
+    agent_token = os.environ.get("AGENT_TOKEN", "")
+    if not agent_token:
+        return ToolResult(success=False, output="", error="AGENT_TOKEN not set")
+
+    normalized_ids = [gid.strip() for gid in group_ids if gid and gid.strip()]
+    if not normalized_ids:
+        return ToolResult(success=True, output="{}")
+
+    try:
+        resp = _requests.get(
+            f"{server_url}/api/group-names",
+            headers={"Authorization": f"Bearer {agent_token}"},
+            params={"group_ids": ",".join(normalized_ids)},
+            timeout=45,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            return ToolResult(success=True, output=_json.dumps(data, ensure_ascii=False))
+        return ToolResult(success=False, output="", error=f"HTTP {resp.status_code}: {resp.text[:200]}")
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
 # --------------- People Profiles ---------------
 
 def update_people_profiles(person_name: str, group_insights: dict, comm_profile_updates: dict = None) -> ToolResult:
@@ -690,6 +719,7 @@ TOOL_REGISTRY = {
     "kpi_check_today": {"fn": kpi_check_today, "description": "2日前のKPIデータ完了チェック"},
     "git_pull_sync": {"fn": git_pull_sync, "description": "GitHubからpull→ローカルデプロイ"},
     "fetch_group_log": {"fn": fetch_group_log, "description": "Renderサーバーから日次グループログを取得"},
+    "fetch_group_names": {"fn": fetch_group_names, "description": "Renderサーバーからグループ名一覧を取得"},
     "update_people_profiles": {"fn": update_people_profiles, "description": "人物プロファイルにグループインサイトを書き込み"},
     "kpi_cache_build": {"fn": kpi_cache_build, "description": "ローカルCSVキャッシュからkpi_summary.jsonを再構築"},
     "kpi_anomaly_check": {"fn": kpi_anomaly_check, "description": "KPIデータの異常検知・媒体別ドリルダウン"},

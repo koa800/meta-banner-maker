@@ -1,0 +1,14 @@
+{
+  "brain_id": "kohara_clone_brain",
+  "kind": "kohara_clone",
+  "update_policy": "user_only",
+  "sections": {
+    "brain_os": "Master/self_clone/kohara/BRAIN_OS.md",
+    "soul": "Master/self_clone/kohara/SOUL.md",
+    "identity": "Master/self_clone/kohara/IDENTITY.md",
+    "current_self": "Master/self_clone/kohara/SELF_PROFILE.md",
+    "awakened_self": "Master/brains/kohara/awakened_self.md"
+  },
+  "private_people_model_path": "Master/brains/kohara/people_private.json",
+  "feedback_memory_path": "Master/learning/reply_feedback.json"
+}

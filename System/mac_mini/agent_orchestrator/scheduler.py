@@ -292,20 +292,210 @@ class TaskScheduler:
             return
 
         account_label = "personal" if account == "personal" else "kohara"
+        state_key = f"mail_waiting_notified_{account_label}"
+        now = datetime.now()
+        last_notified = self.memory.get_state(state_key)
+        if last_notified:
+            try:
+                elapsed = (now - datetime.fromisoformat(last_notified)).total_seconds()
+                if elapsed < 43200:
+                    logger.info(
+                        f"Mail notification suppressed for {account_label}: "
+                        f"waiting={waiting}, elapsed={int(elapsed // 60)}min"
+                    )
+                    return
+            except (ValueError, TypeError):
+                pass
+
         message = f"メールに返信待ちが{waiting}件あります（{account_label}）"
         if delete > 0:
             message += f"\n削除確認も{delete}件あります。"
         ok = send_line_notify(message)
         if ok:
+            self.memory.set_state(state_key, now.isoformat())
             logger.info(f"Mail notification sent for {account}: waiting={waiting}")
         else:
             # 1回リトライ（ネットワーク一時エラー対策）
             import asyncio; await asyncio.sleep(5)
             ok = send_line_notify(message)
             if ok:
+                self.memory.set_state(state_key, datetime.now().isoformat())
                 logger.info(f"Mail notification sent for {account} (retry): waiting={waiting}")
             else:
                 logger.warning(f"Mail notification failed for {account} after retry")
+
+    def _hydrate_group_names(self, groups: dict) -> None:
+        """group log内で未解決のgroup_nameを補完する。"""
+        import json as _json
+
+        missing_ids = [
+            gid for gid, ginfo in groups.items()
+            if not (ginfo.get("group_name") or "").strip()
+            or ginfo.get("group_name") in {"不明", "不明なグループ"}
+        ]
+        if not missing_ids:
+            return
+
+        result = tools.fetch_group_names(missing_ids)
+        if not result.success or not result.output:
+            logger.warning(f"daily_group_digest: failed to hydrate group names: {result.error}")
+            return
+
+        try:
+            name_map = _json.loads(result.output)
+        except _json.JSONDecodeError:
+            logger.warning("daily_group_digest: invalid JSON while hydrating group names")
+            return
+
+        for gid in missing_ids:
+            resolved_name = (name_map.get(gid) or "").strip()
+            if resolved_name and resolved_name not in {"不明", "不明なグループ"}:
+                groups[gid]["group_name"] = resolved_name
+
+    def _select_digest_messages(self, messages: list[dict], limit: int = 6) -> list[dict]:
+        """会話の冒頭と末尾を残しつつ、要約用の代表メッセージを選ぶ。"""
+        if len(messages) <= limit:
+            return messages
+        head_count = max(3, limit // 2)
+        tail_count = max(2, limit - head_count)
+        selected = messages[:head_count] + messages[-tail_count:]
+        deduped = []
+        seen = set()
+        for msg in selected:
+            key = (msg.get("timestamp", ""), msg.get("user_name", ""), msg.get("text", ""))
+            if key in seen:
+                continue
+            deduped.append(msg)
+            seen.add(key)
+        return deduped[:limit]
+
+    def _truncate_digest_text(self, text: str, limit: int = 72) -> str:
+        text = re.sub(r"\s+", " ", (text or "")).strip()
+        if not text:
+            return ""
+        return text[:limit] + ("..." if len(text) > limit else "")
+
+    def _build_group_digest_input(self, groups: dict, profiles: dict) -> tuple[str, int]:
+        """Claude要約用のグループログ入力を構築する。"""
+        group_blocks = []
+        total_messages = 0
+        sorted_groups = sorted(
+            groups.items(),
+            key=lambda item: len(item[1].get("messages", [])),
+            reverse=True,
+        )
+
+        for gid, ginfo in sorted_groups:
+            msgs = ginfo.get("messages", [])
+            if not msgs:
+                continue
+
+            total_messages += len(msgs)
+            gname = (ginfo.get("group_name") or "").strip() or "グループ名未取得"
+
+            speaker_counts = {}
+            for msg in msgs:
+                uname = (msg.get("user_name") or "不明").strip() or "不明"
+                speaker_counts[uname] = speaker_counts.get(uname, 0) + 1
+            top_speakers = ", ".join(
+                f"{name} {count}件"
+                for name, count in sorted(speaker_counts.items(), key=lambda item: item[1], reverse=True)[:3]
+            )
+
+            block_lines = [f"【{gname}】", f"件数: {len(msgs)}件", f"主な発言者: {top_speakers or '不明'}", "会話抜粋:"]
+            for msg in self._select_digest_messages(msgs):
+                uname = (msg.get("user_name") or "不明").strip() or "不明"
+                cat = profiles.get(uname, "")
+                cat_label = f"({cat})" if cat else ""
+                time_part = (msg.get("timestamp") or "")[-8:-3]
+                block_lines.append(
+                    f"- [{time_part}] {uname}{cat_label}: {self._truncate_digest_text(msg.get('text', ''), 88)}"
+                )
+
+            omitted = len(msgs) - len(self._select_digest_messages(msgs))
+            if omitted > 0:
+                block_lines.append(f"- （他 {omitted}件）")
+            group_blocks.append("\n".join(block_lines))
+
+        joined = "\n\n".join(group_blocks)
+        if len(joined) <= 6500:
+            return joined, total_messages
+
+        trimmed_blocks = []
+        current_len = 0
+        for block in group_blocks:
+            if current_len + len(block) > 6200 and trimmed_blocks:
+                break
+            trimmed_blocks.append(block)
+            current_len += len(block) + 2
+        omitted_groups = len(group_blocks) - len(trimmed_blocks)
+        if omitted_groups > 0:
+            trimmed_blocks.append(f"【省略グループ】他 {omitted_groups}グループ")
+        return "\n\n".join(trimmed_blocks), total_messages
+
+    def _infer_secretary_note(self, messages: list[dict]) -> tuple[str, str]:
+        """フォールバック時の秘書メモと必要アクションを簡易推定する。"""
+        text_blob = "\n".join(msg.get("text", "") for msg in messages)
+        if any(keyword in text_blob for keyword in ("docs.google.com", "スプレッドシート", "資料", "workflow", "フロー", "b→dash")):
+            return (
+                "資料共有や業務フロー整理の会話が中心。後続タスクへ落としやすいテーマです。",
+                "ワークフロー整理や担当確認が必要なら、そのままタスク化できます。",
+            )
+        if any(keyword in text_blob for keyword in ("確認", "教えて", "お願い", "お願いします", "どう", "？", "?")):
+            return (
+                "確認・依頼・判断待ちが混ざっています。返答漏れや担当未確定が起きやすい流れです。",
+                "未回答の質問や依頼が残っていないかを見る価値があります。",
+            )
+        if len(messages) >= 20:
+            return (
+                "会話量が多く、進捗共有よりも意思決定の流れが出ています。追跡価値が高いです。",
+                "必要なら重要論点だけ別で抜き出して整理します。",
+            )
+        return (
+            "定常の進捗共有が中心です。大きな異常は見えませんが、継続観測対象です。",
+            "直ちに介入が必要な兆候は薄めです。",
+        )
+
+    def _build_daily_group_digest_fallback(self, groups: dict) -> str:
+        """Claude要約失敗時でも人が読める最低限の要約を返す。"""
+        blocks = []
+        sorted_groups = sorted(
+            groups.items(),
+            key=lambda item: len(item[1].get("messages", [])),
+            reverse=True,
+        )
+        for gid, ginfo in sorted_groups[:5]:
+            msgs = ginfo.get("messages", [])
+            if not msgs:
+                continue
+
+            gname = (ginfo.get("group_name") or "").strip() or "グループ名未取得"
+            speaker_counts = {}
+            for msg in msgs:
+                uname = (msg.get("user_name") or "不明").strip() or "不明"
+                speaker_counts[uname] = speaker_counts.get(uname, 0) + 1
+            top_speakers = ", ".join(
+                f"{name} {count}件"
+                for name, count in sorted(speaker_counts.items(), key=lambda item: item[1], reverse=True)[:3]
+            )
+
+            representative = []
+            for msg in self._select_digest_messages(msgs, limit=3):
+                snippet = self._truncate_digest_text(msg.get("text", ""), 42)
+                if snippet:
+                    representative.append(f"「{snippet}」")
+            note, action = self._infer_secretary_note(msgs)
+            blocks.append(
+                f"【{gname}】\n"
+                f"- どんな会話: {' / '.join(representative) if representative else '内容抽出なし'}\n"
+                f"- 動き: {top_speakers or '不明'}\n"
+                f"- 秘書メモ: {note}\n"
+                f"- 見るべき点: {action}"
+            )
+
+        if not blocks:
+            return "今日は要約対象のグループ会話がありませんでした。"
+        return "\n\n".join(blocks)
 
     def _summarize_dsinsight_weekly(self, emails: list) -> str:
         """1週間分のDS.INSIGHTメールをまとめてClaude Haikuで要約"""
@@ -2721,7 +2911,7 @@ head -3 "{csv_dir}/{csv_filename}"
                 )
 
     async def _run_daily_group_digest(self):
-        """毎日21:00: グループLINEの1日分のメッセージをClaude Code CLI分析→秘書グループに報告"""
+        """毎日21:10: グループLINEの1日分の会話を意思決定向けに要約して報告"""
         import json as _json
         from .notifier import send_line_notify
         from datetime import date
@@ -2745,6 +2935,8 @@ head -3 "{csv_dir}/{csv_filename}"
             logger.info("daily_group_digest: no group messages today")
             return
 
+        self._hydrate_group_names(groups)
+
         # people-profiles.json でユーザー名→プロファイル照合
         master_dir = os.path.expanduser(
             self.config.get("paths", {}).get("master_dir", "~/agents/Master")
@@ -2763,51 +2955,37 @@ head -3 "{csv_dir}/{csv_filename}"
         except Exception:
             pass
 
-        # グループログをテキスト化（Claude入力用）
-        log_lines = []
-        total_messages = 0
-        for gid, ginfo in groups.items():
-            gname = ginfo.get("group_name") or gid[-8:]
-            msgs = ginfo.get("messages", [])
-            total_messages += len(msgs)
-            if not msgs:
-                continue
-            log_lines.append(f"\n【{gname}】({len(msgs)}件)")
-            for m in msgs:
-                uname = m.get("user_name", "不明")
-                cat = profiles.get(uname, "")
-                cat_label = f"({cat})" if cat else ""
-                time_part = m.get("timestamp", "")[-8:-3]  # HH:MM
-                log_lines.append(f"  [{time_part}] {uname}{cat_label}: {m.get('text', '')[:100]}")
-
+        log_text, total_messages = self._build_group_digest_input(groups, profiles)
         if total_messages == 0:
             logger.info("daily_group_digest: 0 messages across all groups")
             return
-
-        log_text = "\n".join(log_lines)
-        # 入力が長すぎる場合は切り詰め
-        if len(log_text) > 4000:
-            log_text = log_text[:4000] + "\n...(以下省略)"
 
         try:
             ok_env, claude_cmd, secretary_config, project_root, env_err = self._prepare_claude_env()
             if not ok_env:
                 raise RuntimeError(f"CLI準備失敗: {env_err}")
 
-            prompt = f"""あなたはスキルプラス事業のAI秘書です。甲原海人（代表・マーケティング責任者）向けに、LINEグループの1日の会話を簡潔に報告してください。
+            prompt = f"""あなたは甲原海人のAI秘書です。
+今日のLINEグループ会話を、件数報告ではなく「甲原さんの判断に効く形」でまとめてください。
 
-以下は今日のLINEグループのメッセージログです。
-甲原さんが把握すべき内容を簡潔にまとめてください。
+以下は今日のグループ会話ログです。
+グループIDではなく、必ずグループ名ベースで報告してください。
 
 {log_text}
 
-【出力形式】（500文字以内・LINEメッセージで読みやすい形式）
-グループごとに:
-・要約（誰が何について話したか）
-・メンバーの活動度やテンション（気になる点があれば）
-・甲原さんがアクションすべき事項（あれば）
-
-特に報告すべき内容がないグループは省略してOKです。"""
+【出力ルール】
+- 700文字以内
+- まず全体の一言を1-2行で書く
+- その後、重要なグループだけを重要度順に並べる
+- 1グループごとに以下4点を短く書く
+  1. グループ名
+  2. どんな会話が繰り広げられていたか
+  3. 秘書として何を学び、どう見たか
+  4. 甲原さんが見るべき点 / 必要なら次アクション
+- ただの件数報告、ID列挙、一般論は禁止
+- 会話量が多いだけで重要度が低いものは省略してよい
+- 特に、相談・意思決定・進行停滞・依頼・感情の揺れ・構造課題がある会話を優先する
+- 出力はそのままLINEに送るので、読みやすい改行と簡潔な日本語で書く"""
 
             success, cli_output, error = self._execute_claude_code_task(
                 "daily_group_digest", claude_cmd, secretary_config,
@@ -2819,14 +2997,7 @@ head -3 "{csv_dir}/{csv_filename}"
                 raise RuntimeError(f"CLI失敗: {error}")
         except Exception as e:
             logger.error(f"daily_group_digest: Claude analysis failed: {e}")
-            # Claude失敗時は簡易サマリーで代替
-            parts = [f"📋 グループ会話ログ ({today_str})"]
-            for gid, ginfo in groups.items():
-                gname = ginfo.get("group_name") or gid[-8:]
-                count = len(ginfo.get("messages", []))
-                if count > 0:
-                    parts.append(f"  {gname}: {count}件")
-            analysis = "\n".join(parts)
+            analysis = self._build_daily_group_digest_fallback(groups)
 
         message = (
             f"今日のグループLINEまとめです（{total_messages}件）\n\n"

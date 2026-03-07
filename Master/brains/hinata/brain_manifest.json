@@ -1,0 +1,10 @@
+{
+  "brain_id": "hinata_brain",
+  "kind": "hinata",
+  "update_policy": "verified_facts_only_to_company",
+  "sections": {
+    "persona": "Master/brains/hinata/persona.md",
+    "reference": "Project/4_AI基盤/日向エージェント.md"
+  },
+  "private_people_model_path": "Master/brains/hinata/people_private.json"
+}

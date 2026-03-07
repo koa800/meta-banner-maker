@@ -6,7 +6,12 @@
 - `System/line_bot_local/` → PC常駐エージェント（ソース）
 - `System/quick_translator/` → Chrome拡張（テキスト選択→自動翻訳ポップアップ、Manifest V3）
 - `System/clip_translator/` → macOSメニューバー常駐アプリ（Cmd+C→翻訳通知、rumps + launchd自動起動）
-- `Master/people/profiles.json` → 58名のプロファイル（comm_profile含む）
+- `Master/people/identities.json` → 識別レイヤー（LINE表示名 / Chatwork ID / メール等）
+- `Master/people/profiles.json` → legacy運用レイヤー（comm_profile / group_insights を含む厚いプロファイル）
+- `Master/people/profiles.md` → `profiles.json` の人間向け表示レイヤー
+- `Master/company/people_public.json` → 会社共通で参照する人物情報の正規レイヤー
+- `Master/brains/kohara/people_private.json` → 甲原クローン脳だけが持つ私的人物理解
+- `System/registries/agent_registry.json` → 人間 / AI / shell / brain の実行主体 registry
 - `Master/learning/reply_feedback.json` → 返信修正フィードバック（correction/approval）
 - `Master/learning/style_rules.json` → 返信スタイルルール（weekly_profile_learningで自動生成）
 - `Project/4_AI基盤/AI秘書作成.md` → AI秘書システムのメインドキュメント

@@ -10,6 +10,7 @@ import traceback
 from pathlib import Path
 from typing import Optional, Callable
 
+import clone_registry
 import llm_router
 import memory_manager
 
@@ -23,12 +24,8 @@ MAX_TOOL_ROUNDS = 5  # ツール呼び出しの最大ラウンド数
 # システムプロンプト構築
 # ---------------------------------------------------------------------------
 
-def _load_identity() -> str:
-    """IDENTITY.md を読み込む"""
-    path = REPO_ROOT / "Master" / "self_clone" / "kohara" / "IDENTITY.md"
-    if path.exists():
-        return path.read_text(encoding="utf-8")[:3000]
-    return ""
+def _excerpt(text: str, limit: int) -> str:
+    return text[:limit] if text else ""
 
 
 def _load_execution_rules() -> str:
@@ -48,30 +45,45 @@ def _load_execution_rules() -> str:
         return ""
 
 
-def build_system_prompt(channel_type: str, sender_context: str = "") -> str:
+def build_system_prompt(
+    channel_type: str,
+    sender_context: str = "",
+    channel_id: str = "",
+    shell_name: str = "line_secretary",
+) -> str:
     """チャネルタイプに応じたシステムプロンプトを構築"""
-    identity = _load_identity()
+    brain = clone_registry.load_kohara_clone_brain()
+    shell_policy = clone_registry.get_shell_policy(shell_name)
     rules = _load_execution_rules()
     memory = memory_manager.load_long_term_memory()
+    shared_context = memory_manager.build_shared_context_block(channel_id)
 
     if channel_type == "secretary_group":
-        return _build_secretary_prompt(identity, rules, memory)
+        return _build_secretary_prompt(brain, shell_policy, rules, memory, shared_context)
     elif channel_type == "mention":
-        return _build_mention_prompt(identity, rules, memory, sender_context)
+        return _build_mention_prompt(brain, shell_policy, rules, memory, shared_context, sender_context)
     elif channel_type == "qa":
-        return _build_qa_prompt(memory)
+        return _build_qa_prompt(memory, shared_context)
     else:
-        return _build_secretary_prompt(identity, rules, memory)
+        return _build_secretary_prompt(brain, shell_policy, rules, memory, shared_context)
 
 
-def _build_secretary_prompt(identity: str, rules: str, memory: str) -> str:
+def _build_secretary_prompt(
+    brain: dict,
+    shell_policy: dict,
+    rules: str,
+    memory: str,
+    shared_context: str,
+) -> str:
+    approved_actions = shell_policy.get("authority", {}).get("approved_actions", [])
+    approved_text = "\n".join(f"- {action}" for action in approved_actions) if approved_actions else "- 承認済み権限のみ"
     return f"""あなたはアドネス株式会社のAI秘書です。甲原さん（こうはらさん）のパートナーとして動きます。
 
 ## あなたの役割
-- 甲原さんとの自然な会話を通じて、業務をサポートする
+- {shell_policy.get("role_description", "甲原さんとの自然な会話を通じて業務をサポートする")}
 - 必要なデータは自分で判断してツールで取得する
-- 重要な情報は記憶に残し、不要な情報は忘れる
 - 「言われたことをやる」だけでなく、気づいたことがあれば自分から提案する
+- 共有短期文脈は他チャネルとも同期されている前提で振る舞う
 
 ## 口調・スタイル
 - フランクで親しみやすい口調（敬語は最低限）
@@ -79,30 +91,65 @@ def _build_secretary_prompt(identity: str, rules: str, memory: str) -> str:
 - 数値は具体的に。曖昧な表現は避ける
 - 選択肢を出すときは自分の意見も添える
 
-## 記憶の使い方
+## 権限
+- 以下は承認済みの自律行動:
+{approved_text}
+- 人物理解の深い推測は会話中に使ってよいが、永続化は甲原さん承認後のみ
+- 短期の感情ノイズではなく、目的に対して何がクリティカルかで判断する
+
+## 記憶と文脈の使い方
 - 会話の中で重要な情報（方針決定、好み、約束）があったら update_memory ツールで覚える
 - 不要になった情報は update_memory ツールで削除する
 - 「覚えておいて」と言われたら必ず覚える
+- shell 間で共有される短期文脈も判断材料に使う
 
 {rules}
 
+## 甲原クローン脳
+### Current Self
+{_excerpt(brain.get("current_self", ""), 1400)}
+
+### Awakened Self
+{_excerpt(brain.get("awakened_self", ""), 1200)}
+
+### Brain OS
+{_excerpt(brain.get("brain_os", ""), 1200)}
+
 ## 現在の記憶
-{memory}
+{_excerpt(memory, 1500)}
 
 ## 甲原さんの人格・価値観（参考）
-{identity[:1500]}
+{_excerpt(brain.get("identity", ""), 1500)}
+
+{shared_context}
 """
 
 
-def _build_mention_prompt(identity: str, rules: str, memory: str, sender_context: str) -> str:
+def _build_mention_prompt(
+    brain: dict,
+    shell_policy: dict,
+    rules: str,
+    memory: str,
+    shared_context: str,
+    sender_context: str,
+) -> str:
     return f"""あなたは甲原海人（こうはらかいと）です。LINEグループでメンションされたメッセージに返信します。
 
 ## 最重要ルール
 - 甲原さん本人として返信する。「秘書」や「AI」であることは絶対に出さない
 - IDENTITY.md の口調・価値観を忠実に再現する
+- 必要なら「覚醒した僕」として今の判断を補正してよい
+- ただし、人物理解の深い推測は会話中のみ利用し、永続化は承認後
 
 ## 甲原さんの口調・人格
-{identity[:2000]}
+{_excerpt(brain.get("identity", ""), 1800)}
+
+## 判断のコア
+### Current Self
+{_excerpt(brain.get("current_self", ""), 1000)}
+
+### Awakened Self
+{_excerpt(brain.get("awakened_self", ""), 900)}
 
 ## 送信者情報
 {sender_context}
@@ -111,11 +158,13 @@ def _build_mention_prompt(identity: str, rules: str, memory: str, sender_context
 {rules}
 
 ## 秘書の記憶（参考）
-{memory[:1000]}
+{_excerpt(memory, 900)}
+
+{shared_context}
 """
 
 
-def _build_qa_prompt(memory: str) -> str:
+def _build_qa_prompt(memory: str, shared_context: str) -> str:
     return f"""あなたはアドネス株式会社のカスタマーサポート担当です。受講生からの質問に丁寧に回答します。
 
 ## 回答ルール
@@ -125,7 +174,9 @@ def _build_qa_prompt(memory: str) -> str:
 - search_knowledge ツールでナレッジベースも参照する
 
 ## 参考情報
-{memory[:500]}
+{_excerpt(memory, 500)}
+
+{shared_context}
 """
 
 
@@ -355,11 +406,33 @@ def process_message(
     Returns:
         応答テキスト
     """
+    shell_name = "line_secretary"
+
     # 1. システムプロンプト構築
-    system_prompt = build_system_prompt(channel_type, sender_context)
+    system_prompt = build_system_prompt(
+        channel_type,
+        sender_context,
+        channel_id=channel_id,
+        shell_name=shell_name,
+    )
 
     # 2. 短期記憶（会話履歴）をロード
-    conversation_history = memory_manager.load_conversation(channel_id, channel_type)
+    conversation_history = memory_manager.load_conversation(
+        channel_id,
+        channel_type,
+        shell_name=shell_name,
+    )
+
+    memory_manager.record_context_event(
+        channel_id=channel_id,
+        shell_name=shell_name,
+        event_type="user_message",
+        content=message,
+        metadata={
+            "channel_type": channel_type,
+            "sender_name": sender_name,
+        },
+    )
 
     # 3. ユーザーメッセージを会話履歴に追加
     conversation_history.append({"role": "user", "content": message})
@@ -372,7 +445,31 @@ def process_message(
 
     # 6. アシスタントの応答を会話履歴に追加して保存
     conversation_history.append({"role": "assistant", "content": response_text})
-    memory_manager.save_conversation(channel_id, conversation_history, channel_type)
+    memory_manager.save_conversation(
+        channel_id,
+        conversation_history,
+        channel_type,
+        shell_name=shell_name,
+    )
+    memory_manager.record_context_event(
+        channel_id=channel_id,
+        shell_name=shell_name,
+        event_type="assistant_reply",
+        content=response_text,
+        metadata={
+            "channel_type": channel_type,
+            "sender_name": sender_name,
+        },
+    )
+    memory_manager.update_active_context(
+        channel_id=channel_id,
+        shell_name=shell_name,
+        summary=f"{sender_name or channel_id}: {message[:80]} -> {response_text[:80]}",
+        metadata={
+            "channel_type": channel_type,
+            "sender_name": sender_name,
+        },
+    )
 
     return response_text
 

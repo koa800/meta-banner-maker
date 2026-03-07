@@ -20,6 +20,7 @@ from pathlib import Path
 
 import anthropic
 
+from clone_registry import build_agent_summary
 from handler_runner import HandlerRunner
 
 # Coordinator が使う LLM モデル
@@ -42,78 +43,8 @@ def _build_claude_tools(registry: dict) -> list:
 
 
 def _load_agent_summary(project_root: Path) -> str:
-    """profiles.json から active なエージェント（人間+AI）のサマリーを生成する。
-    Coordinator がゴールに対して最適なエージェントを選ぶための情報。"""
-    profiles_path = project_root / "Master" / "people" / "profiles.json"
-    if not profiles_path.exists():
-        return ""
-
-    try:
-        profiles = json.loads(profiles_path.read_text(encoding="utf-8"))
-    except Exception:
-        return ""
-
-    lines = ["【利用可能なエージェント一覧】"]
-
-    # AI エージェント
-    ai_agents = []
-    for name, prof in profiles.items():
-        latest = prof.get("latest", {})
-        if latest.get("type") != "ai":
-            continue
-        if latest.get("status", "active") == "inactive":
-            continue
-        caps = ", ".join(latest.get("capabilities", []))
-        best = ", ".join(latest.get("best_for", []))
-        speed = latest.get("constraints", {}).get("speed", "")
-        cost = latest.get("constraints", {}).get("cost", "")
-        ai_agents.append(f"  [{name}] AI / 得意: {best} / 速度: {speed} / コスト: {cost}")
-
-    if ai_agents:
-        lines.append("AI:")
-        lines.extend(ai_agents)
-
-    # 人間エージェント（主要メンバーのみ。capabilities がある人だけ）
-    human_agents = []
-    for name, prof in profiles.items():
-        latest = prof.get("latest", {})
-        if latest.get("type") != "human":
-            continue
-        caps = latest.get("capabilities")
-        if not caps:
-            # capabilities がない人間は、inferred_domains + category で代替
-            domains = latest.get("inferred_domains", [])
-            cat = latest.get("category", "")
-            if domains and cat in ("直下メンバー", "横（並列）", "上司"):
-                human_agents.append(f"  [{name}] {cat} / スキル: {', '.join(domains[:3])}")
-        else:
-            best = ", ".join(latest.get("best_for", caps[:3]))
-            human_agents.append(f"  [{name}] {latest.get('category', '')} / 得意: {best}")
-
-    if human_agents:
-        lines.append("人間（主要メンバー）:")
-        lines.extend(human_agents[:10])  # 上位10名に制限
-
-    # ワークフロー型エージェント（transfer_status 付き）
-    workflow_agents = []
-    for name, prof in profiles.items():
-        latest = prof.get("latest", {})
-        if latest.get("type") != "workflow":
-            continue
-        if latest.get("status", "active") == "inactive":
-            continue
-        best = ", ".join(latest.get("best_for", []))
-        transfer = latest.get("transfer", {})
-        t_status = transfer.get("transfer_status", "")
-        t_target = transfer.get("transferable_to", "")
-        status_text = f" [移譲: {t_status} → {t_target}]" if t_status and t_target else ""
-        workflow_agents.append(f"  [{name}] ワークフロー / 用途: {best}{status_text}")
-
-    if workflow_agents:
-        lines.append("ワークフロー:")
-        lines.extend(workflow_agents)
-
-    return "\n".join(lines)
+    """agent_registry.json を優先し、必要なら legacy から導出したサマリーを返す。"""
+    return build_agent_summary()
 
 
 def _load_video_knowledge(project_root: Path, goal_text: str = "") -> str:
@@ -293,7 +224,7 @@ def _build_system_prompt(sender_name: str = "", project_root: Path = None, goal_
 - APIキーが未設定のツールは、未設定である旨をユーザーに報告する
 
 【ワークフロー移譲ルール】
-profiles.json の transfer.transfer_status に応じて、ワークフローの振り先を自動で変える:
+agent_registry.json の transfer.transfer_status に応じて、ワークフローの振り先を自動で変える:
 - Phase 1（AI全自動）: ワークフローに直接実行を委任
 - Phase 2（AI実行+人間確認）: ワークフローを実行し、結果を transfer_target の人間にも共有
 - Phase 3（人間実行+AIサポート）: transfer_target の人間に依頼し、AIはサポート情報を提供
@@ -329,7 +260,7 @@ LoomやYouTubeのURLが送られて「見ておいて」「確認して」等の
     if sender_name:
         prompt += f"\n\n【送信者】\n{sender_name}（秘書グループからの指示）"
 
-    # profiles.json からエージェント一覧を注入
+    # agent_registry.json からエージェント一覧を注入
     if project_root:
         agent_summary = _load_agent_summary(project_root)
         if agent_summary:

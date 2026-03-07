@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年3月7日（引用返信通知文面を改善） |
+| 最終更新 | 2026年3月7日（clone brain / shared context / registry分離基盤追加、通知・グループ要約改善） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -35,7 +35,8 @@
                                │  【v2会話エンジン】(2026-03-07) │
                                │  - conversation.py: 会話ループ  │
                                │  - llm_router.py: モデル切替     │
-                               │  - memory_manager.py: 記憶管理   │
+                               │  - memory_manager.py: 長期脳 +   │
+                               │    shared context bus + shell状態 │
                                │  - GPT-5.4デフォルト（proも切替可） │
                                │  - フォールバック: 5.4→Opus→Sonnet→4.1│
                                │  - tool_use で自律的にツール選択  │
@@ -56,13 +57,15 @@
                                launchd常駐    │ データ参照
                                               ▼
                                ┌──────────────────────────────┐
-                               │  Master/ (知識ベース)          │
-                               │  - people-profiles.json (54名) │
-                               │  - people-identities.json     │
-                               │    (chatwork_account_id対応)   │
-                               │  - IDENTITY.md (言語スタイル)   │
-                               │  - SELF_PROFILE.md (自己像)    │
-                               │  - reply_feedback.json (学習)  │
+                               │  Master/ + registry層          │
+                               │  - company/people_public.json │
+                               │  - brains/kohara/*           │
+                               │  - people-profiles.json      │
+                               │    （互換fallback）            │
+                               │  - people-identities.json    │
+                               │  - reply_feedback.json       │
+                               │  - System/registries/        │
+                               │    agent_registry.json       │
                                └──────────────────────────────┘
 ```
 
@@ -126,6 +129,7 @@
     - `2 [修正]` → 修正例として自動学習（AI案と異なる場合のみ）
     - `1`（承認） → 成功例として自動学習（AI案が正解だったパターンを蓄積）
     - 学習データは `reply_feedback.json` に蓄積、次回返信案のプロンプトに注入（修正例 + 成功例の両面から学習）
+    - 送信者一致は `sender_name` の完全一致だけでなく canonical 名 / LINE表示名 / 呼び名 / 空白揺れを吸収して照合。通常返信と引用返信で同じ学習データを参照する
 12. **group_insights → 返信プロンプト注入**: 週次プロファイル学習（`weekly_profile_learning`）が書き込んだ `group_insights`（会話スタイル・最近の関心・協業パターン・性格特性）を返信案生成のプロンプトに自動注入。相手の最新の行動パターンを踏まえた返信を生成
 13. **メモコマンド**: `メモ [人名]: [内容]` → その人のプロファイルに文脈メモを追記
 14. **IDENTITY.md**: 甲原海人の言語スタイル定義（口癖・トーン・関係性別ルール）
@@ -133,7 +137,8 @@
 
 ### Phase 5: 高度な返信文脈認識（完了）
 15. **引用返信（リプライ）検知**: ボットが送信したメッセージへのLINE引用返信を自動検知し、新しい返信案を生成
-    - 初回通知は「リプライがありました！」形式、完了通知は「{送信者名}への返信案」形式で秘書グループへ送信
+    - 初回通知は「引用返信あり」形式、完了通知は「{送信者名}への返信案」形式で秘書グループへ送信
+    - 2026-03-07: 秘書グループへの引用返信通知テンプレートを通常フロー寄りに整理し、`グループ / 送信者 / 引用元 / 生成中` が一目で分かる形に統一
 16. **会話文脈取り込み**: メンション直前の発言（最大10件）をバッファリングし、Claude プロンプトに「直前の文脈」として注入
 17. **重複タスク防止**: 同一 `message_id` の `generate_reply_suggestion` タスクは1件のみキューイング
 
@@ -181,6 +186,14 @@
 56. **サイクル間状態引き継ぎ**: MemoryStore（SQLite）でフェーズ・完了基準・アクション一覧・進捗を永続化。30分後の次サイクルで前回の続きから再開
 57. **学習ループ**: `Master/learning/secretary_action_log.json`（最大50件）にアクション履歴を自動記録。直近5件+行動ルール+学習記憶をプロンプトに注入し、同じ失敗を繰り返さない
 58. **連続失敗通知**: 3回連続失敗でLINE通知。1サイクル最大15分（900秒タイムアウト）で定常業務を妨げない
+59. **通知の整理**: `daily_report` の21:00稼働報告LINEは停止。`mail_inbox_*` の「返信待ちがあります」通知はメール確認自体は維持しつつ、LINE通知だけ12時間クールダウンを入れてノイズを削減
+60. **グループLINEまとめ改善**: `daily_group_digest` は件数報告ではなく、`グループ名 / どんな会話だったか / 秘書の学び・所感 / 見るべき点` を優先して報告。Claude Code失敗時もグループ名ベースの人間向けフォールバックを返す
+
+### Phase 13: クローン脳分離基盤（実装完了）
+61. **registry 分離基盤**: `Master/company/people_public.json`、`Master/brains/kohara/brain_manifest.json`、`Master/brains/hinata/brain_manifest.json`、`System/registries/agent_registry.json` を追加。`profiles.json` は互換 fallback に変更
+62. **shared context bus**: `memory_manager.py` を長期記憶 / 共有短期文脈 / shell別会話状態に分離。`event_stream.jsonl` と `active_context.json` を追加し、LINE秘書とCursorクローンが同じ短期文脈を共有できる土台を作成
+63. **same brain + multiple shells**: `conversation.py` は `甲原クローン脳` を manifest 経由で読み込み、`current_self / awakened_self / identity / brain_os` を system prompt に注入。shell 差分は `agent_registry.json` の role/authority で管理
+64. **Skills 正本統一**: `local_agent.py` は `Skills/` を正本として再帰読み込みするよう変更。旧 `System/line_bot/skills/` は互換 fallback のみ
 
 ### Phase 10: OS共有基盤・自己認識（実装完了）
 46. **行動ルール（OS）の動的同期**: `execution_rules.json` をSingle Source of Truthとし、app.py（Render）へは `/api/sync_execution_rules` APIで自動同期。local_agent起動時+ルール更新時に自動実行。永続ディスクに保存しフォールバックにハードコード版を併用
@@ -580,11 +593,11 @@ bash System/line_bot_local/sync_data.sh
 | 08:30 | `daily_addness_digest` | 🟡 | ゴール進捗+今日の予定まとめ | ✅ あり |
 | 09:00 | `addness_goal_check` | 🟢 | やることリスト更新 | ✅ あり |
 | 09:10 | `oauth_health_check` | 🟢 | Google認証トークン確認 | エラー時のみ |
-| 3h毎 :00 | `mail_inbox_personal` | 🟡 | 個人メール確認・分類 | 返信待ちあれば |
-| 3h毎 :05 | `mail_inbox_kohara` | 🟡 | koharaメール確認・分類 | 返信待ちあれば |
+| 3h毎 :00 | `mail_inbox_personal` | 🟡 | 個人メール確認・分類 | 返信待ちあれば（12hごと上限） |
+| 3h毎 :05 | `mail_inbox_kohara` | 🟡 | koharaメール確認・分類 | 返信待ちあれば（12hごと上限） |
 | 12:00 | `kpi_daily_import` | 🟡 | CSVからスプレッドシートへKPI取込 | ✅ あり |
-| 21:00 | `daily_report` | 🟢 | 日次タスク集計 | ✅ あり |
-| 21:10 | `daily_group_digest` | 🟡 | グループLINE未読ダイジェスト | ✅ あり |
+| 21:00 | `daily_report` | 🟢 | 日次タスク集計 | 停止 |
+| 21:10 | `daily_group_digest` | 🟡 | グループLINE要点整理（グループ名 / 会話内容 / 秘書メモ） | ✅ あり |
 | 22:00 | `kpi_nightly_cache` | 🟢 | KPIキャッシュ再生成 | なし |
 
 #### 常時動いているもの（バックグラウンド）
@@ -747,7 +760,7 @@ MacBook (どこからでも)
 - [x] LINE Notify廃止対応（Render /notify エンドポイント + LINE Messaging API push_message）
 - [x] Mac Mini rsync TCC制限対応（Git post-commitフックでDesktop→Mac MiniへrsyncをDesktop側から実行）→ GitHub同期に移行済み
 - [x] SYSTEM_DIR Critical Bug修正（tools.py を __file__ ベースの動的パスに変更・Mac Mini/Desktop両対応）
-- [x] メール処理後LINE通知（返信待ちがある場合に秘書グループへ自動通知）
+- [x] メール処理後LINE通知（返信待ちがある場合に秘書グループへ自動通知。12時間クールダウン付き）
 - [x] qa_monitor 本番有効化（config.json `qa_monitor_enabled: true`）
 - [x] post-commit hook 拡張（line_bot_local/同期追加・config.json変更時も再起動・Orchestrator変更時も再起動）
 - [x] 個人DM対応（メンバーからのDMを秘書グループに通知→承認→返信・学習フロー）
