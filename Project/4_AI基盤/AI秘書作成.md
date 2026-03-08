@@ -200,11 +200,12 @@
 ### Phase 14: 日向 Addness 承認フロー（実装完了）
 65. **日向コメントの承認フロー化**: `pending_messages` に `platform=addness` を追加。`/api/addness/hinata-feedback` で日向の未解決コメントを登録し、既存の LINE 承認フローに接続。同じ `goal_id + sender_name + timestamp` の Addness コメントは重複登録しない
 66. **LINE承認 → Addness実投稿**: 承認時は即送信せず `post_addness_comment` タスクを Mac Mini に委譲。甲原アカウントの Addness セッションで対象ゴールを開き、最新コメントの `返信` または `コメントする` からフォームを開いて実際に返信し、投稿完了後に LINE へ報告
-67. **日向向け返信ガードレール**: Addness返信案は専用プロンプトを使用。Lステップ権限・シート共有は最小権限から提案し、1コメントで1判断 + 1次アクションに絞る
-68. **定期検知ジョブ**: `addness_feedback_manager.py` を追加。`hinata_addness_feedback_check` が10分ごとに Kohara サブツリーの未解決コメントを巡回し、新着のみ秘書承認フローへ登録。ライブのツリー API が使えない場合は `addness_data/latest.json` をフォールバックに使う
-69. **投稿失敗時の復帰**: Addness返信失敗時は `pending_messages` を `pending` に戻し、同じ承認で再実行できるようにした
-70. **秘書コマンド直実行API**: `/api/secretary-command` を追加。認証付きで `承認` / `編集` などの秘書コマンドを直接実行できるため、本番の Addness 承認フローを外部から検証できる
-71. **pending詳細debug**: `/debug/pending/<message_id>` を追加。特定の Addness エントリについて `post_error` と関連タスク状態を直接確認できる
+67. **確認なしの実投稿を禁止**: Addness 返信案は必ず「この内容で返信しようと思っています。合っていれば 1 / 修正なら 2 [内容]」という確認文面で LINE に止める。引用リプライか `承認 [ID]` / `編集 [ID] [内容]` の明示指定なしでは送信しない
+68. **日向向け返信ガードレール**: Addness返信案は専用プロンプトを使用。Lステップ権限・シート共有は最小権限から提案し、1コメントで1判断 + 1次アクションに絞る。日向向けは敬語を避け、甲原らしい短い判断 + 次の一手に自動補正する
+69. **定期検知ジョブ**: `addness_feedback_manager.py` を追加。`hinata_addness_feedback_check` が10分ごとに Kohara サブツリーの未解決コメントを巡回し、新着のみ秘書承認フローへ登録。ライブのツリー API が使えない場合は `addness_data/latest.json` をフォールバックに使う
+70. **投稿失敗時の復帰**: Addness返信失敗時は `pending_messages` を `pending` に戻し、同じ承認で再実行できるようにした
+71. **秘書コマンド直実行API**: `/api/secretary-command` を追加。認証付きで `承認` / `編集` などの秘書コマンドを直接実行できるため、本番の Addness 承認フローを外部から検証できる
+72. **pending詳細debug**: `/debug/pending/<message_id>` を追加。特定の Addness エントリについて `post_error` と関連タスク状態を直接確認できる
 
 ### Phase 10: OS共有基盤・自己認識（実装完了）
 46. **行動ルール（OS）の動的同期**: `execution_rules.json` をSingle Source of Truthとし、app.py（Render）へは `/api/sync_execution_rules` APIで自動同期。local_agent起動時+ルール更新時に自動実行。永続ディスクに保存しフォールバックにハードコード版を併用

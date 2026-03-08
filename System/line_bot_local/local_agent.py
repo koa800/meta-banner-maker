@@ -159,6 +159,66 @@ def _load_self_identity() -> str:
     return ""
 
 
+def _should_rewrite_addness_reply(reply_text: str, platform: str, sender_name: str, sender_cat: str) -> bool:
+    if platform != "addness":
+        return False
+    if sender_cat not in ("直下メンバー", "メンバー") and sender_name not in ("日向", "ひなた"):
+        return False
+    text = (reply_text or "").strip()
+    if not text:
+        return False
+    polite_markers = ("です", "ます", "ください", "お願いします", "いたします", "でしょう")
+    if any(marker in text for marker in polite_markers):
+        return True
+    return len(text) > 120 or text.count("\n") > 3
+
+
+def _rewrite_addness_reply_in_kohara_style(
+    reply_text: str,
+    sender_name: str,
+    goal_title: str,
+    identity_style: str,
+) -> str:
+    prompt = f"""以下の返信文を、甲原海人が直下メンバーの{sender_name}にAddnessで返す文に書き直してください。
+
+対象ゴール: {goal_title or "不明"}
+
+【絶対ルール】
+- 敬語禁止。「です」「ます」「ください」「お願いします」「いたします」は使わない
+- 2〜3文まで
+- 1コメントで 1判断 + 1次アクションに絞る
+- 長い説明はしない
+- 甲原海人らしく、短く、前に進む言い方にする
+- 元の意図は変えない
+
+【甲原海人の言語スタイル】
+{identity_style}
+
+【良い例】
+案Aでいこう！
+まずは25件設定して、ズレ・追加・詰まりだけ共有して！
+権限必要なら対象と必要権限だけ出して！
+
+【元の返信文】
+{reply_text}
+
+【出力ルール】
+返信文だけを出力すること。"""
+    try:
+        client = anthropic.Anthropic()
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=180,
+            system="あなたは甲原海人です。Addnessで直下メンバーに返す短いコメントだけを出力してください。",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        rewritten = response.content[0].text.strip()
+        return rewritten or reply_text
+    except Exception as e:
+        print(f"⚠️ Addness返信の口調補正エラー: {e}")
+        return reply_text
+
+
 def _generate_reply_with_claude_code(
     sender_name: str,
     group_name: str,
@@ -2237,12 +2297,16 @@ def call_claude_api(instruction: str, task: dict):
                     "\n【Addness返信ルール】\n"
                     f"- これは甲原海人がAddness上で日向に返すコメント。対象ゴールは「{goal_title or group_name or '不明'}」\n"
                     "- 日向は直下メンバーの新人マネージャー。敬語なしで、短く、判断と次の一手を明確にする\n"
+                    "- 「です」「ます」「ください」「お願いします」は使わない。LINEより業務的でよいが、甲原っぽい温度感は残す\n"
                     "- 1コメントで伝える内容は1判断 + 1次アクションまで。論点を増やしすぎない\n"
+                    "- 2〜3文まで。1文目で判断、2文目で次のアクション、必要なら3文目で補足だけ\n"
+                    "- 具体的に短く言う。長い前置きや背景説明は入れない\n"
                     "- 秘書側の承認は済んでいる前提なので、ここでは実行に移せる言い方にする\n"
                     "- 権限や共有の相談では、必ず最小権限から始める\n"
                     "  - Lステップ: まず閲覧権限。配信設定変更や本番編集は必要が明確になってから\n"
                     "  - スプレッドシート: まず閲覧またはコメント。編集権限は対象シートが特定できたときだけ\n"
                     "- 操作手順を伝えるときは、一度に一つずつ教える。今このコメントの後に何をすればいいかが分かる形にする\n"
+                    "- 良い例: 「案Aでいこう！」「まずは25件設定して、ズレ・追加・詰まりだけ共有して！」「権限必要なら対象と必要権限だけ出して！」\n"
                 )
                 if is_permission_request:
                     addness_section += "- 今回は権限/共有の相談。対象と権限レベルを明記し、広い権限をまとめて渡す提案はしない\n"
@@ -2399,6 +2463,15 @@ def call_claude_api(instruction: str, task: dict):
                 )
 
                 reply_suggestion = response.content[0].text.strip()
+
+            if _should_rewrite_addness_reply(reply_suggestion, platform, sender_name, sender_cat):
+                print(f"   🎯 Addness返信の口調を甲原スタイルに補正: {sender_name}")
+                reply_suggestion = _rewrite_addness_reply_in_kohara_style(
+                    reply_text=reply_suggestion,
+                    sender_name=sender_name,
+                    goal_title=goal_title,
+                    identity_style=identity_style,
+                )
 
             # raw_reply をタスク引数に一時保存（execute_task_with_claude が complete_task に渡す）
             task.setdefault("arguments", {})["_raw_reply"] = reply_suggestion
