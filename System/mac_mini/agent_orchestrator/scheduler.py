@@ -1005,6 +1005,7 @@ market_trends.md の全文をそのまま出力してください。既存の内
 """
 
         try:
+            self._force_local_chrome_mcp_bridge(secretary_config)
             env = self._build_claude_secretary_env(secretary_config)
 
             cmd = [
@@ -1085,6 +1086,40 @@ market_trends.md の全文をそのまま出力してください。既存の内
         # API key が残っていると Max/OAuth ではなく従量課金の API key 認証に切り替わる。
         env.pop("ANTHROPIC_API_KEY", None)
         return env
+
+    def _force_local_chrome_mcp_bridge(self, secretary_config):
+        """秘書用 Claude が Chrome MCP のローカル native host を使うよう feature flag を固定する。"""
+        import json
+        from pathlib import Path
+
+        config_path = Path(secretary_config) / ".claude.json"
+        if not config_path.exists():
+            return
+
+        try:
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning(f"Claude Chrome MCP: .claude.json 読み込み失敗: {e}")
+            return
+
+        features = data.setdefault("cachedGrowthBookFeatures", {})
+        changed = False
+        for key in ("tengu_copper_bridge", "tengu_ccr_bridge"):
+            if features.get(key) is not False:
+                features[key] = False
+                changed = True
+
+        if not changed:
+            return
+
+        try:
+            config_path.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            logger.info("Claude Chrome MCP: ローカル bridge を強制")
+        except Exception as e:
+            logger.warning(f"Claude Chrome MCP: .claude.json 書き込み失敗: {e}")
 
     def _refresh_claude_oauth(self, secretary_config):
         """Claude Code の OAuth トークンが期限切れ or 1時間以内に切れる場合、
@@ -1453,6 +1488,8 @@ cat {creds_file}
         # メトリクス記録: 開始
         task_log_id = self.memory.log_task_start(task_label)
 
+        if use_chrome:
+            self._force_local_chrome_mcp_bridge(secretary_config)
         env = self._build_claude_secretary_env(secretary_config)
         cmd = [str(claude_cmd), "-p", "--model", model,
                "--max-turns", str(max_turns)]
