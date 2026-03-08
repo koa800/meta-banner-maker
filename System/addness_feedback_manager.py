@@ -380,6 +380,48 @@ def open_comments_if_needed(page):
     time.sleep(2)
 
 
+def find_comment_input(page):
+    return page.locator(
+        'textarea[placeholder*="コメント"], '
+        'textarea[placeholder*="コメントを送信"], '
+        'textarea[placeholder*="CmdかCtrl"], '
+        'textarea[placeholder*="メンション"], '
+        '[placeholder*="コメントを送信"], '
+        '[contenteditable="true"][role="textbox"], '
+        '[contenteditable="true"][data-slate-editor="true"]'
+    ).last
+
+
+def open_comment_composer(page) -> bool:
+    comment_input = find_comment_input(page)
+    if comment_input.count() > 0:
+        return True
+
+    reply_button = page.get_by_role("button", name="返信")
+    if reply_button.count() > 0:
+        try:
+            reply_button.nth(reply_button.count() - 1).click()
+            time.sleep(1)
+            if find_comment_input(page).count() > 0:
+                return True
+        except Exception:
+            pass
+
+    if click_if_visible(
+        page,
+        [
+            'button:has-text("コメントする")',
+            '[role="button"]:has-text("コメントする")',
+            'button:has-text("コメントを追加")',
+        ],
+    ):
+        time.sleep(1)
+        if find_comment_input(page).count() > 0:
+            return True
+
+    return find_comment_input(page).count() > 0
+
+
 def extract_value(obj: Any, keys: tuple[str, ...]) -> str:
     if not isinstance(obj, dict):
         return ""
@@ -735,14 +777,10 @@ def post_comment(goal_id: str, goal_url: str, text: str, headless: bool) -> dict
             time.sleep(2)
             open_comments_if_needed(page)
             time.sleep(1)
+            if not open_comment_composer(page):
+                raise RuntimeError("コメント返信フォームを開けませんでした。")
 
-            comment_input = page.locator(
-                'textarea[placeholder*="コメント"], '
-                '[placeholder*="コメントを送信"], '
-                'textarea[placeholder*="メンション"], '
-                '[contenteditable="true"][role="textbox"], '
-                '[contenteditable="true"][data-slate-editor="true"]'
-            ).last
+            comment_input = find_comment_input(page)
             if comment_input.count() == 0:
                 raise RuntimeError("コメント入力欄が見つかりませんでした。")
 

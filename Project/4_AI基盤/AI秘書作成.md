@@ -199,7 +199,7 @@
 
 ### Phase 14: 日向 Addness 承認フロー（実装完了）
 65. **日向コメントの承認フロー化**: `pending_messages` に `platform=addness` を追加。`/api/addness/hinata-feedback` で日向の未解決コメントを登録し、既存の LINE 承認フローに接続。同じ `goal_id + sender_name + timestamp` の Addness コメントは重複登録しない
-66. **LINE承認 → Addness実投稿**: 承認時は即送信せず `post_addness_comment` タスクを Mac Mini に委譲。甲原アカウントの Addness セッションで実際に返信し、投稿完了後に LINE へ報告
+66. **LINE承認 → Addness実投稿**: 承認時は即送信せず `post_addness_comment` タスクを Mac Mini に委譲。甲原アカウントの Addness セッションで対象ゴールを開き、最新コメントの `返信` または `コメントする` からフォームを開いて実際に返信し、投稿完了後に LINE へ報告
 67. **日向向け返信ガードレール**: Addness返信案は専用プロンプトを使用。Lステップ権限・シート共有は最小権限から提案し、1コメントで1判断 + 1次アクションに絞る
 68. **定期検知ジョブ**: `addness_feedback_manager.py` を追加。`hinata_addness_feedback_check` が10分ごとに Kohara サブツリーの未解決コメントを巡回し、新着のみ秘書承認フローへ登録。ライブのツリー API が使えない場合は `addness_data/latest.json` をフォールバックに使う
 69. **投稿失敗時の復帰**: Addness返信失敗時は `pending_messages` を `pending` に戻し、同じ承認で再実行できるようにした
