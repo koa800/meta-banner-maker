@@ -374,6 +374,7 @@ class TaskScheduler:
         self.scheduler = AsyncIOScheduler(timezone=_SCHEDULER_TIMEZONE)
         self._task_map = {
             "addness_fetch": self._run_addness_fetch,
+            "hinata_addness_feedback_check": self._run_hinata_addness_feedback_check,
             "ai_news": self._run_ai_news,
             "mail_inbox_personal": self._run_mail_personal,
             "mail_inbox_kohara": self._run_mail_kohara,
@@ -1004,12 +1005,7 @@ market_trends.md の全文をそのまま出力してください。既存の内
 """
 
         try:
-            env = {
-                **subprocess.os.environ,
-                "CLAUDE_CONFIG_DIR": str(secretary_config),
-                "PATH": f"/opt/homebrew/bin:{subprocess.os.environ.get('PATH', '')}",
-            }
-            env.pop("ANTHROPIC_API_KEY", None)
+            env = self._build_claude_secretary_env(secretary_config)
 
             cmd = [
                 str(claude_cmd), "-p",
@@ -1051,6 +1047,26 @@ market_trends.md の全文をそのまま出力してください。既存の内
         if result.success:
             logger.info("Addness goal context updated for daily review")
 
+    async def _run_hinata_addness_feedback_check(self):
+        result = await self._execute_tool(
+            "addness_hinata_feedback_scan",
+            tools.addness_hinata_feedback_scan,
+            limit_goals=10,
+        )
+        if result.success:
+            logger.info("Hinata Addness feedback scan completed")
+            return
+
+        logger.warning(f"Hinata Addness feedback scan failed: {result.error}")
+        try:
+            from .notifier import send_line_notify
+            send_line_notify(
+                "⚠️ Addnessの日向コメント検知に失敗しました。\n"
+                f"{(result.error or result.output)[:300]}"
+            )
+        except Exception:
+            pass
+
     def _find_claude_cmd(self):
         """Claude Code CLIパスを検出（Apple Silicon / Intel Mac 両対応）"""
         from pathlib import Path
@@ -1058,6 +1074,17 @@ market_trends.md の全文をそのまま出力してください。既存の内
             if p.exists():
                 return p
         return None
+
+    def _build_claude_secretary_env(self, secretary_config):
+        """秘書用 Claude Code CLI の実行環境を構築する。"""
+        env = os.environ.copy()
+        path = env.get("PATH", "")
+        if "/opt/homebrew/bin" not in path:
+            env["PATH"] = f"/opt/homebrew/bin:{path}"
+        env["CLAUDE_CONFIG_DIR"] = str(secretary_config)
+        # API key が残っていると Max/OAuth ではなく従量課金の API key 認証に切り替わる。
+        env.pop("ANTHROPIC_API_KEY", None)
+        return env
 
     def _refresh_claude_oauth(self, secretary_config):
         """Claude Code の OAuth トークンが期限切れ or 1時間以内に切れる場合、
@@ -1078,13 +1105,9 @@ market_trends.md の全文をそのまま出力してください。既存の内
         except Exception as e:
             return False, f"credentials.json 読み込みエラー: {e}"
 
+        import time
         oauth = creds.get("claudeAiOauth", {})
         expires_at = oauth.get("expiresAt", 0)
-        refresh_token = oauth.get("refreshToken")
-        if not refresh_token:
-            return False, "refresh_token がありません。再認証が必要です"
-
-        import time
         now_ms = int(time.time() * 1000)
         remaining_ms = expires_at - now_ms
         remaining_hours = remaining_ms / (1000 * 3600)
@@ -1095,11 +1118,11 @@ market_trends.md の全文をそのまま出力してください。既存の内
 
         # 1時間以内に切れる or すでに期限切れ → リフレッシュ
         logger.info(f"Claude OAuth: トークン更新開始（残り {remaining_hours:.1f}時間）")
+        refresh_token = oauth.get("refreshToken")
+        if not refresh_token:
+            return False, "refresh_token がありません。再認証が必要です"
         try:
-            env = dict(os.environ)
-            if "/opt/homebrew/bin" not in env.get("PATH", ""):
-                env["PATH"] = f"/opt/homebrew/bin:{env.get('PATH', '')}"
-            env["CLAUDE_CONFIG_DIR"] = str(secretary_config)
+            env = self._build_claude_secretary_env(secretary_config)
 
             # Claude Code CLI を一度起動すれば内部で自動リフレッシュされる
             claude_cmd = self._find_claude_cmd()
@@ -1430,12 +1453,7 @@ cat {creds_file}
         # メトリクス記録: 開始
         task_log_id = self.memory.log_task_start(task_label)
 
-        env = os.environ.copy()
-        # launchd 環境でも node が見つかるよう PATH を保証
-        path = env.get("PATH", "")
-        if "/opt/homebrew/bin" not in path:
-            env["PATH"] = f"/opt/homebrew/bin:{path}"
-        env["CLAUDE_CONFIG_DIR"] = str(secretary_config)
+        env = self._build_claude_secretary_env(secretary_config)
         cmd = [str(claude_cmd), "-p", "--model", model,
                "--max-turns", str(max_turns)]
         if use_chrome:
