@@ -17,7 +17,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-OUTPUT_BASE = Path.home() / "Downloads" / "video_reader"
+OUTPUT_BASE = Path(
+    os.environ.get("VIDEO_READER_OUTPUT_BASE", str(Path.home() / "Downloads" / "video_reader"))
+)
 YT_DLP = "/opt/homebrew/bin/yt-dlp"
 FFMPEG = "/opt/homebrew/bin/ffmpeg"
 

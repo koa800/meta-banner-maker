@@ -26,6 +26,10 @@
 - `System/clip_translator/` → macOSメニューバー常駐アプリ（Cmd+C→翻訳通知、rumps + launchd自動起動）
 - `System/root_layout_check.py` → root 直下の構成逸脱を検知するガードスクリプト
 - `Master/前提/用語定義.md` → 甲原さんが使う言葉のローカル正本。Google Sheets `言葉の定義` から同期
+- `Master/前提/目的.md` → AIが何のために動くかの入口
+- `Master/前提/判断軸.md` → 判断フローと止める条件の入口
+- `Master/前提/優先順位.md` → 今何を重く見るかの入口
+- `Master/前提/更新ルール.md` → 前提レイヤーで確認が必要な変更境界
 - `Master/people/identities.json` → 識別レイヤー（LINE表示名 / Chatwork ID / メール等）
 - `Master/people/profiles.json` → legacy運用レイヤー（comm_profile / group_insights を含む厚いプロファイル）
 - `Master/people/profiles.md` → `profiles.json` の人間向け表示レイヤー

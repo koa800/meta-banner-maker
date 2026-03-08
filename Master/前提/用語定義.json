@@ -1,0 +1,533 @@
+{
+  "updated_at": "2026-03-09T06:58:56.484387",
+  "source_sheet_id": "1nkmeWcHmzxPJH1d5veXwTpDoZrsPFH4_3txevqj225Y",
+  "defined_count": 58,
+  "draft_count": 17,
+  "entries": [
+    {
+      "row": 2,
+      "term": "概念",
+      "definition": "共通する特徴を持つ認識のまとまり。らしさ。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 3,
+      "term": "目的",
+      "definition": "欲求を具体化したもの",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 4,
+      "term": "後悔",
+      "definition": "より良い選択が可能だったはずと信じることで伴う苦痛",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 5,
+      "term": "哲学とは",
+      "definition": "",
+      "note": "",
+      "status": "draft"
+    },
+    {
+      "row": 6,
+      "term": "深いとは",
+      "definition": "",
+      "note": "",
+      "status": "draft"
+    },
+    {
+      "row": 7,
+      "term": "言語",
+      "definition": "言葉を組み合わせて意味を伝達するための体系的なルール",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 8,
+      "term": "言葉",
+      "definition": "意味のある音や記号の単位。話し言葉でも書き言葉でも使われる。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 9,
+      "term": "文字",
+      "definition": "言葉を視覚的に表現するための記号。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 10,
+      "term": "メッセージ",
+      "definition": "誰かに何かを伝えようとする内容",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 11,
+      "term": "ライティング",
+      "definition": "文字を記すこと",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 12,
+      "term": "コピー",
+      "definition": "ある目的のためのメッセージ",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 13,
+      "term": "コピーライティング",
+      "definition": "ある目的のためのメッセージを文字で表現すること",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 14,
+      "term": "キャッチコピー",
+      "definition": "",
+      "note": "",
+      "status": "draft"
+    },
+    {
+      "row": 16,
+      "term": "ブランドコピー",
+      "definition": "",
+      "note": "",
+      "status": "draft"
+    },
+    {
+      "row": 17,
+      "term": "意識",
+      "definition": "自分の状態を認識できるもの。自己と世界を認識できる「自分の視点」のようなもの。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 18,
+      "term": "欲求",
+      "definition": "人間を動かす根本の力。マズローの5欲求のどれかとして現れる。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 19,
+      "term": "市場",
+      "definition": "特定の欲求がまだ満たされていない集団。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 20,
+      "term": "消費者",
+      "definition": "",
+      "note": "",
+      "status": "draft"
+    },
+    {
+      "row": 21,
+      "term": "媒体",
+      "definition": "情報を伝える媒介物",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 22,
+      "term": "ステークホルダー",
+      "definition": "",
+      "note": "",
+      "status": "draft"
+    },
+    {
+      "row": 23,
+      "term": "競合",
+      "definition": "",
+      "note": "",
+      "status": "draft"
+    },
+    {
+      "row": 24,
+      "term": "ビジネスとは",
+      "definition": "",
+      "note": "",
+      "status": "draft"
+    },
+    {
+      "row": 25,
+      "term": "需要",
+      "definition": "商品・サービスに対する欲求",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 26,
+      "term": "露出",
+      "definition": "見える状態",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 27,
+      "term": "感情",
+      "definition": "欲求に紐づいて心が動く状態。人は感情が動いてから論理で納得する。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 28,
+      "term": "供給",
+      "definition": "需要を満たす商品・サービス",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 29,
+      "term": "好き",
+      "definition": "ポジティブな欲求が掻き立てられること",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 30,
+      "term": "嫌い",
+      "definition": "ネガティブな欲求が掻き立てられること",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 31,
+      "term": "伝わる",
+      "definition": "",
+      "note": "",
+      "status": "draft"
+    },
+    {
+      "row": 32,
+      "term": "届ける",
+      "definition": "",
+      "note": "",
+      "status": "draft"
+    },
+    {
+      "row": 33,
+      "term": "無関心",
+      "definition": "意識が向かないこと",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 34,
+      "term": "印象",
+      "definition": "",
+      "note": "",
+      "status": "draft"
+    },
+    {
+      "row": 35,
+      "term": "問題",
+      "definition": "",
+      "note": "",
+      "status": "draft"
+    },
+    {
+      "row": 36,
+      "term": "オファー",
+      "definition": "取引の条件。Aという条件でBを買いませんかという提示。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 37,
+      "term": "マーケティング",
+      "definition": "欲求解消の連続で、需要に供給を届けること。ある市場に、供給を届ける活動すべて。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 38,
+      "term": "ブランドとは",
+      "definition": "コンセプトを一貫して積み上げた結果として育つ、その人・会社・サービスらしさ。",
+      "note": "カテゴリのシンボル？",
+      "status": "defined"
+    },
+    {
+      "row": 39,
+      "term": "ブランディング",
+      "definition": "印象を設計・浸透させること",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 40,
+      "term": "コンセプト",
+      "definition": "らしさを言語化したもの。誰に何を言うかの核であり、訴求の判断軸。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 41,
+      "term": "広告",
+      "definition": "露出機会を購入して、市場に情報を発信すること",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 42,
+      "term": "広報",
+      "definition": "第3者の発信を活用して情報を発信すること",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 43,
+      "term": "SNS",
+      "definition": "",
+      "note": "",
+      "status": "draft"
+    },
+    {
+      "row": 44,
+      "term": "ファネル",
+      "definition": "複数の条件や障壁を順次通過することで、最終的に特定の基準を満たすもののみが残る仕組み",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 45,
+      "term": "導線",
+      "definition": "人を特定の方向へ導く経路の集合体と、その設計思想。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 46,
+      "term": "チャネル",
+      "definition": "伝達を媒介するもの",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 47,
+      "term": "伝達",
+      "definition": "あるものが一方から他方へ移ること",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 48,
+      "term": "組織",
+      "definition": "共通の目的を持つ集団",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 49,
+      "term": "マニュアル",
+      "definition": "タスクのやり方",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 50,
+      "term": "仕組み",
+      "definition": "再現性が担保されたシステム",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 51,
+      "term": "オペレーション",
+      "definition": "仕組みを実行し、アップデートすること",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 52,
+      "term": "マネジメント",
+      "definition": "目標に向けて、リソースの価値やパフォーマンスを最大化させること",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 53,
+      "term": "文化",
+      "definition": "明確化されたルールではない常識",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 54,
+      "term": "チーム",
+      "definition": "",
+      "note": "",
+      "status": "draft"
+    },
+    {
+      "row": 55,
+      "term": "部",
+      "definition": "",
+      "note": "",
+      "status": "draft"
+    },
+    {
+      "row": 56,
+      "term": "シンプル",
+      "definition": "削ぎ落とした先に浮かび上がる",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 57,
+      "term": "洗練",
+      "definition": "シンプルを質と精度で磨き上げた",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 58,
+      "term": "プレイフル",
+      "definition": "",
+      "note": "",
+      "status": "draft"
+    },
+    {
+      "row": 59,
+      "term": "パクリ",
+      "definition": "表現方法が同じであること",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 60,
+      "term": "トレース",
+      "definition": "骨格を再現し、表現を変えること",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 61,
+      "term": "オマージュ",
+      "definition": "エッセンスを理解して再構築すること",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 62,
+      "term": "論理的",
+      "definition": "読み手にとって記述に必要な要素が、読み手の期待する順番に並んでいることから生まれる感覚",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 63,
+      "term": "プレスリリース",
+      "definition": "",
+      "note": "",
+      "status": "draft"
+    },
+    {
+      "row": 64,
+      "term": "人間理解",
+      "definition": "欲求と感情を中心に、人の文脈や人生に共感できるレベルで理解すること。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 65,
+      "term": "インサイト",
+      "definition": "人間理解から抽出される核心。避けたいコストと満たしたい需要のバランスの最適解。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 66,
+      "term": "刺さる",
+      "definition": "感情が強く動き、無視できなくなること。欲しい・自分のことだ・図星だが起きる状態。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 67,
+      "term": "反応率",
+      "definition": "ある母数に対して特定行動を取った割合。何の行動かを文脈で切って使う。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 68,
+      "term": "勝ち筋",
+      "definition": "仮説ではなく、成功がかなり見えていて論理的にも矛盾なく説明できる筋道。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 69,
+      "term": "訴求",
+      "definition": "欲求を想起させるもの。コピー、ビジュアル、音、編集、デザインを含む。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 70,
+      "term": "商品",
+      "definition": "売る中身そのもの。プロダクト。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 71,
+      "term": "教育",
+      "definition": "できないことができるようになること。販売文脈では、買わない状態から買う状態に心理を変えること。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 72,
+      "term": "買う状態",
+      "definition": "人が商品を購入するための10の要素が満たされた状態。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 73,
+      "term": "自分事化",
+      "definition": "それが自分のことだと感じること。自分にも当てはまると認識すること。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 74,
+      "term": "情緒的価値",
+      "definition": "感情を動かし、欲しいと思わせる価値。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 75,
+      "term": "機能的価値",
+      "definition": "商品の機能や性能、具体的に何ができるかという価値。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 76,
+      "term": "ターゲット",
+      "definition": "市場の中でも、より具体で狭い対象。N1に近い範囲。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 77,
+      "term": "強いLP",
+      "definition": "特定市場と目的に対して目的達成率が高いLP。実務上は対象に対するCVRで見ることが多い。",
+      "note": "",
+      "status": "defined"
+    }
+  ]
+}

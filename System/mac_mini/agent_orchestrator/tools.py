@@ -240,6 +240,48 @@ def sheets_sync(sheet_id: str = None) -> ToolResult:
     return _run_script(os.path.join(SYSTEM_DIR, "sheets_sync.py"), args, timeout=600)
 
 
+# --------------- CDP Interviews ---------------
+
+def interview_insights_sync(limit: int = 10, force: bool = False, dry_run: bool = False, row: int = None) -> ToolResult:
+    """収録URL から CDP の定性欄を補完"""
+    args = ["--limit", str(limit)]
+    if force:
+        args.append("--force")
+    if dry_run:
+        args.append("--dry-run")
+    if row:
+        args.extend(["--row", str(row)])
+    args.append("sync")
+    return _run_script(
+        os.path.join(SYSTEM_DIR, "interview_insights_sync.py"),
+        args,
+        timeout=1800,
+    )
+
+
+def interview_insights_backfill(limit: int = 120) -> ToolResult:
+    """収録URL の backlog をまとめて補完する"""
+    batch_size = min(60, max(1, limit))
+    max_batches = max(1, (limit + batch_size - 1) // batch_size)
+    return _run_script(
+        os.path.join(SYSTEM_DIR, "interview_insights_sync.py"),
+        ["--limit", str(batch_size), "backfill", "--max-batches", str(max_batches)],
+        timeout=7200,
+    )
+
+
+def interview_insights_analyze(output_path: str = None) -> ToolResult:
+    """LTV 別の面談定性比較を更新する"""
+    args = ["analyze"]
+    if output_path:
+        args.extend(["--output", output_path])
+    return _run_script(
+        os.path.join(SYSTEM_DIR, "interview_insights_sync.py"),
+        args,
+        timeout=1800,
+    )
+
+
 # --------------- Docs ---------------
 
 def docs_read(url_or_id: str) -> ToolResult:
@@ -713,6 +755,9 @@ TOOL_REGISTRY = {
     "calendar_list": {"fn": calendar_list, "description": "今後の予定一覧を取得"},
     "sheets_read": {"fn": sheets_read, "description": "Googleスプレッドシートのデータを読み取り"},
     "sheets_sync": {"fn": sheets_sync, "description": "管理シートのCSVキャッシュを同期"},
+    "interview_insights_sync": {"fn": interview_insights_sync, "description": "収録URL から CDP の定性欄を補完"},
+    "interview_insights_backfill": {"fn": interview_insights_backfill, "description": "面談定性の backlog をまとめて補完"},
+    "interview_insights_analyze": {"fn": interview_insights_analyze, "description": "LTV別の面談定性比較を更新"},
     "docs_read": {"fn": docs_read, "description": "Googleドキュメントの内容を読み取り"},
     "ai_news_notify": {"fn": ai_news_notify, "description": "最新AIニュースの収集・要約・通知"},
     "addness_fetch": {"fn": addness_fetch, "description": "Addnessからゴールツリーデータをスクレイピング"},

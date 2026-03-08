@@ -21,6 +21,10 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SHEETS_DIR = PROJECT_ROOT / "Master" / "sheets"
 README_PATH = SHEETS_DIR / "README.md"
+GLOSSARY_SHEET_ID = "1nkmeWcHmzxPJH1d5veXwTpDoZrsPFH4_3txevqj225Y"
+PREMISE_DIR = PROJECT_ROOT / "Master" / "前提"
+GLOSSARY_MARKDOWN_PATH = PREMISE_DIR / "用語定義.md"
+GLOSSARY_JSON_PATH = PREMISE_DIR / "用語定義.json"
 
 sys.path.insert(0, str(PROJECT_ROOT / "System"))
 from sheets_manager import get_client, extract_spreadsheet_id
@@ -43,6 +47,105 @@ def parse_registered_sheets() -> list[dict]:
     return sheets
 
 
+def _normalize_cell(value) -> str:
+    return str(value).strip() if value is not None else ""
+
+
+def _escape_markdown(text: str) -> str:
+    return text.replace("|", "\\|").replace("\n", "<br>")
+
+
+def build_glossary_entries(values: list[list[str]]) -> list[dict]:
+    """言葉の定義シートから glossary entry 一覧を作る"""
+    if not values:
+        return []
+
+    entries = []
+    for index, row in enumerate(values[1:], start=2):
+        cells = [_normalize_cell(cell) for cell in row]
+        if len(cells) < 3:
+            cells.extend([""] * (3 - len(cells)))
+
+        term = cells[0]
+        definition = cells[1]
+        note = " / ".join(cell for cell in cells[2:] if cell)
+
+        if not term and not definition and not note:
+            continue
+        if not term:
+            continue
+
+        entries.append(
+            {
+                "row": index,
+                "term": term,
+                "definition": definition,
+                "note": note,
+                "status": "defined" if definition else "draft",
+            }
+        )
+    return entries
+
+
+def export_glossary_artifacts(values: list[list[str]], synced_at: str):
+    """言葉の定義シートを前提レイヤーの正本へ書き出す"""
+    entries = build_glossary_entries(values)
+    defined_entries = [entry for entry in entries if entry["status"] == "defined"]
+    draft_entries = [entry for entry in entries if entry["status"] == "draft"]
+
+    payload = {
+        "updated_at": synced_at,
+        "source_sheet_id": GLOSSARY_SHEET_ID,
+        "defined_count": len(defined_entries),
+        "draft_count": len(draft_entries),
+        "entries": entries,
+    }
+
+    PREMISE_DIR.mkdir(parents=True, exist_ok=True)
+    GLOSSARY_JSON_PATH.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    lines = [
+        "# 用語定義",
+        "",
+        f"最終同期: {synced_at}",
+        "",
+        "> 人が追記する入口は Google Sheets `言葉の定義`。",
+        "> AI が参照するローカル正本はこの Markdown と `用語定義.json`。",
+        "",
+        "## 使い方",
+        "",
+        f"- 追記入口: `https://docs.google.com/spreadsheets/d/{GLOSSARY_SHEET_ID}/edit`",
+        f"- 同期コマンド: `python3 System/sheets_sync.py --id {GLOSSARY_SHEET_ID}`",
+        f"- 定義済み: {len(defined_entries)}件",
+        f"- 定義保留: {len(draft_entries)}件",
+        "",
+        "## 定義済み",
+        "",
+        "| 用語 | 定義 | 補足 |",
+        "|---|---|---|",
+    ]
+
+    for entry in defined_entries:
+        lines.append(
+            f"| {_escape_markdown(entry['term'])} | "
+            f"{_escape_markdown(entry['definition']) or '—'} | "
+            f"{_escape_markdown(entry['note']) or '—'} |"
+        )
+
+    lines.extend(["", "## 定義保留", "", "| 用語 | メモ |", "|---|---|"])
+
+    for entry in draft_entries:
+        lines.append(
+            f"| {_escape_markdown(entry['term'])} | "
+            f"{_escape_markdown(entry['note']) or '定義未入力'} |"
+        )
+
+    GLOSSARY_MARKDOWN_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def sync_sheet(client, sheet_id: str, sheet_dir: Path, dry_run: bool = False) -> dict:
     """1つのスプレッドシートを同期し、メタ情報dictを返す"""
     try:
@@ -57,6 +160,7 @@ def sync_sheet(client, sheet_id: str, sheet_dir: Path, dry_run: bool = False) ->
         "synced_at": datetime.now().isoformat(),
         "tabs": [],
     }
+    glossary_exported = False
 
     if not dry_run:
         sheet_dir.mkdir(parents=True, exist_ok=True)
@@ -79,10 +183,17 @@ def sync_sheet(client, sheet_id: str, sheet_dir: Path, dry_run: bool = False) ->
                 with open(csv_path, "w", encoding="utf-8", newline="") as f:
                     writer = csv.writer(f)
                     writer.writerows(values)
+
+                if sheet_id == GLOSSARY_SHEET_ID and not glossary_exported:
+                    export_glossary_artifacts(values, result["synced_at"])
+                    glossary_exported = True
             except Exception as e:
                 tab_info["error"] = str(e)
 
         result["tabs"].append(tab_info)
+
+    if glossary_exported:
+        result["glossary_exported"] = True
 
     if not dry_run:
         meta_path = sheet_dir / "_meta.json"
@@ -105,6 +216,7 @@ def update_readme_sync_status(results: list[dict]):
         m = re.match(r"(\|\s*`([A-Za-z0-9_-]+)`\s*\|.+\|)\s*([^|]*)\s*\|$", line)
         if m:
             sheet_id = m.group(2)
+            current_sync_text = m.group(3).strip()
             matched = next((r for r in results if r["id"] == sheet_id), None)
             if matched and matched.get("synced"):
                 ts = datetime.fromisoformat(matched["synced_at"]).strftime("%m/%d %H:%M")
@@ -113,7 +225,7 @@ def update_readme_sync_status(results: list[dict]):
             elif matched:
                 sync_text = f"❌ {matched.get('error', 'error')[:30]}"
             else:
-                sync_text = "-"
+                sync_text = current_sync_text or "-"
             prefix = m.group(1)
             new_lines.append(f"{prefix} {sync_text} |")
         else:

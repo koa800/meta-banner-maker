@@ -24,6 +24,15 @@ schedule:
   cdp_sync:
     cron: "0 */2 * * *"          # 2時間ごと  CDP同期（データソース→マスタ + 経路別タブ→集客データ）
     enabled: true
+  interview_insights_sync:
+    cron: "50 * * * *"           # 毎時50分  新規/直近の定性欄を補完（最大20件）
+    enabled: true
+  interview_insights_backfill:
+    cron: "20 1 * * *"           # 01:20  面談定性の backlog をまとめて処理（最大600件目安）
+    enabled: true
+  interview_insights_analysis:
+    cron: "20 5 * * *"           # 05:20  LTV別の面談定性比較を再生成
+    enabled: true
   addness_fetch:
     cron: "0 8 */3 * *"          # 08:00  Addnessゴールツリー取得（3日ごと）
     enabled: true

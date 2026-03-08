@@ -87,7 +87,7 @@ def detect_columns(headers):
 
         # 悩み（詳細テキスト）
         elif "悩み" in h and ("詳細" in h or "相談" in h or "期待" in h):
-            mapping.setdefault("目標", i)  # 詳細は目標カラムに
+            mapping.setdefault("理想の未来", i)  # 詳細は理想の未来カラムに
 
         # その他の回答（隠しデータ抽出用）
         elif h == "その他の回答":
@@ -280,10 +280,10 @@ def read_all_csvs():
             if concern and not p.get("現在の悩み"):
                 p["現在の悩み"] = concern
 
-            # 目標（悩み詳細）
-            goal = get("目標")
-            if goal and not p.get("目標"):
-                p["目標"] = goal
+            # 理想の未来（悩み詳細）
+            ideal_future = get("理想の未来")
+            if ideal_future and not p.get("理想の未来"):
+                p["理想の未来"] = ideal_future
 
     print(f"\nCSV読み込み完了:")
     print(f"  ファイル数: {stats['files']}")
@@ -306,7 +306,7 @@ def import_to_cdp(persons, dry_run=False):
     phone_index = cdp.build_phone_index()
 
     # CDPカラムのうち、CSVから更新するもの
-    target_cols = ["姓", "名", "性別", "年齢", "年収", "職業", "現在の悩み", "目標"]
+    target_cols = ["姓", "名", "性別", "年齢", "年収", "職業", "現在の悩み", "理想の未来"]
 
     stats = {"matched": 0, "updated": 0, "new": 0, "excluded": 0, "cells": 0}
     updates = []  # バッチ更新用
@@ -342,6 +342,8 @@ def import_to_cdp(persons, dry_run=False):
                     continue
 
                 cdp_idx = cdp.get_col_index(col_name)
+                if cdp_idx is None and col_name == "理想の未来":
+                    cdp_idx = cdp.get_col_index("目標")
                 if cdp_idx is None:
                     continue
 
