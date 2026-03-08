@@ -263,6 +263,13 @@ def addness_fetch() -> ToolResult:
 def addness_to_context() -> ToolResult:
     return _run_script(os.path.join(SYSTEM_DIR, "addness_to_context.py"))
 
+def addness_hinata_feedback_scan(limit_goals: int = 10) -> ToolResult:
+    return _run_script(
+        os.path.join(SYSTEM_DIR, "addness_feedback_manager.py"),
+        ["scan", "--headless", "--limit-goals", str(limit_goals)],
+        timeout=600,
+    )
+
 
 # --------------- Q&A ---------------
 
@@ -710,6 +717,7 @@ TOOL_REGISTRY = {
     "ai_news_notify": {"fn": ai_news_notify, "description": "最新AIニュースの収集・要約・通知"},
     "addness_fetch": {"fn": addness_fetch, "description": "Addnessからゴールツリーデータをスクレイピング"},
     "addness_to_context": {"fn": addness_to_context, "description": "Addnessデータをコンテキスト用マークダウンに変換"},
+    "addness_hinata_feedback_scan": {"fn": addness_hinata_feedback_scan, "description": "Addness上の日向コメントを検知して秘書承認フローへ登録"},
     "qa_search": {"fn": qa_search, "description": "Q&Aナレッジベースを検索"},
     "qa_answer": {"fn": qa_answer, "description": "質問に対してAI回答を生成"},
     "qa_stats": {"fn": qa_stats, "description": "Q&Aナレッジベースの統計情報"},

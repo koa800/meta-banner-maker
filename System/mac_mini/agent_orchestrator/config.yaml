@@ -152,6 +152,9 @@ schedule:
   render_health_check:
     interval_minutes: 30         # Renderサーバー監視
     enabled: true
+  hinata_addness_feedback_check:
+    interval_minutes: 10         # 日向のAddness未解決コメントを検知 → LINE承認フローへ登録
+    enabled: true
   repair_check:
     interval_minutes: 30         # エラー検知・修復提案
     enabled: false               # 2026-03-02 クレジット消費過多のため一時停止

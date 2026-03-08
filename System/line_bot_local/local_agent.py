@@ -1246,6 +1246,11 @@ def format_task_for_cursor(task: dict) -> str:
         msg = arguments.get("original_message", original_text)
         return f"「{sender}」からのメッセージへの返信案を生成: {msg[:60]}"
 
+    if function_name == "post_addness_comment":
+        sender = arguments.get("sender_name", "日向")
+        reply_text = arguments.get("reply_text", "")
+        return f"Addnessで「{sender}」に返信: {reply_text[:60]}"
+
     # その他のタスクは元のテキストをそのまま使用
     return original_text or f"タスク: {function_name}"
 
@@ -2095,6 +2100,8 @@ def call_claude_api(instruction: str, task: dict):
             group_name = arguments.get("group_name", "")
             msg_id_short = message_id[:4] if message_id else "----"
             platform = arguments.get("platform", "line")
+            goal_title = arguments.get("goal_title", "")
+            goal_url = arguments.get("goal_url", "")
             cw_account_id = arguments.get("chatwork_account_id", "")
 
             # プロファイルから送信者情報を取得（Chatwork account_idでも検索）
@@ -2219,6 +2226,26 @@ def call_claude_api(instruction: str, task: dict):
             platform_note = ""
             if platform == "chatwork":
                 platform_note = "- 返信先はChatwork（LINEではない）。Chatworkの文体・フォーマットに合わせる\n"
+            elif platform == "addness":
+                platform_note = "- 返信先はAddnessコメント。LINEより少し業務的でよいが、長文説明は不要\n"
+
+            addness_section = ""
+            if platform == "addness":
+                permission_keywords = ("権限", "共有", "シート", "スプレッドシート", "Lステップ", "権限付与", "アクセス")
+                is_permission_request = any(keyword in original_message for keyword in permission_keywords)
+                addness_section = (
+                    "\n【Addness返信ルール】\n"
+                    f"- これは甲原海人がAddness上で日向に返すコメント。対象ゴールは「{goal_title or group_name or '不明'}」\n"
+                    "- 日向は直下メンバーの新人マネージャー。敬語なしで、短く、判断と次の一手を明確にする\n"
+                    "- 1コメントで伝える内容は1判断 + 1次アクションまで。論点を増やしすぎない\n"
+                    "- 秘書側の承認は済んでいる前提なので、ここでは実行に移せる言い方にする\n"
+                    "- 権限や共有の相談では、必ず最小権限から始める\n"
+                    "  - Lステップ: まず閲覧権限。配信設定変更や本番編集は必要が明確になってから\n"
+                    "  - スプレッドシート: まず閲覧またはコメント。編集権限は対象シートが特定できたときだけ\n"
+                    "- 操作手順を伝えるときは、一度に一つずつ教える。今このコメントの後に何をすればいいかが分かる形にする\n"
+                )
+                if is_permission_request:
+                    addness_section += "- 今回は権限/共有の相談。対象と権限レベルを明記し、広い権限をまとめて渡す提案はしない\n"
 
             # 情報開示ルール（相手のカテゴリに応じて出していい情報を制御）
             _disclosure = _get_disclosure_level(sender_cat)
@@ -2281,6 +2308,8 @@ def call_claude_api(instruction: str, task: dict):
                     _cc_profile_lines.append(conversation_history_section)
                 if profile_info:
                     _cc_profile_lines.append(profile_info)
+                if addness_section:
+                    _cc_profile_lines.append(addness_section)
 
                 reply_suggestion = _generate_reply_with_claude_code(
                     sender_name=sender_name,
@@ -2318,16 +2347,18 @@ def call_claude_api(instruction: str, task: dict):
 {f"避けるべき表現: {', '.join(comm_avoid)}" if comm_avoid else ''}
 {goals_context}{notes_text}{insights_text}{conversation_history_section}
 {profile_info}
-{context_section}{quoted_section}{sheet_section}{_member_names_section}
+{addness_section}{context_section}{quoted_section}{sheet_section}{_member_names_section}
 【受信メッセージ】
 グループ: {group_name}
 内容: {original_message}
+{f"ゴールURL: {goal_url}" if goal_url else ""}
 
 【出力ルール】
 - 甲原海人が実際に送る文章のみ出力（説明・前置き不要）
 {f'- 【内部メンバー向け】基本はオフラインで話す前提のため、LINEは極めてシンプル・最低限でOK。相手が明確に厳密な回答を求めている場合のみ丁寧に答える。それ以外は一言〜二言で十分。受け取った相手がポジティブな気持ちになる簡潔さを優先する' if sender_cat in ('本人', '上司', '直下メンバー', '横（並列）') else '- 50文字以内を目安に簡潔に'}
 {f'- 関連データあり。相手が具体的に数字や分析を質問している場合のみデータで回答する。報告・共有・確認には「了解！」「ナイス！」等の短い返しで十分。自分から分析を展開しない' if sheet_section else ''}
 {f'- データを使う場合も要点だけ簡潔に。計算過程や前提条件の列挙は不要' if sheet_section and sender_cat in ('本人', '上司', '直下メンバー', '横（並列）') else f'- データを使う場合は計算式・前提条件・結論を明確に構造化して提示する' if sheet_section else ''}
+- {f'Addnessでは判断と次アクションを短く明確に出す。特に権限・共有の相談では「誰に / どの権限を / 何のために」だけを絞って返す' if platform == 'addness' else '必要以上に論点を増やさない'}
 - 相手固有のスタイルノートと口調の癖をそのまま再現する
 - 【最重要】敬語レベルを厳守すること。「タメ口（敬語禁止）」の相手には「です」「ます」「ございます」「いたします」を絶対に使わない。「了解！」「やっておくよ！」「いいね！」のようなタメ口で返す
 - メモ・現在の取り組みがあれば文脈として活用する
@@ -2384,7 +2415,7 @@ def call_claude_api(instruction: str, task: dict):
                     f"2→編集して送信"
                 )
             else:
-                platform_tag = "[CW] " if platform == "chatwork" else ""
+                platform_tag = "[Addness] " if platform == "addness" else "[CW] " if platform == "chatwork" else ""
                 sender_label = f"{sender_name}（{category_line.strip()}）" if category_line.strip() else sender_name
                 result = (
                     f"返信案 {platform_tag}\n"
@@ -3303,10 +3334,77 @@ def _upload_image_to_render(image_path: Path, filename: str) -> str:
         return ""
 
 
+def _post_addness_comment(task: dict):
+    """Addnessに甲原アカウントでコメントを投稿する。"""
+    arguments = task.get("arguments", {})
+    source_message_id = arguments.get("source_message_id", "")
+    goal_id = arguments.get("goal_id", "")
+    goal_url = arguments.get("goal_url", "")
+    reply_text = (arguments.get("reply_text") or "").strip()
+
+    extra = {"source_message_id": source_message_id}
+
+    if not reply_text:
+        return False, "返信内容が空です", extra
+
+    script_path = _SYSTEM_DIR / "addness_feedback_manager.py"
+    if not script_path.exists():
+        return False, f"スクリプトが見つかりません: {script_path}", extra
+
+    cmd = [sys.executable, str(script_path), "post-comment", "--headless", "--text", reply_text]
+    if goal_url:
+        cmd.extend(["--goal-url", goal_url])
+    elif goal_id:
+        cmd.extend(["--goal-id", goal_id])
+    else:
+        return False, "goal_url または goal_id が必要です", extra
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "Addness返信がタイムアウトしました", extra
+    except Exception as e:
+        return False, f"Addness返信エラー: {e}", extra
+
+    stdout = result.stdout.strip()
+    stderr = result.stderr.strip()
+    payload = {}
+    if stdout:
+        for line in reversed(stdout.splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+                break
+            except json.JSONDecodeError:
+                continue
+
+    if result.returncode != 0 or not payload.get("success", result.returncode == 0):
+        error_message = (
+            payload.get("error")
+            or stderr
+            or stdout
+            or "Addness返信に失敗しました"
+        )
+        return False, error_message, extra
+
+    goal_label = payload.get("goal_title") or goal_id or goal_url or "Addness"
+    return True, f"Addnessで返信しました: {goal_label}", extra
+
+
 def execute_task_with_claude(task: dict):
     """タスクをClaude APIで自動実行"""
     instruction = format_task_for_cursor(task)
     function_name = task.get("function", "")
+
+    if function_name == "post_addness_comment":
+        return _post_addness_comment(task)
 
     print(f"   🤖 Claude APIで処理中...")
     success, result = call_claude_api(instruction, task)
@@ -3322,7 +3420,13 @@ def execute_task_with_claude(task: dict):
         return True, result, {}
     else:
         print(f"   ❌ Claude APIエラー: {result}")
-        return False, result, {}
+        arguments = task.get("arguments", {})
+        source_message_id = (
+            arguments.get("source_message_id")
+            or arguments.get("message_id", "")
+        )
+        extra = {"source_message_id": source_message_id} if source_message_id else {}
+        return False, result, extra
 
 
 # ===== 保留タスクファイル =====
@@ -3819,7 +3923,11 @@ def run_agent():
                         continue
 
                     # ===== v2エンジンで処理 =====
-                    if _engine_version == "v2" and _V2_AVAILABLE and function_name in _V2_TASK_TYPES:
+                    use_v2 = _engine_version == "v2" and _V2_AVAILABLE and function_name in _V2_TASK_TYPES
+                    if function_name == "generate_reply_suggestion" and task.get("arguments", {}).get("platform") == "addness":
+                        use_v2 = False
+
+                    if use_v2:
                         print(f"   🧠 v2エンジンで処理中...")
                         show_notification("🧠 LINE AI秘書 v2", f"処理中: {instruction[:40]}")
                         success, result, extra = _process_task_v2(task)
@@ -3830,7 +3938,13 @@ def run_agent():
                             # v2失敗時はv1にフォールバック
                             print(f"   ⚠️ v2失敗、v1にフォールバック: {result}")
                             success, result, extra = execute_task_with_claude(task)
-                            complete_task(task_id, success, result if success else "処理に失敗しました", None if success else result, extra or None)
+                            complete_task(
+                                task_id,
+                                success,
+                                result if success else "処理に失敗しました",
+                                None if success else result,
+                                extra or None,
+                            )
                         continue
 
                     # Claude APIが使えない場合はCursorで処理
@@ -3855,7 +3969,7 @@ def run_agent():
                             print(f"   ✅ 完了 → LINEに結果を送信しました")
                         else:
                             # 失敗 → エラーをLINEに送信
-                            complete_task(task_id, False, "処理に失敗しました", result)
+                            complete_task(task_id, False, "処理に失敗しました", result, extra or None)
                             show_notification(
                                 "❌ LINE AI秘書 - エラー",
                                 f"エラー: {result[:50]}..."

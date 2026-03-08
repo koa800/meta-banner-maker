@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年3月7日（clone brain / shared context / registry分離基盤追加、通知・グループ要約改善、Cursorワークスペース活用とCDP既知修復を強化） |
+| 最終更新 | 2026年3月8日（Addnessの日向承認フロー追加、LINE承認→本人アカウント返信、最小権限ガードレールと定期検知を追加） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -196,6 +196,13 @@
 62. **shared context bus**: `memory_manager.py` を長期記憶 / 共有短期文脈 / shell別会話状態に分離。`event_stream.jsonl` と `active_context.json` を追加し、LINE秘書とCursorクローンが同じ短期文脈を共有できる土台を作成
 63. **same brain + multiple shells**: `conversation.py` は `甲原クローン脳` を manifest 経由で読み込み、`current_self / awakened_self / identity / brain_os` を system prompt に注入。shell 差分は `agent_registry.json` の role/authority で管理
 64. **Skills 正本統一**: `local_agent.py` は `Skills/` を正本として再帰読み込みするよう変更。旧 `System/line_bot/skills/` は互換 fallback のみ
+
+### Phase 14: 日向 Addness 承認フロー（実装完了）
+65. **日向コメントの承認フロー化**: `pending_messages` に `platform=addness` を追加。`/api/addness/hinata-feedback` で日向の未解決コメントを登録し、既存の LINE 承認フローに接続
+66. **LINE承認 → Addness実投稿**: 承認時は即送信せず `post_addness_comment` タスクを Mac Mini に委譲。甲原アカウントの Addness セッションで実際に返信し、投稿完了後に LINE へ報告
+67. **日向向け返信ガードレール**: Addness返信案は専用プロンプトを使用。Lステップ権限・シート共有は最小権限から提案し、1コメントで1判断 + 1次アクションに絞る
+68. **定期検知ジョブ**: `addness_feedback_manager.py` を追加。`hinata_addness_feedback_check` が10分ごとに Kohara サブツリーの未解決コメントを巡回し、新着のみ秘書承認フローへ登録。ライブのツリー API が使えない場合は `addness_data/latest.json` をフォールバックに使う
+69. **投稿失敗時の復帰**: Addness返信失敗時は `pending_messages` を `pending` に戻し、同じ承認で再実行できるようにした
 
 ### Phase 10: OS共有基盤・自己認識（実装完了）
 46. **行動ルール（OS）の動的同期**: `execution_rules.json` をSingle Source of Truthとし、app.py（Render）へは `/api/sync_execution_rules` APIで自動同期。local_agent起動時+ルール更新時に自動実行。永続ディスクに保存しフォールバックにハードコード版を併用
@@ -608,6 +615,7 @@ bash System/line_bot_local/sync_data.sh
 |------|--------|------|---------|
 | 5分ごと | `health_check` | 🟢 | 死活監視・自動復旧（停止検知→再起動→LINE通知） |
 | 5分ごと | `git_pull_sync` | 🟢 | GitHubからpull→rsyncデプロイ→サービス再起動 |
+| 10分ごと | `hinata_addness_feedback_check` | 🟢 | Addness上の日向コメント検知→LINE承認フローへ登録 |
 | 30分ごと | `render_health_check` | 🟢 | Renderサーバー死活監視（ダウン時LINE通知） |
 | 5分ごと | `service_watchdog` | 🟢 | Orchestrator非依存のサービス監視・自動復旧（bash+launchctlのみ） |
 | 30分ごと | `repair_check` | 🟢 | ~~ログからエラー検知→修復提案~~（API消費削減のため無効化。手動`claude -p`で代替） |
@@ -801,6 +809,7 @@ MacBook (どこからでも)
 - [x] local_agent.py _SYSTEM_DIR パスバグ修正（who_to_ask/addness_sync/mail_check/context_queryがMac Miniで正常動作）
 - [x] 日報入力のLINE対応（Claude Code + Chrome MCPでLooker StudioからCSV取得→日報スプレッドシートに自動入力。`--chrome`フラグで秘書Chromeのブラウザ操作ツールを利用）
 - [x] Chatwork連携（Webhook受信→返信案生成→承認→Chatwork APIで返信。プラットフォーム分岐でLINE/CW自動判別）
+- [x] 日向 Addness 承認フロー（Addnessコメント検知→LINE承認→甲原アカウントで返信→返信完了報告）
 - [x] スプレッドシート文脈参照（people-profiles.jsonのrelated_sheetsからシートデータを自動取得→プロンプト注入）
 - [x] people-identities.jsonにchatwork_account_id/chatwork_display_nameフィールド追加（全81エントリ）
 - [x] 未返信一覧に[CW]/[LINE]プラットフォームバッジ表示
