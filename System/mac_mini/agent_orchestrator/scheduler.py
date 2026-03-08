@@ -1010,6 +1010,8 @@ market_trends.md の全文をそのまま出力してください。既存の内
 
             cmd = [
                 str(claude_cmd), "-p",
+                "--allow-dangerously-skip-permissions",
+                "--dangerously-skip-permissions",
                 "--model", "claude-sonnet-4-6",
                 "--max-turns", "15",
                 "--chrome",
@@ -1494,6 +1496,10 @@ cat {creds_file}
         cmd = [str(claude_cmd), "-p", "--model", model,
                "--max-turns", str(max_turns)]
         if use_chrome:
+            cmd.extend([
+                "--allow-dangerously-skip-permissions",
+                "--dangerously-skip-permissions",
+            ])
             cmd.append("--chrome")
         cmd.append(prompt)
 
