@@ -1,11 +1,31 @@
 # プロジェクト構成・アーキテクチャ
 
+## Master 4層アーキテクチャ
+
+- `Master/前提/` → 用語定義・目的・価値観・判断軸など、AIが考える前に揃えるもの
+- `Master/knowledge/` → 事実・観察・過去LP・導線・数値などの知識
+- `Master/rules/` → 成功失敗から抽出した再現ルール・NG
+- `Master/output/` → 実際に出した成果物と、その結果レビュー
+
+既存運用との対応:
+
+- `self_clone/`, `brains/`, `people/`, `company/` は主に `前提` の詳細層
+- `addness/`, `knowledge/`, `sheets/` は主に `knowledge` の詳細層
+- `learning/` は `前提` と `rules` を補助する学習層
+- `addness/proactive_output/` は `output` の legacy 出力先
+
 ## ディレクトリ構成
+
+- `cursor/` root 直下の意味付きフォルダは `Master/` `Project/` `Skills/` `System/` の4本を正本とする
+- root 直下の例外は `.git/` `.claude/` `.cursor/` `.vscode/` と制御ファイル (`AGENTS.md`, `CLAUDE.md`, `pyproject.toml`, `.gitignore`, `.gitmodules`) だけ
+- root 構成の検知は `python3 System/root_layout_check.py` を使う。逸脱があれば修正してから完了扱いにする
 
 - `System/line_bot/` → Render (Flask) サーバー。**Gitサブモジュール**。デプロイは `cd System/line_bot && git push origin main`
 - `System/line_bot_local/` → PC常駐エージェント（ソース）
 - `System/quick_translator/` → Chrome拡張（テキスト選択→自動翻訳ポップアップ、Manifest V3）
 - `System/clip_translator/` → macOSメニューバー常駐アプリ（Cmd+C→翻訳通知、rumps + launchd自動起動）
+- `System/root_layout_check.py` → root 直下の構成逸脱を検知するガードスクリプト
+- `Master/前提/用語定義.md` → 甲原さんが使う言葉のローカル正本。Google Sheets `言葉の定義` から同期
 - `Master/people/identities.json` → 識別レイヤー（LINE表示名 / Chatwork ID / メール等）
 - `Master/people/profiles.json` → legacy運用レイヤー（comm_profile / group_insights を含む厚いプロファイル）
 - `Master/people/profiles.md` → `profiles.json` の人間向け表示レイヤー
@@ -14,8 +34,12 @@
 - `System/registries/agent_registry.json` → 人間 / AI / shell / brain の実行主体 registry
 - `Master/learning/reply_feedback.json` → 返信修正フィードバック（correction/approval）
 - `Master/learning/style_rules.json` → 返信スタイルルール（weekly_profile_learningで自動生成）
+- `Master/rules/rules.md` → 成果物運用から増えていく再現ルール・NG の受け皿
+- `Master/output/` → 成果物と結果レビューの入口
+- `Master/output/経理/領収書/` → Gmail から取得した領収書・請求書の正本置き場
 - `Master/self_clone/kohara/USER.md` → 甲原クローンの判断スタンス。再利用可能な業務原理の正本は `Skills/` に置き、ここには「何を重く見るか」だけを残す
 - `Project/4_AI基盤/AI秘書作成.md` → AI秘書システムのメインドキュメント
+- `Project/4_AI基盤/agent_requirements/` → エージェント要件・設計メモのプロジェクト正本
 
 ## 積み上がる学習（Phase 7, 2026-02-25 実装完了）
 

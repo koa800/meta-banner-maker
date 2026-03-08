@@ -4,10 +4,10 @@ Gmail から取得した領収書を `年/月` で整理しています。
 
 ## 保存場所
 
-- **ローカル**: このリポジトリの `Receipts/2026/02/` など
+- **ローカル**: このリポジトリの `Master/output/経理/領収書/2026/02/` など
 - **個人 Google Drive 経理フォルダ**にまとめたい場合:
   ```bash
-  rclone copy "Receipts/2026/" "personal:2026年/2月/" --drive-root-folder-id "1_C74ShJA34R-TAzeJN5lbEGikv_ykAWk" 2>/dev/null
+  rclone copy "Master/output/経理/領収書/2026/" "personal:2026年/2月/" --drive-root-folder-id "1_C74ShJA34R-TAzeJN5lbEGikv_ykAWk" 2>/dev/null
   ```
 
 ## Creem / seadance の領収書について

@@ -18,8 +18,8 @@ BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
 from mail_manager import get_credentials, get_gmail_service, get_header, parse_sender
 
-# 領収書の保存先: ワークスペース (cursor) 直下の Receipts/年/月
-RECEIPTS_BASE = BASE_DIR.parent / "Receipts"
+# 領収書の保存先: Master/output/経理/領収書/年/月
+RECEIPTS_BASE = BASE_DIR.parent / "Master" / "output" / "経理" / "領収書"
 
 
 def list_attachments(service, msg):
