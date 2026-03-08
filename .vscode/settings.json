@@ -1,0 +1,16 @@
+{
+  "terminal.integrated.defaultProfile.osx": "Cursor Goal Shell",
+  "terminal.integrated.profiles.osx": {
+    "Cursor Goal Shell": {
+      "path": "/bin/zsh",
+      "args": [
+        "-il"
+      ],
+      "env": {
+        "ZDOTDIR": "${workspaceFolder}/System/hinata/cursor_task_terminal"
+      }
+    }
+  },
+  "terminal.integrated.tabs.hideCondition": "never",
+  "terminal.integrated.tabs.title": "${sequence}"
+}
