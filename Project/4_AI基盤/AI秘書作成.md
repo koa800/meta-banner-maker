@@ -204,6 +204,7 @@
 68. **定期検知ジョブ**: `addness_feedback_manager.py` を追加。`hinata_addness_feedback_check` が10分ごとに Kohara サブツリーの未解決コメントを巡回し、新着のみ秘書承認フローへ登録。ライブのツリー API が使えない場合は `addness_data/latest.json` をフォールバックに使う
 69. **投稿失敗時の復帰**: Addness返信失敗時は `pending_messages` を `pending` に戻し、同じ承認で再実行できるようにした
 70. **秘書コマンド直実行API**: `/api/secretary-command` を追加。認証付きで `承認` / `編集` などの秘書コマンドを直接実行できるため、本番の Addness 承認フローを外部から検証できる
+71. **pending詳細debug**: `/debug/pending/<message_id>` を追加。特定の Addness エントリについて `post_error` と関連タスク状態を直接確認できる
 
 ### Phase 10: OS共有基盤・自己認識（実装完了）
 46. **行動ルール（OS）の動的同期**: `execution_rules.json` をSingle Source of Truthとし、app.py（Render）へは `/api/sync_execution_rules` APIで自動同期。local_agent起動時+ルール更新時に自動実行。永続ディスクに保存しフォールバックにハードコード版を併用
