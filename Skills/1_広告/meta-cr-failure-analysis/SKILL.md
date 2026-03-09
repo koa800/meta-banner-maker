@@ -17,8 +17,10 @@ Meta広告CRの失敗分析は、`誰が作ったか` ではなく `どこで崩
 - 出力先:
   - `Master/knowledge/広告CR失敗パターン.md`
   - `System/data/meta_cr_dashboard/failure_summary.json`
+  - `System/data/meta_cr_dashboard/video_signal_summary.json`
 
 基本は `CR一覧の long-range full raw` を取ってから読む。`meta_ads_cr_dashboard.md` は fallback の初回分析用。
+Meta広告のCR分析は、数値だけでなく `実際の動画内容` まで読む。特に `上流は通るが後ろで失敗` では、冒頭の広さとオーディエンス学習のズレを確認する。
 
 ## Looker 作業ルール
 
@@ -68,6 +70,15 @@ python3 System/meta_cr_dashboard_sync.py capture-full-raw --date-start 2023-01-0
 python3 System/meta_cr_dashboard_sync.py analyze --failure-csv "System/data/meta_cr_dashboard/full_failure_raw_latest.csv"
 ```
 
+8. `上流は通るが後ろで失敗` を見始めたら、動画URLをそのまま文字起こしする。最初は冒頭 20-45秒で十分。
+
+```bash
+python3 System/meta_cr_dashboard_sync.py video-backfill --failure-csv "System/data/meta_cr_dashboard/full_failure_raw_latest.csv" --limit 15 --bucket "上流は通るが後ろで失敗" --max-seconds 20
+python3 System/meta_cr_dashboard_sync.py analyze --failure-csv "System/data/meta_cr_dashboard/full_failure_raw_latest.csv"
+```
+
+`video-backfill` は `動画URL -> Whisper文字起こし -> broad marker / audience scope 集計` を行う。結果は `Master/knowledge/広告CR失敗パターン.md` の「動画内容まで読んだ所見」に反映される。
+
 fallback の 24件スナップショットだけで初回分析したいときはこうする。
 
 ```bash
@@ -78,6 +89,7 @@ python3 System/meta_cr_dashboard_sync.py analyze
 
 - `高フック` でも負けることは普通にある。フック率だけで勝ち負けを決めない。
 - `上流は通るが後ろで失敗` が多いなら、CR単体より `約束の質 / LP / オファー / 導線` を先に疑う。
+- `上流は通るが後ろで失敗` を読むときは、`実際の冒頭文` を見ずに終わらない。広い危機訴求、著名人、無料特典などで広く集めすぎていないかを確認する。
 - SNS広告では、`広いフック -> 広いオーディエンス -> 浅い反応層への学習` という失敗メカニズムを常に疑う。
 - `押されるが集客単価が重い` は、興味はあるが質の低いクリックか期待値ズレを疑う。
 - `同じクリエイティブなのに数字が違う` ときは、先に `配信対象 / 広告ID / 広告セットID / LP / 時期 / 冒頭` を切る。creative 単体の優劣に直行しない。

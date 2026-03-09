@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-"""Video Reader — Loom / YouTube URLからTranscript+キーフレーム画像を自動抽出
+"""Video Reader — Loom / YouTube / 直mp4 URLからTranscript+キーフレーム画像を自動抽出
 
 使い方:
   python3 video_reader.py "https://www.loom.com/share/xxxxx"
   python3 video_reader.py "https://www.youtube.com/watch?v=xxxxx"
   python3 video_reader.py "https://youtu.be/xxxxx"
+  python3 video_reader.py "https://video-xxx.fbcdn.net/...mp4?..."
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -22,6 +24,14 @@ OUTPUT_BASE = Path(
 )
 YT_DLP = "/opt/homebrew/bin/yt-dlp"
 FFMPEG = "/opt/homebrew/bin/ffmpeg"
+WHISPER_MODEL = os.environ.get("VIDEO_READER_WHISPER_MODEL", "base")
+WHISPER_DOWNLOAD_ROOT = Path(
+    os.environ.get(
+        "VIDEO_READER_WHISPER_ROOT",
+        str(Path(__file__).resolve().parent.parent / "data" / "whisper_models"),
+    )
+)
+DEFAULT_MAX_SECONDS = int(os.environ.get("VIDEO_READER_MAX_SECONDS", "0") or "0")
 
 # --- URL判定 ---
 
@@ -30,6 +40,7 @@ _YT_RE = re.compile(
     r"(?:youtube\.com/watch\?.*v=|youtu\.be/|youtube\.com/shorts/)"
     r"([A-Za-z0-9_-]{11})"
 )
+_DIRECT_MP4_RE = re.compile(r"https?://[^\s]+\.mp4(?:\?[^\s]+)?$")
 
 
 def detect_source(url: str) -> tuple[str, str]:
@@ -40,16 +51,52 @@ def detect_source(url: str) -> tuple[str, str]:
     m = _YT_RE.search(url)
     if m:
         return "youtube", m.group(1)
+    if _DIRECT_MP4_RE.match(url):
+        return "direct_mp4", hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
     raise ValueError(
         f"未対応のURL: {url}\n"
-        "対応: loom.com/share/... / youtube.com/watch?v=... / youtu.be/..."
+        "対応: loom.com/share/... / youtube.com/watch?v=... / youtu.be/... / 直mp4 URL"
     )
 
 
 # --- メタデータ ---
 
-def fetch_metadata(url: str, source: str, out_dir: Path) -> dict:
+def _probe_direct_duration(url: str) -> int:
+    r = subprocess.run(
+        [
+            "/opt/homebrew/bin/ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            url,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"ffprobe失敗: {r.stderr.strip()}")
+    return int(float(r.stdout.strip() or "0"))
+
+
+def fetch_metadata(url: str, source: str, out_dir: Path, title_hint: str = "") -> dict:
     """yt-dlpでメタデータ取得"""
+    if source == "direct_mp4":
+        meta = {
+            "title": title_hint or f"direct_mp4_{out_dir.name}",
+            "duration": _probe_direct_duration(url),
+            "uploader": "meta_direct",
+            "source": source,
+            "url": url,
+        }
+        (out_dir / "metadata.json").write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2)
+        )
+        return meta
+
     r = subprocess.run(
         [YT_DLP, "--dump-json", "--no-download", url],
         capture_output=True, text=True, timeout=60,
@@ -72,8 +119,88 @@ def fetch_metadata(url: str, source: str, out_dir: Path) -> dict:
 
 # --- Transcript ---
 
-def fetch_transcript(url: str, source: str, out_dir: Path) -> bool:
+def _format_seconds_label(seconds: float) -> str:
+    whole = int(seconds)
+    minutes, sec = divmod(whole, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{sec:02d}"
+    return f"{minutes:02d}:{sec:02d}"
+
+
+def _transcribe_direct_video(
+    url: str,
+    out_dir: Path,
+    *,
+    whisper_model: str = WHISPER_MODEL,
+    max_seconds: int | None = None,
+) -> bool:
+    WHISPER_DOWNLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        audio_path = Path(tmp) / "audio.wav"
+        cmd = [
+            FFMPEG,
+            "-y",
+            "-i",
+            url,
+        ]
+        if max_seconds and max_seconds > 0:
+            cmd.extend(["-t", str(max_seconds)])
+        cmd.extend(
+            [
+                "-vn",
+                "-acodec",
+                "pcm_s16le",
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                str(audio_path),
+            ]
+        )
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
+        if r.returncode != 0 or not audio_path.exists():
+            raise RuntimeError(f"音声抽出失敗: {r.stderr.strip()}")
+
+        import whisper
+
+        model = whisper.load_model(whisper_model, download_root=str(WHISPER_DOWNLOAD_ROOT))
+        result = model.transcribe(str(audio_path), language="ja", fp16=False, verbose=False)
+
+    segments = result.get("segments", [])
+    plain_parts = [segment.get("text", "").strip() for segment in segments if segment.get("text")]
+    timestamped_parts = [
+        f"[{_format_seconds_label(segment.get('start', 0.0))}] {segment.get('text', '').strip()}"
+        for segment in segments
+        if segment.get("text")
+    ]
+    plain = " ".join(part for part in plain_parts if part).strip()
+    timestamped = "\n".join(part for part in timestamped_parts if part).strip()
+    if not plain:
+        return False
+
+    (out_dir / "transcript.txt").write_text(plain, encoding="utf-8")
+    (out_dir / "transcript_ts.txt").write_text(timestamped, encoding="utf-8")
+    return True
+
+
+def fetch_transcript(
+    url: str,
+    source: str,
+    out_dir: Path,
+    *,
+    whisper_model: str = WHISPER_MODEL,
+    max_seconds: int | None = None,
+) -> bool:
     """字幕をダウンロードしてプレーンテキストに変換"""
+    if source == "direct_mp4":
+        return _transcribe_direct_video(
+            url,
+            out_dir,
+            whisper_model=whisper_model,
+            max_seconds=max_seconds,
+        )
+
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
 
@@ -202,7 +329,14 @@ def _parse_vtt(vtt: str) -> tuple[str, str]:
 
 # --- フレーム抽出 ---
 
-def extract_frames(url: str, duration: int, out_dir: Path) -> int:
+def extract_frames(
+    url: str,
+    duration: int,
+    out_dir: Path,
+    *,
+    source: str = "",
+    max_seconds: int | None = None,
+) -> int:
     """動画をDL→ffmpegでキーフレーム抽出→動画削除"""
     frames_dir = out_dir / "frames"
     frames_dir.mkdir(exist_ok=True)
@@ -216,24 +350,40 @@ def extract_frames(url: str, duration: int, out_dir: Path) -> int:
     dl_timeout = max(600, duration + 120)
 
     with tempfile.TemporaryDirectory() as tmp:
-        tmp_video = Path(tmp) / "video.mp4"
-        r = subprocess.run(
-            [YT_DLP,
-             "-f", "bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[ext=mp4][height<=720]/best",
-             "-o", str(tmp_video), url],
-            capture_output=True, text=True, timeout=dl_timeout,
-        )
-        if r.returncode != 0:
-            print(f"動画DL失敗: {r.stderr.strip()}", file=sys.stderr)
-            return 0
+        input_path = url
+        if source != "direct_mp4":
+            tmp_video = Path(tmp) / "video.mp4"
+            r = subprocess.run(
+                [
+                    YT_DLP,
+                    "-f",
+                    "bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[ext=mp4][height<=720]/best",
+                    "-o",
+                    str(tmp_video),
+                    url,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=dl_timeout,
+            )
+            if r.returncode != 0:
+                print(f"動画DL失敗: {r.stderr.strip()}", file=sys.stderr)
+                return 0
+            input_path = str(tmp_video)
 
-        r = subprocess.run(
-            [FFMPEG, "-i", str(tmp_video),
-             "-vf", f"fps=1/{interval},scale=640:-1",
-             "-q:v", "5",
-             str(frames_dir / "frame_%03d.jpg")],
-            capture_output=True, text=True, timeout=dl_timeout,
+        cmd = [FFMPEG, "-i", str(input_path)]
+        if max_seconds and max_seconds > 0:
+            cmd.extend(["-t", str(max_seconds)])
+        cmd.extend(
+            [
+                "-vf",
+                f"fps=1/{interval},scale=640:-1",
+                "-q:v",
+                "5",
+                str(frames_dir / "frame_%03d.jpg"),
+            ]
         )
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=dl_timeout)
         if r.returncode != 0:
             print(f"フレーム抽出失敗: {r.stderr.strip()}", file=sys.stderr)
             return 0
@@ -251,7 +401,7 @@ def extract_frames(url: str, duration: int, out_dir: Path) -> int:
 
 def generate_summary(out_dir: Path, meta: dict, has_transcript: bool, frame_count: int):
     """summary.txt 生成"""
-    source_label = {"loom": "Loom", "youtube": "YouTube"}.get(
+    source_label = {"loom": "Loom", "youtube": "YouTube", "direct_mp4": "Direct MP4"}.get(
         meta.get("source", ""), meta.get("source", "")
     )
     dur = meta.get("duration", 0)
@@ -334,84 +484,98 @@ def summarize_transcript(transcript: str, meta: dict) -> str | None:
         return None
 
 
-# --- main ---
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="Loom/YouTube動画からTranscript+キーフレームを抽出"
-    )
-    parser.add_argument("url", help="Loom or YouTube URL")
-    parser.add_argument("--no-frames", action="store_true",
-                        help="フレーム抽出をスキップ")
-    args = parser.parse_args()
-
-    # 1. URL判定
-    source, video_id = detect_source(args.url)
-    out_dir = OUTPUT_BASE / f"{source}_{video_id}"
-    out_dir.mkdir(parents=True, exist_ok=True)
+def process_video_url(
+    url: str,
+    *,
+    out_dir: Path | None = None,
+    no_frames: bool = False,
+    whisper_model: str = WHISPER_MODEL,
+    max_seconds: int | None = None,
+    title_hint: str = "",
+) -> dict:
+    source, video_id = detect_source(url)
+    target_out_dir = out_dir or OUTPUT_BASE / f"{source}_{video_id}"
+    target_out_dir.mkdir(parents=True, exist_ok=True)
 
     result = {
         "status": "success",
-        "output_dir": str(out_dir),
+        "output_dir": str(target_out_dir),
         "source": source,
         "video_id": video_id,
     }
 
-    # 2. メタデータ
-    try:
-        meta = fetch_metadata(args.url, source, out_dir)
-        result["title"] = meta.get("title", "")
-        result["duration"] = meta.get("duration", 0)
-    except Exception as e:
-        result["status"] = "error"
-        result["error"] = f"メタデータ取得失敗: {e}"
-        print(json.dumps(result, ensure_ascii=False))
-        sys.exit(1)
+    meta = fetch_metadata(url, source, target_out_dir, title_hint=title_hint)
+    result["title"] = meta.get("title", "")
+    result["duration"] = meta.get("duration", 0)
 
-    # 3. Transcript
-    try:
-        has_transcript = fetch_transcript(args.url, source, out_dir)
-        result["transcript_available"] = has_transcript
-    except Exception as e:
-        has_transcript = False
-        result["transcript_available"] = False
-        print(f"Transcript取得エラー: {e}", file=sys.stderr)
+    has_transcript = fetch_transcript(
+        url,
+        source,
+        target_out_dir,
+        whisper_model=whisper_model,
+        max_seconds=max_seconds,
+    )
+    result["transcript_available"] = has_transcript
 
-    # 4-5. フレーム抽出
     frame_count = 0
-    if not args.no_frames:
-        try:
-            frame_count = extract_frames(
-                args.url, meta.get("duration", 0), out_dir
-            )
-        except Exception as e:
-            print(f"フレーム抽出エラー: {e}", file=sys.stderr)
+    if not no_frames:
+        frame_count = extract_frames(
+            url,
+            meta.get("duration", 0),
+            target_out_dir,
+            source=source,
+            max_seconds=max_seconds,
+        )
     result["frame_count"] = frame_count
 
-    # 6. 要約
-    generate_summary(out_dir, meta, has_transcript, frame_count)
+    generate_summary(target_out_dir, meta, has_transcript, frame_count)
 
-    # 7. transcript本文をJSON出力に含める（coordinatorが内容を理解するため）
     if has_transcript:
-        transcript_path = out_dir / "transcript.txt"
+        transcript_path = target_out_dir / "transcript.txt"
         if transcript_path.exists():
             transcript_text = transcript_path.read_text(encoding="utf-8")
             if len(transcript_text) > SUMMARIZE_THRESHOLD:
-                # 長い transcript → Sonnet で要約
-                print(f"   📝 Transcript が長い({len(transcript_text)}文字)ため要約中...",
-                      file=sys.stderr)
                 summary = summarize_transcript(transcript_text, meta)
                 if summary:
                     result["transcript_summary"] = summary
-                    result["transcript_text"] = transcript_text[:1000]  # 冒頭だけ参考用
+                    result["transcript_text"] = transcript_text[:1000]
                 else:
-                    # 要約失敗時は先頭3000文字をそのまま
                     result["transcript_text"] = transcript_text[:3000]
             else:
-                # 短い transcript → そのまま全文
                 result["transcript_text"] = transcript_text
 
-    # 8. 結果出力
+    return result
+
+
+# --- main ---
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Loom/YouTube/直mp4動画からTranscript+キーフレームを抽出"
+    )
+    parser.add_argument("url", help="Loom or YouTube URL")
+    parser.add_argument("--no-frames", action="store_true",
+                        help="フレーム抽出をスキップ")
+    parser.add_argument("--whisper-model", default=WHISPER_MODEL,
+                        help="直mp4 URL を文字起こしする Whisper モデル")
+    parser.add_argument("--max-seconds", type=int, default=DEFAULT_MAX_SECONDS,
+                        help="先頭何秒までを読むか。0なら全文")
+    parser.add_argument("--title-hint", default="",
+                        help="直mp4 URL のときに使うタイトル補助")
+    args = parser.parse_args()
+    try:
+        result = process_video_url(
+            args.url,
+            no_frames=args.no_frames,
+            whisper_model=args.whisper_model,
+            max_seconds=args.max_seconds or None,
+            title_hint=args.title_hint,
+        )
+    except Exception as e:
+        result = {"status": "error", "error": str(e), "url": args.url}
+        print(json.dumps(result, ensure_ascii=False))
+        sys.exit(1)
+
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

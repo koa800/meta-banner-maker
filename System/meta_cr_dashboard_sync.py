@@ -24,6 +24,10 @@ KNOWLEDGE_PATH = ROOT_DIR / "Master" / "knowledge" / "広告CR失敗パターン
 DEFAULT_FULL_FAILURE_CSV = DATA_DIR / "full_failure_raw_latest.csv"
 DEFAULT_CDP_URL = "http://127.0.0.1:9224"
 DEFAULT_LOOKER_PAGE_KEY = "p_i93dt7hmvd"
+VIDEO_CACHE_DIR = DATA_DIR / "video_cache"
+VIDEO_SIGNAL_SUMMARY_PATH = DATA_DIR / "video_signal_summary.json"
+DEFAULT_VIDEO_MODEL = "base"
+DEFAULT_VIDEO_CLIP_SECONDS = 45
 
 FAILURE_COLUMNS = (
     "rank",
@@ -59,6 +63,17 @@ CIRCLED_NUMBER_MAP = {
 
 def collapse_ws(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def get_video_reader():
+    import sys
+
+    system_path = str(ROOT_DIR / "System")
+    if system_path not in sys.path:
+        sys.path.insert(0, system_path)
+    from video_reader.video_reader import process_video_url
+
+    return process_video_url
 
 
 def normalize_opening_number(text: str) -> str:
@@ -198,6 +213,152 @@ def is_meaningful_theme(theme_key: str) -> bool:
         return False
     return True
 
+
+VIDEO_BROAD_PATTERNS: dict[str, tuple[str, ...]] = {
+    "広い危機訴求": ("このままじゃ", "このままでは", "人生を変", "後悔", "無駄にした"),
+    "広い属性呼びかけ": ("会社員", "副業", "初心者", "みんな", "あなた"),
+    "著名人/権威": ("堀江", "林社長", "フォロワー", "月1億", "有名"),
+    "無料特典": ("無料", "テンプレ", "受け取って", "プレゼント"),
+    "強い感情語": ("終わった", "やばい", "ガチ", "絶対"),
+}
+
+VIDEO_NARROW_PATTERNS: dict[str, tuple[str, ...]] = {
+    "具体数値": ("月収", "万円", "30秒", "38分", "1分"),
+    "具体行動": ("LP", "オプトイン", "面談", "予約", "広告費", "CTR", "CPA"),
+    "具体対象": ("店舗", "デザイナー", "講師", "フリーランス", "経営者"),
+}
+
+
+def summarize_text_excerpt(text: str, limit: int = 140) -> str:
+    normalized = collapse_ws(text)
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[:limit].rstrip() + "…"
+
+
+def find_marker_hits(text: str, patterns: dict[str, tuple[str, ...]]) -> list[str]:
+    normalized = collapse_ws(text)
+    hits: list[str] = []
+    for label, words in patterns.items():
+        if any(word in normalized for word in words):
+            hits.append(label)
+    return hits
+
+
+def classify_audience_scope(broad_hits: list[str], narrow_hits: list[str]) -> str:
+    if len(broad_hits) >= 2 and len(narrow_hits) == 0:
+        return "広い"
+    if len(narrow_hits) >= 2 and len(broad_hits) == 0:
+        return "狭い"
+    if len(broad_hits) > len(narrow_hits):
+        return "やや広い"
+    if len(narrow_hits) > len(broad_hits):
+        return "やや狭い"
+    return "混合"
+
+
+def build_video_signal_record(row: dict[str, Any], transcript_text: str, duration: int, max_seconds: int | None) -> dict[str, Any]:
+    opening_excerpt = summarize_text_excerpt(transcript_text, limit=160)
+    broad_hits = find_marker_hits(opening_excerpt, VIDEO_BROAD_PATTERNS)
+    narrow_hits = find_marker_hits(opening_excerpt, VIDEO_NARROW_PATTERNS)
+    return {
+        "asset_key": row.get("asset_key", ""),
+        "ad_name": row.get("ad_name", ""),
+        "title_core": row.get("title_core", ""),
+        "theme_key": row.get("theme_key", ""),
+        "opening_key": row.get("opening_key", ""),
+        "lp_key": row.get("lp_key", ""),
+        "created_on": row.get("created_on", ""),
+        "failure_bucket": row.get("failure_bucket", ""),
+        "distribution_hint": row.get("distribution_hint", ""),
+        "spend": row.get("spend"),
+        "ctr": row.get("ctr"),
+        "cpa": row.get("cpa"),
+        "hook_rate": row.get("hook_rate"),
+        "video_url": row.get("video_url", ""),
+        "duration": duration,
+        "clip_seconds": max_seconds or duration,
+        "opening_excerpt": opening_excerpt,
+        "broad_hits": broad_hits,
+        "narrow_hits": narrow_hits,
+        "audience_scope": classify_audience_scope(broad_hits, narrow_hits),
+    }
+
+
+def row_sort_key(row: dict[str, Any]) -> tuple[float, float, float]:
+    spend = float(row.get("spend") or 0.0)
+    ctr = float(row.get("ctr") or 0.0)
+    cpa = float(row.get("cpa") or 0.0)
+    return (spend, ctr, cpa)
+
+
+def select_video_rows(rows: list[dict[str, Any]], limit: int, bucket: str = "") -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    seen_assets: set[str] = set()
+    filtered = rows
+    if bucket:
+        filtered = [row for row in rows if row.get("failure_bucket") == bucket]
+    ordered = sorted(filtered, key=row_sort_key, reverse=True)
+    for row in ordered:
+        asset_key = collapse_ws(row.get("asset_key"))
+        video_url = collapse_ws(row.get("video_url"))
+        if not asset_key or not video_url or asset_key == "データなし" or video_url == "データなし":
+            continue
+        if asset_key in seen_assets:
+            continue
+        selected.append(row)
+        seen_assets.add(asset_key)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def render_video_scope_summary(summary: dict[str, Any]) -> str:
+    rows = [
+        "| failure bucket | transcribed assets | broad/やや広い | 混合 | narrow/やや狭い |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for bucket in summary.get("bucket_scope_counts", []):
+        rows.append(
+            "| {bucket} | {count} | {broad} | {mixed} | {narrow} |".format(
+                bucket=bucket["failure_bucket"],
+                count=bucket["count"],
+                broad=bucket["broad_like"],
+                mixed=bucket["mixed"],
+                narrow=bucket["narrow_like"],
+            )
+        )
+    return "\n".join(rows)
+
+
+def render_video_marker_summary(summary: dict[str, Any]) -> str:
+    rows = [
+        "| broad marker | count |",
+        "|---|---:|",
+    ]
+    for record in summary.get("broad_marker_counts", []):
+        rows.append(f"| {record['label']} | {record['count']} |")
+    return "\n".join(rows)
+
+
+def render_video_examples(records: list[dict[str, Any]]) -> str:
+    lines = [
+        "| 広告名 | failure bucket | 冒頭抜粋 | broad markers | audience scope | CTR | CPA |",
+        "|---|---|---|---|---|---:|---:|",
+    ]
+    for record in records:
+        lines.append(
+            "| {ad} | {bucket} | {excerpt} | {markers} | {scope} | {ctr} | {cpa} |".format(
+                ad=record.get("ad_name", ""),
+                bucket=record.get("failure_bucket", "-"),
+                excerpt=record.get("opening_excerpt", "-"),
+                markers=", ".join(record.get("broad_hits", [])) or "-",
+                scope=record.get("audience_scope", "-"),
+                ctr=format_percent(record.get("ctr")),
+                cpa=format_yen(record.get("cpa")),
+            )
+        )
+    return "\n".join(lines)
 
 def parse_iso_date(text: str) -> tuple[int, int, int]:
     parts = text.split("-")
@@ -573,6 +734,98 @@ def enrich_failures(failure_rows: list[dict[str, Any]], benchmarks: dict[str, fl
         enriched_row["confidence"] = confidence
         enriched.append(enriched_row)
     return enriched
+
+
+def backfill_video_signals(
+    rows: list[dict[str, Any]],
+    *,
+    limit: int,
+    bucket: str,
+    whisper_model: str,
+    max_seconds: int,
+) -> dict[str, Any]:
+    process_video_url = get_video_reader()
+    VIDEO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    selected_rows = select_video_rows(rows, limit=limit, bucket=bucket)
+    processed: list[dict[str, Any]] = []
+    reused = 0
+    for row in selected_rows:
+        asset_key = collapse_ws(row.get("asset_key"))
+        cache_dir = VIDEO_CACHE_DIR / re.sub(r"[^A-Za-z0-9._-]+", "_", asset_key)[:120]
+        signal_path = cache_dir / "signal.json"
+        if signal_path.exists():
+            processed.append(json.loads(signal_path.read_text(encoding="utf-8")))
+            reused += 1
+            continue
+
+        result = process_video_url(
+            row.get("video_url", ""),
+            out_dir=cache_dir,
+            no_frames=True,
+            whisper_model=whisper_model,
+            max_seconds=max_seconds,
+            title_hint=row.get("ad_name", ""),
+        )
+        transcript_text = collapse_ws(result.get("transcript_text", ""))
+        signal = build_video_signal_record(
+            row,
+            transcript_text,
+            int(result.get("duration") or 0),
+            max_seconds,
+        )
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        signal_path.write_text(json.dumps(signal, ensure_ascii=False, indent=2), encoding="utf-8")
+        processed.append(signal)
+
+    scope_buckets: defaultdict[str, Counter] = defaultdict(Counter)
+    marker_counter: Counter[str] = Counter()
+    for record in processed:
+        scope = record.get("audience_scope", "混合")
+        bucket_name = record.get("failure_bucket") or "未分類"
+        marker_counter.update(record.get("broad_hits", []))
+        if scope in {"広い", "やや広い"}:
+            scope_buckets[bucket_name]["broad_like"] += 1
+        elif scope in {"狭い", "やや狭い"}:
+            scope_buckets[bucket_name]["narrow_like"] += 1
+        else:
+            scope_buckets[bucket_name]["mixed"] += 1
+        scope_buckets[bucket_name]["count"] += 1
+
+    bucket_scope_counts = [
+        {
+            "failure_bucket": bucket_name,
+            "count": counter.get("count", 0),
+            "broad_like": counter.get("broad_like", 0),
+            "mixed": counter.get("mixed", 0),
+            "narrow_like": counter.get("narrow_like", 0),
+        }
+        for bucket_name, counter in sorted(scope_buckets.items(), key=lambda item: item[1].get("count", 0), reverse=True)
+    ]
+
+    summary = {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "bucket_filter": bucket,
+        "requested_limit": limit,
+        "processed_count": len(processed),
+        "reused_count": reused,
+        "video_cache_dir": str(VIDEO_CACHE_DIR),
+        "bucket_scope_counts": bucket_scope_counts,
+        "broad_marker_counts": [
+            {"label": label, "count": count}
+            for label, count in marker_counter.most_common()
+        ],
+        "top_examples": sorted(
+            processed,
+            key=lambda record: (
+                len(record.get("broad_hits", [])),
+                float(record.get("spend") or 0.0),
+                float(record.get("ctr") or 0.0),
+            ),
+            reverse=True,
+        )[:10],
+    }
+    VIDEO_SIGNAL_SUMMARY_PATH.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    return summary
 
 
 def build_context_hint(rows: list[dict[str, Any]]) -> str:
@@ -1040,6 +1293,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
     winner_same_asset_summary = summary["winner_same_asset_summary"]
     failure_same_asset_summary = summary["failure_same_asset_summary"]
     same_asset_summary = failure_same_asset_summary if failure_mode == "csv" else winner_same_asset_summary
+    video_signal_summary = summary.get("video_signal_summary") or {}
     failure_source_name = Path(summary["failure_source"]).name
     if failure_mode == "csv":
         comparison_header = f"ここでは `勝ちCR {summary['winner_count']}件` を基準に、`非大当たり {summary['failure_count']}件` を比較している。"
@@ -1143,6 +1397,25 @@ def render_markdown(summary: dict[str, Any]) -> str:
         ]
     )
 
+    if video_signal_summary.get("processed_count"):
+        lines.extend(
+            [
+                "",
+                "## 動画内容まで読んだ所見",
+                "",
+                "- Meta広告のCR分析は、数値だけでなく `実際の冒頭文` まで見る。特に `上流は通るが後ろで失敗` では、広いフックで広いオーディエンスに学習していないかを先に疑う。",
+                f"- 今回は `動画 {video_signal_summary['processed_count']}本` を文字起こしし、冒頭の broad marker と audience scope を集計した。",
+                "",
+                render_video_scope_summary(video_signal_summary),
+                "",
+                render_video_marker_summary(video_signal_summary),
+                "",
+                "### 冒頭の具体例",
+                "",
+                render_video_examples(video_signal_summary.get("top_examples", [])),
+            ]
+        )
+
     for stage in summary["stage_counts"]:
         bucket = stage["name"]
         rows = summary["stage_examples"].get(bucket, [])
@@ -1190,6 +1463,8 @@ def run_analysis(winner_csv: Path, failure_markdown: Path | None, failure_csv: P
         source_label = str(failure_csv or failure_markdown)
         raise SystemExit(f"失敗サンプルを読めませんでした: {source_label}")
     summary = summarize_patterns(winner_rows, failure_rows, scope_note, failure_source, failure_mode)
+    if VIDEO_SIGNAL_SUMMARY_PATH.exists():
+        summary["video_signal_summary"] = json.loads(VIDEO_SIGNAL_SUMMARY_PATH.read_text(encoding="utf-8"))
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     SUMMARY_JSON_PATH.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     KNOWLEDGE_PATH.write_text(render_markdown(summary), encoding="utf-8")
@@ -1198,6 +1473,11 @@ def run_analysis(winner_csv: Path, failure_markdown: Path | None, failure_csv: P
 
 def print_status() -> None:
     summary = json.loads(SUMMARY_JSON_PATH.read_text(encoding="utf-8")) if SUMMARY_JSON_PATH.exists() else {}
+    video_summary = (
+        json.loads(VIDEO_SIGNAL_SUMMARY_PATH.read_text(encoding="utf-8"))
+        if VIDEO_SIGNAL_SUMMARY_PATH.exists()
+        else {}
+    )
     print(
         json.dumps(
             {
@@ -1207,6 +1487,8 @@ def print_status() -> None:
                 "latest_summary_generated_at": summary.get("generated_at", ""),
                 "winner_count": summary.get("winner_count", 0),
                 "failure_count": summary.get("failure_count", 0),
+                "video_signal_generated_at": video_summary.get("generated_at", ""),
+                "video_signal_processed_count": video_summary.get("processed_count", 0),
                 "knowledge_path": str(KNOWLEDGE_PATH),
             },
             ensure_ascii=False,
@@ -1230,6 +1512,14 @@ def build_parser() -> argparse.ArgumentParser:
     capture.add_argument("--date-start", default="2023-01-01")
     capture.add_argument("--output", type=Path, default=DEFAULT_FULL_FAILURE_CSV)
 
+    video_backfill = subparsers.add_parser("video-backfill", help="Meta動画URLを文字起こしして冒頭シグナルを集計する")
+    video_backfill.add_argument("--winner-csv", type=Path, default=DEFAULT_WINNER_CSV)
+    video_backfill.add_argument("--failure-csv", type=Path, default=DEFAULT_FULL_FAILURE_CSV)
+    video_backfill.add_argument("--limit", type=int, default=20)
+    video_backfill.add_argument("--bucket", default="上流は通るが後ろで失敗")
+    video_backfill.add_argument("--whisper-model", default=DEFAULT_VIDEO_MODEL)
+    video_backfill.add_argument("--max-seconds", type=int, default=DEFAULT_VIDEO_CLIP_SECONDS)
+
     subparsers.add_parser("status", help="現在のソースと最新集計状況を表示する")
     return parser
 
@@ -1249,6 +1539,20 @@ def main() -> None:
                 date_start=args.date_start,
                 output_path=args.output,
             )
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    if command == "video-backfill":
+        winner_rows = load_winner_rows(args.winner_csv)
+        failure_rows, _ = load_failure_rows_from_csv(args.failure_csv)
+        benchmarks = build_benchmarks(winner_rows)
+        enriched_failures = enrich_failures(failure_rows, benchmarks)
+        result = backfill_video_signals(
+            enriched_failures,
+            limit=args.limit,
+            bucket=args.bucket,
+            whisper_model=args.whisper_model,
+            max_seconds=args.max_seconds,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
