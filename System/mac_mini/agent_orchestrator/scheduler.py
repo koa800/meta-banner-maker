@@ -394,6 +394,7 @@ class TaskScheduler:
             "daily_report_input": self._run_daily_report_input,
             "daily_report_verify": self._run_daily_report_verify,
             "looker_csv_download": self._run_looker_csv_download,
+            "meta_cr_dashboard_download": self._run_meta_cr_dashboard_download,
             "kpi_daily_import": self._run_kpi_daily_import,
             "sheets_sync": self._run_sheets_sync,
             "cdp_sync": self._run_cdp_sync,
@@ -1453,6 +1454,118 @@ market_trends.md の全文をそのまま出力してください。既存の内
         if errors:
             report_lines.append("エラー: " + " / ".join(errors))
         return True, "\n".join(report_lines)
+
+    def _wait_looker_page_text(self, ws_url, required_texts, timeout_seconds=30):
+        """Looker ページ本文に必要なラベルが現れるまで待つ。"""
+        import time as _time
+
+        normalized = [text for text in required_texts if text]
+        for _ in range(timeout_seconds):
+            try:
+                body_text = self._cdp_runtime_evaluate(
+                    ws_url,
+                    "document.body ? document.body.innerText : ''",
+                ) or ""
+                if all(text in body_text for text in normalized):
+                    return True
+            except Exception:
+                pass
+            _time.sleep(1)
+        return False
+
+    def _export_looker_current_table_via_cdp(self, ws_url, csv_path):
+        """現在表示中の Looker テーブルを CSV として書き出す。"""
+        import glob
+        import time as _time
+        import shutil
+        from pathlib import Path
+
+        downloads_dir = Path.home() / "Downloads"
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        download_started_at = _time.time()
+
+        click_steps = [
+            "グラフのメニューを表示",
+            "グラフをエクスポート",
+            "データのエクスポート",
+            "エクスポート",
+        ]
+        for label in click_steps:
+            click_result = self._cdp_runtime_evaluate(
+                ws_url,
+                f"""(() => {{
+                  const nodes = [...document.querySelectorAll(
+                    '[aria-label],[title],button,[role=\"button\"],div[role=\"button\"],li,[role=\"menuitem\"],[role=\"option\"]'
+                  )];
+                  const exact = {json.dumps(label)};
+                  const target = nodes.find(el => {{
+                    const fields = [
+                      (el.innerText || '').trim(),
+                      (el.getAttribute('aria-label') || '').trim(),
+                      (el.getAttribute('title') || '').trim(),
+                    ].filter(Boolean);
+                    return fields.some(field => {{
+                      if (exact === 'エクスポート') return field === exact;
+                      if (exact === 'グラフをエクスポート') return field.startsWith(exact);
+                      return field === exact || field.startsWith(exact);
+                    }});
+                  }});
+                  if (!target) return 'not_found';
+                  target.click();
+                  return 'ok';
+                }})()""",
+            )
+            if click_result != "ok":
+                raise RuntimeError(f"{label}_not_found")
+            _time.sleep(2 if label in {"グラフのメニューを表示", "グラフをエクスポート", "データのエクスポート"} else 1)
+
+        latest_download = None
+        for _ in range(20):
+            candidates = []
+            for path_str in glob.glob(str(downloads_dir / "*.csv")):
+                path = Path(path_str)
+                try:
+                    if path.stat().st_mtime >= download_started_at - 1:
+                        candidates.append(path)
+                except FileNotFoundError:
+                    continue
+            if candidates:
+                latest_download = max(candidates, key=lambda p: p.stat().st_mtime)
+                break
+            _time.sleep(1)
+
+        if not latest_download:
+            raise RuntimeError("download_timeout")
+
+        shutil.move(str(latest_download), str(csv_path))
+        line_count = sum(1 for _ in csv_path.open("r", encoding="utf-8", errors="ignore"))
+        return line_count
+
+    def _download_meta_cr_dashboard_csv_via_cdp(self, page_url, csv_path):
+        """Meta広告CR一覧の current view を CDP で直接エクスポートする。"""
+        ws_url = self._get_chrome_page_ws_url("lookerstudio.google.com", open_url=page_url)
+        if not ws_url:
+            return False, "Chrome CDP で Meta広告CR一覧ページを開けませんでした"
+
+        try:
+            self._cdp_call(ws_url, "Page.enable")
+        except Exception:
+            pass
+
+        try:
+            self._cdp_call(ws_url, "Page.navigate", {"url": page_url})
+        except Exception as e:
+            return False, f"Meta広告CR一覧ページへの遷移失敗: {e}"
+
+        page_ready = self._wait_looker_page_text(ws_url, ["広告名", "CR判定", "KPI判定"], timeout_seconds=30)
+        if not page_ready:
+            return False, "Meta広告CR一覧ページの読み込み待ちでタイムアウトしました"
+
+        try:
+            line_count = self._export_looker_current_table_via_cdp(ws_url, csv_path)
+            return True, f"{csv_path} ({line_count}行)"
+        except Exception as e:
+            return False, f"Meta広告CR一覧 CSV のエクスポート失敗: {e}"
 
     def _sync_claude_chrome_extension_account(self, secretary_config):
         """秘書用 Claude Code の OAuth を Chrome 拡張へ同期し、bridge を再接続する。"""
@@ -3497,6 +3610,135 @@ head -3 "{csv_dir}/{csv_filename}"
                 logger.warning(f"Looker CSV: still missing after download: {dates_str}")
         else:
             send_line_notify(f"Looker CSVのダウンロードがリトライ後も失敗しました。\n{error[:200]}")
+
+    async def _run_meta_cr_dashboard_download(self):
+        """毎日11:45: Meta広告CR一覧の raw CSV を取得し、失敗分析を更新する。"""
+        from pathlib import Path
+        from datetime import date
+        from .notifier import send_line_notify
+
+        logger.info("Meta広告CR CSV ダウンロード: 開始")
+
+        ok, claude_cmd, secretary_config, project_root, preflight_err = self._ensure_claude_chrome_ready()
+        if not ok:
+            logger.error(f"Meta広告CR CSV ダウンロード: プリフライト失敗 - {preflight_err}")
+            send_line_notify(f"Meta広告CRのダウンロード準備で失敗しました。\n{preflight_err}")
+            return
+
+        page_url = "https://lookerstudio.google.com/u/1/reporting/cf23ad7f-89c2-44bb-8127-8abd2fe3544f/page/p_3t9tjftxwd"
+        csv_dir = Path.home() / "Desktop" / "Looker Studio CSV" / "meta_cr_dashboard"
+        csv_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = csv_dir / f"{date.today().isoformat()}_Meta広告CR一覧_表.csv"
+
+        if csv_path.exists() and csv_path.stat().st_size > 100:
+            logger.info(f"Meta広告CR CSV ダウンロード: 既存ファイルあり → 分析のみ {csv_path}")
+            await self._run_meta_cr_dashboard_analysis(project_root, csv_dir)
+            self._record_schedule_success("meta_cr_dashboard_download")
+            return
+
+        prompt = f"""あなたは甲原海人のAI秘書です。Meta広告CR一覧の raw CSV を Looker Studio からダウンロードしてください。
+
+## タスク
+Meta広告の CR ダッシュボードを開き、現在表示されているテーブルを CSV で保存する。
+
+## 手順
+1. URL を開く
+   - {page_url}
+2. ページ内に `広告名` `CR判定` `KPI判定` `配信状況` `消化金額` が見えることを確認
+3. テーブル右上の `グラフのメニューを表示` → `グラフをエクスポート...` → `データのエクスポート` → `CSV` → `エクスポート`
+4. 最新の Downloads 内 CSV を次へ移動
+```bash
+latest_csv=$(ls -t ~/Downloads/*.csv 2>/dev/null | head -1)
+if [ -n "$latest_csv" ]; then
+  mv "$latest_csv" "{csv_path}"
+  ls -la "{csv_path}"
+  head -3 "{csv_path}"
+fi
+```
+
+## 注意
+- `アクセスが拒否されました` または `Access denied` が画面上に実際に見える時だけアクセス拒否として扱う
+- Looker の表が見えているなら、そこで止まらず CSV エクスポートまで進める
+- 返答前に必ず `ls -t ~/Downloads/*.csv` で新しい CSV が落ちたことを確認する
+
+{self._build_google_login_instructions()}
+
+## 出力形式
+===RESULT_START===
+（保存先パスと簡単な結果）
+===RESULT_END==="""
+
+        success, output, error = self._execute_claude_code_task(
+            "Meta広告CR CSVダウンロード",
+            claude_cmd,
+            secretary_config,
+            project_root,
+            prompt,
+            max_turns=20,
+            timeout=420,
+            use_chrome=True,
+        )
+
+        def extract_report(raw_output: str) -> str:
+            if "===RESULT_START===" in raw_output and "===RESULT_END===" in raw_output:
+                return raw_output.split("===RESULT_START===")[1].split("===RESULT_END===")[0].strip()
+            return raw_output.strip()
+
+        if success:
+            report = extract_report(output)
+            needs_cdp_fallback = (
+                not csv_path.exists()
+                or csv_path.stat().st_size <= 100
+                or any(
+                    phrase in report
+                    for phrase in [
+                        "アクセスが拒否されました",
+                        "Looker Studioへのアクセスを許可",
+                        "Chrome MCP に接続できません",
+                        "ブラウザ自動操作ツールの使用許可",
+                    ]
+                )
+            )
+            if needs_cdp_fallback:
+                logger.warning("Meta広告CR CSV ダウンロード: Claude 側 UI 操作失敗を検知。Chrome CDP fallback を実行します")
+                cdp_success, cdp_report = self._download_meta_cr_dashboard_csv_via_cdp(page_url, csv_path)
+                if not cdp_success:
+                    send_line_notify(f"Meta広告CRのダウンロードがCDP fallbackでも失敗しました。\n{cdp_report[:200]}")
+                    return
+                report = cdp_report
+
+            logger.info(f"Meta広告CR CSV ダウンロード: 完了 - {report[:300]}")
+            await self._run_meta_cr_dashboard_analysis(project_root, csv_dir)
+            self._record_schedule_success("meta_cr_dashboard_download")
+            return
+
+        send_line_notify(f"Meta広告CRのダウンロードが失敗しました。\n{error[:200]}")
+
+    async def _run_meta_cr_dashboard_analysis(self, project_root, csv_dir):
+        """Meta広告CR一覧 CSV を正規化し、失敗パターン候補を更新する。"""
+        import subprocess
+        from .notifier import send_line_notify
+
+        try:
+            env = dict(os.environ)
+            if "/opt/homebrew/bin" not in env.get("PATH", ""):
+                env["PATH"] = f"/opt/homebrew/bin:{env.get('PATH', '')}"
+            result = subprocess.run(
+                ["python3", "System/meta_cr_dashboard_sync.py", "analyze", "--input-dir", str(csv_dir)],
+                capture_output=True,
+                text=True,
+                timeout=180,
+                cwd=str(project_root),
+                env=env,
+            )
+            if result.returncode == 0:
+                logger.info(f"Meta広告CR 失敗分析: 完了 - {result.stdout[-300:]}")
+            else:
+                logger.warning(f"Meta広告CR 失敗分析: 失敗 - {result.stderr[:300] or result.stdout[:300]}")
+                send_line_notify("Meta広告CRの失敗分析更新でエラーが出ました。Master/knowledge/広告CR失敗パターン.md を確認してください。")
+        except Exception as e:
+            logger.warning(f"Meta広告CR 失敗分析: 例外 - {e}")
+            send_line_notify("Meta広告CRの失敗分析更新中にエラーが出ました。")
 
     async def _run_csv_sheet_sync_after_download(self, project_root):
         """CSVダウンロード後にcsv_sheet_syncを実行して元データシートを更新する。"""
