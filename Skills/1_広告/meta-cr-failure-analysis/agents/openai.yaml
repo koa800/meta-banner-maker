@@ -1,0 +1,4 @@
+interface:
+  display_name: "Meta CR失敗分析"
+  short_description: "勝ち基準と失敗サンプルを比較して失敗形を抽出する分析"
+  default_prompt: "Meta広告CRの失敗パターンを分析して知識化して"
