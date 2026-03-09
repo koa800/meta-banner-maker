@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import argparse
 import csv
 import json
@@ -20,6 +21,9 @@ DEFAULT_WINNER_CSV = ROOT_DIR / "System" / "data" / "cr_bigwinners_raw.csv"
 DEFAULT_FAILURE_MARKDOWN = ROOT_DIR / "Master" / "addness" / "meta_ads_cr_dashboard.md"
 SUMMARY_JSON_PATH = DATA_DIR / "failure_summary.json"
 KNOWLEDGE_PATH = ROOT_DIR / "Master" / "knowledge" / "広告CR失敗パターン.md"
+DEFAULT_FULL_FAILURE_CSV = DATA_DIR / "full_failure_raw_latest.csv"
+DEFAULT_CDP_URL = "http://127.0.0.1:9224"
+DEFAULT_LOOKER_PAGE_KEY = "p_i93dt7hmvd"
 
 FAILURE_COLUMNS = (
     "rank",
@@ -39,9 +43,47 @@ FAILURE_COLUMNS = (
     "hook_rate",
 )
 
+CIRCLED_NUMBER_MAP = {
+    "①": "1",
+    "②": "2",
+    "③": "3",
+    "④": "4",
+    "⑤": "5",
+    "⑥": "6",
+    "⑦": "7",
+    "⑧": "8",
+    "⑨": "9",
+    "⑩": "10",
+}
+
 
 def collapse_ws(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def normalize_opening_number(text: str) -> str:
+    normalized = collapse_ws(text)
+    for source, target in CIRCLED_NUMBER_MAP.items():
+        normalized = normalized.replace(source, target)
+    return normalized
+
+
+def extract_opening_marker(text: str) -> str:
+    normalized = normalize_opening_number(text)
+    match = re.search(r"冒頭\s*[-_：:]?\s*([0-9]+)", normalized)
+    if match:
+        return f"冒頭{match.group(1)}"
+    if "冒頭" in normalized:
+        return collapse_ws(normalized)
+    return ""
+
+
+def strip_opening_marker(text: str) -> str:
+    normalized = normalize_opening_number(text)
+    cleaned = re.sub(r"冒頭\s*[-_：:]?\s*[0-9]+", "", normalized)
+    cleaned = cleaned.replace("【", "").replace("】", "")
+    cleaned = re.sub(r"[-_／/]+", " ", cleaned)
+    return collapse_ws(cleaned)
 
 
 def looks_like_date_segment(value: str) -> bool:
@@ -115,8 +157,9 @@ def extract_title_family(title: str) -> str:
 
 def extract_opening_key(title_segments: list[str]) -> str:
     for segment in title_segments:
-        if "冒頭" in segment:
-            return collapse_ws(segment)
+        opening_marker = extract_opening_marker(segment)
+        if opening_marker:
+            return opening_marker
     return ""
 
 
@@ -135,13 +178,13 @@ def extract_theme_key(title_segments: list[str]) -> str:
         normalized = collapse_ws(segment)
         if not normalized:
             continue
-        if "冒頭" in normalized:
-            continue
         if re.fullmatch(r"広告ID\d+", normalized):
             continue
         if re.search(r"類似\d|ノンタゲ", normalized):
             continue
-        kept.append(normalized)
+        cleaned = strip_opening_marker(normalized)
+        if cleaned:
+            kept.append(cleaned)
     if kept:
         return collapse_ws("/".join(kept))
     return collapse_ws("/".join(title_segments))
@@ -154,6 +197,152 @@ def is_meaningful_theme(theme_key: str) -> bool:
     if re.fullmatch(r"[0-9/ ]+", normalized):
         return False
     return True
+
+
+def parse_iso_date(text: str) -> tuple[int, int, int]:
+    parts = text.split("-")
+    if len(parts) != 3:
+        raise SystemExit(f"日付は YYYY-MM-DD 形式で指定してください: {text}")
+    year, month, day = (int(part) for part in parts)
+    return year, month, day
+
+
+async def capture_full_failure_raw(
+    cdp_url: str,
+    page_key: str,
+    date_start: str,
+    output_path: Path,
+) -> dict[str, Any]:
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError as exc:
+        raise SystemExit(f"playwright が必要です: {exc}") from exc
+
+    menu_labels = ["グラフのメニューを表示", "グラフをエクスポート", "データのエクスポート"]
+    open_script = """(label) => {
+      const nodes = [...document.querySelectorAll('[aria-label],[title],button,[role="button"],div[role="button"],li,[role="menuitem"],[role="option"]')];
+      const target = nodes.find(el => {
+        const fields = [(el.innerText||'').trim(), (el.getAttribute('aria-label')||'').trim(), (el.getAttribute('title')||'').trim()].filter(Boolean);
+        return fields.some(field => field === label || field.startsWith(label));
+      });
+      if (!target) return 'not_found';
+      target.click();
+      return 'ok';
+    }"""
+
+    year, month, day = parse_iso_date(date_start)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    async with async_playwright() as p:
+        browser = await p.chromium.connect_over_cdp(cdp_url)
+        page = None
+        for context in browser.contexts:
+            for candidate in context.pages:
+                if page_key in candidate.url and "/u/0/" in candidate.url:
+                    page = candidate
+                    break
+            if page:
+                break
+        if not page:
+            raise SystemExit(
+                f"認証済みの Looker Studio タブが見つかりませんでした: page_key={page_key}"
+            )
+
+        await page.bring_to_front()
+        await page.wait_for_timeout(1000)
+        await page.evaluate(
+            """() => {
+              const btn = document.querySelector('button.canvas-date-input');
+              if (!btn) return 'date_button_not_found';
+              btn.click();
+              return 'ok';
+            }"""
+        )
+        await page.wait_for_timeout(800)
+        await page.evaluate(
+            """() => {
+              const startRoot = document.querySelector('.start-date-picker') || document;
+              const period = startRoot.querySelector('button.mat-calendar-period-button');
+              if (!period) return 'period_not_found';
+              period.click();
+              return 'period_clicked';
+            }"""
+        )
+        await page.wait_for_timeout(400)
+        year_result = await page.evaluate(
+            """(yearText) => {
+              const root = document.querySelector('.start-date-picker') || document;
+              const btn = [...root.querySelectorAll('button')].find(el => (el.innerText || '').trim() === yearText);
+              if (!btn) return 'year_not_found';
+              btn.click();
+              return 'year_clicked';
+            }""",
+            str(year),
+        )
+        if year_result != "year_clicked":
+            raise SystemExit(f"開始年の選択に失敗しました: {year_result}")
+        await page.wait_for_timeout(400)
+        month_result = await page.evaluate(
+            """(monthText) => {
+              const root = document.querySelector('.start-date-picker') || document;
+              const btn = [...root.querySelectorAll('button')].find(el => (el.innerText || '').trim() === monthText);
+              if (!btn) return 'month_not_found';
+              btn.click();
+              return 'month_clicked';
+            }""",
+            f"{month}月",
+        )
+        if month_result != "month_clicked":
+            raise SystemExit(f"開始月の選択に失敗しました: {month_result}")
+        await page.wait_for_timeout(400)
+        day_result = await page.evaluate(
+            """(label) => {
+              const root = document.querySelector('.start-date-picker') || document;
+              const btn = root.querySelector(`button[aria-label="${label}"]`);
+              if (!btn) return 'day_not_found';
+              btn.click();
+              return 'day_clicked';
+            }""",
+            f"{year}年{month}月{day}日",
+        )
+        if day_result != "day_clicked":
+            raise SystemExit(f"開始日の選択に失敗しました: {day_result}")
+        await page.wait_for_timeout(400)
+        apply_result = await page.evaluate(
+            """() => {
+              const btn = [...document.querySelectorAll('button')].find(el => (el.innerText || '').trim() === '適用');
+              if (!btn) return 'apply_not_found';
+              btn.click();
+              return 'apply_clicked';
+            }"""
+        )
+        if apply_result != "apply_clicked":
+            raise SystemExit(f"日付適用に失敗しました: {apply_result}")
+        await page.wait_for_timeout(5000)
+
+        for label in menu_labels:
+            result = await page.evaluate(open_script, label)
+            if result != "ok":
+                raise SystemExit(f"エクスポートメニューの操作に失敗しました: {label} -> {result}")
+            await page.wait_for_timeout(800)
+
+        export_button = page.get_by_role("button", name="エクスポート").last
+        async with page.expect_download(timeout=180000) as download_info:
+            await export_button.click(force=True)
+        download = await download_info.value
+        if output_path.exists():
+            output_path.unlink()
+        await download.save_as(str(output_path))
+        await browser.close()
+
+    with output_path.open("r", encoding="utf-8-sig", newline="") as fh:
+        row_count = sum(1 for _ in fh) - 1
+    return {
+        "output_path": str(output_path),
+        "row_count": row_count,
+        "date_start": date_start,
+        "page_key": page_key,
+    }
 
 
 def percentile(values: list[float], ratio: float) -> float | None:
@@ -272,6 +461,8 @@ def load_failure_rows_from_csv(path: Path) -> tuple[list[dict[str, Any]], str]:
             creator = collapse_ws(raw.get("製作者"))
             title_segments = extract_title_segments(ad_name, creator)
             title_core = normalize_title_from_ad_name(ad_name, creator)
+            video_url = collapse_ws(raw.get("動画URL"))
+            thumbnail_url = collapse_ws(raw.get("サムネイル"))
             rows.append(
                 {
                     "rank": None,
@@ -285,6 +476,9 @@ def load_failure_rows_from_csv(path: Path) -> tuple[list[dict[str, Any]], str]:
                     "opening_key": extract_opening_key(title_segments),
                     "distribution_hint": extract_distribution_hint(title_segments),
                     "lp_key": extract_lp_key(ad_name),
+                    "video_url": video_url,
+                    "thumbnail_url": thumbnail_url,
+                    "asset_key": video_url if video_url and video_url != "データなし" else thumbnail_url,
                     "cr_judgment": cr_judgment,
                     "kpi_judgment": collapse_ws(raw.get("KPI判定")),
                     "delivery_status": collapse_ws(raw.get("配信状況")),
@@ -402,36 +596,36 @@ def build_context_hint(rows: list[dict[str, Any]]) -> str:
     return "同一アセットでも広告セット・学習状態・配信面でブレる"
 
 
-def summarize_same_asset_variation(winner_rows: list[dict[str, Any]]) -> dict[str, Any]:
+def summarize_same_asset_variation(source_rows: list[dict[str, Any]]) -> dict[str, Any]:
     groups: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in winner_rows:
+    for row in source_rows:
         asset_key = collapse_ws(row.get("asset_key"))
         if asset_key and asset_key != "データなし":
             groups[asset_key].append(row)
 
-    multi_groups = [rows for rows in groups.values() if len(rows) >= 2]
+    multi_groups = [group_rows for group_rows in groups.values() if len(group_rows) >= 2]
 
     exact_context_examples: list[dict[str, Any]] = []
     exact_context_groups: defaultdict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
-    for row in winner_rows:
+    for row in source_rows:
         asset_key = collapse_ws(row.get("asset_key"))
         if not asset_key or asset_key == "データなし":
             continue
         exact_context_groups[(asset_key, row.get("created_on", ""), row.get("lp_key", ""))].append(row)
-    for rows in exact_context_groups.values():
-        if len(rows) < 2:
+    for group_rows in exact_context_groups.values():
+        if len(group_rows) < 2:
             continue
-        ctrs = [row["ctr"] for row in rows if row.get("ctr") is not None]
-        cpas = [row["cpa"] for row in rows if row.get("cpa") is not None]
+        ctrs = [row["ctr"] for row in group_rows if row.get("ctr") is not None]
+        cpas = [row["cpa"] for row in group_rows if row.get("cpa") is not None]
         exact_context_examples.append(
             {
-                "count": len(rows),
-                "created_on": rows[0].get("created_on", ""),
-                "lp_key": rows[0].get("lp_key", ""),
+                "count": len(group_rows),
+                "created_on": group_rows[0].get("created_on", ""),
+                "lp_key": group_rows[0].get("lp_key", ""),
                 "ctr_spread": (max(ctrs) - min(ctrs)) if len(ctrs) >= 2 else 0.0,
                 "cpa_spread": (max(cpas) - min(cpas)) if len(cpas) >= 2 else 0.0,
-                "context_hint": build_context_hint(rows),
-                "rows": rows,
+                "context_hint": build_context_hint(group_rows),
+                "rows": group_rows,
             }
         )
     exact_context_examples.sort(key=lambda item: (item["cpa_spread"], item["ctr_spread"], item["count"]), reverse=True)
@@ -524,40 +718,40 @@ def summarize_same_asset_variation(winner_rows: list[dict[str, Any]]) -> dict[st
     )
 
     cross_lp_examples: list[dict[str, Any]] = []
-    for rows in multi_groups:
-        lp_keys = sorted({row.get("lp_key") for row in rows if row.get("lp_key")})
+    for group_rows in multi_groups:
+        lp_keys = sorted({row.get("lp_key") for row in group_rows if row.get("lp_key")})
         if len(lp_keys) < 2:
             continue
-        ctrs = [row["ctr"] for row in rows if row.get("ctr") is not None]
-        cpas = [row["cpa"] for row in rows if row.get("cpa") is not None]
+        ctrs = [row["ctr"] for row in group_rows if row.get("ctr") is not None]
+        cpas = [row["cpa"] for row in group_rows if row.get("cpa") is not None]
         cross_lp_examples.append(
             {
-                "count": len(rows),
+                "count": len(group_rows),
                 "lp_keys": lp_keys,
                 "ctr_spread": (max(ctrs) - min(ctrs)) if len(ctrs) >= 2 else 0.0,
                 "cpa_spread": (max(cpas) - min(cpas)) if len(cpas) >= 2 else 0.0,
-                "context_hint": build_context_hint(rows),
-                "rows": rows,
+                "context_hint": build_context_hint(group_rows),
+                "rows": group_rows,
             }
         )
     cross_lp_examples.sort(key=lambda item: (item["cpa_spread"], item["ctr_spread"], item["count"]), reverse=True)
 
     theme_groups: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in winner_rows:
+    for row in source_rows:
         theme_key = collapse_ws(row.get("theme_key"))
         if theme_key:
             theme_groups[theme_key].append(row)
 
     opening_examples: list[dict[str, Any]] = []
-    for theme_key, rows in theme_groups.items():
+    for theme_key, theme_rows in theme_groups.items():
         if not is_meaningful_theme(theme_key):
             continue
-        openings = sorted({row.get("opening_key") for row in rows if row.get("opening_key")})
+        openings = sorted({row.get("opening_key") for row in theme_rows if row.get("opening_key")})
         if len(openings) < 2:
             continue
         by_opening: list[dict[str, Any]] = []
         for opening_key in openings:
-            subset = [row for row in rows if row.get("opening_key") == opening_key]
+            subset = [row for row in theme_rows if row.get("opening_key") == opening_key]
             ctrs = [row["ctr"] for row in subset if row.get("ctr") is not None]
             cpas = [row["cpa"] for row in subset if row.get("cpa") is not None]
             by_opening.append(
@@ -568,22 +762,26 @@ def summarize_same_asset_variation(winner_rows: list[dict[str, Any]]) -> dict[st
                     "cpa_median": statistics.median(cpas) if cpas else None,
                 }
             )
-        cpa_values = [record["cpa_median"] for record in by_opening if record.get("cpa_median") is not None]
-        ctr_values = [record["ctr_median"] for record in by_opening if record.get("ctr_median") is not None]
+        meaningful_openings = [record for record in by_opening if record.get("count", 0) >= 2]
+        if len(meaningful_openings) < 2:
+            continue
+        cpa_values = [record["cpa_median"] for record in meaningful_openings if record.get("cpa_median") is not None]
+        ctr_values = [record["ctr_median"] for record in meaningful_openings if record.get("ctr_median") is not None]
         opening_examples.append(
             {
                 "theme_key": theme_key,
-                "count": len(rows),
+                "count": len(theme_rows),
                 "cpa_spread": (max(cpa_values) - min(cpa_values)) if len(cpa_values) >= 2 else 0.0,
                 "ctr_spread": (max(ctr_values) - min(ctr_values)) if len(ctr_values) >= 2 else 0.0,
-                "openings": by_opening,
+                "openings": meaningful_openings,
             }
         )
     opening_examples.sort(key=lambda item: (item["count"], item["cpa_spread"], item["ctr_spread"]), reverse=True)
 
     return {
         "same_asset_groups_ge_2": len(multi_groups),
-        "rows_in_same_asset_groups": sum(len(rows) for rows in multi_groups),
+        "rows_in_same_asset_groups": sum(len(group_rows) for group_rows in multi_groups),
+        "rows_in_same_asset_same_context_groups": sum(len(group_rows) for group_rows in exact_context_groups.values() if len(group_rows) >= 2),
         "same_asset_same_context_examples": exact_context_examples[:5],
         "same_asset_same_context_group_count": len(exact_context_examples),
         "audience_variation_group_count": len(audience_variation_examples),
@@ -599,10 +797,17 @@ def summarize_same_asset_variation(winner_rows: list[dict[str, Any]]) -> dict[st
     }
 
 
-def summarize_patterns(winner_rows: list[dict[str, Any]], failure_rows: list[dict[str, Any]], scope_note: str) -> dict[str, Any]:
+def summarize_patterns(
+    winner_rows: list[dict[str, Any]],
+    failure_rows: list[dict[str, Any]],
+    scope_note: str,
+    failure_source: Path,
+    failure_mode: str,
+) -> dict[str, Any]:
     benchmarks = build_benchmarks(winner_rows)
     enriched_failures = enrich_failures(failure_rows, benchmarks)
-    same_asset_summary = summarize_same_asset_variation(winner_rows)
+    winner_same_asset_summary = summarize_same_asset_variation(winner_rows)
+    failure_same_asset_summary = summarize_same_asset_variation(failure_rows)
 
     stage_counts = Counter(row["failure_bucket"] for row in enriched_failures)
     examples_by_stage: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -631,7 +836,8 @@ def summarize_patterns(winner_rows: list[dict[str, Any]], failure_rows: list[dic
     summary = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "winner_source": str(DEFAULT_WINNER_CSV),
-        "failure_source": str(DEFAULT_FAILURE_MARKDOWN),
+        "failure_source": str(failure_source),
+        "failure_mode": failure_mode,
         "failure_scope_note": scope_note,
         "winner_count": len(winner_rows),
         "failure_count": len(failure_rows),
@@ -665,7 +871,8 @@ def summarize_patterns(winner_rows: list[dict[str, Any]], failure_rows: list[dic
             for bucket, rows in examples_by_stage.items()
         },
         "family_signals": family_signal_rows(winner_rows, failure_rows),
-        "same_asset_summary": same_asset_summary,
+        "winner_same_asset_summary": winner_same_asset_summary,
+        "failure_same_asset_summary": failure_same_asset_summary,
     }
     return summary
 
@@ -804,7 +1011,16 @@ def render_opening_examples(rows: list[dict[str, Any]]) -> str:
     ]
     for row in rows:
         theme_key = row.get("theme_key") or "-"
-        for opening in row.get("openings", []):
+        openings = sorted(
+            row.get("openings", []),
+            key=lambda opening: (
+                opening.get("count", 0),
+                opening.get("cpa_median") or 0.0,
+                opening.get("ctr_median") or 0.0,
+            ),
+            reverse=True,
+        )
+        for opening in openings[:5]:
             lines.append(
                 "| {theme} | {opening_key} | {count} | {ctr} | {cpa} |".format(
                     theme=theme_key,
@@ -820,25 +1036,45 @@ def render_opening_examples(rows: list[dict[str, Any]]) -> str:
 def render_markdown(summary: dict[str, Any]) -> str:
     benchmarks = summary["benchmarks"]
     comparison = summary["comparison"]
-    same_asset_summary = summary["same_asset_summary"]
+    failure_mode = summary.get("failure_mode", "markdown")
+    winner_same_asset_summary = summary["winner_same_asset_summary"]
+    failure_same_asset_summary = summary["failure_same_asset_summary"]
+    same_asset_summary = failure_same_asset_summary if failure_mode == "csv" else winner_same_asset_summary
+    failure_source_name = Path(summary["failure_source"]).name
+    if failure_mode == "csv":
+        comparison_header = f"ここでは `勝ちCR {summary['winner_count']}件` を基準に、`非大当たり {summary['failure_count']}件` を比較している。"
+        failure_source_line = f"- 失敗ソース: `System/data/meta_cr_dashboard/{failure_source_name}`（{summary['failure_count']}件）"
+        failure_note_line = "- 注意: 失敗側は long-range の full raw。Meta広告 CR一覧の非大当たりを全件で読んでいる。"
+        top_funnel_line = f"- 失敗全量 `{summary['failure_count']}` 件のうち、`{comparison['top_funnel_strong_failures']}` 件は `上流は通るが後ろで失敗` の候補に入る。"
+        same_asset_source_line = f"- 失敗全量 `{summary['failure_count']}` 件の中だけでも、同一アセットの再利用群は `{same_asset_summary['same_asset_groups_ge_2']}` 群 `{same_asset_summary['rows_in_same_asset_groups']}` 件ある。CR単体ではなく `配信対象（オーディエンス） / 広告ID / 広告セットID / LP / 時期` を切って読む必要がある。"
+        meta_common_line = f"- 失敗全量の内部だけでも、`同一アセット × 同日 × 同LP` まで揃えて数値を比べられる群が `{same_asset_summary['same_asset_same_context_group_count']}` 群 `{same_asset_summary['rows_in_same_asset_same_context_groups']}` 件あり、そのうち配信対象差を読める群が `{same_asset_summary['audience_variation_group_count']}` 群ある。"
+        same_asset_section_line = f"- 今回の失敗全量では、同一アセット群が `{same_asset_summary['same_asset_groups_ge_2']}` 群 `{same_asset_summary['rows_in_same_asset_groups']}` 件ある。`同じCRなのに数値が違う` を解くときの一次切り分けに使う。"
+    else:
+        comparison_header = "ここでは `勝ちCR 340件` を基準に、`失敗側 24件` を比較している。"
+        failure_source_line = f"- 失敗サンプル: `{summary['failure_source']}`（{summary['failure_count']}件）"
+        failure_note_line = "- 注意: 失敗側は `消化金額上位24件` のスナップショット。全失敗CRの全量ではなく、高消化で負けた型を先に見ている。"
+        top_funnel_line = f"- 高消化の失敗は `冒頭で死ぬ型` より `上流は通るが後ろで失敗` が中心。今回の24件では `{comparison['top_funnel_strong_failures']}` 件がこの形に入る。"
+        same_asset_source_line = f"- 勝ちCR 340件の中だけでも、同一アセットの再利用群は `{same_asset_summary['same_asset_groups_ge_2']}` 群 `{same_asset_summary['rows_in_same_asset_groups']}` 件ある。CR単体ではなく `配信対象（オーディエンス） / 広告ID / 広告セットID / LP / 時期` を切って読む必要がある。"
+        meta_common_line = f"- 勝ちCR 340件の内部だけでも、`同一アセット × 同日 × 同LP` まで揃えて数値を比べられる群が `{same_asset_summary['same_asset_same_context_group_count']}` 群あり、そのうち配信対象差を読める群が `{same_asset_summary['audience_variation_group_count']}` 群ある。"
+        same_asset_section_line = f"- 今回の340件では、同一アセット群が `{same_asset_summary['same_asset_groups_ge_2']}` 群 `{same_asset_summary['rows_in_same_asset_groups']}` 件ある。`同じCRなのに数値が違う` を解くための最初の切り口になる。"
     lines = [
         "# 広告CR失敗パターン",
         "",
         f"最終更新: {datetime.now().date().isoformat()}",
         "",
         "Meta広告CRの失敗は、`誰が作ったか` より `どこで崩れたか` で読む。",
-        "ここでは `勝ちCR 340件` を基準に、`失敗側 24件` を比較している。",
+        comparison_header,
         "",
         "## 集計対象",
         "",
         f"- 勝ち基準: `System/data/cr_bigwinners_raw.csv`（{summary['winner_count']}件）",
-        f"- 失敗サンプル: `Master/addness/meta_ads_cr_dashboard.md`（{summary['failure_count']}件）",
+        failure_source_line,
     ]
     if summary["failure_scope_note"]:
         lines.append(f"- 失敗側の範囲: {summary['failure_scope_note']}")
     lines.extend(
         [
-            "- 注意: 失敗側は `消化金額上位24件` のスナップショット。全失敗CRの全量ではなく、高消化で負けた型を先に見ている。",
+            failure_note_line,
             "",
             "## 勝ち基準との比較",
             "",
@@ -855,16 +1091,17 @@ def render_markdown(summary: dict[str, Any]) -> str:
             "",
             "## まず読むべき本質",
             "",
-            f"- 高消化の失敗は `冒頭で死ぬ型` より `上流は通るが後ろで失敗` が中心。今回の24件では `{comparison['top_funnel_strong_failures']}` 件がこの形に入る。",
+            top_funnel_line,
             "- つまり、失敗CRの主因を `フック不足` だけで説明しない。約束の質、クリック後の期待値、LP・オファー・導線の崩れを先に疑う。",
             "- 一方で `タイトルの家系` には偏りがある。言い回し単体で勝てるわけではないが、同じ家系が繰り返し外れているなら失敗候補として重く見る。",
-            f"- 勝ちCR 340件の中だけでも、同一アセットの再利用群は `{same_asset_summary['same_asset_groups_ge_2']}` 群 `{same_asset_summary['rows_in_same_asset_groups']}` 件ある。CR単体ではなく `配信対象（オーディエンス） / 広告ID / 広告セットID / LP / 時期` を切って読む必要がある。",
+            same_asset_source_line,
             "",
             "## Meta広告分析から見えた SNS広告共通の失敗メカニズム",
             "",
             "- ここで見ているのは Meta広告CR だが、`フックを広く取りすぎて広いオーディエンスに寄る失敗` という構造自体は SNS広告全般で起こる。",
-            f"- 勝ちCR 340件の内部だけでも、`同一アセット × 同日 × 同LP` まで揃えて数値を比べられる群が `{same_asset_summary['same_asset_same_context_group_count']}` 群あり、そのうち配信対象差を読める群が `{same_asset_summary['audience_variation_group_count']}` 群ある。",
+            meta_common_line,
             f"- さらに `ノンタゲ vs 類似` を直接比べられる群は `{same_asset_summary['broad_vs_narrow_group_count']}` 群あり、CTR は `{same_asset_summary['broad_ctr_lower_count']}/{same_asset_summary['broad_ctr_compared_count']}` 群で広い側が低く、CPA は比較可能な `{same_asset_summary['broad_cpa_heavier_count']}/{same_asset_summary['broad_cpa_compared_count']}` 群で広い側が重かった。",
+            f"- 勝ちCR 340件の再利用群でも、同じ比較ができる `{winner_same_asset_summary['broad_vs_narrow_group_count']}` 群では CTR が `{winner_same_asset_summary['broad_ctr_lower_count']}/{winner_same_asset_summary['broad_ctr_compared_count']}`、CPA が `{winner_same_asset_summary['broad_cpa_heavier_count']}/{winner_same_asset_summary['broad_cpa_compared_count']}` で広い側が不利だった。良いクリエイティブでも、広いオーディエンスに寄ると質が崩れやすい。",
             "- つまり `広いフックで人を集める -> オーディエンスが広がる -> 浅い反応層に学習する -> CTRやフック率の見た目より後ろの質が弱くなる` を、SNS広告の代表的な失敗メカニズムとして常に疑う。",
             "",
             "### ノンタゲと類似で差が出た例",
@@ -884,7 +1121,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
             "## 同一アセットでも数値がズレる例",
             "",
             "- まず `同じ動画URL/画像` を束ねる。そこから `同日・同LP` で比べ、最後に `LP差 / 時期差 / 冒頭差` を見る。",
-            f"- 今回の340件では、同一アセット群が `{same_asset_summary['same_asset_groups_ge_2']}` 群 `{same_asset_summary['rows_in_same_asset_groups']}` 件ある。`同じCRなのに数値が違う` を解くための最初の切り口になる。",
+            same_asset_section_line,
             "",
             "### 同日・同LPでもズレる例",
             "",
@@ -935,10 +1172,16 @@ def render_markdown(summary: dict[str, Any]) -> str:
 
 def run_analysis(winner_csv: Path, failure_markdown: Path | None, failure_csv: Path | None = None) -> dict[str, Any]:
     winner_rows = load_winner_rows(winner_csv)
+    failure_source: Path
+    failure_mode: str
     if failure_csv:
         failure_rows, scope_note = load_failure_rows_from_csv(failure_csv)
+        failure_source = failure_csv
+        failure_mode = "csv"
     elif failure_markdown:
         failure_rows, scope_note = load_failure_rows_from_markdown(failure_markdown)
+        failure_source = failure_markdown
+        failure_mode = "markdown"
     else:
         raise SystemExit("failure_markdown か failure_csv のどちらかが必要です")
     if not winner_rows:
@@ -946,7 +1189,7 @@ def run_analysis(winner_csv: Path, failure_markdown: Path | None, failure_csv: P
     if not failure_rows:
         source_label = str(failure_csv or failure_markdown)
         raise SystemExit(f"失敗サンプルを読めませんでした: {source_label}")
-    summary = summarize_patterns(winner_rows, failure_rows, scope_note)
+    summary = summarize_patterns(winner_rows, failure_rows, scope_note, failure_source, failure_mode)
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     SUMMARY_JSON_PATH.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     KNOWLEDGE_PATH.write_text(render_markdown(summary), encoding="utf-8")
@@ -959,7 +1202,8 @@ def print_status() -> None:
         json.dumps(
             {
                 "winner_source": str(DEFAULT_WINNER_CSV),
-                "failure_source": str(DEFAULT_FAILURE_MARKDOWN),
+                "failure_source": summary.get("failure_source", str(DEFAULT_FAILURE_MARKDOWN)),
+                "failure_mode": summary.get("failure_mode", ""),
                 "latest_summary_generated_at": summary.get("generated_at", ""),
                 "winner_count": summary.get("winner_count", 0),
                 "failure_count": summary.get("failure_count", 0),
@@ -980,6 +1224,12 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--failure-markdown", type=Path, default=DEFAULT_FAILURE_MARKDOWN)
     analyze.add_argument("--failure-csv", type=Path, default=None)
 
+    capture = subparsers.add_parser("capture-full-raw", help="認証済みの Looker Studio タブから Meta広告 CR一覧 full raw を保存する")
+    capture.add_argument("--cdp-url", default=DEFAULT_CDP_URL)
+    capture.add_argument("--page-key", default=DEFAULT_LOOKER_PAGE_KEY)
+    capture.add_argument("--date-start", default="2023-01-01")
+    capture.add_argument("--output", type=Path, default=DEFAULT_FULL_FAILURE_CSV)
+
     subparsers.add_parser("status", help="現在のソースと最新集計状況を表示する")
     return parser
 
@@ -991,6 +1241,17 @@ def main() -> None:
     if command == "status":
         print_status()
         return
+    if command == "capture-full-raw":
+        result = asyncio.run(
+            capture_full_failure_raw(
+                cdp_url=args.cdp_url,
+                page_key=args.page_key,
+                date_start=args.date_start,
+                output_path=args.output,
+            )
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
 
     summary = run_analysis(args.winner_csv, args.failure_markdown, args.failure_csv)
     print(
@@ -999,6 +1260,8 @@ def main() -> None:
                 "generated_at": summary["generated_at"],
                 "winner_count": summary["winner_count"],
                 "failure_count": summary["failure_count"],
+                "failure_source": summary["failure_source"],
+                "failure_mode": summary["failure_mode"],
                 "knowledge_path": str(KNOWLEDGE_PATH),
             },
             ensure_ascii=False,
