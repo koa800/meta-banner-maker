@@ -391,6 +391,8 @@ def build_context_hint(rows: list[dict[str, Any]]) -> str:
     )
     lp_keys = sorted({row.get("lp_key") for row in rows if row.get("lp_key")})
     dates = sorted({row.get("created_on") for row in rows if row.get("created_on")})
+    if distribution_hints and all(re.fullmatch(r"広告ID\d+", hint or "") for hint in distribution_hints):
+        return "広告ID差による配信面ブレを先に疑う"
     if len(distribution_hints) >= 2:
         return "配信対象や配信条件の差が大きい可能性が高い"
     if len(lp_keys) >= 2:
@@ -433,6 +435,93 @@ def summarize_same_asset_variation(winner_rows: list[dict[str, Any]]) -> dict[st
             }
         )
     exact_context_examples.sort(key=lambda item: (item["cpa_spread"], item["ctr_spread"], item["count"]), reverse=True)
+
+    audience_variation_examples = [
+        item
+        for item in exact_context_examples
+        if len(
+            {
+                collapse_ws(row.get("distribution_hint"))
+                for row in item.get("rows", [])
+                if collapse_ws(row.get("distribution_hint"))
+            }
+        )
+        >= 2
+    ]
+
+    broad_vs_narrow_examples: list[dict[str, Any]] = []
+    broad_ctr_lower_count = 0
+    broad_ctr_compared_count = 0
+    broad_cpa_heavier_count = 0
+    broad_cpa_compared_count = 0
+    for item in audience_variation_examples:
+        broad_rows = [
+            row
+            for row in item.get("rows", [])
+            if "ノンタゲ" in collapse_ws(row.get("distribution_hint"))
+        ]
+        narrow_rows = [
+            row
+            for row in item.get("rows", [])
+            if "類似" in collapse_ws(row.get("distribution_hint"))
+        ]
+        if not broad_rows or not narrow_rows:
+            continue
+        broad_ctr_values = [row["ctr"] for row in broad_rows if row.get("ctr") is not None]
+        narrow_ctr_values = [row["ctr"] for row in narrow_rows if row.get("ctr") is not None]
+        broad_cpa_values = [row["cpa"] for row in broad_rows if row.get("cpa") is not None]
+        narrow_cpa_values = [row["cpa"] for row in narrow_rows if row.get("cpa") is not None]
+        broad_ctr = statistics.mean(broad_ctr_values) if broad_ctr_values else None
+        narrow_ctr = statistics.mean(narrow_ctr_values) if narrow_ctr_values else None
+        broad_cpa = statistics.mean(broad_cpa_values) if broad_cpa_values else None
+        narrow_cpa = statistics.mean(narrow_cpa_values) if narrow_cpa_values else None
+        if broad_ctr is not None and narrow_ctr is not None:
+            broad_ctr_compared_count += 1
+            if broad_ctr < narrow_ctr:
+                broad_ctr_lower_count += 1
+        if broad_cpa is not None and narrow_cpa is not None:
+            broad_cpa_compared_count += 1
+            if broad_cpa > narrow_cpa:
+                broad_cpa_heavier_count += 1
+        broad_vs_narrow_examples.append(
+            {
+                "created_on": item.get("created_on"),
+                "lp_key": item.get("lp_key"),
+                "count": item.get("count"),
+                "broad_label": " / ".join(
+                    sorted(
+                        {
+                            collapse_ws(row.get("distribution_hint"))
+                            for row in broad_rows
+                            if collapse_ws(row.get("distribution_hint"))
+                        }
+                    )
+                ),
+                "narrow_label": " / ".join(
+                    sorted(
+                        {
+                            collapse_ws(row.get("distribution_hint"))
+                            for row in narrow_rows
+                            if collapse_ws(row.get("distribution_hint"))
+                        }
+                    )
+                ),
+                "broad_ctr": broad_ctr,
+                "narrow_ctr": narrow_ctr,
+                "broad_cpa": broad_cpa,
+                "narrow_cpa": narrow_cpa,
+                "context_hint": item.get("context_hint", ""),
+                "rows": item.get("rows", []),
+            }
+        )
+    broad_vs_narrow_examples.sort(
+        key=lambda item: (
+            ((item.get("broad_cpa") or 0.0) - (item.get("narrow_cpa") or 0.0)),
+            ((item.get("narrow_ctr") or 0.0) - (item.get("broad_ctr") or 0.0)),
+            item.get("count", 0),
+        ),
+        reverse=True,
+    )
 
     cross_lp_examples: list[dict[str, Any]] = []
     for rows in multi_groups:
@@ -496,6 +585,15 @@ def summarize_same_asset_variation(winner_rows: list[dict[str, Any]]) -> dict[st
         "same_asset_groups_ge_2": len(multi_groups),
         "rows_in_same_asset_groups": sum(len(rows) for rows in multi_groups),
         "same_asset_same_context_examples": exact_context_examples[:5],
+        "same_asset_same_context_group_count": len(exact_context_examples),
+        "audience_variation_group_count": len(audience_variation_examples),
+        "audience_variation_examples": audience_variation_examples[:5],
+        "broad_vs_narrow_group_count": len(broad_vs_narrow_examples),
+        "broad_ctr_lower_count": broad_ctr_lower_count,
+        "broad_ctr_compared_count": broad_ctr_compared_count,
+        "broad_cpa_heavier_count": broad_cpa_heavier_count,
+        "broad_cpa_compared_count": broad_cpa_compared_count,
+        "broad_vs_narrow_examples": broad_vs_narrow_examples[:5],
         "same_asset_cross_lp_examples": cross_lp_examples[:5],
         "theme_opening_examples": opening_examples[:5],
     }
@@ -673,6 +771,32 @@ def render_cross_lp_examples(rows: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def render_broad_vs_narrow_examples(rows: list[dict[str, Any]]) -> str:
+    lines = [
+        "| 日付 | LP | 広いオーディエンス | 狭いオーディエンス | CTR | CPA | 読み |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for row in rows:
+        ctr_text = "- / -"
+        if row.get("broad_ctr") is not None or row.get("narrow_ctr") is not None:
+            ctr_text = f"{format_percent(row.get('broad_ctr'))} -> {format_percent(row.get('narrow_ctr'))}"
+        cpa_text = "- / -"
+        if row.get("broad_cpa") is not None or row.get("narrow_cpa") is not None:
+            cpa_text = f"{format_yen(row.get('broad_cpa'))} -> {format_yen(row.get('narrow_cpa'))}"
+        lines.append(
+            "| {date} | {lp} | {broad} | {narrow} | {ctr} | {cpa} | {hint} |".format(
+                date=row.get("created_on") or "-",
+                lp=row.get("lp_key") or "-",
+                broad=row.get("broad_label") or "-",
+                narrow=row.get("narrow_label") or "-",
+                ctr=ctr_text,
+                cpa=cpa_text,
+                hint=row.get("context_hint", "-"),
+            )
+        )
+    return "\n".join(lines)
+
+
 def render_opening_examples(rows: list[dict[str, Any]]) -> str:
     lines = [
         "| テーマ | 冒頭構成 | 件数 | CTR中央値 | CPA中央値 |",
@@ -734,7 +858,20 @@ def render_markdown(summary: dict[str, Any]) -> str:
             f"- 高消化の失敗は `冒頭で死ぬ型` より `上流は通るが後ろで失敗` が中心。今回の24件では `{comparison['top_funnel_strong_failures']}` 件がこの形に入る。",
             "- つまり、失敗CRの主因を `フック不足` だけで説明しない。約束の質、クリック後の期待値、LP・オファー・導線の崩れを先に疑う。",
             "- 一方で `タイトルの家系` には偏りがある。言い回し単体で勝てるわけではないが、同じ家系が繰り返し外れているなら失敗候補として重く見る。",
-            f"- 勝ちCR 340件の中だけでも、同一アセットの再利用群は `{same_asset_summary['same_asset_groups_ge_2']}` 群 `{same_asset_summary['rows_in_same_asset_groups']}` 件ある。CR単体ではなく `配信対象 / LP / 時期` を切って読む必要がある。",
+            f"- 勝ちCR 340件の中だけでも、同一アセットの再利用群は `{same_asset_summary['same_asset_groups_ge_2']}` 群 `{same_asset_summary['rows_in_same_asset_groups']}` 件ある。CR単体ではなく `配信対象（オーディエンス） / 広告ID / 広告セットID / LP / 時期` を切って読む必要がある。",
+            "",
+            "## Meta広告分析から見えた SNS広告共通の失敗メカニズム",
+            "",
+            "- ここで見ているのは Meta広告CR だが、`フックを広く取りすぎて広いオーディエンスに寄る失敗` という構造自体は SNS広告全般で起こる。",
+            f"- 勝ちCR 340件の内部だけでも、`同一アセット × 同日 × 同LP` まで揃えて数値を比べられる群が `{same_asset_summary['same_asset_same_context_group_count']}` 群あり、そのうち配信対象差を読める群が `{same_asset_summary['audience_variation_group_count']}` 群ある。",
+            f"- さらに `ノンタゲ vs 類似` を直接比べられる群は `{same_asset_summary['broad_vs_narrow_group_count']}` 群あり、CTR は `{same_asset_summary['broad_ctr_lower_count']}/{same_asset_summary['broad_ctr_compared_count']}` 群で広い側が低く、CPA は比較可能な `{same_asset_summary['broad_cpa_heavier_count']}/{same_asset_summary['broad_cpa_compared_count']}` 群で広い側が重かった。",
+            "- つまり `広いフックで人を集める -> オーディエンスが広がる -> 浅い反応層に学習する -> CTRやフック率の見た目より後ろの質が弱くなる` を、SNS広告の代表的な失敗メカニズムとして常に疑う。",
+            "",
+            "### ノンタゲと類似で差が出た例",
+            "",
+            render_broad_vs_narrow_examples(same_asset_summary["broad_vs_narrow_examples"])
+            if same_asset_summary["broad_vs_narrow_examples"]
+            else "- まだ該当なし",
             "",
             "## 失敗形の内訳",
             "",
@@ -789,7 +926,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
             "- まず `どこで崩れたか` を決める。`誰が作ったか` や `単語単体` に逃げない。",
             "- `上流は通るが後ろで失敗` に入ったら、CR単体の改善より `約束の質 / LP / オファー / 導線` を優先して見る。",
             "- `押されるが集客単価が重い` は、興味は取れているので `質の低いクリック` か `期待値ズレ` を疑う。",
-            "- 同一アセット比較は `asset -> 配信対象 -> LP -> 時期 -> 冒頭` の順で切る。順番を飛ばして `このCRは強い/弱い` と断定しない。",
+            "- 同一アセット比較は `asset -> 配信対象（オーディエンス） -> 広告ID / 広告セットID -> LP -> 時期 -> 冒頭` の順で切る。順番を飛ばして `このCRは強い/弱い` と断定しない。",
             "- 同じ家系が失敗側に偏っていても、1回では rules に上げない。複数スナップショットか下流数値が重なってから rules 化する。",
         ]
     )
