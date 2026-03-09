@@ -30,6 +30,13 @@
 - knowledge に戻す学び
 - rules に戻す禁止・推奨
 
+## CRレビューの入力元
+
+- 広告CRのレビューは `Looker Studio / 広告管理画面 / 経路別数値` を一次入力元にしてよい
+- ただし、数値で言えるのは `何が外れたか` まで。`なぜ外れたか` は `観察` と `解釈` を分けて書く
+- `低反応` `反応はあるが後ろが悪い` `CPAは許容でもLTVが悪い` のように失敗の型を分けて残す
+- Looker 数値だけで原因を断定しない。必要なら LP / 面談定性 / 下流売上と重ねる
+
 テンプレートは `Master/output/OUTPUT_REVIEW_TEMPLATE.md` を使う。
 
 LP を個別レビューするときは `Master/output/LP_REVIEW_TEMPLATE.md` を使う。
