@@ -169,6 +169,14 @@ ai                           # → デフォルトでCodex起動
 - LINEアカウントは ID ではなく LINE名で会話する。必要な場合だけ補足で ID を添える
 - 事業KPIは外部に非開示
 
+### Looker Studio / Google資産運用ルール
+
+- アドネス株式会社の Looker Studio / Google Sheets / 会社Google資産は、原則 `kohara.kaito@team.addness.co.jp` を正本アカウントとして扱う
+- Looker Studio 作業では、既に開いている認証済みタブを再利用する。ページを何度も開き直さない
+- `https://lookerstudio.google.com/u/1/...` のような account index 付き URL を新規に踏まない。必要なら account index を外した URL か、認証済みタブの複製を使う
+- `アクセスが拒否されました` やアカウント選択画面が出たら、まずアカウント文脈ズレを疑う。新しいタブで再ログインを繰り返さず、`kohara.kaito@team.addness.co.jp` で開いているタブに戻る
+- 同じレポート内の別ページを見るときは、新しいタブを増やすより同一タブ内のページ遷移を優先する
+
 ---
 
 ## ドキュメント更新ルール

@@ -6,7 +6,7 @@
 
 | 項目 | 内容 |
 |------|------|
-| URL | https://lookerstudio.google.com/u/1/reporting/cf23ad7f-89c2-44bb-8127-8abd2fe3544f/page/p_3t9tjftxwd |
+| URL | https://lookerstudio.google.com/reporting/cf23ad7f-89c2-44bb-8127-8abd2fe3544f/page/p_3t9tjftxwd |
 | ログインアカウント | kohara.kaito@team.addness.co.jp |
 | データソース | Meta広告（Facebook Ads） |
 | 最終データ更新 | 2026/3/1 0:47 |

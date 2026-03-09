@@ -180,7 +180,7 @@
 54. **API→CLI移行（API消費削減）**: 非リアルタイムのバッチ/スケジュールタスク7箇所をAnthropic API直接呼び出しからClaude Code CLI（サブスク課金）に移行。対象: weekly_bottleneck, weekly_content_suggestions, daily_group_digest, weekly_hinata_memory, os_sync_session, ai_news要約, sns_analyzer分析。repair_checkは無効化（手動`claude -p`で代替）
 51. **日報検証→自動再実行**: daily_report_verify（09:20）で未入力を検知した場合、daily_report_inputを自動で再実行（1日1回まで）。リトライ後も未完了ならLINE通知
 52. **Looker Studioセッション維持**: 毎朝07:00に `looker_session_keepalive` がChrome CDP経由でLooker Studioの2ページを開いてGoogleセッションをリフレッシュ（Claude Code不要の軽量処理）
-53. **Looker Studio自動ログイン**: Googleログイン切れ検知時、`credentials/kohara_google.txt`からパスワードを読み込みChrome MCPで自動ログイン（koa800sea.nifs→kohara.kaitoの順）。2段階認証はLINE通知→甲原のiPhoneで承認
+53. **Looker Studio自動ログイン**: Googleログイン切れ検知時、`credentials/kohara_google.txt`からパスワードを読み込みChrome MCPで自動ログイン（`kohara.kaito@team.addness.co.jp` を第1候補）。既存の認証済みタブを再利用し、`u/1` 固定URLの開き直しは避ける。2段階認証はLINE通知→甲原のiPhoneで承認
 
 ### Phase 12: ゴール進行モード（実装完了）
 54. **秘書ゴール進行モード**: 定常業務の空き時間（30分ごとにチェック）にAddnessの「定常業務の自動化」ゴールを自律的に進める。Chrome MCPでAddnessを直接操作し、ゴール確認→完了基準定義→アクション一覧作成→実行→報告のサイクルを回す

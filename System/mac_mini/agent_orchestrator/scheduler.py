@@ -43,6 +43,11 @@ _CDP_MASTER_TAB = "顧客マスタ"
 _CDP_SOURCE_MANAGEMENT_TAB = "データソース管理"
 _CLAUDE_CHROME_EXTENSION_ID = "fcoeoabgfenejglbffodgkkbkcdhcgfn"
 _CLAUDE_CHROME_CDP_ORIGIN = "http://127.0.0.1:9224"
+_LOOKER_PRIMARY_GOOGLE_ACCOUNT = "kohara.kaito@team.addness.co.jp"
+_LOOKER_DAILY_REPORT_URL = "https://lookerstudio.google.com/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_evmsc9twzd"
+_LOOKER_MEMBER_REPORT_URL = "https://lookerstudio.google.com/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_dfv0688m0d"
+_LOOKER_CSV_REPORT_URL = "https://lookerstudio.google.com/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_dsqvinv6zd"
+_LOOKER_MONTHLY_KPI_URL = "https://lookerstudio.google.com/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_ghqtl90f1d"
 
 
 def _ensure_system_path() -> None:
@@ -111,6 +116,20 @@ def _normalize_cron_day_of_week(raw: str) -> str:
         start, end = value.split("-", 1)
         return f"{_normalize_cron_day_of_week(start)}-{_normalize_cron_day_of_week(end)}"
     return _CRON_WEEKDAY_MAP.get(value, value)
+
+
+def _normalize_looker_url(url: str) -> str:
+    """Looker Studio URL から account index (`/u/1` など) を外して正規化する。"""
+    return re.sub(r"(https://lookerstudio\.google\.com)/u/\d+/", r"\1/", str(url or ""))
+
+
+def _extract_looker_page_key(url: str) -> str:
+    """Looker レポート+ページの識別子を取り出す。account index の違いは吸収する。"""
+    normalized = _normalize_looker_url(url)
+    match = re.search(r"lookerstudio\.google\.com/reporting/([^/]+)/page/([^/?#]+)", normalized)
+    if not match:
+        return ""
+    return f"{match.group(1)}/{match.group(2)}"
 
 
 def _build_cron_trigger_from_expr(expr: str) -> CronTrigger:
@@ -1259,6 +1278,8 @@ market_trends.md の全文をそのまま出力してください。既存の内
         import urllib.parse
         import urllib.request
 
+        looker_page_key = _extract_looker_page_key(open_url or "")
+
         try:
             with urllib.request.urlopen(f"{_CLAUDE_CHROME_CDP_ORIGIN}/json/list", timeout=5) as response:
                 targets = json.load(response)
@@ -1268,15 +1289,20 @@ market_trends.md の全文をそのまま出力してください。既存の内
 
         for target in targets:
             url = target.get("url", "")
-            if target.get("type") == "page" and url_contains in url:
+            if target.get("type") != "page":
+                continue
+            if looker_page_key and _extract_looker_page_key(url) == looker_page_key:
+                return target.get("webSocketDebuggerUrl")
+            if url_contains in url:
                 return target.get("webSocketDebuggerUrl")
 
         if not open_url:
             return None
 
+        normalized_open_url = _normalize_looker_url(open_url)
         create_endpoint = (
             f"{_CLAUDE_CHROME_CDP_ORIGIN}/json/new?"
-            f"{urllib.parse.quote(open_url, safe=':/?=&')}"
+            f"{urllib.parse.quote(normalized_open_url, safe=':/?=&')}"
         )
         request = urllib.request.Request(create_endpoint, method="PUT")
         try:
@@ -1305,7 +1331,7 @@ market_trends.md の全文をそのまま出力してください。既存の内
             pass
 
         try:
-            self._cdp_call(ws_url, "Page.navigate", {"url": page_url})
+            self._cdp_call(ws_url, "Page.navigate", {"url": _normalize_looker_url(page_url)})
         except Exception as e:
             return False, f"Looker Studio への遷移失敗: {e}"
 
@@ -1706,9 +1732,11 @@ cat {creds_file}
 ```
 この出力がGoogleアカウントのパスワードです。
 
-2. ログインフロー（第1候補: koa800sea.nifs@gmail.com）:
-   - アカウント選択画面 → `koa800sea.nifs@gmail.com` を選択。なければ「別のアカウントを使用」
-   - メール入力画面 → `koa800sea.nifs@gmail.com` を入力して「次へ」
+2. ログインフロー（第1候補: {_LOOKER_PRIMARY_GOOGLE_ACCOUNT}）:
+   - まず、既に開いている Looker Studio の認証済みタブがないか確認し、あればそのタブを使い続ける
+   - `アクセスが拒否されました` やアカウント選択が出たら、`/u/1` など別アカウント文脈のタブを開き直さず、認証済みタブに戻る
+   - アカウント選択画面 → `{_LOOKER_PRIMARY_GOOGLE_ACCOUNT}` を選択。なければ「別のアカウントを使用」
+   - メール入力画面 → `{_LOOKER_PRIMARY_GOOGLE_ACCOUNT}` を入力して「次へ」
    - パスワード入力画面 → 上記で読み取ったパスワードを入力して「次へ」
    - 2段階認証画面が表示されたら:
      a. LINEで通知:
@@ -1720,8 +1748,8 @@ cat {creds_file}
      c. ページの状態を確認。まだ認証画面なら追加で60秒待機
    - ログイン成功 → Looker Studio に自動遷移するので、元のタスクを続行
 
-3. koa800sea.nifs でログイン失敗した場合:
-   - `kohara.kaito@team.addness.co.jp` で同じパスワードを使ってリトライ
+3. 第1候補でログイン失敗した場合:
+   - `koa800sea.nifs@gmail.com` で同じパスワードを使ってリトライ
 
 4. 両方失敗した場合のみ:
    → ===RESULT_START===
@@ -1738,8 +1766,8 @@ cat {creds_file}
 
         CHROME_PORT = 9224  # 秘書Chrome
         LOOKER_URLS = [
-            "https://lookerstudio.google.com/u/1/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_evmsc9twzd",
-            "https://lookerstudio.google.com/u/1/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_dfv0688m0d",
+            _LOOKER_DAILY_REPORT_URL,
+            _LOOKER_MEMBER_REPORT_URL,
         ]
 
         logger.info("Looker セッション維持: 開始")
@@ -1755,7 +1783,23 @@ cat {creds_file}
             return
 
         opened_tabs = []
+        existing_page_keys = set()
+        try:
+            with urllib.request.urlopen(f"http://localhost:{CHROME_PORT}/json/list", timeout=10) as resp:
+                targets = json.loads(resp.read())
+            existing_page_keys = {
+                _extract_looker_page_key(target.get("url", ""))
+                for target in targets
+                if target.get("type") == "page"
+            }
+        except Exception:
+            pass
+
         for url in LOOKER_URLS:
+            page_key = _extract_looker_page_key(url)
+            if page_key and page_key in existing_page_keys:
+                logger.info(f"Looker セッション維持: 既存タブを再利用 - {page_key}")
+                continue
             try:
                 req = urllib.request.Request(
                     f"http://localhost:{CHROME_PORT}/json/new?{url}")
@@ -2122,7 +2166,8 @@ python3 System/sheets_manager.py read "1gOVSt0PDub3-W8fBglKnuUAIub3FOyv-1X8CdFEv
 ## 手順
 
 ### Step 1: Looker Studio 日別データページからデータ取得
-- URL: https://lookerstudio.google.com/u/1/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_evmsc9twzd
+- URL: {_LOOKER_DAILY_REPORT_URL}
+- 既に認証済みの Looker タブがあるなら、そのタブを使う。新しいログインページを開き直さない
 - ブラウザで開く
 - javascript_tool で以下を実行してページテキストを取得:
 ```javascript
@@ -2134,7 +2179,8 @@ await new Promise(r => setTimeout(r, 10000)); document.body.innerText
 - それでも取得できない場合 → スクショ撮影して目視確認（最終手段）
 
 ### Step 2: Looker Studio 会員数ページからデータ取得
-- URL: https://lookerstudio.google.com/u/1/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_dfv0688m0d
+- URL: {_LOOKER_MEMBER_REPORT_URL}
+- 既に認証済みの Looker タブがあるなら、そのタブを使う。新しいログインページを開き直さない
 - ブラウザで開く
 - javascript_tool で以下を実行してページテキストを取得:
 ```javascript
@@ -3479,7 +3525,8 @@ head -3 "{csv_dir}/{csv_filename}"
 ## 手順
 
 ### Step 1: Looker Studio を開く
-- URL: https://lookerstudio.google.com/u/1/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_dsqvinv6zd
+- URL: {_LOOKER_CSV_REPORT_URL}
+- 既に認証済みの Looker タブがあるなら、そのタブを再利用する。ページを何度も開き直さない
 - ページ名: 媒体・ファネル別データ
 - ブラウザで開いて読み込み完了を待つ
 
@@ -3555,7 +3602,7 @@ head -3 "{csv_dir}/{csv_filename}"
                     "Chrome CDP で残件を直接ダウンロードします"
                 )
                 cdp_success, cdp_report = self._download_looker_csv_via_cdp(
-                    "https://lookerstudio.google.com/u/1/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_dsqvinv6zd",
+                    _LOOKER_CSV_REPORT_URL,
                     csv_dir,
                     still_missing,
                 )
@@ -6042,7 +6089,8 @@ crop.save('/tmp/output.png')
    - 画面サイズが異なる場合はMCP screenshotで位置を確認してから調整
 
 #### 1-1. 月次KPI
-1. ブラウザで Looker Studio を開く: https://lookerstudio.google.com/u/1/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_ghqtl90f1d
+1. ブラウザで Looker Studio を開く: {_LOOKER_MONTHLY_KPI_URL}
+   - 既に認証済みの Looker タブがあるなら、そのタブを再利用する
 2. 日付フィルターをクリック
 3. javascript_tool でオフセット変更:
 ```javascript

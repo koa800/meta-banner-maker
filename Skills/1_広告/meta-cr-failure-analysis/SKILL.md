@@ -13,11 +13,18 @@ Meta広告CRの失敗分析は、`誰が作ったか` ではなく `どこで崩
 - 勝ち基準: `System/data/cr_bigwinners_raw.csv`
 - 失敗サンプル: `Master/addness/meta_ads_cr_dashboard.md`
 - full raw があるなら `--failure-csv` で直接読む
+- Looker Studio の正本アカウント: `kohara.kaito@team.addness.co.jp`
 - 出力先:
   - `Master/knowledge/広告CR失敗パターン.md`
   - `System/data/meta_cr_dashboard/failure_summary.json`
 
 full raw があるなら後で差し替えてよいが、まずはこの2つで十分に初回分析できる。
+
+## Looker 作業ルール
+
+- 既に開いている認証済みタブを再利用する。ページを何度も開き直さない
+- `u/1` など account index 付き URL を新規に踏まず、account index を外した URL か認証済みタブの複製を使う
+- `アクセスが拒否されました` が出たら、まずアカウント文脈ズレを疑う
 
 ## 手順
 
