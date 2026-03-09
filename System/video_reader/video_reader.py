@@ -17,6 +17,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 OUTPUT_BASE = Path(
@@ -32,6 +33,7 @@ WHISPER_DOWNLOAD_ROOT = Path(
     )
 )
 DEFAULT_MAX_SECONDS = int(os.environ.get("VIDEO_READER_MAX_SECONDS", "0") or "0")
+_WHISPER_MODELS: dict[str, object] = {}
 
 # --- URL判定 ---
 
@@ -164,8 +166,12 @@ def _transcribe_direct_video(
 
         import whisper
 
-        model = whisper.load_model(whisper_model, download_root=str(WHISPER_DOWNLOAD_ROOT))
-        result = model.transcribe(str(audio_path), language="ja", fp16=False, verbose=False)
+        model = _WHISPER_MODELS.get(whisper_model)
+        if model is None:
+            model = whisper.load_model(whisper_model, download_root=str(WHISPER_DOWNLOAD_ROOT))
+            _WHISPER_MODELS[whisper_model] = model
+        with open(os.devnull, "w", encoding="utf-8") as sink, redirect_stdout(sink), redirect_stderr(sink):
+            result = model.transcribe(str(audio_path), language="ja", fp16=False, verbose=False)
 
     segments = result.get("segments", [])
     plain_parts = [segment.get("text", "").strip() for segment in segments if segment.get("text")]
