@@ -749,33 +749,53 @@ def backfill_video_signals(
     selected_rows = select_video_rows(rows, limit=limit, bucket=bucket)
     processed: list[dict[str, Any]] = []
     reused = 0
+    error_records: list[dict[str, Any]] = []
+    reused_errors = 0
     for row in selected_rows:
         asset_key = collapse_ws(row.get("asset_key"))
         cache_dir = VIDEO_CACHE_DIR / re.sub(r"[^A-Za-z0-9._-]+", "_", asset_key)[:120]
         signal_path = cache_dir / "signal.json"
+        error_path = cache_dir / "error.json"
         if signal_path.exists():
             processed.append(json.loads(signal_path.read_text(encoding="utf-8")))
             reused += 1
             continue
+        if error_path.exists():
+            error_records.append(json.loads(error_path.read_text(encoding="utf-8")))
+            reused_errors += 1
+            continue
 
-        result = process_video_url(
-            row.get("video_url", ""),
-            out_dir=cache_dir,
-            no_frames=True,
-            whisper_model=whisper_model,
-            max_seconds=max_seconds,
-            title_hint=row.get("ad_name", ""),
-        )
-        transcript_text = collapse_ws(result.get("transcript_text", ""))
-        signal = build_video_signal_record(
-            row,
-            transcript_text,
-            int(result.get("duration") or 0),
-            max_seconds,
-        )
         cache_dir.mkdir(parents=True, exist_ok=True)
-        signal_path.write_text(json.dumps(signal, ensure_ascii=False, indent=2), encoding="utf-8")
-        processed.append(signal)
+        try:
+            result = process_video_url(
+                row.get("video_url", ""),
+                out_dir=cache_dir,
+                no_frames=True,
+                whisper_model=whisper_model,
+                max_seconds=max_seconds,
+                title_hint=row.get("ad_name", ""),
+            )
+            transcript_text = collapse_ws(result.get("transcript_text", ""))
+            signal = build_video_signal_record(
+                row,
+                transcript_text,
+                int(result.get("duration") or 0),
+                max_seconds,
+            )
+            signal_path.write_text(json.dumps(signal, ensure_ascii=False, indent=2), encoding="utf-8")
+            processed.append(signal)
+        except Exception as exc:
+            error_record = {
+                "asset_key": asset_key,
+                "ad_name": row.get("ad_name", ""),
+                "video_url": row.get("video_url", ""),
+                "failure_bucket": row.get("failure_bucket", ""),
+                "error_type": exc.__class__.__name__,
+                "error_message": collapse_ws(str(exc))[:500],
+                "recorded_at": datetime.now().isoformat(timespec="seconds"),
+            }
+            error_path.write_text(json.dumps(error_record, ensure_ascii=False, indent=2), encoding="utf-8")
+            error_records.append(error_record)
 
     scope_buckets: defaultdict[str, Counter] = defaultdict(Counter)
     marker_counter: Counter[str] = Counter()
@@ -808,12 +828,15 @@ def backfill_video_signals(
         "requested_limit": limit,
         "processed_count": len(processed),
         "reused_count": reused,
+        "error_count": len(error_records),
+        "reused_error_count": reused_errors,
         "video_cache_dir": str(VIDEO_CACHE_DIR),
         "bucket_scope_counts": bucket_scope_counts,
         "broad_marker_counts": [
             {"label": label, "count": count}
             for label, count in marker_counter.most_common()
         ],
+        "top_errors": error_records[:10],
         "top_examples": sorted(
             processed,
             key=lambda record: (
