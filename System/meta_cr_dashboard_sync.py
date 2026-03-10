@@ -13,6 +13,7 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -182,6 +183,30 @@ def extract_lp_key(ad_name: str) -> str:
 def extract_cr_code(text: str) -> str:
     match = re.search(r"(CR\d+)", collapse_ws(text).upper())
     return match.group(1) if match else ""
+
+
+def normalize_landing_url(value: Any) -> str:
+    text = collapse_ws(value)
+    if not text or not re.match(r"^https?://", text, flags=re.IGNORECASE):
+        return ""
+    try:
+        parsed = urlsplit(text)
+    except ValueError:
+        return ""
+    scheme = parsed.scheme.lower() or "https"
+    netloc = parsed.netloc.lower()
+    path = re.sub(r"/+", "/", parsed.path or "").rstrip("/")
+    return urlunsplit((scheme, netloc, path, "", ""))
+
+
+def format_lp_display(lp_url: str, lp_key: str = "") -> str:
+    normalized_url = normalize_landing_url(lp_url)
+    normalized_key = collapse_ws(lp_key).upper()
+    if normalized_url:
+        return normalized_url
+    if normalized_key:
+        return f"{normalized_key}（URL未取得）"
+    return "URL未取得"
 
 
 def extract_title_family(title: str) -> str:
@@ -1512,6 +1537,7 @@ def load_cr_route_lp_map() -> dict[str, Any]:
             cr_code,
             {
                 "lp_keys": set(),
+                "lp_urls": set(),
                 "crlp_values": set(),
             },
         )
@@ -1523,9 +1549,12 @@ def load_cr_route_lp_map() -> dict[str, Any]:
                 record["lp_keys"].add(lp_from_crlp.upper())
         if crlp:
             record["crlp_values"].add(crlp)
+        landing_url = normalize_landing_url(padded[idx["遷移先リンク"]]) if "遷移先リンク" in idx else ""
+        if landing_url:
+            record["lp_urls"].add(landing_url)
 
-    single_lp_codes = sum(1 for record in meta_codes.values() if len(record["lp_keys"]) == 1)
-    ambiguous_lp_codes = sum(1 for record in meta_codes.values() if len(record["lp_keys"]) >= 2)
+    single_lp_codes = sum(1 for record in meta_codes.values() if len(record["lp_urls"] or record["lp_keys"]) == 1)
+    ambiguous_lp_codes = sum(1 for record in meta_codes.values() if len(record["lp_urls"] or record["lp_keys"]) >= 2)
     return {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "meta_rows": meta_rows,
@@ -1591,6 +1620,7 @@ def summarize_cdp_downstream(
     lp_rollup: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
             "cr_codes": set(),
+            "lp_keys": set(),
             "customer_rows": 0,
             "buyer_rows": 0,
             "total_sales": 0.0,
@@ -1631,23 +1661,25 @@ def summarize_cdp_downstream(
 
         raw_lp_keys = {lp for lp in raw_record["lp_keys"] if lp}
         route_lp_keys = {lp for lp in route_record.get("lp_keys", set()) if lp}
-        if route_lp_keys:
+        if route_lp_keys or route_record.get("lp_urls"):
             route_matched_codes += 1
-        lp_keys = route_lp_keys or raw_lp_keys
-        if len(raw_lp_keys) >= 2 and len(route_lp_keys) == 1:
+        route_lp_urls = {url for url in route_record.get("lp_urls", set()) if url}
+        lp_identifiers = route_lp_urls or route_lp_keys or raw_lp_keys
+        if len(raw_lp_keys) >= 2 and len(lp_identifiers) == 1:
             route_helped_codes += 1
-        if len(lp_keys) == 1:
+        if len(lp_identifiers) == 1:
             final_single_lp_codes += 1
-            lp_key = next(iter(lp_keys))
-            target = lp_rollup[lp_key]
+            lp_identifier = next(iter(lp_identifiers))
+            target = lp_rollup[lp_identifier]
             target["cr_codes"].add(code)
+            target["lp_keys"].update(route_lp_keys or raw_lp_keys)
             target["customer_rows"] += cdp_record["customer_rows"]
             target["buyer_rows"] += cdp_record["buyer_rows"]
             target["total_sales"] += cdp_record["total_sales"]
             target["total_refunds"] += cdp_record["total_refunds"]
             target["total_ltv"] += cdp_record["total_ltv"]
             target["ltv_values"].extend(cdp_record["ltv_values"])
-        elif len(lp_keys) >= 2:
+        elif len(lp_identifiers) >= 2:
             ambiguous_lp_codes += 1
 
     def finalize_rollup(source: dict[str, dict[str, Any]], key_name: str) -> list[dict[str, Any]]:
@@ -1657,6 +1689,7 @@ def summarize_cdp_downstream(
             rows.append(
                 {
                     key_name: key,
+                    "lp_keys": sorted(record.get("lp_keys", set())),
                     "cr_code_count": len(record["cr_codes"]),
                     "customer_rows": record["customer_rows"],
                     "buyer_rows": record["buyer_rows"],
@@ -1691,7 +1724,7 @@ def summarize_cdp_downstream(
         "ambiguous_lp_codes": ambiguous_lp_codes,
         "route_helped_codes": route_helped_codes,
         "bucket_rows": finalize_rollup(bucket_rollup, "failure_bucket"),
-        "lp_rows": finalize_rollup(lp_rollup, "lp_key"),
+        "lp_rows": finalize_rollup(lp_rollup, "lp_display"),
     }
 
 
@@ -1835,13 +1868,16 @@ def render_cdp_join_table(summary: dict[str, Any]) -> str:
 
 def render_downstream_rollup(rows: list[dict[str, Any]], key_name: str, key_label: str) -> str:
     lines = [
-        f"| {key_label} | CRコード数 | 顧客行 | 購入者行 | 購入者率 | 着金売上 | 返金額 | 返金率 | 顧客あたりLTV | LTV中央値 |",
+        f"| {key_label} | CRコード数 | 顧客行 | 商品購入者行（フロント+バック全体） | 商品購入率（フロント+バック全体） | 着金売上 | 返金額 | 返金率 | 顧客あたりLTV | LTV中央値 |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in rows:
+        key_value = row[key_name]
+        if key_name == "lp_display":
+            key_value = format_lp_display(key_value, row.get("lp_keys", [""])[0] if row.get("lp_keys") else "")
         lines.append(
             "| {key} | {codes} | {customers} | {buyers} | {buyer_rate} | {sales} | {refunds} | {refund_rate} | {ltv_per_customer} | {ltv_median} |".format(
-                key=row[key_name],
+                key=key_value,
                 codes=row["cr_code_count"],
                 customers=row["customer_rows"],
                 buyers=row["buyer_rows"],
@@ -1869,8 +1905,8 @@ def build_cdp_downstream_insights(summary: dict[str, Any]) -> list[str]:
             " `CPAが高い/低い` だけではなく、その市場に対してどの質の顧客を連れてきたかで読む。"
         )
         insights.append(
-            f"- `失敗形` で見ると、購入者率が最も高いのは `{top_buyer_bucket['failure_bucket']}` で `{format_percent(top_buyer_bucket.get('buyer_rate'))}`。"
-            " 安く獲得すること自体ではなく、獲得後の購入率まで含めて読む。"
+            f"- `失敗形` で見ると、商品購入率（フロント+バック全体）が最も高いのは `{top_buyer_bucket['failure_bucket']}` で `{format_percent(top_buyer_bucket.get('buyer_rate'))}`。"
+            " 安く獲得すること自体ではなく、獲得後にフロント/バックを分けず何かしらの商品購入まで進む率を含めて読む。"
         )
         insights.append(
             f"- 返金率が最も高いのは `{top_refund_bucket['failure_bucket']}` で `{format_percent(top_refund_bucket.get('refund_rate'))}`。"
@@ -1880,12 +1916,20 @@ def build_cdp_downstream_insights(summary: dict[str, Any]) -> list[str]:
     if stable_lp_rows:
         top_ltv_lp = max(stable_lp_rows, key=lambda row: row.get("ltv_per_customer") or 0.0)
         top_refund_lp = max(stable_lp_rows, key=lambda row: row.get("refund_rate") or 0.0)
+        top_ltv_lp_label = format_lp_display(
+            top_ltv_lp.get("lp_display", ""),
+            top_ltv_lp.get("lp_keys", [""])[0] if top_ltv_lp.get("lp_keys") else "",
+        )
+        top_refund_lp_label = format_lp_display(
+            top_refund_lp.get("lp_display", ""),
+            top_refund_lp.get("lp_keys", [""])[0] if top_refund_lp.get("lp_keys") else "",
+        )
         insights.append(
-            f"- `LP` では、顧客あたりLTVが最も高いのは `{top_ltv_lp['lp_key']}` で `{format_yen(top_ltv_lp.get('ltv_per_customer'))}`。"
+            f"- `LP URL` では、顧客あたりLTVが最も高いのは `{top_ltv_lp_label}` で `{format_yen(top_ltv_lp.get('ltv_per_customer'))}`。"
             " LPのオプトインCVRだけでなく、下流売上まで含めた強さを見る。"
         )
         insights.append(
-            f"- `LP` では、返金率が最も高いのは `{top_refund_lp['lp_key']}` で `{format_percent(top_refund_lp.get('refund_rate'))}`。"
+            f"- `LP URL` では、返金率が最も高いのは `{top_refund_lp_label}` で `{format_percent(top_refund_lp.get('refund_rate'))}`。"
             " オファーやターゲット層のズレを含めて確認する。"
         )
     return insights
@@ -2358,7 +2402,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
             "",
             "## LPごとの下流売上/LTV",
             "",
-            render_downstream_rollup(cdp_downstream_summary.get("lp_rows", [])[:8], "lp_key", "LP")
+            render_downstream_rollup(cdp_downstream_summary.get("lp_rows", [])[:8], "lp_display", "LP URL")
             if cdp_downstream_summary.get("lp_rows")
             else "- まだ該当なし",
             "",
