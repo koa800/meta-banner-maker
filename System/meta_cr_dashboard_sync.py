@@ -326,8 +326,10 @@ def select_video_rows(rows: list[dict[str, Any]], limit: int, bucket: str = "") 
 
 def normalize_failure_bucket_label(label: str) -> str:
     mapping = {
+        "最初で止まる": "フックで離脱",
         "見られるが押されない": "見られるがクリックされない",
         "押されるが集客単価が重い": "クリックされるがCPAが高い",
+        "上流は通るが後ろで失敗": "CTRとフック率は通るがオプトイン以降で失敗",
     }
     return mapping.get(label, label)
 
@@ -875,28 +877,28 @@ def classify_failure_shape(row: dict[str, Any], benchmarks: dict[str, float]) ->
 
     if ctr is not None and hook is not None and ctr < benchmarks["winner_ctr_p25"] and hook < benchmarks["winner_hook_p25"]:
         return (
-            "最初で止まる",
-            "冒頭の注意獲得もクリック意欲も弱く、そもそも前に進まない。",
+            "フックで離脱",
+            "CTRとフック率がどちらも勝ちCRの下位25%基準を下回っていて、フックで離脱している。",
             "strong",
         )
 
     if ctr is not None and ctr < benchmarks["winner_ctr_p25"]:
         return (
             "見られるがクリックされない",
-            "視聴はされても、自分事化やクリックする理由が弱く、クリックまで届かない。",
+            "フック率は出ても CTR が勝ちCRの下位25%基準を下回っていて、クリックまで届かない。",
             "strong" if hook is not None else "medium",
         )
 
     if cpa is not None and cpa > benchmarks["winner_cpa_p75"]:
         return (
             "クリックされるがCPAが高い",
-            "クリックはされるが、オプトイン率が低いか見込客の質が弱く、CPAが高い。",
+            "CTR は出るが CPA が勝ちCRの上位25%基準を上回っていて、オプトイン率かターゲット層の質で崩れている。",
             "strong",
         )
 
     return (
-        "上流は通るが後ろで失敗",
-        "フックとクリックは一定以上。CR単体より、約束の質・LP・オファー・導線の崩れを先に疑う。",
+        "CTRとフック率は通るがオプトイン以降で失敗",
+        "CTR とフック率は勝ち基準帯にある。CR単体より LP・オファー・導線・ターゲット層を先に疑う。",
         "strong" if ctr is not None and hook is not None else "medium",
     )
 
@@ -946,15 +948,15 @@ def summarize_family_bucket_profiles(
         secondary_name, secondary_count = top_buckets[1] if len(top_buckets) > 1 else ("-", 0)
 
         if primary_name == "見られるがクリックされない":
-            read = "注意は取れるが、自分事化やクリックする理由が弱い。"
-        elif primary_name == "最初で止まる":
-            read = "冒頭の新規性や意外性が落ちると、一気に前で死にやすい。"
+            read = "フック率は残るが、CTRが伸びずクリックに届いていない。"
+        elif primary_name == "フックで離脱":
+            read = "冒頭の新規性や対象ワードが弱く、フックで離脱している。"
         elif primary_name == "クリックされるがCPAが高い":
-            read = "クリックはされるので、オプトイン率の低さか見込客の質を疑う。"
+            read = "クリックは取れているので、オプトイン率かターゲット層の質を疑う。"
         elif secondary_count and (primary_count - secondary_count) / total <= 0.08:
             read = "崩れ方が二極化していて、単一原因で見ない方がいい。"
         else:
-            read = "フックは残りやすく、後ろの約束や流入の質を先に疑う。"
+            read = "CTRとフック率は通るので、CR単体より LP・オファー・導線・ターゲット層を先に疑う。"
 
         rows.append(
             {
@@ -1110,9 +1112,9 @@ def build_context_hint(rows: list[dict[str, Any]]) -> str:
     if distribution_hints and all(re.fullmatch(r"広告ID\d+", hint or "") for hint in distribution_hints):
         return "広告ID差による配信面ブレを先に疑う"
     if len(distribution_hints) >= 2:
-        return "配信対象や配信条件の差が大きい可能性が高い"
+        return "オーディエンスや配信条件の差が大きい可能性が高い"
     if len(lp_keys) >= 2:
-        return "LP差による期待値ズレを先に疑う"
+        return "LPとオファーの期待値ズレを先に疑う"
     if len(dates) >= 2:
         return "配信時期差や既視感の蓄積を疑う"
     return "同一アセットでも広告セット・学習状態・配信面でブレる"
@@ -1420,6 +1422,19 @@ def render_stage_table(stage_counts: list[dict[str, Any]], failure_count: int) -
     return "\n".join(lines)
 
 
+def render_stage_definition_table(benchmarks: dict[str, float]) -> str:
+    return "\n".join(
+        [
+            "| 失敗形 | 判定基準 |",
+            "|---|---|",
+            f"| フックで離脱 | CTR < {benchmarks['winner_ctr_p25']:.2f}% かつ フック率 < {benchmarks['winner_hook_p25']:.2f}% |",
+            f"| 見られるがクリックされない | CTR < {benchmarks['winner_ctr_p25']:.2f}% |",
+            f"| クリックされるがCPAが高い | CPA > {format_yen(benchmarks['winner_cpa_p75'])} |",
+            "| CTRとフック率は通るがオプトイン以降で失敗 | 上記3条件に入らない非勝ちCR |",
+        ]
+    )
+
+
 def render_family_table(rows: list[dict[str, Any]]) -> str:
     lines = ["| CR系統ラベル | 失敗数 | 勝ち数 | 読み |", "|---|---:|---:|---|"]
     for row in rows:
@@ -1640,10 +1655,10 @@ def build_time_context_insights(rows: list[dict[str, Any]]) -> list[str]:
                 "- `1年後悔` は、年末年始に `また1年無駄にした` という自己評価のタイミングと噛み合う。"
                 " いまの表でも `2025/12` `2026/01` に観測が厚く、まずは `年末の反省需要` と接続した旬を疑う。"
             )
-        if any(row.get("top_stage_name") == "上流は通るが後ろで失敗" for row in winter_rows):
+        if any(row.get("top_stage_name") == "CTRとフック率は通るがオプトイン以降で失敗" for row in winter_rows):
             insights.append(
-                "- ただし `1年後悔` の崩れ方は、冬でも `最初で死ぬ` より `上流は通るが後ろで失敗` が主。"
-                " つまりフック自体は残りやすく、課題は `誰を集めたか` と `後ろの約束` に寄りやすい。"
+                "- ただし `1年後悔` の崩れ方は、冬でも `フックで離脱` より `CTRとフック率は通るがオプトイン以降で失敗` が主。"
+                " つまりフック自体は残りやすく、課題は `ターゲット層` と `オファー` に寄りやすい。"
             )
 
     mondainai = by_family.get("問題ないです", [])
@@ -1654,13 +1669,13 @@ def build_time_context_insights(rows: list[dict[str, Any]]) -> list[str]:
                 row
                 for row in mondainai
                 if row.get("month_key") in {"2025/09", "2025/10"}
-                and row.get("top_stage_name") == "最初で止まる"
+                and row.get("top_stage_name") == "フックで離脱"
             ),
             None,
         )
         if late_summer and later_first_stop and late_summer.get("top_stage_name") != later_first_stop.get("top_stage_name"):
             insights.append(
-                "- `問題ないです` は、`2025/08` では `上流は通るが後ろで失敗` が主だったのに、`2025/09〜10` では `最初で止まる` へ移っている。"
+                "- `問題ないです` は、`2025/08` では `CTRとフック率は通るがオプトイン以降で失敗` が主だったのに、`2025/09〜10` では `フックで離脱` へ移っている。"
                 " 自社の露出増だけでなく、他社が同じフォーマットを模倣したことで市場全体に既視感が広がり、`新しい情報ではない` と判断されてスキップが増えた可能性が高い。"
             )
 
@@ -1670,8 +1685,8 @@ def build_time_context_insights(rows: list[dict[str, Any]]) -> list[str]:
         dec = next((row for row in machigae if row.get("month_key") == "2025/12"), None)
         if nov and dec and nov.get("top_stage_name") != dec.get("top_stage_name"):
             insights.append(
-                "- `間違えました` は、`2025/11` では `上流は通るが後ろで失敗` が多い一方、`2025/12` では `最初で止まる` に寄る。"
-                " `暴露 / 訂正` の驚きは初速を作るが、既視感が出ると一気に冒頭で止まりやすい。"
+                "- `間違えました` は、`2025/11` では `CTRとフック率は通るがオプトイン以降で失敗` が多い一方、`2025/12` では `フックで離脱` に寄る。"
+                " `暴露 / 訂正` の驚きは初速を作るが、既視感が出ると一気に冒頭で離脱されやすい。"
             )
 
     yame = by_family.get("全部やめました", [])
@@ -1680,14 +1695,14 @@ def build_time_context_insights(rows: list[dict[str, Any]]) -> list[str]:
         mar = next((row for row in yame if row.get("month_key") == "2026/03"), None)
         if feb and mar:
             insights.append(
-                "- `全部やめました` は、`2026/02` では `上流は通るが後ろで失敗` が主で CTR も高めだが、`2026/03` では `見られるがクリックされない` へずれている。"
+                "- `全部やめました` は、`2026/02` では `CTRとフック率は通るがオプトイン以降で失敗` が主で CTR も高めだが、`2026/03` では `見られるがクリックされない` へずれている。"
                 " 反王道メッセージが一度は新鮮でも、翌月には `またその話か` になり、クリックする理由が弱くなった可能性が高い。"
             )
 
     if insights:
         insights.append(
             "- 時期差は `勝ち数が増えた/減った` だけでなく、`どこで崩れるかがどう変わったか` を見る。"
-            " 同じCR系統でも `上流は通るが後ろで失敗 -> 最初で止まる / 見られるがクリックされない` にずれたら、旬切れや既視感の発生を先に疑う。"
+            " 同じCR系統でも `CTRとフック率は通るがオプトイン以降で失敗 -> フックで離脱 / 見られるがクリックされない` にずれたら、旬切れや既視感の発生を先に疑う。"
         )
 
     return insights
@@ -1706,17 +1721,17 @@ def render_markdown(summary: dict[str, Any]) -> str:
         comparison_header = f"ここでは `大当たり基準 {summary['winner_count']}件` をベンチマークにしつつ、`勝ち側 {summary['positive_count']}件` と `非勝ち {summary['failure_count']}件` を比較している。"
         failure_source_line = f"- 失敗ソース: `System/data/meta_cr_dashboard/{failure_source_name}`（勝ち側 {summary['positive_count']}件 / 非勝ち {summary['failure_count']}件）"
         failure_note_line = "- 注意: full raw では `大当たり / 当たり` を勝ち側、その他を非勝ち側として読む。"
-        top_funnel_line = f"- 非勝ち全量 `{summary['failure_count']}` 件のうち、`{comparison['top_funnel_strong_failures']}` 件は `上流は通るが後ろで失敗` の候補に入る。"
-        same_asset_source_line = f"- 非勝ち全量 `{summary['failure_count']}` 件の中だけでも、同一アセットの再利用群は `{same_asset_summary['same_asset_groups_ge_2']}` 群 `{same_asset_summary['rows_in_same_asset_groups']}` 件ある。CR単体ではなく `配信対象（オーディエンス） / 広告ID / 広告セットID / LP / 時期` を切って読む必要がある。"
-        meta_common_line = f"- 非勝ち全量の内部だけでも、`同一アセット × 同日 × 同LP` まで揃えて数値を比べられる群が `{same_asset_summary['same_asset_same_context_group_count']}` 群 `{same_asset_summary['rows_in_same_asset_same_context_groups']}` 件あり、そのうち配信対象差を読める群が `{same_asset_summary['audience_variation_group_count']}` 群ある。"
+        top_funnel_line = f"- 非勝ち全量 `{summary['failure_count']}` 件のうち、`{comparison['top_funnel_strong_failures']}` 件は `CTRとフック率は通るがオプトイン以降で失敗` の候補に入る。"
+        same_asset_source_line = f"- 非勝ち全量 `{summary['failure_count']}` 件の中だけでも、同一アセットの再利用群は `{same_asset_summary['same_asset_groups_ge_2']}` 群 `{same_asset_summary['rows_in_same_asset_groups']}` 件ある。CR単体ではなく `オーディエンス / 広告ID / 広告セットID / LP / 時期` を切って読む必要がある。"
+        meta_common_line = f"- 非勝ち全量の内部だけでも、`同一アセット × 同日 × 同LP` まで揃えて数値を比べられる群が `{same_asset_summary['same_asset_same_context_group_count']}` 群 `{same_asset_summary['rows_in_same_asset_same_context_groups']}` 件あり、そのうちオーディエンス差を読める群が `{same_asset_summary['audience_variation_group_count']}` 群ある。"
         same_asset_section_line = f"- 今回の失敗全量では、同一アセット群が `{same_asset_summary['same_asset_groups_ge_2']}` 群 `{same_asset_summary['rows_in_same_asset_groups']}` 件ある。`同じCRなのに数値が違う` を解くときの一次切り分けに使う。"
     else:
         comparison_header = "ここでは `勝ちCR 340件` を基準に、`失敗側 24件` を比較している。"
         failure_source_line = f"- 失敗サンプル: `{summary['failure_source']}`（{summary['failure_count']}件）"
         failure_note_line = "- 注意: 失敗側は `消化金額上位24件` のスナップショット。全失敗CRの全量ではなく、高消化で負けた型を先に見ている。"
-        top_funnel_line = f"- 高消化の失敗は `冒頭で死ぬ型` より `上流は通るが後ろで失敗` が中心。今回の24件では `{comparison['top_funnel_strong_failures']}` 件がこの形に入る。"
-        same_asset_source_line = f"- 勝ちCR 340件の中だけでも、同一アセットの再利用群は `{same_asset_summary['same_asset_groups_ge_2']}` 群 `{same_asset_summary['rows_in_same_asset_groups']}` 件ある。CR単体ではなく `配信対象（オーディエンス） / 広告ID / 広告セットID / LP / 時期` を切って読む必要がある。"
-        meta_common_line = f"- 勝ちCR 340件の内部だけでも、`同一アセット × 同日 × 同LP` まで揃えて数値を比べられる群が `{same_asset_summary['same_asset_same_context_group_count']}` 群あり、そのうち配信対象差を読める群が `{same_asset_summary['audience_variation_group_count']}` 群ある。"
+        top_funnel_line = f"- 高消化の失敗は `フックで離脱` より `CTRとフック率は通るがオプトイン以降で失敗` が中心。今回の24件では `{comparison['top_funnel_strong_failures']}` 件がこの形に入る。"
+        same_asset_source_line = f"- 勝ちCR 340件の中だけでも、同一アセットの再利用群は `{same_asset_summary['same_asset_groups_ge_2']}` 群 `{same_asset_summary['rows_in_same_asset_groups']}` 件ある。CR単体ではなく `オーディエンス / 広告ID / 広告セットID / LP / 時期` を切って読む必要がある。"
+        meta_common_line = f"- 勝ちCR 340件の内部だけでも、`同一アセット × 同日 × 同LP` まで揃えて数値を比べられる群が `{same_asset_summary['same_asset_same_context_group_count']}` 群あり、そのうちオーディエンス差を読める群が `{same_asset_summary['audience_variation_group_count']}` 群ある。"
         same_asset_section_line = f"- 今回の340件では、同一アセット群が `{same_asset_summary['same_asset_groups_ge_2']}` 群 `{same_asset_summary['rows_in_same_asset_groups']}` 件ある。`同じCRなのに数値が違う` を解くための最初の切り口になる。"
     lines = [
         "# 広告CR失敗パターン",
@@ -1760,6 +1775,10 @@ def render_markdown(summary: dict[str, Any]) -> str:
             f"| フック率 | {benchmarks['winner_hook_median']:.2f}% | {benchmarks['failure_hook_median']:.2f}% |",
             f"| CPA | {format_yen(benchmarks['winner_cpa_median'])} | {format_yen(benchmarks['failure_cpa_median'])} |",
             "",
+            "## 失敗形の判定基準（現在の自動分類）",
+            "",
+            render_stage_definition_table(benchmarks),
+            "",
             f"- 非勝ち {summary['failure_count']}件のうち `{comparison['failure_ctr_ge_winner_median']}` 件は CTR が勝ちCR中央値以上",
             f"- 非勝ち {summary['failure_count']}件のうち `{comparison['failure_hook_ge_winner_median']}` 件は フック率が勝ちCR中央値以上",
             f"- 非勝ち {summary['failure_count']}件のうち `{comparison['top_funnel_strong_failures']}` 件は CTR とフック率の両方が勝ちCR中央値以上",
@@ -1768,7 +1787,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
             "## まず読むべき本質",
             "",
             top_funnel_line,
-            "- つまり、失敗CRの主因を `フック不足` だけで説明しない。約束の質、クリック後の期待値、LP・オファー・導線の崩れを先に疑う。",
+            "- つまり、失敗CRの主因を `フック不足` だけで説明しない。クリック後の期待値、LP・オファー・導線の崩れを先に疑う。",
             "- 一方で `CR系統ラベル` には偏りがある。言い回し単体で勝てるわけではないが、同じ系統が繰り返し外れているなら失敗候補として重く見る。",
             same_asset_source_line,
             "",
@@ -1778,7 +1797,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
             meta_common_line,
             f"- さらに `ノンタゲ vs 類似` を直接比べられる群は `{same_asset_summary['broad_vs_narrow_group_count']}` 群あり、CTR は `{same_asset_summary['broad_ctr_lower_count']}/{same_asset_summary['broad_ctr_compared_count']}` 群で広い側が低く、CPA は比較可能な `{same_asset_summary['broad_cpa_heavier_count']}/{same_asset_summary['broad_cpa_compared_count']}` 群で広い側が重かった。",
             f"- 勝ちCR 340件の再利用群でも、同じ比較ができる `{winner_same_asset_summary['broad_vs_narrow_group_count']}` 群では CTR が `{winner_same_asset_summary['broad_ctr_lower_count']}/{winner_same_asset_summary['broad_ctr_compared_count']}`、CPA が `{winner_same_asset_summary['broad_cpa_heavier_count']}/{winner_same_asset_summary['broad_cpa_compared_count']}` で広い側が不利だった。良いクリエイティブでも、広いオーディエンスに寄ると質が崩れやすい。",
-            "- つまり `広いフックで人を集める -> オーディエンスが広がる -> 浅い反応層に学習する -> CTRやフック率の見た目より後ろの質が弱くなる` を、SNS広告の代表的な失敗メカニズムとして常に疑う。",
+            "- つまり `広いフックで人を集める -> オーディエンスが広がる -> 浅い反応層に学習する -> CTRやフック率の見た目よりオプトイン率やターゲット層の質が弱くなる` を、SNS広告の代表的な失敗メカニズムとして常に疑う。",
             "",
             "### ノンタゲと類似で差が出た例",
             "",
@@ -1855,7 +1874,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
                 "",
                 "## 動画内容まで読んだ所見",
                 "",
-                "- Meta広告のCR分析は、数値だけでなく `実際の冒頭文` まで見る。特に `上流は通るが後ろで失敗` では、広いフックで広いオーディエンスに学習していないかを先に疑う。",
+                "- Meta広告のCR分析は、数値だけでなく `実際の冒頭文` まで見る。特に `CTRとフック率は通るがオプトイン以降で失敗` では、広いフックで広いオーディエンスに学習していないかを先に疑う。",
                 f"- 今回は `動画 {video_signal_summary['processed_count']}本` を文字起こしし、冒頭の broad marker と audience scope を集計した。",
                 "",
                 render_video_scope_summary(video_signal_summary),
@@ -1886,9 +1905,9 @@ def render_markdown(summary: dict[str, Any]) -> str:
             "## この知識の使い方",
             "",
             "- まず `どこで崩れたか` を決める。`誰が作ったか` や `単語単体` に逃げない。",
-            "- `上流は通るが後ろで失敗` に入ったら、CR単体の改善より `約束の質 / LP / オファー / 導線` を優先して見る。",
-            "- `クリックされるがCPAが高い` は、クリックはされるので `オプトイン率の低さ` か `期待値ズレ` を疑う。",
-            "- 同一アセット比較は `asset -> 配信対象（オーディエンス） -> 広告ID / 広告セットID -> LP -> 時期 -> 冒頭` の順で切る。順番を飛ばして `このCRは強い/弱い` と断定しない。",
+            "- `CTRとフック率は通るがオプトイン以降で失敗` に入ったら、CR単体の改善より `LP / オファー / 導線 / ターゲット層` を優先して見る。",
+            "- `クリックされるがCPAが高い` は、クリックはされるので `オプトイン率の低さ` か `ターゲット層の質` を疑う。",
+            "- 同一アセット比較は `asset -> オーディエンス -> 広告ID / 広告セットID -> LP -> 時期 -> 冒頭` の順で切る。順番を飛ばして `このCRは強い/弱い` と断定しない。",
             "- 同じCR系統が失敗側に偏っていても、1回では rules に上げない。複数スナップショットか下流数値が重なってから rules 化する。",
         ]
     )
@@ -1971,7 +1990,7 @@ def build_parser() -> argparse.ArgumentParser:
     video_backfill.add_argument("--winner-csv", type=Path, default=DEFAULT_WINNER_CSV)
     video_backfill.add_argument("--failure-csv", type=Path, default=DEFAULT_FULL_FAILURE_CSV)
     video_backfill.add_argument("--limit", type=int, default=20)
-    video_backfill.add_argument("--bucket", default="上流は通るが後ろで失敗")
+    video_backfill.add_argument("--bucket", default="CTRとフック率は通るがオプトイン以降で失敗")
     video_backfill.add_argument("--all-buckets", action="store_true")
     video_backfill.add_argument("--whisper-model", default=DEFAULT_VIDEO_MODEL)
     video_backfill.add_argument("--max-seconds", type=int, default=DEFAULT_VIDEO_CLIP_SECONDS)
