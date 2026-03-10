@@ -1694,14 +1694,19 @@ def build_cdp_downstream_insights(summary: dict[str, Any]) -> list[str]:
     lp_rows = summary.get("lp_rows", [])
     if bucket_rows:
         top_ltv_bucket = max(bucket_rows, key=lambda row: row.get("ltv_per_customer") or 0.0)
+        top_buyer_bucket = max(bucket_rows, key=lambda row: row.get("buyer_rate") or 0.0)
         top_refund_bucket = max(bucket_rows, key=lambda row: row.get("refund_rate") or 0.0)
         insights.append(
             f"- `失敗形` で見ると、顧客あたりLTVが最も高いのは `{top_ltv_bucket['failure_bucket']}` で `{format_yen(top_ltv_bucket.get('ltv_per_customer'))}`。"
-            " クリックは取れていても、下流で取り返している型かどうかを切り分けて読む。"
+            " `CPAが高い/低い` だけではなく、その市場に対してどの質の顧客を連れてきたかで読む。"
+        )
+        insights.append(
+            f"- `失敗形` で見ると、購入者率が最も高いのは `{top_buyer_bucket['failure_bucket']}` で `{format_percent(top_buyer_bucket.get('buyer_rate'))}`。"
+            " 安く獲得すること自体ではなく、獲得後の購入率まで含めて読む。"
         )
         insights.append(
             f"- 返金率が最も高いのは `{top_refund_bucket['failure_bucket']}` で `{format_percent(top_refund_bucket.get('refund_rate'))}`。"
-            " 単純な売上総額より、返金まで含めた質で読む。"
+            " ただし、これは `CTRが低いから返金率が高い` と断定する意味ではない。現時点の結線母集団ではこの失敗形が最も高い、という事実に留める。"
         )
     stable_lp_rows = [row for row in lp_rows if row.get("customer_rows", 0) >= 50]
     if stable_lp_rows:
