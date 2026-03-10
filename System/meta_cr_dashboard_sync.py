@@ -25,6 +25,9 @@ DEFAULT_FULL_FAILURE_CSV = DATA_DIR / "full_failure_raw_latest.csv"
 CDP_SHEET_ID = "1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk"
 CDP_MASTER_TAB = "顧客マスタ"
 CDP_DOWNSTREAM_RANGE = "AC2:AU"
+CR_ROUTE_SHEET_ID = "1tsNi91jdMYrZr2k4V9N3V0Q6_LROl_JuFg_7EWuRi_w"
+CR_ROUTE_TAB_NAME = "CR別データ"
+CR_ROUTE_RANGE = "A1:L"
 DEFAULT_CDP_URL = "http://127.0.0.1:9224"
 DEFAULT_LOOKER_PAGE_KEY = "p_i93dt7hmvd"
 VIDEO_CACHE_DIR = DATA_DIR / "video_cache"
@@ -1469,12 +1472,78 @@ def load_cdp_downstream_by_cr_code() -> dict[str, Any]:
     }
 
 
+def load_cr_route_lp_map() -> dict[str, Any]:
+    import sys
+
+    system_path = str(ROOT_DIR / "System")
+    if system_path not in sys.path:
+        sys.path.insert(0, system_path)
+    from sheets_manager import get_client
+
+    sheet = get_client().open_by_key(CR_ROUTE_SHEET_ID)
+    ws = sheet.worksheet(CR_ROUTE_TAB_NAME)
+    values = ws.get(CR_ROUTE_RANGE)
+    if not values:
+        return {
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "meta_rows": 0,
+            "meta_codes": {},
+        }
+
+    headers = values[0]
+    rows = values[1:]
+    idx = {header: i for i, header in enumerate(headers)}
+
+    meta_codes: dict[str, dict[str, Any]] = {}
+    meta_rows = 0
+    for row in rows:
+        padded = row + [""] * (len(headers) - len(row))
+        media = collapse_ws(padded[idx["集客媒体"]]) if "集客媒体" in idx else ""
+        if media != "Meta広告":
+            continue
+        cr_name = collapse_ws(padded[idx["CR名"]]) if "CR名" in idx else ""
+        crlp = collapse_ws(padded[idx["CR×LP"]]) if "CR×LP" in idx else ""
+        lp_name = collapse_ws(padded[idx["LP名"]]) if "LP名" in idx else ""
+        cr_code = extract_cr_code(cr_name or crlp)
+        if not cr_code:
+            continue
+        meta_rows += 1
+        record = meta_codes.setdefault(
+            cr_code,
+            {
+                "lp_keys": set(),
+                "crlp_values": set(),
+            },
+        )
+        if lp_name:
+            record["lp_keys"].add(lp_name.upper())
+        else:
+            lp_from_crlp = extract_lp_key(crlp)
+            if lp_from_crlp:
+                record["lp_keys"].add(lp_from_crlp.upper())
+        if crlp:
+            record["crlp_values"].add(crlp)
+
+    single_lp_codes = sum(1 for record in meta_codes.values() if len(record["lp_keys"]) == 1)
+    ambiguous_lp_codes = sum(1 for record in meta_codes.values() if len(record["lp_keys"]) >= 2)
+    return {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "meta_rows": meta_rows,
+        "meta_unique_cr_codes": len(meta_codes),
+        "meta_single_lp_codes": single_lp_codes,
+        "meta_ambiguous_lp_codes": ambiguous_lp_codes,
+        "meta_codes": meta_codes,
+    }
+
+
 def summarize_cdp_downstream(
     positive_rows: list[dict[str, Any]],
     failure_rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
     cdp_summary = load_cdp_downstream_by_cr_code()
     cdp_codes: dict[str, dict[str, Any]] = cdp_summary["codes"]
+    route_summary = load_cr_route_lp_map()
+    route_codes: dict[str, dict[str, Any]] = route_summary["meta_codes"]
 
     raw_code_summary: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
@@ -1534,12 +1603,16 @@ def summarize_cdp_downstream(
     matched_customer_rows = 0
     matched_buyer_rows = 0
     matched_ltv_values: list[float] = []
-    single_lp_codes = 0
+    final_single_lp_codes = 0
     ambiguous_lp_codes = 0
+    route_matched_codes = 0
+    route_helped_codes = 0
+    raw_single_lp_codes = sum(1 for record in raw_code_summary.values() if len({lp for lp in record["lp_keys"] if lp}) == 1)
 
     for code in matched_codes:
         cdp_record = cdp_codes[code]
         raw_record = raw_code_summary[code]
+        route_record = route_codes.get(code, {})
         matched_customer_rows += cdp_record["customer_rows"]
         matched_buyer_rows += cdp_record["buyer_rows"]
         matched_ltv_values.extend(cdp_record["ltv_values"])
@@ -1556,9 +1629,15 @@ def summarize_cdp_downstream(
             target["total_ltv"] += cdp_record["total_ltv"]
             target["ltv_values"].extend(cdp_record["ltv_values"])
 
-        lp_keys = {lp for lp in raw_record["lp_keys"] if lp}
+        raw_lp_keys = {lp for lp in raw_record["lp_keys"] if lp}
+        route_lp_keys = {lp for lp in route_record.get("lp_keys", set()) if lp}
+        if route_lp_keys:
+            route_matched_codes += 1
+        lp_keys = route_lp_keys or raw_lp_keys
+        if len(raw_lp_keys) >= 2 and len(route_lp_keys) == 1:
+            route_helped_codes += 1
         if len(lp_keys) == 1:
-            single_lp_codes += 1
+            final_single_lp_codes += 1
             lp_key = next(iter(lp_keys))
             target = lp_rollup[lp_key]
             target["cr_codes"].add(code)
@@ -1602,8 +1681,15 @@ def summarize_cdp_downstream(
         "matched_customer_rows": matched_customer_rows,
         "matched_buyer_rows": matched_buyer_rows,
         "matched_ltv_median": statistics.median(matched_ltv_values) if matched_ltv_values else None,
-        "single_lp_codes": single_lp_codes,
+        "route_meta_rows": route_summary["meta_rows"],
+        "route_meta_unique_cr_codes": route_summary["meta_unique_cr_codes"],
+        "route_meta_single_lp_codes": route_summary["meta_single_lp_codes"],
+        "route_meta_ambiguous_lp_codes": route_summary["meta_ambiguous_lp_codes"],
+        "route_matched_codes": route_matched_codes,
+        "raw_single_lp_codes": raw_single_lp_codes,
+        "single_lp_codes": final_single_lp_codes,
         "ambiguous_lp_codes": ambiguous_lp_codes,
+        "route_helped_codes": route_helped_codes,
         "bucket_rows": finalize_rollup(bucket_rollup, "failure_bucket"),
         "lp_rows": finalize_rollup(lp_rollup, "lp_key"),
     }
@@ -1730,11 +1816,15 @@ def render_cdp_join_table(summary: dict[str, Any]) -> str:
         ("CDP側の顧客行（CRコードあり）", f"{summary['cdp_rows_with_cr_code']:,}"),
         ("CDP側のユニークCRコード", f"{summary['cdp_unique_cr_codes']:,}"),
         ("Meta raw側のユニークCRコード", f"{summary['raw_unique_cr_codes']:,}"),
+        ("CR別データ(Meta)のユニークCRコード", f"{summary['route_meta_unique_cr_codes']:,}"),
         ("結線できたCRコード", f"{summary['matched_cr_codes']:,}"),
         ("結線できた顧客行", f"{summary['matched_customer_rows']:,}"),
         ("結線できた購入者行", f"{summary['matched_buyer_rows']:,}"),
-        ("LPを一意に解けたCRコード", f"{summary['single_lp_codes']:,}"),
+        ("rawだけでLPを一意に解けたCRコード", f"{summary['raw_single_lp_codes']:,}"),
+        ("CR別データでLPを一意に解けたCRコード", f"{summary['route_meta_single_lp_codes']:,}"),
+        ("照合後にLPを一意に解けたCRコード", f"{summary['single_lp_codes']:,}"),
         ("LPが複数にまたがるCRコード", f"{summary['ambiguous_lp_codes']:,}"),
+        ("CR別データでLP解像度が上がったCRコード", f"{summary['route_helped_codes']:,}"),
         ("結線行のLTV中央値", format_yen(summary.get("matched_ltv_median"))),
     ]
     lines = ["| 項目 | 数値 |", "|---|---:|"]
@@ -2255,7 +2345,8 @@ def render_markdown(summary: dict[str, Any]) -> str:
             "## CDP結線状況",
             "",
             "- CDP は `CR名` の末尾 `CRコード` で Meta raw と結線している。",
-            "- LP別の下流集計は、`1つのCRコードが raw 上で単一LPにしか紐づかないもの` だけを使う。複数LPにまたがるCRコードは除外している。",
+            "- LP別の下流集計は、まず `CR別データ` シートの `CR名 / LP名 / CR×LP` を優先して使い、そこで単一LPに解けないものだけ raw 側を見る。",
+            "- それでも複数LPにまたがるCRコードは、LP別集計から除外している。",
             "",
             render_cdp_join_table(cdp_downstream_summary) if cdp_downstream_summary else "- まだ結線できていない",
             "",
