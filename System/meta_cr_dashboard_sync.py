@@ -324,6 +324,14 @@ def select_video_rows(rows: list[dict[str, Any]], limit: int, bucket: str = "") 
     return selected
 
 
+def normalize_failure_bucket_label(label: str) -> str:
+    mapping = {
+        "見られるが押されない": "見られるがクリックされない",
+        "押されるが集客単価が重い": "クリックされるがCPAが高い",
+    }
+    return mapping.get(label, label)
+
+
 def render_video_scope_summary(summary: dict[str, Any]) -> str:
     rows = [
         "| failure bucket | transcribed assets | broad/やや広い | 混合 | narrow/やや狭い |",
@@ -332,7 +340,7 @@ def render_video_scope_summary(summary: dict[str, Any]) -> str:
     for bucket in summary.get("bucket_scope_counts", []):
         rows.append(
             "| {bucket} | {count} | {broad} | {mixed} | {narrow} |".format(
-                bucket=bucket["failure_bucket"],
+                bucket=normalize_failure_bucket_label(bucket["failure_bucket"]),
                 count=bucket["count"],
                 broad=bucket["broad_like"],
                 mixed=bucket["mixed"],
@@ -361,7 +369,7 @@ def render_video_examples(records: list[dict[str, Any]]) -> str:
         lines.append(
             "| {ad} | {bucket} | {excerpt} | {markers} | {scope} | {ctr} | {cpa} |".format(
                 ad=record.get("ad_name", ""),
-                bucket=record.get("failure_bucket", "-"),
+                bucket=normalize_failure_bucket_label(record.get("failure_bucket", "-")),
                 excerpt=record.get("opening_excerpt", "-"),
                 markers=", ".join(record.get("broad_hits", [])) or "-",
                 scope=record.get("audience_scope", "-"),
@@ -874,15 +882,15 @@ def classify_failure_shape(row: dict[str, Any], benchmarks: dict[str, float]) ->
 
     if ctr is not None and ctr < benchmarks["winner_ctr_p25"]:
         return (
-            "見られるが押されない",
-            "視聴はされても、自分事化や次を見たい理由が弱く、クリック意思まで届かない。",
+            "見られるがクリックされない",
+            "視聴はされても、自分事化やクリックする理由が弱く、クリックまで届かない。",
             "strong" if hook is not None else "medium",
         )
 
     if cpa is not None and cpa > benchmarks["winner_cpa_p75"]:
         return (
-            "押されるが集客単価が重い",
-            "興味は取れているが、期待値ズレか見込客の質の弱さで集客効率が崩れている。",
+            "クリックされるがCPAが高い",
+            "クリックはされるが、オプトイン率が低いか見込客の質が弱く、CPAが高い。",
             "strong",
         )
 
@@ -937,12 +945,12 @@ def summarize_family_bucket_profiles(
         primary_name, primary_count = top_buckets[0]
         secondary_name, secondary_count = top_buckets[1] if len(top_buckets) > 1 else ("-", 0)
 
-        if primary_name == "見られるが押されない":
-            read = "注意は取れるが、自分事化や次の一押しが弱い。"
+        if primary_name == "見られるがクリックされない":
+            read = "注意は取れるが、自分事化やクリックする理由が弱い。"
         elif primary_name == "最初で止まる":
             read = "冒頭の新規性や意外性が落ちると、一気に前で死にやすい。"
-        elif primary_name == "押されるが集客単価が重い":
-            read = "興味は取れているので、見込客の質か期待値ズレを疑う。"
+        elif primary_name == "クリックされるがCPAが高い":
+            read = "クリックはされるので、オプトイン率の低さか見込客の質を疑う。"
         elif secondary_count and (primary_count - secondary_count) / total <= 0.08:
             read = "崩れ方が二極化していて、単一原因で見ない方がいい。"
         else:
@@ -1413,7 +1421,7 @@ def render_stage_table(stage_counts: list[dict[str, Any]], failure_count: int) -
 
 
 def render_family_table(rows: list[dict[str, Any]]) -> str:
-    lines = ["| タイトル家系 | 失敗数 | 勝ち数 | 読み |", "|---|---:|---:|---|"]
+    lines = ["| CR系統ラベル | 失敗数 | 勝ち数 | 読み |", "|---|---:|---:|---|"]
     for row in rows:
         lines.append(
             f"| {row['family']} | {row['failure_count']} | {row['winner_count']} | {row['signal']} |"
@@ -1576,7 +1584,7 @@ def render_mixed_exact_crs(rows: list[dict[str, Any]]) -> str:
 
 def render_family_month_contexts(rows: list[dict[str, Any]]) -> str:
     lines = [
-        "| 家系 | 月 | 勝ち数 | 非勝ち数 | 主な崩れ方 | CTR中央値 | CPA中央値 | 読み |",
+        "| CR系統 | 月 | 勝ち数 | 非勝ち数 | 主な崩れ方 | CTR中央値 | CPA中央値 | 読み |",
         "|---|---|---:|---:|---|---:|---:|---|",
     ]
     for row in rows:
@@ -1597,7 +1605,7 @@ def render_family_month_contexts(rows: list[dict[str, Any]]) -> str:
 
 def render_family_bucket_profiles(rows: list[dict[str, Any]]) -> str:
     lines = [
-        "| 家系 | 非勝ち件数 | 主な失敗形 | 構成比 | 次点の失敗形 | 構成比 | 読み |",
+        "| CR系統 | 非勝ち件数 | 主な失敗形 | 構成比 | 次点の失敗形 | 構成比 | 読み |",
         "|---|---:|---|---:|---|---:|---|",
     ]
     for row in rows:
@@ -1672,14 +1680,14 @@ def build_time_context_insights(rows: list[dict[str, Any]]) -> list[str]:
         mar = next((row for row in yame if row.get("month_key") == "2026/03"), None)
         if feb and mar:
             insights.append(
-                "- `全部やめました` は、`2026/02` では `上流は通るが後ろで失敗` が主で CTR も高めだが、`2026/03` では `見られるが押されない` へずれている。"
-                " 反王道メッセージが一度は新鮮でも、翌月には `またその話か` になり、自分事化が弱くなった可能性が高い。"
+                "- `全部やめました` は、`2026/02` では `上流は通るが後ろで失敗` が主で CTR も高めだが、`2026/03` では `見られるがクリックされない` へずれている。"
+                " 反王道メッセージが一度は新鮮でも、翌月には `またその話か` になり、クリックする理由が弱くなった可能性が高い。"
             )
 
     if insights:
         insights.append(
             "- 時期差は `勝ち数が増えた/減った` だけでなく、`どこで崩れるかがどう変わったか` を見る。"
-            " 同じ家系でも `上流は通るが後ろで失敗 -> 最初で止まる / 見られるが押されない` にずれたら、旬切れや既視感の発生を先に疑う。"
+            " 同じCR系統でも `上流は通るが後ろで失敗 -> 最初で止まる / 見られるがクリックされない` にずれたら、旬切れや既視感の発生を先に疑う。"
         )
 
     return insights
@@ -1720,11 +1728,11 @@ def render_markdown(summary: dict[str, Any]) -> str:
         "",
         "## 失敗CRの定義",
         "",
-        "- `1年後悔` や `林さん` のような家系名そのものを `失敗CR` と呼ばない",
+        "- `1年後悔` や `林さん` のような CR系統ラベルそのものを `失敗CR` と呼ばない",
         "- `失敗CR` は、`大当たりCR / 当たりCR` に入らない側の CR 個体を指す",
         "- `完全に同じCR` で `勝ち / 非勝ち` が混在するときは、まず `運用差` を疑う",
-        "- `フックが全然違う` なら、テーマや家系名が近くても `別CR` として扱う",
-        "- 家系名は `比較ラベル` であり、勝ち負けの断定には使わない",
+        "- `フックが全然違う` なら、テーマやCR系統ラベルが近くても `別CR` として扱う",
+        "- CR系統ラベルは `比較ラベル` であり、勝ち負けの断定には使わない",
         "",
         "## まず切る変数",
         "",
@@ -1761,7 +1769,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
             "",
             top_funnel_line,
             "- つまり、失敗CRの主因を `フック不足` だけで説明しない。約束の質、クリック後の期待値、LP・オファー・導線の崩れを先に疑う。",
-            "- 一方で `タイトルの家系` には偏りがある。言い回し単体で勝てるわけではないが、同じ家系が繰り返し外れているなら失敗候補として重く見る。",
+            "- 一方で `CR系統ラベル` には偏りがある。言い回し単体で勝てるわけではないが、同じ系統が繰り返し外れているなら失敗候補として重く見る。",
             same_asset_source_line,
             "",
             "## Meta広告分析から見えた SNS広告共通の失敗メカニズム",
@@ -1782,11 +1790,11 @@ def render_markdown(summary: dict[str, Any]) -> str:
             "",
             render_stage_table(summary["stage_counts"], summary["failure_count"]),
             "",
-            "## タイトル家系の偏り",
+            "## CR系統ラベルの偏り",
             "",
             render_family_table(summary["family_signals"]) if summary["family_signals"] else "- 目立つ偏りはまだ出ていない",
             "",
-            "## 家系ごとの主な失敗形",
+            "## CR系統ごとの主な失敗形",
             "",
             render_family_bucket_profiles(summary["family_bucket_profiles"])
             if summary["family_bucket_profiles"]
@@ -1794,15 +1802,15 @@ def render_markdown(summary: dict[str, Any]) -> str:
             "",
             "## 同じCRで勝ち負け混在する例",
             "",
-            "- ここは `家系` ではなく `広告名ベースの同一CR` を見ている",
+            "- ここは `CR系統` ではなく `広告名ベースの同一CR` を見ている",
             "- 同じCRで `勝ち / 非勝ち` が混ざるなら、creative の善し悪しより `運用差` を先に疑う",
             "",
             render_mixed_exact_crs(summary["mixed_exact_crs"]) if summary["mixed_exact_crs"] else "- まだ該当なし",
             "",
-            "## 家系ごとの時期差",
+            "## CR系統ごとの時期差",
             "",
             "- `時期` は日付ではなく、その時期の社会背景・市場背景・旬まで含めて読む",
-            "- ここは `家系 × 月` の観察表。数値だけで断定せず、その月の空気と重ねて解釈する",
+            "- ここは `CR系統 × 月` の観察表。数値だけで断定せず、その月の空気と重ねて解釈する",
             "",
             render_family_month_contexts(summary["family_month_contexts"])
             if summary["family_month_contexts"]
@@ -1879,9 +1887,9 @@ def render_markdown(summary: dict[str, Any]) -> str:
             "",
             "- まず `どこで崩れたか` を決める。`誰が作ったか` や `単語単体` に逃げない。",
             "- `上流は通るが後ろで失敗` に入ったら、CR単体の改善より `約束の質 / LP / オファー / 導線` を優先して見る。",
-            "- `押されるが集客単価が重い` は、興味は取れているので `質の低いクリック` か `期待値ズレ` を疑う。",
+            "- `クリックされるがCPAが高い` は、クリックはされるので `オプトイン率の低さ` か `期待値ズレ` を疑う。",
             "- 同一アセット比較は `asset -> 配信対象（オーディエンス） -> 広告ID / 広告セットID -> LP -> 時期 -> 冒頭` の順で切る。順番を飛ばして `このCRは強い/弱い` と断定しない。",
-            "- 同じ家系が失敗側に偏っていても、1回では rules に上げない。複数スナップショットか下流数値が重なってから rules 化する。",
+            "- 同じCR系統が失敗側に偏っていても、1回では rules に上げない。複数スナップショットか下流数値が重なってから rules 化する。",
         ]
     )
     return "\n".join(lines).strip() + "\n"
