@@ -1174,6 +1174,18 @@ def summarize_same_asset_variation(source_rows: list[dict[str, Any]]) -> dict[st
         )
         >= 2
     ]
+    operator_variation_group_count = sum(
+        1
+        for item in exact_context_examples
+        if len(
+            {
+                collapse_ws(row.get("operator"))
+                for row in item.get("rows", [])
+                if collapse_ws(row.get("operator"))
+            }
+        )
+        >= 2
+    )
 
     broad_vs_narrow_examples: list[dict[str, Any]] = []
     broad_ctr_lower_count = 0
@@ -1268,6 +1280,33 @@ def summarize_same_asset_variation(source_rows: list[dict[str, Any]]) -> dict[st
         )
     cross_lp_examples.sort(key=lambda item: (item["cpa_spread"], item["ctr_spread"], item["count"]), reverse=True)
 
+    date_variation_examples: list[dict[str, Any]] = []
+    asset_lp_groups: defaultdict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in source_rows:
+        asset_key = collapse_ws(row.get("asset_key"))
+        lp_key = collapse_ws(row.get("lp_key"))
+        if not asset_key or asset_key == "データなし" or not lp_key:
+            continue
+        asset_lp_groups[(asset_key, lp_key)].append(row)
+    for group_rows in asset_lp_groups.values():
+        date_keys = sorted({row.get("created_on") for row in group_rows if row.get("created_on")})
+        if len(group_rows) < 2 or len(date_keys) < 2:
+            continue
+        ctrs = [row["ctr"] for row in group_rows if row.get("ctr") is not None]
+        cpas = [row["cpa"] for row in group_rows if row.get("cpa") is not None]
+        date_variation_examples.append(
+            {
+                "count": len(group_rows),
+                "lp_key": group_rows[0].get("lp_key", ""),
+                "date_keys": date_keys,
+                "ctr_spread": (max(ctrs) - min(ctrs)) if len(ctrs) >= 2 else 0.0,
+                "cpa_spread": (max(cpas) - min(cpas)) if len(cpas) >= 2 else 0.0,
+                "context_hint": "配信時期差や市場背景の差を先に疑う",
+                "rows": group_rows,
+            }
+        )
+    date_variation_examples.sort(key=lambda item: (item["cpa_spread"], item["ctr_spread"], item["count"]), reverse=True)
+
     theme_groups: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in source_rows:
         theme_key = collapse_ws(row.get("theme_key"))
@@ -1310,6 +1349,42 @@ def summarize_same_asset_variation(source_rows: list[dict[str, Any]]) -> dict[st
         )
     opening_examples.sort(key=lambda item: (item["count"], item["cpa_spread"], item["ctr_spread"]), reverse=True)
 
+    def summarize_variation_axis(
+        label: str,
+        rows: list[dict[str, Any]],
+        read: str,
+    ) -> dict[str, Any]:
+        ctr_spreads = [row["ctr_spread"] for row in rows if row.get("ctr_spread") is not None]
+        cpa_spreads = [row["cpa_spread"] for row in rows if row.get("cpa_spread") is not None]
+        return {
+            "axis": label,
+            "group_count": len(rows),
+            "ctr_compared_count": len(ctr_spreads),
+            "cpa_compared_count": len(cpa_spreads),
+            "ctr_spread_median": statistics.median(ctr_spreads) if ctr_spreads else None,
+            "cpa_spread_median": statistics.median(cpa_spreads) if cpa_spreads else None,
+            "max_cpa_spread": max(cpa_spreads) if cpa_spreads else None,
+            "read": read,
+        }
+
+    variation_axis_rows = [
+        summarize_variation_axis(
+            "運用差（オーディエンス/広告ID）",
+            audience_variation_examples,
+            "同一アセット・同日・同LPでも、配信条件差でCPAがぶれる。",
+        ),
+        summarize_variation_axis(
+            "LP差",
+            cross_lp_examples,
+            "同じクリエイティブでも、LPとオファーのズレでCPA差が出る。",
+        ),
+        summarize_variation_axis(
+            "時期差",
+            date_variation_examples,
+            "同じクリエイティブ・同じLPでも、旬や市場背景でCPA差が出る。",
+        ),
+    ]
+
     return {
         "same_asset_groups_ge_2": len(multi_groups),
         "rows_in_same_asset_groups": sum(len(group_rows) for group_rows in multi_groups),
@@ -1317,6 +1392,7 @@ def summarize_same_asset_variation(source_rows: list[dict[str, Any]]) -> dict[st
         "same_asset_same_context_examples": exact_context_examples[:5],
         "same_asset_same_context_group_count": len(exact_context_examples),
         "audience_variation_group_count": len(audience_variation_examples),
+        "operator_variation_group_count": operator_variation_group_count,
         "audience_variation_examples": audience_variation_examples[:5],
         "broad_vs_narrow_group_count": len(broad_vs_narrow_examples),
         "broad_ctr_lower_count": broad_ctr_lower_count,
@@ -1325,7 +1401,9 @@ def summarize_same_asset_variation(source_rows: list[dict[str, Any]]) -> dict[st
         "broad_cpa_compared_count": broad_cpa_compared_count,
         "broad_vs_narrow_examples": broad_vs_narrow_examples[:5],
         "same_asset_cross_lp_examples": cross_lp_examples[:5],
+        "same_asset_date_variation_examples": date_variation_examples[:5],
         "theme_opening_examples": opening_examples[:5],
+        "variation_axis_rows": variation_axis_rows,
     }
 
 
@@ -1780,6 +1858,54 @@ def render_same_asset_context_examples(rows: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def render_variation_axis_table(rows: list[dict[str, Any]]) -> str:
+    lines = [
+        "| 変数 | 比較できる群数 | CTR差中央値 | CPA差中央値 | 最大CPA差 | 読み |",
+        "|---|---:|---:|---:|---:|---|",
+    ]
+    for row in rows:
+        lines.append(
+            "| {axis} | {groups} | {ctr} | {cpa} | {max_cpa} | {read} |".format(
+                axis=row.get("axis") or "-",
+                groups=row.get("group_count", 0),
+                ctr=format_percent(row.get("ctr_spread_median")),
+                cpa=format_yen(row.get("cpa_spread_median")),
+                max_cpa=format_yen(row.get("max_cpa_spread")),
+                read=row.get("read") or "-",
+            )
+        )
+    return "\n".join(lines)
+
+
+def render_date_variation_examples(rows: list[dict[str, Any]]) -> str:
+    lines = [
+        "| LP | 期間群 | 件数 | CTR幅 | CPA幅 | 先に疑うこと | 代表行 |",
+        "|---|---|---:|---:|---:|---|---|",
+    ]
+    for row in rows:
+        examples = " / ".join(
+            filter(
+                None,
+                [
+                    collapse_ws(example.get("title_core")) or collapse_ws(example.get("ad_name"))
+                    for example in row.get("rows", [])[:2]
+                ],
+            )
+        )
+        lines.append(
+            "| {lp} | {dates} | {count} | {ctr:.2f}% | {cpa} | {hint} | {examples} |".format(
+                lp=row.get("lp_key") or "-",
+                dates=" / ".join(row.get("date_keys", [])[:3]) or "-",
+                count=row.get("count", 0),
+                ctr=row.get("ctr_spread", 0.0),
+                cpa=format_yen(row.get("cpa_spread")),
+                hint=row.get("context_hint", "-"),
+                examples=examples or "-",
+            )
+        )
+    return "\n".join(lines)
+
+
 def render_cross_lp_examples(rows: list[dict[str, Any]]) -> str:
     lines = [
         "| LP群 | 件数 | CTR幅 | CPA幅 | 先に疑うこと | 代表行 |",
@@ -1996,6 +2122,34 @@ def build_time_context_insights(rows: list[dict[str, Any]]) -> list[str]:
     return insights
 
 
+def build_variation_axis_insights(summary: dict[str, Any]) -> list[str]:
+    insights: list[str] = []
+    variation_rows = summary.get("variation_axis_rows", [])
+    if not variation_rows:
+        return ["- まだ十分な比較群がない"]
+    top_group_axis = max(variation_rows, key=lambda row: row.get("group_count", 0))
+    comparable_cpa_rows = [row for row in variation_rows if row.get("cpa_compared_count", 0) > 0]
+    if comparable_cpa_rows:
+        top_cpa_axis = max(comparable_cpa_rows, key=lambda row: row.get("cpa_spread_median") or 0.0)
+        insights.append(
+            f"- 比較できる群数が最も多いのは `{top_group_axis['axis']}` で `{top_group_axis['group_count']}` 群。"
+            " どこで差が出るかを見るときは、まずこの変数から疑う。"
+        )
+        insights.append(
+            f"- CPA差中央値が最も大きいのは `{top_cpa_axis['axis']}` で `{format_yen(top_cpa_axis.get('cpa_spread_median'))}`。"
+            " つまり、今の raw ではこの変数がCPAを動かしやすい。"
+        )
+    audience_groups = summary.get("audience_variation_group_count", 0)
+    operator_groups = summary.get("operator_variation_group_count", 0)
+    if audience_groups:
+        insights.append(
+            f"- `運用者名` が違って数値がズレた群は `{operator_groups}`。"
+            f" 一方で、`オーディエンス/広告ID` 差を読める群は `{audience_groups}`。"
+            " この raw で読める `運用差` の中心は、人ではなく配信条件側にある。"
+        )
+    return insights
+
+
 def render_markdown(summary: dict[str, Any]) -> str:
     benchmarks = summary["benchmarks"]
     comparison = summary["comparison"]
@@ -2164,10 +2318,24 @@ def render_markdown(summary: dict[str, Any]) -> str:
             "- まず `同じ動画URL/画像` を束ねる。そこから `同日・同LP` で比べ、最後に `LP差 / 時期差 / 冒頭差` を見る。",
             same_asset_section_line,
             "",
+            "## 変数別に見た数値ブレ",
+            "",
+            render_variation_axis_table(same_asset_summary["variation_axis_rows"])
+            if same_asset_summary.get("variation_axis_rows")
+            else "- まだ該当なし",
+            "",
+            *build_variation_axis_insights(same_asset_summary),
+            "",
             "### 同日・同LPでもズレる例",
             "",
             render_same_asset_context_examples(same_asset_summary["same_asset_same_context_examples"])
             if same_asset_summary["same_asset_same_context_examples"]
+            else "- まだ該当なし",
+            "",
+            "### 同一アセット・同LPで時期差が出た例",
+            "",
+            render_date_variation_examples(same_asset_summary["same_asset_date_variation_examples"])
+            if same_asset_summary.get("same_asset_date_variation_examples")
             else "- まだ該当なし",
             "",
             "### 同一アセットをLP違いで回した例",
