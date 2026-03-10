@@ -152,6 +152,16 @@ def parse_rate(value: Any, decimal_ratio: bool = False) -> float | None:
     return number * 100 if decimal_ratio else number
 
 
+def extract_month_key(value: Any) -> str:
+    text = collapse_ws(value)
+    match = re.match(r"(\d{4})/(\d{1,2})/", text)
+    if not match:
+        return ""
+    year = match.group(1)
+    month = int(match.group(2))
+    return f"{year}/{month:02d}"
+
+
 def normalize_title_from_ad_name(ad_name: str, creator: str = "") -> str:
     title = "/".join(extract_title_segments(ad_name, creator))
     title = re.sub(r"[＿_]+", " ", title)
@@ -739,6 +749,83 @@ def summarize_mixed_exact_crs(
     return mixed_rows[:limit]
 
 
+def summarize_family_month_context(
+    positive_rows: list[dict[str, Any]],
+    failure_rows: list[dict[str, Any]],
+    limit: int = 12,
+) -> list[dict[str, Any]]:
+    family_totals: Counter[str] = Counter()
+    family_positive: Counter[str] = Counter()
+    buckets: dict[tuple[str, str], dict[str, Any]] = defaultdict(
+        lambda: {"positive_count": 0, "failure_count": 0, "ctr_values": [], "cpa_values": []}
+    )
+
+    for row in positive_rows:
+        family = collapse_ws(row.get("title_family"))
+        month_key = extract_month_key(row.get("created_on"))
+        if not family or not month_key:
+            continue
+        family_totals[family] += 1
+        family_positive[family] += 1
+        bucket = buckets[(family, month_key)]
+        bucket["positive_count"] += 1
+        if row.get("ctr") is not None:
+            bucket["ctr_values"].append(row["ctr"])
+        if row.get("cpa") is not None:
+            bucket["cpa_values"].append(row["cpa"])
+
+    for row in failure_rows:
+        family = collapse_ws(row.get("title_family"))
+        month_key = extract_month_key(row.get("created_on"))
+        if not family or not month_key:
+            continue
+        family_totals[family] += 1
+        bucket = buckets[(family, month_key)]
+        bucket["failure_count"] += 1
+        if row.get("ctr") is not None:
+            bucket["ctr_values"].append(row["ctr"])
+        if row.get("cpa") is not None:
+            bucket["cpa_values"].append(row["cpa"])
+
+    focus_families = [
+        family
+        for family, total in family_totals.most_common()
+        if total >= 20 and family_positive.get(family, 0) > 0
+    ][:6]
+
+    rows: list[dict[str, Any]] = []
+    for family in focus_families:
+        family_rows = []
+        for (bucket_family, month_key), bucket in buckets.items():
+            if bucket_family != family:
+                continue
+            total_count = bucket["positive_count"] + bucket["failure_count"]
+            if total_count < 5:
+                continue
+            month = int(month_key.split("/")[1])
+            if month in {11, 12, 1}:
+                read = "年末年始の空気や自己評価タイミング、市場の関心上昇を重ねて読む。"
+            else:
+                read = "その月の市場背景、トレンド、既視感の有無を重ねて読む。"
+            family_rows.append(
+                {
+                    "family": family,
+                    "month_key": month_key,
+                    "positive_count": bucket["positive_count"],
+                    "failure_count": bucket["failure_count"],
+                    "total_count": total_count,
+                    "ctr_median": statistics.median(bucket["ctr_values"]) if bucket["ctr_values"] else None,
+                    "cpa_median": statistics.median(bucket["cpa_values"]) if bucket["cpa_values"] else None,
+                    "read": read,
+                }
+            )
+        family_rows.sort(key=lambda row: (row["total_count"], row["positive_count"]), reverse=True)
+        rows.extend(family_rows[:2])
+
+    rows.sort(key=lambda row: (row["family"], row["month_key"]), reverse=False)
+    return rows[:limit]
+
+
 def build_benchmarks(rows: list[dict[str, Any]]) -> dict[str, float]:
     ctr_values = [row["ctr"] for row in rows if row.get("ctr") is not None]
     hook_values = [row["hook_rate"] for row in rows if row.get("hook_rate") is not None]
@@ -1233,6 +1320,7 @@ def summarize_patterns(
         },
         "family_signals": family_signal_rows(positive_rows, failure_rows),
         "mixed_exact_crs": summarize_mixed_exact_crs(positive_rows, failure_rows),
+        "family_month_contexts": summarize_family_month_context(positive_rows, failure_rows),
         "winner_same_asset_summary": winner_same_asset_summary,
         "failure_same_asset_summary": failure_same_asset_summary,
     }
@@ -1417,6 +1505,26 @@ def render_mixed_exact_crs(rows: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def render_family_month_contexts(rows: list[dict[str, Any]]) -> str:
+    lines = [
+        "| 家系 | 月 | 勝ち数 | 非勝ち数 | CTR中央値 | CPA中央値 | 読み |",
+        "|---|---|---:|---:|---:|---:|---|",
+    ]
+    for row in rows:
+        lines.append(
+            "| {family} | {month} | {pos} | {neg} | {ctr} | {cpa} | {read} |".format(
+                family=row.get("family") or "-",
+                month=row.get("month_key") or "-",
+                pos=row.get("positive_count", 0),
+                neg=row.get("failure_count", 0),
+                ctr=format_percent(row.get("ctr_median")),
+                cpa=format_yen(row.get("cpa_median")),
+                read=row.get("read", "-"),
+            )
+        )
+    return "\n".join(lines)
+
+
 def render_markdown(summary: dict[str, Any]) -> str:
     benchmarks = summary["benchmarks"]
     comparison = summary["comparison"]
@@ -1524,6 +1632,15 @@ def render_markdown(summary: dict[str, Any]) -> str:
             "- 同じCRで `勝ち / 非勝ち` が混ざるなら、creative の善し悪しより `運用差` を先に疑う",
             "",
             render_mixed_exact_crs(summary["mixed_exact_crs"]) if summary["mixed_exact_crs"] else "- まだ該当なし",
+            "",
+            "## 家系ごとの時期差",
+            "",
+            "- `時期` は日付ではなく、その時期の社会背景・市場背景・旬まで含めて読む",
+            "- ここは `家系 × 月` の観察表。数値だけで断定せず、その月の空気と重ねて解釈する",
+            "",
+            render_family_month_contexts(summary["family_month_contexts"])
+            if summary["family_month_contexts"]
+            else "- まだ該当なし",
             "",
             "## 同一アセットでも数値がズレる例",
             "",
