@@ -928,7 +928,7 @@ def classify_failure_shape(row: dict[str, Any], benchmarks: dict[str, float]) ->
     if cpa is not None and cpa > benchmarks["winner_cpa_p75"]:
         return (
             "クリックされるがCPAが高い",
-            "CTR は出るが CPA が勝ちCRの上位25%基準を上回っていて、オプトイン率かターゲット層の質で崩れている。",
+            "CTR は出るが CPA が勝ちCRの上位25%基準を上回っていて、オプトイン率かターゲット層の属性ズレで崩れている。",
             "strong",
         )
 
@@ -988,7 +988,7 @@ def summarize_family_bucket_profiles(
         elif primary_name == "フックで離脱":
             read = "冒頭の新規性や対象ワードが弱く、フックで離脱している。"
         elif primary_name == "クリックされるがCPAが高い":
-            read = "クリックは取れているので、オプトイン率かターゲット層の質を疑う。"
+            read = "クリックは取れているので、オプトイン率かターゲット層の属性ズレを疑う。"
         elif secondary_count and (primary_count - secondary_count) / total <= 0.08:
             read = "崩れ方が二極化していて、単一原因で見ない方がいい。"
         else:
@@ -1902,7 +1902,7 @@ def build_cdp_downstream_insights(summary: dict[str, Any]) -> list[str]:
         top_refund_bucket = max(bucket_rows, key=lambda row: row.get("refund_rate") or 0.0)
         insights.append(
             f"- `失敗形` で見ると、顧客あたりLTVが最も高いのは `{top_ltv_bucket['failure_bucket']}` で `{format_yen(top_ltv_bucket.get('ltv_per_customer'))}`。"
-            " `CPAが高い/低い` だけではなく、その市場に対してどの質の顧客を連れてきたかで読む。"
+            " `CPAが高い/低い` だけではなく、その市場に対してどの属性の人を連れてきたかで読む。"
         )
         insights.append(
             f"- `失敗形` で見ると、商品購入率（フロント+バック全体）が最も高いのは `{top_buyer_bucket['failure_bucket']}` で `{format_percent(top_buyer_bucket.get('buyer_rate'))}`。"
@@ -2374,7 +2374,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
             meta_common_line,
             f"- さらに `ノンタゲ vs 類似` を直接比べられる群は `{same_asset_summary['broad_vs_narrow_group_count']}` 群あり、CTR は `{same_asset_summary['broad_ctr_lower_count']}/{same_asset_summary['broad_ctr_compared_count']}` 群で広い側が低く、CPA は比較可能な `{same_asset_summary['broad_cpa_heavier_count']}/{same_asset_summary['broad_cpa_compared_count']}` 群で広い側が重かった。",
             f"- 勝ちCR 340件の再利用群でも、同じ比較ができる `{winner_same_asset_summary['broad_vs_narrow_group_count']}` 群では CTR が `{winner_same_asset_summary['broad_ctr_lower_count']}/{winner_same_asset_summary['broad_ctr_compared_count']}`、CPA が `{winner_same_asset_summary['broad_cpa_heavier_count']}/{winner_same_asset_summary['broad_cpa_compared_count']}` で広い側が不利だった。良いクリエイティブでも、広いオーディエンスに寄ると質が崩れやすい。",
-            "- つまり `広いフックで人を集める -> オーディエンスが広がる -> 浅い反応層に学習する -> CTRやフック率の見た目よりオプトイン率やターゲット層の質が弱くなる` を、SNS広告の代表的な失敗メカニズムとして常に疑う。",
+            "- つまり `広いフックで人を集める -> オーディエンスが広がる -> 浅い反応層に学習する -> CTRやフック率の見た目よりオプトイン率が落ちる、または狙っていない属性の比率が上がる` を、SNS広告の代表的な失敗メカニズムとして常に疑う。",
             "",
             "### ノンタゲと類似で差が出た例",
             "",
@@ -2525,7 +2525,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
             "",
             "- まず `どこで崩れたか` を決める。`誰が作ったか` や `単語単体` に逃げない。",
             "- `CTRとフック率は通るがオプトイン以降で失敗` に入ったら、CR単体の改善より `LP / オファー / 導線 / ターゲット層` を優先して見る。",
-            "- `クリックされるがCPAが高い` は、クリックはされるので `オプトイン率の低さ` か `ターゲット層の質` を疑う。",
+            "- `クリックされるがCPAが高い` は、クリックはされるので `オプトイン率の低さ` か `ターゲット層の属性ズレ` を疑う。",
             "- 同一アセット比較は `asset -> オーディエンス -> 広告ID / 広告セットID -> LP -> 時期 -> 冒頭` の順で切る。順番を飛ばして `このCRは強い/弱い` と断定しない。",
             "- 同じCR系統が失敗側に偏っていても、1回では rules に上げない。複数スナップショットか下流数値が重なってから rules 化する。",
         ]
