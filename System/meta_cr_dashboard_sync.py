@@ -28,6 +28,7 @@ VIDEO_CACHE_DIR = DATA_DIR / "video_cache"
 VIDEO_SIGNAL_SUMMARY_PATH = DATA_DIR / "video_signal_summary.json"
 DEFAULT_VIDEO_MODEL = "base"
 DEFAULT_VIDEO_CLIP_SECONDS = 45
+SUCCESS_JUDGMENTS = {"大当たり", "当たり"}
 
 FAILURE_COLUMNS = (
     "rank",
@@ -617,7 +618,7 @@ def load_failure_rows_from_csv(path: Path) -> tuple[list[dict[str, Any]], str]:
             if not ad_name:
                 continue
             cr_judgment = collapse_ws(raw.get("CR判定"))
-            if cr_judgment == "大当たり":
+            if cr_judgment in SUCCESS_JUDGMENTS:
                 continue
             creator = collapse_ws(raw.get("製作者"))
             title_segments = extract_title_segments(ad_name, creator)
@@ -652,8 +653,90 @@ def load_failure_rows_from_csv(path: Path) -> tuple[list[dict[str, Any]], str]:
                     "hook_rate": parse_rate(raw.get("フック率（3秒間視聴）"), decimal_ratio=True),
                 }
             )
-    scope_note = f"{path.name} から非大当たり {len(rows)}件を読み込み"
+    scope_note = f"{path.name} から非勝ち {len(rows)}件を読み込み"
     return rows, scope_note
+
+
+def load_positive_rows_from_csv(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8-sig", newline="") as fh:
+        reader = csv.DictReader(fh)
+        for raw in reader:
+            ad_name = collapse_ws(raw.get("広告名"))
+            if not ad_name:
+                continue
+            cr_judgment = collapse_ws(raw.get("CR判定"))
+            if cr_judgment not in SUCCESS_JUDGMENTS:
+                continue
+            creator = collapse_ws(raw.get("製作者"))
+            title_segments = extract_title_segments(ad_name, creator)
+            title_core = normalize_title_from_ad_name(ad_name, creator)
+            video_url = collapse_ws(raw.get("動画URL"))
+            thumbnail_url = collapse_ws(raw.get("サムネイル"))
+            rows.append(
+                {
+                    "ad_name": ad_name,
+                    "creator": creator,
+                    "title_segments": title_segments,
+                    "title_core": title_core,
+                    "title_family": extract_title_family(title_core),
+                    "theme_key": extract_theme_key(title_segments),
+                    "opening_key": extract_opening_key(title_segments),
+                    "distribution_hint": extract_distribution_hint(title_segments),
+                    "lp_key": extract_lp_key(ad_name),
+                    "funnel": collapse_ws(raw.get("ファネル")),
+                    "created_on": collapse_ws(raw.get("作成日")),
+                    "video_url": video_url,
+                    "thumbnail_url": thumbnail_url,
+                    "asset_key": video_url if video_url and video_url != "データなし" else thumbnail_url,
+                    "cr_judgment": cr_judgment,
+                    "ctr": parse_rate(raw.get("CTR"), decimal_ratio=True),
+                    "hook_rate": parse_rate(raw.get("フック率（3秒間視聴）"), decimal_ratio=True),
+                    "cpa": parse_currency(raw.get("CPA")),
+                }
+            )
+    return rows
+
+
+def summarize_mixed_exact_crs(
+    positive_rows: list[dict[str, Any]],
+    failure_rows: list[dict[str, Any]],
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    positive_by_name: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    failure_by_name: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in positive_rows:
+        name = collapse_ws(row.get("ad_name"))
+        if name:
+            positive_by_name[name].append(row)
+    for row in failure_rows:
+        name = collapse_ws(row.get("ad_name"))
+        if name:
+            failure_by_name[name].append(row)
+
+    mixed_rows: list[dict[str, Any]] = []
+    for name in sorted(set(positive_by_name) & set(failure_by_name)):
+        pos = positive_by_name[name]
+        neg = failure_by_name[name]
+        pos_ctrs = [row.get("ctr") for row in pos if row.get("ctr") is not None]
+        neg_ctrs = [row.get("ctr") for row in neg if row.get("ctr") is not None]
+        pos_cpas = [row.get("cpa") for row in pos if row.get("cpa") is not None]
+        neg_cpas = [row.get("cpa") for row in neg if row.get("cpa") is not None]
+        mixed_rows.append(
+            {
+                "ad_name": name,
+                "positive_count": len(pos),
+                "failure_count": len(neg),
+                "lp_keys": sorted({row.get("lp_key", "") for row in pos + neg if row.get("lp_key")}),
+                "positive_ctr_median": statistics.median(pos_ctrs) if pos_ctrs else None,
+                "failure_ctr_median": statistics.median(neg_ctrs) if neg_ctrs else None,
+                "positive_cpa_median": statistics.median(pos_cpas) if pos_cpas else None,
+                "failure_cpa_median": statistics.median(neg_cpas) if neg_cpas else None,
+                "read": "完全同一CRで勝ち負け混在。まず運用差を疑う。",
+            }
+        )
+    mixed_rows.sort(key=lambda row: (row["positive_count"] + row["failure_count"], row["failure_count"]), reverse=True)
+    return mixed_rows[:limit]
 
 
 def build_benchmarks(rows: list[dict[str, Any]]) -> dict[str, float]:
@@ -1076,6 +1159,7 @@ def summarize_same_asset_variation(source_rows: list[dict[str, Any]]) -> dict[st
 def summarize_patterns(
     winner_rows: list[dict[str, Any]],
     failure_rows: list[dict[str, Any]],
+    positive_rows: list[dict[str, Any]],
     scope_note: str,
     failure_source: Path,
     failure_mode: str,
@@ -1116,6 +1200,7 @@ def summarize_patterns(
         "failure_mode": failure_mode,
         "failure_scope_note": scope_note,
         "winner_count": len(winner_rows),
+        "positive_count": len(positive_rows),
         "failure_count": len(failure_rows),
         "benchmarks": {
             **benchmarks,
@@ -1146,7 +1231,8 @@ def summarize_patterns(
             bucket: rows[:5]
             for bucket, rows in examples_by_stage.items()
         },
-        "family_signals": family_signal_rows(winner_rows, failure_rows),
+        "family_signals": family_signal_rows(positive_rows, failure_rows),
+        "mixed_exact_crs": summarize_mixed_exact_crs(positive_rows, failure_rows),
         "winner_same_asset_summary": winner_same_asset_summary,
         "failure_same_asset_summary": failure_same_asset_summary,
     }
@@ -1309,6 +1395,28 @@ def render_opening_examples(rows: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def render_mixed_exact_crs(rows: list[dict[str, Any]]) -> str:
+    lines = [
+        "| 広告名 | 勝ち数 | 非勝ち数 | LP群 | CTR中央値 | CPA中央値 | 先に読むこと |",
+        "|---|---:|---:|---|---|---|---|",
+    ]
+    for row in rows:
+        ctr_text = f"{format_percent(row.get('positive_ctr_median'))} -> {format_percent(row.get('failure_ctr_median'))}"
+        cpa_text = f"{format_yen(row.get('positive_cpa_median'))} -> {format_yen(row.get('failure_cpa_median'))}"
+        lines.append(
+            "| {ad} | {pos} | {neg} | {lps} | {ctr} | {cpa} | {read} |".format(
+                ad=row.get("ad_name") or "-",
+                pos=row.get("positive_count", 0),
+                neg=row.get("failure_count", 0),
+                lps=", ".join(row.get("lp_keys", [])) or "-",
+                ctr=ctr_text,
+                cpa=cpa_text,
+                read=row.get("read", "-"),
+            )
+        )
+    return "\n".join(lines)
+
+
 def render_markdown(summary: dict[str, Any]) -> str:
     benchmarks = summary["benchmarks"]
     comparison = summary["comparison"]
@@ -1319,12 +1427,12 @@ def render_markdown(summary: dict[str, Any]) -> str:
     video_signal_summary = summary.get("video_signal_summary") or {}
     failure_source_name = Path(summary["failure_source"]).name
     if failure_mode == "csv":
-        comparison_header = f"ここでは `勝ちCR {summary['winner_count']}件` を基準に、`非大当たり {summary['failure_count']}件` を比較している。"
-        failure_source_line = f"- 失敗ソース: `System/data/meta_cr_dashboard/{failure_source_name}`（{summary['failure_count']}件）"
-        failure_note_line = "- 注意: 失敗側は long-range の full raw。Meta広告 CR一覧の非大当たりを全件で読んでいる。"
-        top_funnel_line = f"- 失敗全量 `{summary['failure_count']}` 件のうち、`{comparison['top_funnel_strong_failures']}` 件は `上流は通るが後ろで失敗` の候補に入る。"
-        same_asset_source_line = f"- 失敗全量 `{summary['failure_count']}` 件の中だけでも、同一アセットの再利用群は `{same_asset_summary['same_asset_groups_ge_2']}` 群 `{same_asset_summary['rows_in_same_asset_groups']}` 件ある。CR単体ではなく `配信対象（オーディエンス） / 広告ID / 広告セットID / LP / 時期` を切って読む必要がある。"
-        meta_common_line = f"- 失敗全量の内部だけでも、`同一アセット × 同日 × 同LP` まで揃えて数値を比べられる群が `{same_asset_summary['same_asset_same_context_group_count']}` 群 `{same_asset_summary['rows_in_same_asset_same_context_groups']}` 件あり、そのうち配信対象差を読める群が `{same_asset_summary['audience_variation_group_count']}` 群ある。"
+        comparison_header = f"ここでは `大当たり基準 {summary['winner_count']}件` をベンチマークにしつつ、`勝ち側 {summary['positive_count']}件` と `非勝ち {summary['failure_count']}件` を比較している。"
+        failure_source_line = f"- 失敗ソース: `System/data/meta_cr_dashboard/{failure_source_name}`（勝ち側 {summary['positive_count']}件 / 非勝ち {summary['failure_count']}件）"
+        failure_note_line = "- 注意: full raw では `大当たり / 当たり` を勝ち側、その他を非勝ち側として読む。"
+        top_funnel_line = f"- 非勝ち全量 `{summary['failure_count']}` 件のうち、`{comparison['top_funnel_strong_failures']}` 件は `上流は通るが後ろで失敗` の候補に入る。"
+        same_asset_source_line = f"- 非勝ち全量 `{summary['failure_count']}` 件の中だけでも、同一アセットの再利用群は `{same_asset_summary['same_asset_groups_ge_2']}` 群 `{same_asset_summary['rows_in_same_asset_groups']}` 件ある。CR単体ではなく `配信対象（オーディエンス） / 広告ID / 広告セットID / LP / 時期` を切って読む必要がある。"
+        meta_common_line = f"- 非勝ち全量の内部だけでも、`同一アセット × 同日 × 同LP` まで揃えて数値を比べられる群が `{same_asset_summary['same_asset_same_context_group_count']}` 群 `{same_asset_summary['rows_in_same_asset_same_context_groups']}` 件あり、そのうち配信対象差を読める群が `{same_asset_summary['audience_variation_group_count']}` 群ある。"
         same_asset_section_line = f"- 今回の失敗全量では、同一アセット群が `{same_asset_summary['same_asset_groups_ge_2']}` 群 `{same_asset_summary['rows_in_same_asset_groups']}` 件ある。`同じCRなのに数値が違う` を解くときの一次切り分けに使う。"
     else:
         comparison_header = "ここでは `勝ちCR 340件` を基準に、`失敗側 24件` を比較している。"
@@ -1341,6 +1449,14 @@ def render_markdown(summary: dict[str, Any]) -> str:
         "",
         "Meta広告CRの失敗は、`誰が作ったか` より `どこで崩れたか` で読む。",
         comparison_header,
+        "",
+        "## 失敗CRの定義",
+        "",
+        "- `1年後悔` や `林さん` のような家系名そのものを `失敗CR` と呼ばない",
+        "- `失敗CR` は、`大当たりCR / 当たりCR` に入らない側の CR 個体を指す",
+        "- `完全に同じCR` で `勝ち / 非勝ち` が混在するときは、まず `運用差` を疑う",
+        "- `フックが全然違う` なら、テーマや家系名が近くても `別CR` として扱う",
+        "- 家系名は `比較ラベル` であり、勝ち負けの断定には使わない",
         "",
         "## 集計対象",
         "",
@@ -1361,9 +1477,9 @@ def render_markdown(summary: dict[str, Any]) -> str:
             f"| フック率 | {benchmarks['winner_hook_median']:.2f}% | {benchmarks['failure_hook_median']:.2f}% |",
             f"| CPA | {format_yen(benchmarks['winner_cpa_median'])} | {format_yen(benchmarks['failure_cpa_median'])} |",
             "",
-            f"- 失敗 {summary['failure_count']}件のうち `{comparison['failure_ctr_ge_winner_median']}` 件は CTR が勝ちCR中央値以上",
-            f"- 失敗 {summary['failure_count']}件のうち `{comparison['failure_hook_ge_winner_median']}` 件は フック率が勝ちCR中央値以上",
-            f"- 失敗 {summary['failure_count']}件のうち `{comparison['top_funnel_strong_failures']}` 件は CTR とフック率の両方が勝ちCR中央値以上",
+            f"- 非勝ち {summary['failure_count']}件のうち `{comparison['failure_ctr_ge_winner_median']}` 件は CTR が勝ちCR中央値以上",
+            f"- 非勝ち {summary['failure_count']}件のうち `{comparison['failure_hook_ge_winner_median']}` 件は フック率が勝ちCR中央値以上",
+            f"- 非勝ち {summary['failure_count']}件のうち `{comparison['top_funnel_strong_failures']}` 件は CTR とフック率の両方が勝ちCR中央値以上",
             f"- その中でも `{comparison['efficient_but_failed']}` 件は CPA まで勝ちCRの第3四分位以内に収まる",
             "",
             "## まず読むべき本質",
@@ -1394,6 +1510,13 @@ def render_markdown(summary: dict[str, Any]) -> str:
             "## タイトル家系の偏り",
             "",
             render_family_table(summary["family_signals"]) if summary["family_signals"] else "- 目立つ偏りはまだ出ていない",
+            "",
+            "## 同じCRで勝ち負け混在する例",
+            "",
+            "- ここは `家系` ではなく `広告名ベースの同一CR` を見ている",
+            "- 同じCRで `勝ち / 非勝ち` が混ざるなら、creative の善し悪しより `運用差` を先に疑う",
+            "",
+            render_mixed_exact_crs(summary["mixed_exact_crs"]) if summary["mixed_exact_crs"] else "- まだ該当なし",
             "",
             "## 同一アセットでも数値がズレる例",
             "",
@@ -1468,10 +1591,12 @@ def render_markdown(summary: dict[str, Any]) -> str:
 
 def run_analysis(winner_csv: Path, failure_markdown: Path | None, failure_csv: Path | None = None) -> dict[str, Any]:
     winner_rows = load_winner_rows(winner_csv)
+    positive_rows = winner_rows
     failure_source: Path
     failure_mode: str
     if failure_csv:
         failure_rows, scope_note = load_failure_rows_from_csv(failure_csv)
+        positive_rows = load_positive_rows_from_csv(failure_csv)
         failure_source = failure_csv
         failure_mode = "csv"
     elif failure_markdown:
@@ -1485,7 +1610,7 @@ def run_analysis(winner_csv: Path, failure_markdown: Path | None, failure_csv: P
     if not failure_rows:
         source_label = str(failure_csv or failure_markdown)
         raise SystemExit(f"失敗サンプルを読めませんでした: {source_label}")
-    summary = summarize_patterns(winner_rows, failure_rows, scope_note, failure_source, failure_mode)
+    summary = summarize_patterns(winner_rows, failure_rows, positive_rows, scope_note, failure_source, failure_mode)
     if VIDEO_SIGNAL_SUMMARY_PATH.exists():
         summary["video_signal_summary"] = json.loads(VIDEO_SIGNAL_SUMMARY_PATH.read_text(encoding="utf-8"))
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -1509,6 +1634,7 @@ def print_status() -> None:
                 "failure_mode": summary.get("failure_mode", ""),
                 "latest_summary_generated_at": summary.get("generated_at", ""),
                 "winner_count": summary.get("winner_count", 0),
+                "positive_count": summary.get("positive_count", 0),
                 "failure_count": summary.get("failure_count", 0),
                 "video_signal_generated_at": video_summary.get("generated_at", ""),
                 "video_signal_processed_count": video_summary.get("processed_count", 0),
