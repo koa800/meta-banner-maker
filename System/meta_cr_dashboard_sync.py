@@ -1584,7 +1584,7 @@ def build_time_context_insights(rows: list[dict[str, Any]]) -> list[str]:
         if late_summer and later_first_stop and late_summer.get("top_stage_name") != later_first_stop.get("top_stage_name"):
             insights.append(
                 "- `問題ないです` は、`2025/08` では `上流は通るが後ろで失敗` が主だったのに、`2025/09〜10` では `最初で止まる` へ移っている。"
-                " 逆張りの安心フックは当初は新規性があるが、露出が増えると驚きが薄れ、前で死にやすくなる仮説が強い。"
+                " 自社の露出増だけでなく、他社が同じフォーマットを模倣したことで市場全体に既視感が広がり、`新しい情報ではない` と判断されてスキップが増えた可能性が高い。"
             )
 
     machigae = by_family.get("間違えました", [])
