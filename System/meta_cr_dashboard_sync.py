@@ -1540,6 +1540,7 @@ def build_parser() -> argparse.ArgumentParser:
     video_backfill.add_argument("--failure-csv", type=Path, default=DEFAULT_FULL_FAILURE_CSV)
     video_backfill.add_argument("--limit", type=int, default=20)
     video_backfill.add_argument("--bucket", default="上流は通るが後ろで失敗")
+    video_backfill.add_argument("--all-buckets", action="store_true")
     video_backfill.add_argument("--whisper-model", default=DEFAULT_VIDEO_MODEL)
     video_backfill.add_argument("--max-seconds", type=int, default=DEFAULT_VIDEO_CLIP_SECONDS)
 
@@ -1570,10 +1571,11 @@ def main() -> None:
         failure_rows, _ = load_failure_rows_from_csv(args.failure_csv)
         benchmarks = build_benchmarks(winner_rows)
         enriched_failures = enrich_failures(failure_rows, benchmarks)
+        bucket = "" if getattr(args, "all_buckets", False) else args.bucket
         result = backfill_video_signals(
             enriched_failures,
             limit=args.limit,
-            bucket=args.bucket,
+            bucket=bucket,
             whisper_model=args.whisper_model,
             max_seconds=args.max_seconds,
         )

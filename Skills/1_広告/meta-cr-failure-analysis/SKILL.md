@@ -80,6 +80,13 @@ python3 System/meta_cr_dashboard_sync.py analyze --failure-csv "System/data/meta
 `video-backfill` は `動画URL -> Whisper文字起こし -> broad marker / audience scope 集計` を行う。結果は `Master/knowledge/広告CR失敗パターン.md` の「動画内容まで読んだ所見」に反映される。
 一部の動画URLが `403` などで読めないときは、そのURLだけ `video_cache/<asset>/error.json` に記録して全体は止めずに継続する。
 
+9. 失敗バケットをまたいで `全件` 読みたいときは、`--all-buckets` を必ず付ける。
+
+```bash
+python3 System/meta_cr_dashboard_sync.py video-backfill --failure-csv "System/data/meta_cr_dashboard/full_failure_raw_latest.csv" --limit 10000 --all-buckets --max-seconds 20
+python3 System/meta_cr_dashboard_sync.py analyze --failure-csv "System/data/meta_cr_dashboard/full_failure_raw_latest.csv"
+```
+
 fallback の 24件スナップショットだけで初回分析したいときはこうする。
 
 ```bash
