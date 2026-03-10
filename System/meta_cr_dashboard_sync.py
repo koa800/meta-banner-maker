@@ -914,6 +914,54 @@ def family_signal_rows(winner_rows: list[dict[str, Any]], failure_rows: list[dic
     return records[:10]
 
 
+def summarize_family_bucket_profiles(
+    failure_rows: list[dict[str, Any]],
+    limit: int = 6,
+) -> list[dict[str, Any]]:
+    by_family: dict[str, Counter] = defaultdict(Counter)
+    for row in failure_rows:
+        family = collapse_ws(row.get("title_family"))
+        bucket = row.get("failure_bucket")
+        if not family or not bucket:
+            continue
+        by_family[family]["total"] += 1
+        by_family[family][bucket] += 1
+
+    rows: list[dict[str, Any]] = []
+    for family, counter in sorted(by_family.items(), key=lambda item: item[1]["total"], reverse=True):
+        total = counter["total"]
+        if total < 50:
+            continue
+        top_buckets = [(name, count) for name, count in counter.items() if name != "total"]
+        top_buckets.sort(key=lambda item: item[1], reverse=True)
+        primary_name, primary_count = top_buckets[0]
+        secondary_name, secondary_count = top_buckets[1] if len(top_buckets) > 1 else ("-", 0)
+
+        if primary_name == "見られるが押されない":
+            read = "注意は取れるが、自分事化や次の一押しが弱い。"
+        elif primary_name == "最初で止まる":
+            read = "冒頭の新規性や意外性が落ちると、一気に前で死にやすい。"
+        elif primary_name == "押されるが集客単価が重い":
+            read = "興味は取れているので、見込客の質か期待値ズレを疑う。"
+        elif secondary_count and (primary_count - secondary_count) / total <= 0.08:
+            read = "崩れ方が二極化していて、単一原因で見ない方がいい。"
+        else:
+            read = "フックは残りやすく、後ろの約束や流入の質を先に疑う。"
+
+        rows.append(
+            {
+                "family": family,
+                "total": total,
+                "primary_bucket": primary_name,
+                "primary_share": primary_count / total * 100,
+                "secondary_bucket": secondary_name,
+                "secondary_share": secondary_count / total * 100 if secondary_count else 0.0,
+                "read": read,
+            }
+        )
+    return rows[:limit]
+
+
 def enrich_failures(failure_rows: list[dict[str, Any]], benchmarks: dict[str, float]) -> list[dict[str, Any]]:
     enriched: list[dict[str, Any]] = []
     for row in failure_rows:
@@ -1339,6 +1387,7 @@ def summarize_patterns(
             for bucket, rows in examples_by_stage.items()
         },
         "family_signals": family_signal_rows(positive_rows, failure_rows),
+        "family_bucket_profiles": summarize_family_bucket_profiles(enriched_failures),
         "mixed_exact_crs": summarize_mixed_exact_crs(positive_rows, failure_rows),
         "family_month_contexts": summarize_family_month_context(positive_rows, enriched_failures),
         "winner_same_asset_summary": winner_same_asset_summary,
@@ -1546,6 +1595,26 @@ def render_family_month_contexts(rows: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def render_family_bucket_profiles(rows: list[dict[str, Any]]) -> str:
+    lines = [
+        "| 家系 | 非勝ち件数 | 主な失敗形 | 構成比 | 次点の失敗形 | 構成比 | 読み |",
+        "|---|---:|---|---:|---|---:|---|",
+    ]
+    for row in rows:
+        lines.append(
+            "| {family} | {total} | {primary} | {primary_share:.1f}% | {secondary} | {secondary_share:.1f}% | {read} |".format(
+                family=row.get("family") or "-",
+                total=row.get("total", 0),
+                primary=row.get("primary_bucket") or "-",
+                primary_share=row.get("primary_share", 0.0),
+                secondary=row.get("secondary_bucket") or "-",
+                secondary_share=row.get("secondary_share", 0.0),
+                read=row.get("read") or "-",
+            )
+        )
+    return "\n".join(lines)
+
+
 def build_time_context_insights(rows: list[dict[str, Any]]) -> list[str]:
     by_family: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -1716,6 +1785,12 @@ def render_markdown(summary: dict[str, Any]) -> str:
             "## タイトル家系の偏り",
             "",
             render_family_table(summary["family_signals"]) if summary["family_signals"] else "- 目立つ偏りはまだ出ていない",
+            "",
+            "## 家系ごとの主な失敗形",
+            "",
+            render_family_bucket_profiles(summary["family_bucket_profiles"])
+            if summary["family_bucket_profiles"]
+            else "- まだ該当なし",
             "",
             "## 同じCRで勝ち負け混在する例",
             "",
