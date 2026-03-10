@@ -752,12 +752,12 @@ def summarize_mixed_exact_crs(
 def summarize_family_month_context(
     positive_rows: list[dict[str, Any]],
     failure_rows: list[dict[str, Any]],
-    limit: int = 12,
+    limit: int = 18,
 ) -> list[dict[str, Any]]:
     family_totals: Counter[str] = Counter()
     family_positive: Counter[str] = Counter()
     buckets: dict[tuple[str, str], dict[str, Any]] = defaultdict(
-        lambda: {"positive_count": 0, "failure_count": 0, "ctr_values": [], "cpa_values": []}
+        lambda: {"positive_count": 0, "failure_count": 0, "ctr_values": [], "cpa_values": [], "stage": Counter()}
     )
 
     for row in positive_rows:
@@ -782,6 +782,8 @@ def summarize_family_month_context(
         family_totals[family] += 1
         bucket = buckets[(family, month_key)]
         bucket["failure_count"] += 1
+        if row.get("failure_bucket"):
+            bucket["stage"][row["failure_bucket"]] += 1
         if row.get("ctr") is not None:
             bucket["ctr_values"].append(row["ctr"])
         if row.get("cpa") is not None:
@@ -814,13 +816,31 @@ def summarize_family_month_context(
                     "positive_count": bucket["positive_count"],
                     "failure_count": bucket["failure_count"],
                     "total_count": total_count,
+                    "top_stage_name": bucket["stage"].most_common(1)[0][0] if bucket["stage"] else "",
+                    "top_stage_count": bucket["stage"].most_common(1)[0][1] if bucket["stage"] else 0,
                     "ctr_median": statistics.median(bucket["ctr_values"]) if bucket["ctr_values"] else None,
                     "cpa_median": statistics.median(bucket["cpa_values"]) if bucket["cpa_values"] else None,
                     "read": read,
                 }
             )
         family_rows.sort(key=lambda row: (row["total_count"], row["positive_count"]), reverse=True)
-        rows.extend(family_rows[:2])
+        chosen: list[dict[str, Any]] = []
+        seen_stages: set[str] = set()
+        for row in family_rows:
+            stage_name = row.get("top_stage_name") or ""
+            if stage_name and stage_name not in seen_stages:
+                chosen.append(row)
+                seen_stages.add(stage_name)
+            if len(chosen) >= 3:
+                break
+        if len(chosen) < 3:
+            for row in family_rows:
+                if row not in chosen:
+                    chosen.append(row)
+                if len(chosen) >= 3:
+                    break
+        chosen.sort(key=lambda row: row["month_key"])
+        rows.extend(chosen)
 
     rows.sort(key=lambda row: (row["family"], row["month_key"]), reverse=False)
     return rows[:limit]
@@ -1320,7 +1340,7 @@ def summarize_patterns(
         },
         "family_signals": family_signal_rows(positive_rows, failure_rows),
         "mixed_exact_crs": summarize_mixed_exact_crs(positive_rows, failure_rows),
-        "family_month_contexts": summarize_family_month_context(positive_rows, failure_rows),
+        "family_month_contexts": summarize_family_month_context(positive_rows, enriched_failures),
         "winner_same_asset_summary": winner_same_asset_summary,
         "failure_same_asset_summary": failure_same_asset_summary,
     }
@@ -1507,22 +1527,93 @@ def render_mixed_exact_crs(rows: list[dict[str, Any]]) -> str:
 
 def render_family_month_contexts(rows: list[dict[str, Any]]) -> str:
     lines = [
-        "| 家系 | 月 | 勝ち数 | 非勝ち数 | CTR中央値 | CPA中央値 | 読み |",
-        "|---|---|---:|---:|---:|---:|---|",
+        "| 家系 | 月 | 勝ち数 | 非勝ち数 | 主な崩れ方 | CTR中央値 | CPA中央値 | 読み |",
+        "|---|---|---:|---:|---|---:|---:|---|",
     ]
     for row in rows:
         lines.append(
-            "| {family} | {month} | {pos} | {neg} | {ctr} | {cpa} | {read} |".format(
+            "| {family} | {month} | {pos} | {neg} | {stage} | {ctr} | {cpa} | {read} |".format(
                 family=row.get("family") or "-",
                 month=row.get("month_key") or "-",
                 pos=row.get("positive_count", 0),
                 neg=row.get("failure_count", 0),
+                stage=row.get("top_stage_name") or "-",
                 ctr=format_percent(row.get("ctr_median")),
                 cpa=format_yen(row.get("cpa_median")),
                 read=row.get("read", "-"),
             )
         )
     return "\n".join(lines)
+
+
+def build_time_context_insights(rows: list[dict[str, Any]]) -> list[str]:
+    by_family: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        by_family[row.get("family", "")].append(row)
+    for family_rows in by_family.values():
+        family_rows.sort(key=lambda row: row.get("month_key", ""))
+
+    insights: list[str] = []
+
+    one_year = by_family.get("1年後悔", [])
+    if one_year:
+        winter_rows = [row for row in one_year if row.get("month_key", "")[5:7] in {"11", "12", "01"}]
+        if winter_rows:
+            insights.append(
+                "- `1年後悔` は、年末年始に `また1年無駄にした` という自己評価のタイミングと噛み合う。"
+                " いまの表でも `2025/12` `2026/01` に観測が厚く、まずは `年末の反省需要` と接続した旬を疑う。"
+            )
+        if any(row.get("top_stage_name") == "上流は通るが後ろで失敗" for row in winter_rows):
+            insights.append(
+                "- ただし `1年後悔` の崩れ方は、冬でも `最初で死ぬ` より `上流は通るが後ろで失敗` が主。"
+                " つまりフック自体は残りやすく、課題は `誰を集めたか` と `後ろの約束` に寄りやすい。"
+            )
+
+    mondainai = by_family.get("問題ないです", [])
+    if mondainai:
+        late_summer = next((row for row in mondainai if row.get("month_key") == "2025/08"), None)
+        later_first_stop = next(
+            (
+                row
+                for row in mondainai
+                if row.get("month_key") in {"2025/09", "2025/10"}
+                and row.get("top_stage_name") == "最初で止まる"
+            ),
+            None,
+        )
+        if late_summer and later_first_stop and late_summer.get("top_stage_name") != later_first_stop.get("top_stage_name"):
+            insights.append(
+                "- `問題ないです` は、`2025/08` では `上流は通るが後ろで失敗` が主だったのに、`2025/09〜10` では `最初で止まる` へ移っている。"
+                " 逆張りの安心フックは当初は新規性があるが、露出が増えると驚きが薄れ、前で死にやすくなる仮説が強い。"
+            )
+
+    machigae = by_family.get("間違えました", [])
+    if machigae:
+        nov = next((row for row in machigae if row.get("month_key") == "2025/11"), None)
+        dec = next((row for row in machigae if row.get("month_key") == "2025/12"), None)
+        if nov and dec and nov.get("top_stage_name") != dec.get("top_stage_name"):
+            insights.append(
+                "- `間違えました` は、`2025/11` では `上流は通るが後ろで失敗` が多い一方、`2025/12` では `最初で止まる` に寄る。"
+                " `暴露 / 訂正` の驚きは初速を作るが、既視感が出ると一気に冒頭で止まりやすい。"
+            )
+
+    yame = by_family.get("全部やめました", [])
+    if yame:
+        feb = next((row for row in yame if row.get("month_key") == "2026/02"), None)
+        mar = next((row for row in yame if row.get("month_key") == "2026/03"), None)
+        if feb and mar:
+            insights.append(
+                "- `全部やめました` は、`2026/02` では `上流は通るが後ろで失敗` が主で CTR も高めだが、`2026/03` では `見られるが押されない` へずれている。"
+                " 反王道メッセージが一度は新鮮でも、翌月には `またその話か` になり、自分事化が弱くなった可能性が高い。"
+            )
+
+    if insights:
+        insights.append(
+            "- 時期差は `勝ち数が増えた/減った` だけでなく、`どこで崩れるかがどう変わったか` を見る。"
+            " 同じ家系でも `上流は通るが後ろで失敗 -> 最初で止まる / 見られるが押されない` にずれたら、旬切れや既視感の発生を先に疑う。"
+        )
+
+    return insights
 
 
 def render_markdown(summary: dict[str, Any]) -> str:
@@ -1641,6 +1732,14 @@ def render_markdown(summary: dict[str, Any]) -> str:
             render_family_month_contexts(summary["family_month_contexts"])
             if summary["family_month_contexts"]
             else "- まだ該当なし",
+            "",
+            "## 時期文脈から見える仮説",
+            "",
+            *(
+                build_time_context_insights(summary["family_month_contexts"])
+                if summary["family_month_contexts"]
+                else ["- まだ十分な観察がない"]
+            ),
             "",
             "## 同一アセットでも数値がズレる例",
             "",
