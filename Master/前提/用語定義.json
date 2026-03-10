@@ -1,186 +1,8 @@
 {
-  "updated_at": "2026-03-11T00:00:00+09:00",
+  "updated_at": "2026-03-11T00:46:58.592927",
   "source_sheet_id": "1nkmeWcHmzxPJH1d5veXwTpDoZrsPFH4_3txevqj225Y",
-  "defined_count": 58,
-  "draft_count": 17,
-  "manual_core_concepts_updated_at": "2026-03-11T00:00:00+09:00",
-  "manual_core_concepts": [
-    {
-      "term": "信念",
-      "definition": "俯瞰的選択と関係の積み上げが愛という世界を作る",
-      "note": "最上位の世界観"
-    },
-    {
-      "term": "最上位ゴール",
-      "definition": "世界中の「ありがとう」の数を増やすこと",
-      "note": "スキルプラスより上位"
-    },
-    {
-      "term": "仕事",
-      "definition": "人の役に立つこと",
-      "note": ""
-    },
-    {
-      "term": "ありがとう",
-      "definition": "人の課題が解決された結果として生まれる反応",
-      "note": ""
-    },
-    {
-      "term": "欲求",
-      "definition": "言語化されていない目的。もっと良くしたい方向性はあるが、まだピン留めされていないもの。",
-      "note": "マズローの5欲求として現れる"
-    },
-    {
-      "term": "目的",
-      "definition": "欲求を言語化したもの",
-      "note": ""
-    },
-    {
-      "term": "理想",
-      "definition": "その人が主観的に「こう在れたら良い」と感じる、目的が満たされた状態像",
-      "note": ""
-    },
-    {
-      "term": "現実",
-      "definition": "理想に対して、その人が今実際に置かれている状態",
-      "note": ""
-    },
-    {
-      "term": "問題",
-      "definition": "理想と現実のギャップ",
-      "note": "顕在問題と潜在問題を含む"
-    },
-    {
-      "term": "課題",
-      "definition": "理想と現実のギャップの原因",
-      "note": ""
-    },
-    {
-      "term": "状態",
-      "definition": "ある時点において、その人が理想に近づけるか、遠ざかるかを決めている条件の総体",
-      "note": "今その人を決めている条件の束"
-    },
-    {
-      "term": "市場",
-      "definition": "特定の欲求がまだ満たされていない集団",
-      "note": ""
-    },
-    {
-      "term": "属性",
-      "definition": "市場の中の切り方。セグメント。",
-      "note": ""
-    },
-    {
-      "term": "需要",
-      "definition": "サービスに対する欲求",
-      "note": ""
-    },
-    {
-      "term": "供給",
-      "definition": "需要を満たす商品・サービス",
-      "note": ""
-    },
-    {
-      "term": "価値",
-      "definition": "相手が主観的に「自分にとって意味がある」「理想に近づく」と認識するもの",
-      "note": "感情そのものではない"
-    },
-    {
-      "term": "オファー",
-      "definition": "ある場面で、相手に受け取ってほしい取引条件の提示",
-      "note": "LINE登録、オプトイン、商品購入などを含む"
-    },
-    {
-      "term": "取引成立",
-      "definition": "オファーが受け取られ、交換行為が成立した瞬間",
-      "note": ""
-    },
-    {
-      "term": "事業",
-      "definition": "ある市場に対して供給を届ける活動",
-      "note": ""
-    },
-    {
-      "term": "マーケティング",
-      "definition": "需要に供給を届ける全ての活動",
-      "note": ""
-    },
-    {
-      "term": "ビジネス",
-      "definition": "価値提供すること",
-      "note": ""
-    },
-    {
-      "term": "教育",
-      "definition": "できないことをできるようにすること",
-      "note": ""
-    },
-    {
-      "term": "できる",
-      "definition": "ある課題に対して、再現性をもって解決行動を取れること",
-      "note": ""
-    },
-    {
-      "term": "成長",
-      "definition": "できることが増えること、またはできることの再現性・範囲・深さが広がること",
-      "note": ""
-    },
-    {
-      "term": "自立",
-      "definition": "自分で理想と現実を捉え、問題と課題を見つけ、必要な供給を受け取り、行動し続けられる状態",
-      "note": ""
-    },
-    {
-      "term": "信頼",
-      "definition": "ある対象に対して、自分が期待していることが満たされると見込んでいる状態",
-      "note": ""
-    },
-    {
-      "term": "不安",
-      "definition": "期待していることが満たされない可能性を感じている状態",
-      "note": ""
-    },
-    {
-      "term": "安心",
-      "definition": "期待していることが満たされない可能性が、十分に小さいと感じている状態",
-      "note": ""
-    },
-    {
-      "term": "納得",
-      "definition": "そのオファーを受け取ることが、自分にとって意味があり、妥当で、今受け取ってよいと内的に整合している状態",
-      "note": "オファーに対する納得"
-    },
-    {
-      "term": "OS",
-      "definition": "判断と行動に一貫性を与える根本原理",
-      "note": ""
-    },
-    {
-      "term": "哲学",
-      "definition": "世界をどう捉え、何を善いとし、どう在りたいかについての根本姿勢",
-      "note": "OS の源泉"
-    },
-    {
-      "term": "テーマ",
-      "definition": "今の自分が時間と資源を投下して向き合っている、大きな問い",
-      "note": "今の主戦場"
-    },
-    {
-      "term": "戦略",
-      "definition": "限られたリソースを、どこにどう配分するかを決めること",
-      "note": ""
-    },
-    {
-      "term": "選択",
-      "definition": "ある目的のために、他の可能性を捨てて、特定の何かを取ること",
-      "note": "取ることより捨てることが本質"
-    },
-    {
-      "term": "集中",
-      "definition": "選んだものに、認識・時間・資源の焦点を合わせること",
-      "note": ""
-    }
-  ],
+  "defined_count": 109,
+  "draft_count": 14,
   "entries": [
     {
       "row": 2,
@@ -192,7 +14,7 @@
     {
       "row": 3,
       "term": "目的",
-      "definition": "欲求を具体化したもの",
+      "definition": "欲求を言語化したもの",
       "note": "",
       "status": "defined"
     },
@@ -206,9 +28,9 @@
     {
       "row": 5,
       "term": "哲学とは",
-      "definition": "",
-      "note": "",
-      "status": "draft"
+      "definition": "世界をどう捉え、何を善いとし、どう在りたいかについての根本姿勢",
+      "note": "OS の源泉",
+      "status": "defined"
     },
     {
       "row": 6,
@@ -290,8 +112,8 @@
     {
       "row": 18,
       "term": "欲求",
-      "definition": "人間を動かす根本の力。マズローの5欲求のどれかとして現れる。",
-      "note": "",
+      "definition": "言語化されていない目的。もっと良くしたい方向性はあるが、まだピン留めされていないもの。",
+      "note": "マズローの5欲求として現れる",
       "status": "defined"
     },
     {
@@ -332,14 +154,14 @@
     {
       "row": 24,
       "term": "ビジネスとは",
-      "definition": "",
+      "definition": "価値提供すること",
       "note": "",
-      "status": "draft"
+      "status": "defined"
     },
     {
       "row": 25,
       "term": "需要",
-      "definition": "商品・サービスに対する欲求",
+      "definition": "サービスに対する欲求",
       "note": "",
       "status": "defined"
     },
@@ -409,21 +231,21 @@
     {
       "row": 35,
       "term": "問題",
-      "definition": "",
-      "note": "",
-      "status": "draft"
+      "definition": "理想と現実のギャップ",
+      "note": "顕在問題と潜在問題を含む",
+      "status": "defined"
     },
     {
       "row": 36,
       "term": "オファー",
-      "definition": "取引の条件。Aという条件でBを買いませんかという提示。",
-      "note": "",
+      "definition": "ある場面で、相手に受け取ってほしい取引条件の提示",
+      "note": "LINE登録、オプトイン、商品購入などを含む",
       "status": "defined"
     },
     {
       "row": 37,
       "term": "マーケティング",
-      "definition": "欲求解消の連続で、需要に供給を届けること。ある市場に、供給を届ける活動すべて。",
+      "definition": "需要に供給を届ける全ての活動",
       "note": "",
       "status": "defined"
     },
@@ -661,7 +483,7 @@
     {
       "row": 71,
       "term": "教育",
-      "definition": "できないことができるようになること。販売文脈では、買わない状態から買う状態に心理を変えること。",
+      "definition": "できないことをできるようにすること",
       "note": "",
       "status": "defined"
     },
@@ -703,7 +525,343 @@
     {
       "row": 77,
       "term": "強いLP",
-      "definition": "特定市場と目的に対して目的達成率が高いLP。実務上は対象に対するCVRで見ることが多い。",
+      "definition": "特定市場と目的に対して目的達成率が高いLP。何に対しての何率かまで具体化して見る。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 78,
+      "term": "信念",
+      "definition": "俯瞰的選択と関係の積み上げが愛という世界を作る",
+      "note": "最上位の世界観",
+      "status": "defined"
+    },
+    {
+      "row": 79,
+      "term": "最上位ゴール",
+      "definition": "世界中の「ありがとう」の数を増やすこと",
+      "note": "スキルプラスより上位",
+      "status": "defined"
+    },
+    {
+      "row": 80,
+      "term": "仕事",
+      "definition": "人の役に立つこと",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 81,
+      "term": "ありがとう",
+      "definition": "人の課題が解決された結果として生まれる反応",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 82,
+      "term": "理想",
+      "definition": "その人が主観的に「こう在れたら良い」と感じる、目的が満たされた状態像",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 83,
+      "term": "現実",
+      "definition": "理想に対して、その人が今実際に置かれている状態",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 84,
+      "term": "課題",
+      "definition": "理想と現実のギャップの原因",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 85,
+      "term": "状態",
+      "definition": "ある時点において、その人が理想に近づけるか、遠ざかるかを決めている条件の総体",
+      "note": "今その人を決めている条件の束",
+      "status": "defined"
+    },
+    {
+      "row": 86,
+      "term": "属性",
+      "definition": "市場の中の切り方。セグメント。",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 87,
+      "term": "価値",
+      "definition": "相手が主観的に「自分にとって意味がある」「理想に近づく」と認識するもの",
+      "note": "感情そのものではない",
+      "status": "defined"
+    },
+    {
+      "row": 88,
+      "term": "取引成立",
+      "definition": "オファーが受け取られ、交換行為が成立した瞬間",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 89,
+      "term": "事業",
+      "definition": "ある市場に対して供給を届ける活動",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 90,
+      "term": "できる",
+      "definition": "ある課題に対して、再現性をもって解決行動を取れること",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 91,
+      "term": "成長",
+      "definition": "できることが増えること、またはできることの再現性・範囲・深さが広がること",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 92,
+      "term": "自立",
+      "definition": "自分で理想と現実を捉え、問題と課題を見つけ、必要な供給を受け取り、行動し続けられる状態",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 93,
+      "term": "信頼",
+      "definition": "ある対象に対して、自分が期待していることが満たされると見込んでいる状態",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 94,
+      "term": "不安",
+      "definition": "期待していることが満たされない可能性を感じている状態",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 95,
+      "term": "安心",
+      "definition": "期待していることが満たされない可能性が、十分に小さいと感じている状態",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 96,
+      "term": "納得",
+      "definition": "そのオファーを受け取ることが、自分にとって意味があり、妥当で、今受け取ってよいと内的に整合している状態",
+      "note": "オファーに対する納得",
+      "status": "defined"
+    },
+    {
+      "row": 97,
+      "term": "OS",
+      "definition": "判断と行動に一貫性を与える根本原理",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 98,
+      "term": "テーマ",
+      "definition": "今の自分が時間と資源を投下して向き合っている、大きな問い",
+      "note": "今の主戦場",
+      "status": "defined"
+    },
+    {
+      "row": 99,
+      "term": "戦略",
+      "definition": "限られたリソースを、どこにどう配分するかを決めること",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 100,
+      "term": "選択",
+      "definition": "ある目的のために、他の可能性を捨てて、特定の何かを取ること",
+      "note": "取ることより捨てることが本質",
+      "status": "defined"
+    },
+    {
+      "row": 101,
+      "term": "集中",
+      "definition": "選んだものに、認識・時間・資源の焦点を合わせること",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 102,
+      "term": "幸福",
+      "definition": "well-being",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 103,
+      "term": "愛",
+      "definition": "代替不可能性を信じられること",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 104,
+      "term": "戦術",
+      "definition": "戦略を現場で成立させるための具体手段",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 105,
+      "term": "実行",
+      "definition": "戦術を現実の行動として動かすこと",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 106,
+      "term": "検証",
+      "definition": "その実行が、目的やゴールに近づいたかを確かめること",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 107,
+      "term": "改善",
+      "definition": "検証結果をもとに、次の実行を良くすること",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 108,
+      "term": "判断",
+      "definition": "複数の選択肢の中から、目的に最も近づくものを決めること",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 109,
+      "term": "設計",
+      "definition": "目的達成のために、要素の配置・順序・関係を決めること",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 110,
+      "term": "原則",
+      "definition": "状況が変わっても繰り返し使える判断基準",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 111,
+      "term": "再現性",
+      "definition": "同じような条件で、同じような結果を起こせること",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 112,
+      "term": "成功",
+      "definition": "目的やゴールに近づく結果",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 113,
+      "term": "失敗",
+      "definition": "目的やゴールに近づかない、または遠ざかる結果",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 114,
+      "term": "積み上げ",
+      "definition": "未来の選択肢・信頼・再現性が増える形で価値が残ること",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 115,
+      "term": "関係",
+      "definition": "相互認識と相互期待の蓄積",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 116,
+      "term": "役割",
+      "definition": "全体目的の中で、自分が担うべき機能",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 117,
+      "term": "責任",
+      "definition": "自分が引き受ける結果の範囲",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 118,
+      "term": "覚悟",
+      "definition": "選んだものの結果を引き受ける前提を持つこと",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 119,
+      "term": "執着",
+      "definition": "本来捨てるべきものを、手放せない状態",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 120,
+      "term": "自由",
+      "definition": "選択肢を持ち、自分で選べる状態",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 121,
+      "term": "制約",
+      "definition": "選択肢や行動範囲を狭める条件",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 122,
+      "term": "可能性",
+      "definition": "今はまだ実現していないが、条件が揃えば実現しうる幅",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 123,
+      "term": "本質",
+      "definition": "それがそれであるために外せない要素",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 124,
+      "term": "違和感",
+      "definition": "自分の認識している構造のどこかに矛盾があるというシグナル",
+      "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 125,
+      "term": "自信",
+      "definition": "自分はできる、あるいはやればできると見込めている状態",
       "note": "",
       "status": "defined"
     }
