@@ -1926,7 +1926,7 @@ def build_cdp_downstream_insights(summary: dict[str, Any]) -> list[str]:
         )
         insights.append(
             f"- `LP URL` では、顧客あたりLTVが最も高いのは `{top_ltv_lp_label}` で `{format_yen(top_ltv_lp.get('ltv_per_customer'))}`。"
-            " LPのオプトインCVRだけでなく、下流売上まで含めた強さを見る。"
+            " LP到達に対するオプトイン率だけでなく、下流売上まで含めた強さを見る。"
         )
         insights.append(
             f"- `LP URL` では、返金率が最も高いのは `{top_refund_lp_label}` で `{format_percent(top_refund_lp.get('refund_rate'))}`。"
