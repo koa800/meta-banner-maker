@@ -2373,7 +2373,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
             "- ここで見ているのは Meta広告CR だが、`フックを広く取りすぎて広いオーディエンスに寄る失敗` という構造自体は SNS広告全般で起こる。",
             meta_common_line,
             f"- さらに `ノンタゲ vs 類似` を直接比べられる群は `{same_asset_summary['broad_vs_narrow_group_count']}` 群あり、CTR は `{same_asset_summary['broad_ctr_lower_count']}/{same_asset_summary['broad_ctr_compared_count']}` 群で広い側が低く、CPA は比較可能な `{same_asset_summary['broad_cpa_heavier_count']}/{same_asset_summary['broad_cpa_compared_count']}` 群で広い側が重かった。",
-            f"- 勝ちCR 340件の再利用群でも、同じ比較ができる `{winner_same_asset_summary['broad_vs_narrow_group_count']}` 群では CTR が `{winner_same_asset_summary['broad_ctr_lower_count']}/{winner_same_asset_summary['broad_ctr_compared_count']}`、CPA が `{winner_same_asset_summary['broad_cpa_heavier_count']}/{winner_same_asset_summary['broad_cpa_compared_count']}` で広い側が不利だった。良いクリエイティブでも、広いオーディエンスに寄ると質が崩れやすい。",
+            f"- 勝ちCR 340件の再利用群でも、同じ比較ができる `{winner_same_asset_summary['broad_vs_narrow_group_count']}` 群では CTR が `{winner_same_asset_summary['broad_ctr_lower_count']}/{winner_same_asset_summary['broad_ctr_compared_count']}`、CPA が `{winner_same_asset_summary['broad_cpa_heavier_count']}/{winner_same_asset_summary['broad_cpa_compared_count']}` で広い側が不利だった。良いクリエイティブでも、広いオーディエンスに寄ると狙っていない属性の比率が上がりやすい。",
             "- つまり `広いフックで人を集める -> オーディエンスが広がる -> 浅い反応層に学習する -> CTRやフック率の見た目よりオプトイン率が落ちる、または狙っていない属性の比率が上がる` を、SNS広告の代表的な失敗メカニズムとして常に疑う。",
             "",
             "### ノンタゲと類似で差が出た例",
