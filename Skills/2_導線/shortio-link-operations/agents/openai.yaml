@@ -1,0 +1,4 @@
+interface:
+  display_name: "short.io運用"
+  short_description: "Addnessのshort.io短縮URL作成と差し替え運用"
+  default_prompt: "Use -link-operations to create or update an Addness short.io link and record it in the URL管理シート。"
