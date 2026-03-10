@@ -1,8 +1,8 @@
 # 前提レイヤー
 
-最終更新: 2026-03-09
+最終更新: 2026-03-10
 
-ここは「AIが判断する前に先に揃えておくもの」を置く場所です。
+ここは「AIが判断する前に先に揃えておくもの」を置く場所です。最上位では、甲原さんのOS・信念・目的を扱い、個別事業より上の判断軸をここで固定します。
 
 ## 前提に入れるもの
 
@@ -30,6 +30,7 @@
 - 判断軸の入口: `Master/前提/判断軸.md`
 - 優先順位の入口: `Master/前提/優先順位.md`
 - 更新境界: `Master/前提/更新ルール.md`
+- 本人の固定プロフィール: `Master/前提/本人基本プロフィール.md`
 
 ```bash
 python3 System/sheets_sync.py --id 1nkmeWcHmzxPJH1d5veXwTpDoZrsPFH4_3txevqj225Y
@@ -42,6 +43,7 @@ python3 System/sheets_sync.py --id 1nkmeWcHmzxPJH1d5veXwTpDoZrsPFH4_3txevqj225Y
 - 判断スタンス: `Master/self_clone/kohara/USER.md`
 - 哲学・価値観: `Master/self_clone/kohara/SELF_PROFILE.md`
 - 人物理解: `Master/company/people_public.json`, `Master/brains/kohara/people_private.json`
+- 事務・申告で使う固定プロフィール: `Master/前提/本人基本プロフィール.md`
 
 ## 運用ルール
 

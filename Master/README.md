@@ -1,8 +1,8 @@
 # Master 設計図
 
-最終更新: 2026-03-09
+最終更新: 2026-03-10
 
-`Master/` は、AIの脳みその設計図です。目的は「情報を置くこと」ではなく、「使うたびに判断精度が上がる構造を作ること」です。
+`Master/` は、AIの脳みその設計図です。目的は「情報を置くこと」ではなく、「使うたびに判断精度が上がる構造を作ること」です。ここで作る脳は `スキルプラス専用` ではなく、甲原さんのOS・信念・今やっていること・これからやりたいことを統合して、世界中の `ありがとう` を増やすための判断を行う脳です。
 
 ## 4層
 
@@ -97,6 +97,7 @@ output を作る
 
 - 全体方針: [Master/README.md](/Users/koa800/Desktop/cursor/Master/README.md)
 - 用語定義: [用語定義.md](/Users/koa800/Desktop/cursor/Master/前提/用語定義.md)
+- 本人固定プロフィール: [本人基本プロフィール.md](/Users/koa800/Desktop/cursor/Master/前提/本人基本プロフィール.md)
 - 目的: [目的.md](/Users/koa800/Desktop/cursor/Master/前提/目的.md)
 - 判断軸: [判断軸.md](/Users/koa800/Desktop/cursor/Master/前提/判断軸.md)
 - 優先順位: [優先順位.md](/Users/koa800/Desktop/cursor/Master/前提/優先順位.md)
