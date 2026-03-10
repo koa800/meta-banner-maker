@@ -1714,7 +1714,7 @@ def build_cdp_downstream_insights(summary: dict[str, Any]) -> list[str]:
         top_refund_lp = max(stable_lp_rows, key=lambda row: row.get("refund_rate") or 0.0)
         insights.append(
             f"- `LP` では、顧客あたりLTVが最も高いのは `{top_ltv_lp['lp_key']}` で `{format_yen(top_ltv_lp.get('ltv_per_customer'))}`。"
-            " LPのCVRだけでなく、下流売上まで含めた強さを見る。"
+            " LPのオプトインCVRだけでなく、下流売上まで含めた強さを見る。"
         )
         insights.append(
             f"- `LP` では、返金率が最も高いのは `{top_refund_lp['lp_key']}` で `{format_percent(top_refund_lp.get('refund_rate'))}`。"
