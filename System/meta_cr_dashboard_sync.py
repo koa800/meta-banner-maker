@@ -22,6 +22,9 @@ DEFAULT_FAILURE_MARKDOWN = ROOT_DIR / "Master" / "addness" / "meta_ads_cr_dashbo
 SUMMARY_JSON_PATH = DATA_DIR / "failure_summary.json"
 KNOWLEDGE_PATH = ROOT_DIR / "Master" / "knowledge" / "広告CR失敗パターン.md"
 DEFAULT_FULL_FAILURE_CSV = DATA_DIR / "full_failure_raw_latest.csv"
+CDP_SHEET_ID = "1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk"
+CDP_MASTER_TAB = "顧客マスタ"
+CDP_DOWNSTREAM_RANGE = "AC2:AU"
 DEFAULT_CDP_URL = "http://127.0.0.1:9224"
 DEFAULT_LOOKER_PAGE_KEY = "p_i93dt7hmvd"
 VIDEO_CACHE_DIR = DATA_DIR / "video_cache"
@@ -170,6 +173,11 @@ def normalize_title_from_ad_name(ad_name: str, creator: str = "") -> str:
 
 def extract_lp_key(ad_name: str) -> str:
     match = re.search(r"(LP\d+)", ad_name or "")
+    return match.group(1) if match else ""
+
+
+def extract_cr_code(text: str) -> str:
+    match = re.search(r"(CR\d+)", collapse_ws(text).upper())
     return match.group(1) if match else ""
 
 
@@ -1321,6 +1329,208 @@ def summarize_same_asset_variation(source_rows: list[dict[str, Any]]) -> dict[st
     }
 
 
+def load_cdp_downstream_by_cr_code() -> dict[str, Any]:
+    import sys
+
+    system_path = str(ROOT_DIR / "System")
+    if system_path not in sys.path:
+        sys.path.insert(0, system_path)
+    from sheets_manager import get_client
+
+    sheet = get_client().open_by_key(CDP_SHEET_ID)
+    ws = sheet.worksheet(CDP_MASTER_TAB)
+    values = ws.get(CDP_DOWNSTREAM_RANGE)
+    if not values:
+        return {"generated_at": datetime.now().isoformat(timespec="seconds"), "rows_with_cr_code": 0, "codes": {}}
+
+    headers = values[0]
+    rows = values[1:]
+    idx = {header: i for i, header in enumerate(headers)}
+
+    by_code: dict[str, dict[str, Any]] = {}
+    rows_with_cr_code = 0
+    for row in rows:
+        padded = row + [""] * (len(headers) - len(row))
+        cr_code = extract_cr_code(padded[idx["CR名"]]) if "CR名" in idx else ""
+        if not cr_code:
+            continue
+        rows_with_cr_code += 1
+        record = by_code.setdefault(
+            cr_code,
+            {
+                "customer_rows": 0,
+                "buyer_rows": 0,
+                "total_sales": 0.0,
+                "total_refunds": 0.0,
+                "total_ltv": 0.0,
+                "ltv_values": [],
+            },
+        )
+        record["customer_rows"] += 1
+
+        first_purchase_date = collapse_ws(padded[idx["初回購入日"]]) if "初回購入日" in idx else ""
+        purchase_count = parse_int(padded[idx["累計購入回数"]]) if "累計購入回数" in idx else None
+        sales = parse_currency(padded[idx["着金売上"]]) if "着金売上" in idx else None
+        refunds = parse_currency(padded[idx["返金額"]]) if "返金額" in idx else None
+        ltv = parse_currency(padded[idx["LTV"]]) if "LTV" in idx else None
+
+        if first_purchase_date or (purchase_count is not None and purchase_count > 0) or (sales is not None and sales > 0):
+            record["buyer_rows"] += 1
+        if sales is not None:
+            record["total_sales"] += sales
+        if refunds is not None:
+            record["total_refunds"] += refunds
+        if ltv is not None:
+            record["total_ltv"] += ltv
+            record["ltv_values"].append(ltv)
+
+    return {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "rows_with_cr_code": rows_with_cr_code,
+        "codes": by_code,
+    }
+
+
+def summarize_cdp_downstream(
+    positive_rows: list[dict[str, Any]],
+    failure_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    cdp_summary = load_cdp_downstream_by_cr_code()
+    cdp_codes: dict[str, dict[str, Any]] = cdp_summary["codes"]
+
+    raw_code_summary: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "lp_keys": set(),
+            "positive_count": 0,
+            "failure_count": 0,
+            "failure_buckets": Counter(),
+        }
+    )
+
+    for row in positive_rows:
+        code = extract_cr_code(row.get("ad_name", ""))
+        if not code:
+            continue
+        raw_code_summary[code]["positive_count"] += 1
+        lp_key = collapse_ws(row.get("lp_key"))
+        if lp_key:
+            raw_code_summary[code]["lp_keys"].add(lp_key)
+
+    for row in failure_rows:
+        code = extract_cr_code(row.get("ad_name", ""))
+        if not code:
+            continue
+        raw_code_summary[code]["failure_count"] += 1
+        lp_key = collapse_ws(row.get("lp_key"))
+        if lp_key:
+            raw_code_summary[code]["lp_keys"].add(lp_key)
+        bucket = collapse_ws(row.get("failure_bucket"))
+        if bucket:
+            raw_code_summary[code]["failure_buckets"][bucket] += 1
+
+    matched_codes = sorted(set(cdp_codes) & set(raw_code_summary))
+
+    bucket_rollup: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "cr_codes": set(),
+            "customer_rows": 0,
+            "buyer_rows": 0,
+            "total_sales": 0.0,
+            "total_refunds": 0.0,
+            "total_ltv": 0.0,
+            "ltv_values": [],
+        }
+    )
+    lp_rollup: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "cr_codes": set(),
+            "customer_rows": 0,
+            "buyer_rows": 0,
+            "total_sales": 0.0,
+            "total_refunds": 0.0,
+            "total_ltv": 0.0,
+            "ltv_values": [],
+        }
+    )
+
+    matched_customer_rows = 0
+    matched_buyer_rows = 0
+    matched_ltv_values: list[float] = []
+    single_lp_codes = 0
+    ambiguous_lp_codes = 0
+
+    for code in matched_codes:
+        cdp_record = cdp_codes[code]
+        raw_record = raw_code_summary[code]
+        matched_customer_rows += cdp_record["customer_rows"]
+        matched_buyer_rows += cdp_record["buyer_rows"]
+        matched_ltv_values.extend(cdp_record["ltv_values"])
+
+        failure_buckets = raw_record["failure_buckets"]
+        if failure_buckets:
+            bucket = failure_buckets.most_common(1)[0][0]
+            target = bucket_rollup[bucket]
+            target["cr_codes"].add(code)
+            target["customer_rows"] += cdp_record["customer_rows"]
+            target["buyer_rows"] += cdp_record["buyer_rows"]
+            target["total_sales"] += cdp_record["total_sales"]
+            target["total_refunds"] += cdp_record["total_refunds"]
+            target["total_ltv"] += cdp_record["total_ltv"]
+            target["ltv_values"].extend(cdp_record["ltv_values"])
+
+        lp_keys = {lp for lp in raw_record["lp_keys"] if lp}
+        if len(lp_keys) == 1:
+            single_lp_codes += 1
+            lp_key = next(iter(lp_keys))
+            target = lp_rollup[lp_key]
+            target["cr_codes"].add(code)
+            target["customer_rows"] += cdp_record["customer_rows"]
+            target["buyer_rows"] += cdp_record["buyer_rows"]
+            target["total_sales"] += cdp_record["total_sales"]
+            target["total_refunds"] += cdp_record["total_refunds"]
+            target["total_ltv"] += cdp_record["total_ltv"]
+            target["ltv_values"].extend(cdp_record["ltv_values"])
+        elif len(lp_keys) >= 2:
+            ambiguous_lp_codes += 1
+
+    def finalize_rollup(source: dict[str, dict[str, Any]], key_name: str) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for key, record in source.items():
+            ltv_values = record["ltv_values"]
+            rows.append(
+                {
+                    key_name: key,
+                    "cr_code_count": len(record["cr_codes"]),
+                    "customer_rows": record["customer_rows"],
+                    "buyer_rows": record["buyer_rows"],
+                    "total_sales": record["total_sales"],
+                    "total_refunds": record["total_refunds"],
+                    "total_ltv": record["total_ltv"],
+                    "buyer_rate": (record["buyer_rows"] / record["customer_rows"] * 100) if record["customer_rows"] else None,
+                    "ltv_per_customer": (record["total_ltv"] / record["customer_rows"]) if record["customer_rows"] else None,
+                    "refund_rate": (record["total_refunds"] / record["total_sales"] * 100) if record["total_sales"] else None,
+                    "ltv_median": statistics.median(ltv_values) if ltv_values else None,
+                }
+            )
+        rows.sort(key=lambda row: (row["total_ltv"], row["customer_rows"]), reverse=True)
+        return rows
+
+    return {
+        "generated_at": cdp_summary["generated_at"],
+        "cdp_rows_with_cr_code": cdp_summary["rows_with_cr_code"],
+        "cdp_unique_cr_codes": len(cdp_codes),
+        "raw_unique_cr_codes": len(raw_code_summary),
+        "matched_cr_codes": len(matched_codes),
+        "matched_customer_rows": matched_customer_rows,
+        "matched_buyer_rows": matched_buyer_rows,
+        "matched_ltv_median": statistics.median(matched_ltv_values) if matched_ltv_values else None,
+        "single_lp_codes": single_lp_codes,
+        "ambiguous_lp_codes": ambiguous_lp_codes,
+        "bucket_rows": finalize_rollup(bucket_rollup, "failure_bucket"),
+        "lp_rows": finalize_rollup(lp_rollup, "lp_key"),
+    }
+
+
 def summarize_patterns(
     winner_rows: list[dict[str, Any]],
     failure_rows: list[dict[str, Any]],
@@ -1333,6 +1543,7 @@ def summarize_patterns(
     enriched_failures = enrich_failures(failure_rows, benchmarks)
     winner_same_asset_summary = summarize_same_asset_variation(winner_rows)
     failure_same_asset_summary = summarize_same_asset_variation(failure_rows)
+    cdp_downstream_summary = summarize_cdp_downstream(positive_rows, enriched_failures)
 
     stage_counts = Counter(row["failure_bucket"] for row in enriched_failures)
     examples_by_stage: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -1402,6 +1613,7 @@ def summarize_patterns(
         "family_month_contexts": summarize_family_month_context(positive_rows, enriched_failures),
         "winner_same_asset_summary": winner_same_asset_summary,
         "failure_same_asset_summary": failure_same_asset_summary,
+        "cdp_downstream_summary": cdp_downstream_summary,
     }
     return summary
 
@@ -1433,6 +1645,77 @@ def render_stage_definition_table(benchmarks: dict[str, float]) -> str:
             "| CTRとフック率は通るがオプトイン以降で失敗 | 上記3条件に入らない非勝ちCR |",
         ]
     )
+
+
+def render_cdp_join_table(summary: dict[str, Any]) -> str:
+    rows = [
+        ("CDP側の顧客行（CRコードあり）", f"{summary['cdp_rows_with_cr_code']:,}"),
+        ("CDP側のユニークCRコード", f"{summary['cdp_unique_cr_codes']:,}"),
+        ("Meta raw側のユニークCRコード", f"{summary['raw_unique_cr_codes']:,}"),
+        ("結線できたCRコード", f"{summary['matched_cr_codes']:,}"),
+        ("結線できた顧客行", f"{summary['matched_customer_rows']:,}"),
+        ("結線できた購入者行", f"{summary['matched_buyer_rows']:,}"),
+        ("LPを一意に解けたCRコード", f"{summary['single_lp_codes']:,}"),
+        ("LPが複数にまたがるCRコード", f"{summary['ambiguous_lp_codes']:,}"),
+        ("結線行のLTV中央値", format_yen(summary.get("matched_ltv_median"))),
+    ]
+    lines = ["| 項目 | 数値 |", "|---|---:|"]
+    for label, value in rows:
+        lines.append(f"| {label} | {value} |")
+    return "\n".join(lines)
+
+
+def render_downstream_rollup(rows: list[dict[str, Any]], key_name: str, key_label: str) -> str:
+    lines = [
+        f"| {key_label} | CRコード数 | 顧客行 | 購入者行 | 購入者率 | 着金売上 | 返金額 | 返金率 | 顧客あたりLTV | LTV中央値 |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for row in rows:
+        lines.append(
+            "| {key} | {codes} | {customers} | {buyers} | {buyer_rate} | {sales} | {refunds} | {refund_rate} | {ltv_per_customer} | {ltv_median} |".format(
+                key=row[key_name],
+                codes=row["cr_code_count"],
+                customers=row["customer_rows"],
+                buyers=row["buyer_rows"],
+                buyer_rate=format_percent(row["buyer_rate"]),
+                sales=format_yen(row["total_sales"]),
+                refunds=format_yen(row["total_refunds"]),
+                refund_rate=format_percent(row["refund_rate"]),
+                ltv_per_customer=format_yen(row["ltv_per_customer"]),
+                ltv_median=format_yen(row["ltv_median"]),
+            )
+        )
+    return "\n".join(lines)
+
+
+def build_cdp_downstream_insights(summary: dict[str, Any]) -> list[str]:
+    insights: list[str] = []
+    bucket_rows = summary.get("bucket_rows", [])
+    lp_rows = summary.get("lp_rows", [])
+    if bucket_rows:
+        top_ltv_bucket = max(bucket_rows, key=lambda row: row.get("ltv_per_customer") or 0.0)
+        top_refund_bucket = max(bucket_rows, key=lambda row: row.get("refund_rate") or 0.0)
+        insights.append(
+            f"- `失敗形` で見ると、顧客あたりLTVが最も高いのは `{top_ltv_bucket['failure_bucket']}` で `{format_yen(top_ltv_bucket.get('ltv_per_customer'))}`。"
+            " クリックは取れていても、下流で取り返している型かどうかを切り分けて読む。"
+        )
+        insights.append(
+            f"- 返金率が最も高いのは `{top_refund_bucket['failure_bucket']}` で `{format_percent(top_refund_bucket.get('refund_rate'))}`。"
+            " 単純な売上総額より、返金まで含めた質で読む。"
+        )
+    stable_lp_rows = [row for row in lp_rows if row.get("customer_rows", 0) >= 50]
+    if stable_lp_rows:
+        top_ltv_lp = max(stable_lp_rows, key=lambda row: row.get("ltv_per_customer") or 0.0)
+        top_refund_lp = max(stable_lp_rows, key=lambda row: row.get("refund_rate") or 0.0)
+        insights.append(
+            f"- `LP` では、顧客あたりLTVが最も高いのは `{top_ltv_lp['lp_key']}` で `{format_yen(top_ltv_lp.get('ltv_per_customer'))}`。"
+            " LPのCVRだけでなく、下流売上まで含めた強さを見る。"
+        )
+        insights.append(
+            f"- `LP` では、返金率が最も高いのは `{top_refund_lp['lp_key']}` で `{format_percent(top_refund_lp.get('refund_rate'))}`。"
+            " オファーやターゲット層のズレを含めて確認する。"
+        )
+    return insights
 
 
 def render_family_table(rows: list[dict[str, Any]]) -> str:
@@ -1716,6 +1999,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
     failure_same_asset_summary = summary["failure_same_asset_summary"]
     same_asset_summary = failure_same_asset_summary if failure_mode == "csv" else winner_same_asset_summary
     video_signal_summary = summary.get("video_signal_summary") or {}
+    cdp_downstream_summary = summary.get("cdp_downstream_summary") or {}
     failure_source_name = Path(summary["failure_source"]).name
     if failure_mode == "csv":
         comparison_header = f"ここでは `大当たり基準 {summary['winner_count']}件` をベンチマークにしつつ、`勝ち側 {summary['positive_count']}件` と `非勝ち {summary['failure_count']}件` を比較している。"
@@ -1808,6 +2092,33 @@ def render_markdown(summary: dict[str, Any]) -> str:
             "## 失敗形の内訳",
             "",
             render_stage_table(summary["stage_counts"], summary["failure_count"]),
+            "",
+            "## CDP結線状況",
+            "",
+            "- CDP は `CR名` の末尾 `CRコード` で Meta raw と結線している。",
+            "- LP別の下流集計は、`1つのCRコードが raw 上で単一LPにしか紐づかないもの` だけを使う。複数LPにまたがるCRコードは除外している。",
+            "",
+            render_cdp_join_table(cdp_downstream_summary) if cdp_downstream_summary else "- まだ結線できていない",
+            "",
+            "## 失敗形ごとの下流売上/LTV",
+            "",
+            render_downstream_rollup(cdp_downstream_summary.get("bucket_rows", [])[:8], "failure_bucket", "失敗形")
+            if cdp_downstream_summary.get("bucket_rows")
+            else "- まだ該当なし",
+            "",
+            "## LPごとの下流売上/LTV",
+            "",
+            render_downstream_rollup(cdp_downstream_summary.get("lp_rows", [])[:8], "lp_key", "LP")
+            if cdp_downstream_summary.get("lp_rows")
+            else "- まだ該当なし",
+            "",
+            "## 下流数値から見える仮説",
+            "",
+            *(
+                build_cdp_downstream_insights(cdp_downstream_summary)
+                if cdp_downstream_summary
+                else ["- まだ十分な結線がない"]
+            ),
             "",
             "## CR系統ラベルの偏り",
             "",
