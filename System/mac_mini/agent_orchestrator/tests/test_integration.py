@@ -12,8 +12,9 @@ import sys
 import tempfile
 import shutil
 import types
+from datetime import datetime as real_datetime
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -234,6 +235,377 @@ def test_scheduler_normalizes_cron_weekday_for_apscheduler():
     print("  [PASS] scheduler normalizes cron weekday and timezone")
 
 
+def test_scheduler_setup_uses_catchup_defaults():
+    """cron/interval タスクは取りこぼしに強い job option で登録する。"""
+    scheduler_module = _load_scheduler_module()
+    from agent_orchestrator.memory import MemoryStore
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    try:
+        scheduler = scheduler_module.TaskScheduler(
+            {
+                "paths": {"db_path": db_path},
+                "schedule": {
+                    "daily_report_input": {"cron": "40 8 * * *", "enabled": True},
+                    "health_check": {"interval_minutes": 5, "enabled": True},
+                },
+            },
+            MemoryStore(db_path),
+        )
+        scheduler.setup()
+
+        jobs = {job["kwargs"]["id"]: job["kwargs"] for job in scheduler.scheduler.jobs}
+        assert jobs["daily_report_input"]["misfire_grace_time"] == 1800
+        assert jobs["daily_report_input"]["coalesce"] is True
+        assert jobs["daily_report_input"]["max_instances"] == 1
+        assert jobs["health_check"]["misfire_grace_time"] == 300
+        assert jobs["health_check"]["coalesce"] is True
+        print("  [PASS] scheduler uses catch-up defaults")
+    finally:
+        os.unlink(db_path)
+
+
+def test_find_claude_cmd_supports_shell_path():
+    """Claude CLI は PATH 上の ~/.local/bin なども検出できる。"""
+    scheduler_module = _load_scheduler_module()
+    from agent_orchestrator.memory import MemoryStore
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    try:
+        scheduler = scheduler_module.TaskScheduler({"paths": {"db_path": db_path}, "schedule": {}}, MemoryStore(db_path))
+        with tempfile.TemporaryDirectory() as td:
+            claude_path = Path(td) / "claude"
+            claude_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            claude_path.chmod(0o755)
+
+            with patch("shutil.which", return_value=str(claude_path)):
+                assert scheduler._find_claude_cmd() == claude_path
+
+        print("  [PASS] scheduler finds Claude CLI from shell PATH")
+    finally:
+        os.unlink(db_path)
+
+
+def test_resolve_claude_config_dir_falls_back_to_default_config():
+    """秘書用 config が未完成なら ~/.claude を使う。"""
+    scheduler_module = _load_scheduler_module()
+    from agent_orchestrator.memory import MemoryStore
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    try:
+        scheduler = scheduler_module.TaskScheduler({"paths": {"db_path": db_path}, "schedule": {}}, MemoryStore(db_path))
+        with tempfile.TemporaryDirectory() as td:
+            fake_home = Path(td)
+            secretary_dir = fake_home / ".claude-secretary"
+            default_dir = fake_home / ".claude"
+            secretary_dir.mkdir()
+            (secretary_dir / ".claude.json").write_text("{}", encoding="utf-8")
+            default_dir.mkdir()
+            (default_dir / "settings.json").write_text("{}", encoding="utf-8")
+
+            with patch("pathlib.Path.home", return_value=fake_home):
+                assert scheduler._resolve_claude_config_dir() == default_dir
+
+        print("  [PASS] scheduler falls back to ~/.claude when secretary config lacks auth files")
+    finally:
+        os.unlink(db_path)
+
+
+def test_refresh_claude_oauth_falls_back_to_cli_check_without_credentials():
+    """credentials 不在時は CLI healthcheck で代替確認する。"""
+    scheduler_module = _load_scheduler_module()
+    from agent_orchestrator.memory import MemoryStore
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    try:
+        scheduler = scheduler_module.TaskScheduler({"paths": {"db_path": db_path}, "schedule": {}}, MemoryStore(db_path))
+        scheduler._run_claude_cli_healthcheck = MagicMock(return_value=(True, ""))
+
+        with tempfile.TemporaryDirectory() as td:
+            config_dir = Path(td)
+            ok, err = scheduler._refresh_claude_oauth(config_dir)
+
+        assert ok is True
+        assert err == ""
+        scheduler._run_claude_cli_healthcheck.assert_called_once_with(config_dir)
+        print("  [PASS] scheduler uses CLI healthcheck when credentials file is missing")
+    finally:
+        os.unlink(db_path)
+
+
+def test_start_claude_auth_login_flow_launches_cli_login():
+    """Claude 認証復旧は auth login を自動起動して承認だけ依頼できる。"""
+    scheduler_module = _load_scheduler_module()
+    from agent_orchestrator.memory import MemoryStore
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    try:
+        scheduler = scheduler_module.TaskScheduler({"paths": {"db_path": db_path}, "schedule": {}}, MemoryStore(db_path))
+        secretary_config = Path("/tmp/.claude-secretary")
+        scheduler._find_claude_cmd = MagicMock(return_value=Path("/tmp/claude"))
+        scheduler._build_claude_secretary_env = MagicMock(return_value={"PATH": "/tmp"})
+
+        with patch("subprocess.Popen") as mock_popen:
+            status, detail = scheduler._start_claude_auth_login_flow(secretary_config)
+
+        assert status == "started"
+        assert detail == ""
+        mock_popen.assert_called_once()
+        popen_args = mock_popen.call_args.args[0]
+        assert popen_args == [
+            "/tmp/claude",
+            "auth",
+            "login",
+            "--email",
+            "koa800.secretary@gmail.com",
+        ]
+        print("  [PASS] scheduler launches Claude auth login for approval-only recovery")
+    finally:
+        os.unlink(db_path)
+
+
+def test_execute_claude_code_task_fails_fast_when_bridge_is_down():
+    """Chrome bridge 不通なら Claude CLI を叩く前に止める。"""
+    scheduler_module = _load_scheduler_module()
+    from agent_orchestrator.memory import MemoryStore
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    try:
+        scheduler = scheduler_module.TaskScheduler({"paths": {"db_path": db_path}, "schedule": {}}, MemoryStore(db_path))
+        scheduler._ensure_claude_chrome_bridge = MagicMock(return_value=(False, "bridge down"))
+        scheduler._check_task_health = MagicMock()
+
+        success, output, error = scheduler._execute_claude_code_task(
+            "daily_report_input",
+            "/tmp/claude",
+            "/tmp/.claude-secretary",
+            "/tmp",
+            "test prompt",
+            use_chrome=True,
+        )
+
+        assert success is False
+        assert output == ""
+        assert error == "bridge down"
+        scheduler._check_task_health.assert_called_once()
+        print("  [PASS] chrome bridge failure stops Claude task early")
+    finally:
+        os.unlink(db_path)
+
+
+def test_routine_watchdog_reruns_missing_task_once():
+    """watchdog は未実行の定常を1回だけ補走する。"""
+    scheduler_module = _load_scheduler_module()
+    from agent_orchestrator.memory import MemoryStore
+
+    class FakeDateTime(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            base = real_datetime(2026, 3, 9, 9, 5)
+            return base if tz is None else base.replace(tzinfo=tz)
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    try:
+        scheduler = scheduler_module.TaskScheduler(
+            {
+                "paths": {"db_path": db_path},
+                "schedule": {"daily_report_input": {"enabled": True}},
+            },
+            MemoryStore(db_path),
+        )
+        runner = AsyncMock()
+
+        with patch.object(scheduler_module, "datetime", FakeDateTime):
+            asyncio.run(
+                scheduler._ensure_routine_slot_completed(
+                    task_name="daily_report_input",
+                    success_state_key="last_success_daily_report_input",
+                    check_after=(9, 0),
+                    runner=runner,
+                )
+            )
+            asyncio.run(
+                scheduler._ensure_routine_slot_completed(
+                    task_name="daily_report_input",
+                    success_state_key="last_success_daily_report_input",
+                    check_after=(9, 0),
+                    runner=runner,
+                )
+            )
+
+        assert runner.await_count == 1
+        print("  [PASS] routine watchdog reruns missing task once")
+    finally:
+        os.unlink(db_path)
+
+
+def test_routine_watchdog_retries_after_cooldown_until_limit():
+    """watchdog はクールダウン後に再試行し、上限回数で止まる。"""
+    scheduler_module = _load_scheduler_module()
+    from agent_orchestrator.memory import MemoryStore
+
+    class FakeDateTime(real_datetime):
+        current = real_datetime(2026, 3, 9, 9, 5)
+
+        @classmethod
+        def now(cls, tz=None):
+            base = cls.current
+            return base if tz is None else base.replace(tzinfo=tz)
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    try:
+        scheduler = scheduler_module.TaskScheduler(
+            {
+                "paths": {"db_path": db_path},
+                "schedule": {"daily_report_input": {"enabled": True}},
+            },
+            MemoryStore(db_path),
+        )
+        runner = AsyncMock()
+
+        with patch.object(scheduler_module, "datetime", FakeDateTime):
+            for minute in (5, 9, 16, 27, 38):
+                FakeDateTime.current = real_datetime(2026, 3, 9, 9, minute)
+                asyncio.run(
+                    scheduler._ensure_routine_slot_completed(
+                        task_name="daily_report_input",
+                        success_state_key="last_success_daily_report_input",
+                        check_after=(9, 0),
+                        runner=runner,
+                        max_retries=3,
+                        retry_cooldown_minutes=10,
+                    )
+                )
+
+        assert runner.await_count == 3
+        print("  [PASS] routine watchdog retries after cooldown until limit")
+    finally:
+        os.unlink(db_path)
+
+
+def test_routine_watchdog_notifies_once_when_retry_limit_reached():
+    """watchdog は上限到達後に1回だけ失敗通知する。"""
+    scheduler_module = _load_scheduler_module()
+    from agent_orchestrator.memory import MemoryStore
+
+    class FakeDateTime(real_datetime):
+        current = real_datetime(2026, 3, 9, 9, 5)
+
+        @classmethod
+        def now(cls, tz=None):
+            base = cls.current
+            return base if tz is None else base.replace(tzinfo=tz)
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    try:
+        scheduler = scheduler_module.TaskScheduler(
+            {
+                "paths": {"db_path": db_path},
+                "schedule": {"daily_report_input": {"enabled": True}},
+            },
+            MemoryStore(db_path),
+        )
+        scheduler._maybe_notify_task_failure = MagicMock()
+        runner = AsyncMock()
+
+        with patch.object(scheduler_module, "datetime", FakeDateTime):
+            for minute in (5, 16, 27, 38, 49):
+                FakeDateTime.current = real_datetime(2026, 3, 9, 9, minute)
+                asyncio.run(
+                    scheduler._ensure_routine_slot_completed(
+                        task_name="daily_report_input",
+                        success_state_key="last_success_daily_report_input",
+                        check_after=(9, 0),
+                        runner=runner,
+                        max_retries=3,
+                        retry_cooldown_minutes=10,
+                    )
+                )
+
+        assert runner.await_count == 3
+        scheduler._maybe_notify_task_failure.assert_called_once()
+        assert "自動補走後も未完了" in scheduler._maybe_notify_task_failure.call_args[0][1]
+        print("  [PASS] routine watchdog notifies once after retry limit")
+    finally:
+        os.unlink(db_path)
+
+
+def test_startup_recovery_reruns_missed_task_without_waiting_for_health_check():
+    """再起動直後は health_check を待たずに当日分の取りこぼしを補う。"""
+    scheduler_module = _load_scheduler_module()
+    from agent_orchestrator.memory import MemoryStore
+
+    class FakeDateTime(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            base = real_datetime(2026, 3, 9, 9, 5)
+            return base if tz is None else base.replace(tzinfo=tz)
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    try:
+        scheduler = scheduler_module.TaskScheduler(
+            {
+                "paths": {"db_path": db_path},
+                "schedule": {"daily_report_input": {"enabled": True}},
+            },
+            MemoryStore(db_path),
+        )
+        scheduler._run_daily_report_input = AsyncMock()
+
+        with patch.object(scheduler_module, "datetime", FakeDateTime):
+            asyncio.run(scheduler.run_startup_recovery())
+
+        assert scheduler._run_daily_report_input.await_count == 1
+        assert scheduler.memory.get_state("last_startup_recovery_check")
+        print("  [PASS] startup recovery reruns missed task immediately")
+    finally:
+        os.unlink(db_path)
+
+
+def test_launchctl_service_running_accepts_plist_style_pid_output():
+    """launchctl list の plist 形式出力でも local_agent を生存判定できる。"""
+    scheduler_module = _load_scheduler_module()
+    from agent_orchestrator.memory import MemoryStore
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    try:
+        scheduler = scheduler_module.TaskScheduler(
+            {"paths": {"db_path": db_path}, "schedule": {}},
+            MemoryStore(db_path),
+        )
+        list_output = MagicMock(returncode=0, stdout='{\n\t"PID" = 46347;\n\t"Label" = "com.linebot.localagent";\n};\n')
+        print_output = MagicMock(returncode=1, stdout="")
+
+        with patch("subprocess.run", side_effect=[list_output, print_output]):
+            assert scheduler._launchctl_service_running("com.linebot.localagent") is True
+
+        print("  [PASS] launchctl plist-style PID output is treated as alive")
+    finally:
+        os.unlink(db_path)
+
+
 def test_meeting_report_skips_outside_friday():
     """経営会議資料は金曜以外なら実行前に止める。"""
     scheduler_module = _load_scheduler_module()
@@ -253,6 +625,67 @@ def test_meeting_report_skips_outside_friday():
 
     scheduler._ensure_claude_chrome_ready.assert_not_called()
     print("  [PASS] meeting_report skips on non-Friday")
+
+
+def test_daily_report_input_oauth_failure_requests_approval_only():
+    """日報の preflight で Claude 認証が切れたら承認だけ依頼する。"""
+    scheduler_module = _load_scheduler_module()
+    from agent_orchestrator.memory import MemoryStore
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    try:
+        scheduler = scheduler_module.TaskScheduler({"paths": {"db_path": db_path}, "schedule": {}}, MemoryStore(db_path))
+        secretary_config = Path("/tmp/.claude")
+        scheduler._ensure_claude_chrome_ready = MagicMock(
+            return_value=(False, Path("/tmp/claude"), secretary_config, Path("/tmp/repo"), "Claude Code OAuth エラー: expired")
+        )
+        scheduler._request_claude_approval_only = MagicMock()
+
+        with patch("agent_orchestrator.notifier.send_line_notify") as mock_notify:
+            asyncio.run(scheduler._run_daily_report_input())
+
+        scheduler._request_claude_approval_only.assert_called_once_with("日報の自動入力", secretary_config)
+        mock_notify.assert_not_called()
+        print("  [PASS] daily_report_input requests approval-only Claude recovery on preflight auth failure")
+    finally:
+        os.unlink(db_path)
+
+
+def test_looker_csv_download_login_failure_requests_approval_only():
+    """Looker CSV が Google ログインで止まったら承認だけ依頼する。"""
+    scheduler_module = _load_scheduler_module()
+    from agent_orchestrator.memory import MemoryStore
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    try:
+        scheduler = scheduler_module.TaskScheduler({"paths": {"db_path": db_path}, "schedule": {}}, MemoryStore(db_path))
+        scheduler._ensure_claude_chrome_ready = MagicMock(
+            return_value=(True, Path("/tmp/claude"), Path("/tmp/.claude"), Path("/tmp/repo"), "")
+        )
+        scheduler._find_missing_csv_dates = MagicMock(return_value=[real_datetime(2026, 3, 9).date()])
+        scheduler._execute_claude_code_task = MagicMock(return_value=(False, "", "Googleログイン切れ"))
+        scheduler._request_google_approval_only = MagicMock()
+
+        with tempfile.TemporaryDirectory() as td:
+            fake_home = Path(td)
+            (fake_home / "Desktop").mkdir(parents=True, exist_ok=True)
+            with patch("pathlib.Path.home", return_value=fake_home):
+                with patch("agent_orchestrator.notifier.send_line_notify") as mock_notify:
+                    asyncio.run(scheduler._run_looker_csv_download())
+
+        scheduler._request_google_approval_only.assert_called_once_with(
+            "Looker CSVのダウンロード",
+            scheduler_module._LOOKER_CSV_REPORT_URL,
+            "manual_approval_google_looker_csv",
+        )
+        mock_notify.assert_not_called()
+        print("  [PASS] looker_csv_download requests approval-only Google recovery on login failure")
+    finally:
+        os.unlink(db_path)
 
 
 def test_repair_agent_no_errors():
@@ -324,7 +757,20 @@ if __name__ == "__main__":
     test_cdp_sync_finds_best_header_match()
     test_scheduler_formats_cdp_sync_attention_message()
     test_scheduler_normalizes_cron_weekday_for_apscheduler()
+    test_scheduler_setup_uses_catchup_defaults()
+    test_find_claude_cmd_supports_shell_path()
+    test_resolve_claude_config_dir_falls_back_to_default_config()
+    test_refresh_claude_oauth_falls_back_to_cli_check_without_credentials()
+    test_start_claude_auth_login_flow_launches_cli_login()
+    test_execute_claude_code_task_fails_fast_when_bridge_is_down()
+    test_routine_watchdog_reruns_missing_task_once()
+    test_routine_watchdog_retries_after_cooldown_until_limit()
+    test_routine_watchdog_notifies_once_when_retry_limit_reached()
+    test_startup_recovery_reruns_missed_task_without_waiting_for_health_check()
+    test_launchctl_service_running_accepts_plist_style_pid_output()
     test_meeting_report_skips_outside_friday()
+    test_daily_report_input_oauth_failure_requests_approval_only()
+    test_looker_csv_download_login_failure_requests_approval_only()
     test_repair_agent_no_errors()
     test_repair_agent_dedup()
     print("\n✓ All integration tests passed!")

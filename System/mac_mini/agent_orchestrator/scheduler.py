@@ -43,6 +43,8 @@ _CDP_MASTER_TAB = "顧客マスタ"
 _CDP_SOURCE_MANAGEMENT_TAB = "データソース管理"
 _CLAUDE_CHROME_EXTENSION_ID = "fcoeoabgfenejglbffodgkkbkcdhcgfn"
 _CLAUDE_CHROME_CDP_ORIGIN = "http://127.0.0.1:9224"
+_CLAUDE_SECRETARY_EMAIL = "koa800.secretary@gmail.com"
+_MANUAL_APPROVAL_COOLDOWN_MINUTES = 30
 _LOOKER_PRIMARY_GOOGLE_ACCOUNT = "kohara.kaito@team.addness.co.jp"
 _LOOKER_DAILY_REPORT_URL = "https://lookerstudio.google.com/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_evmsc9twzd"
 _LOOKER_MEMBER_REPORT_URL = "https://lookerstudio.google.com/reporting/f3d08756-9297-4d34-b6ea-ea22780eb4d2/page/p_dfv0688m0d"
@@ -446,6 +448,235 @@ class TaskScheduler:
             "meeting_report": self._run_meeting_report,
         }
 
+    def _job_options(self, task_name: str, cfg: dict) -> dict:
+        """タスク種別に応じて、取りこぼしを抑える APScheduler オプションを返す。"""
+        if "misfire_grace_time" in cfg:
+            grace = int(cfg["misfire_grace_time"])
+        elif "cron" in cfg:
+            grace = 1800
+        elif "interval_minutes" in cfg:
+            grace = max(120, min(int(cfg["interval_minutes"]) * 60, 1800))
+        elif "interval_seconds" in cfg:
+            grace = max(30, min(int(cfg["interval_seconds"]) * 2, 300))
+        else:
+            grace = 60
+
+        return {
+            "misfire_grace_time": grace,
+            "coalesce": True,
+            "max_instances": 1,
+            "replace_existing": True,
+        }
+
+    def _record_schedule_success(self, task_name: str, slot_key: str | None = None):
+        """スケジュールタスクの最終成功時刻を統一的に記録する。"""
+        now = datetime.now(_SCHEDULER_TIMEZONE).isoformat()
+        self.memory.set_state(f"last_success_{task_name}", now)
+        if slot_key:
+            self.memory.set_state(f"last_success_{slot_key}", now)
+
+    def _get_state_datetime(self, key: str) -> datetime | None:
+        raw = self.memory.get_state(key)
+        if not raw:
+            return None
+        try:
+            dt = datetime.fromisoformat(raw)
+        except (TypeError, ValueError):
+            return None
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=_SCHEDULER_TIMEZONE)
+        return dt.astimezone(_SCHEDULER_TIMEZONE)
+
+    def _state_recorded_today(self, key: str, now: datetime | None = None) -> bool:
+        now_jst = now or datetime.now(_SCHEDULER_TIMEZONE)
+        recorded_at = self._get_state_datetime(key)
+        return bool(recorded_at and recorded_at.date() == now_jst.date())
+
+    async def _ensure_routine_slot_completed(
+        self,
+        *,
+        task_name: str,
+        success_state_key: str,
+        check_after: tuple[int, int],
+        runner,
+        weekday_only: bool = False,
+        now: datetime | None = None,
+        max_retries: int = 3,
+        retry_cooldown_minutes: int = 10,
+    ):
+        """定刻を過ぎても未実行の定常タスクを回数制限付きで自動補走する。"""
+        cfg = self.config.get("schedule", {}).get(task_name, {})
+        if not cfg.get("enabled", False):
+            return
+
+        now_jst = now or datetime.now(_SCHEDULER_TIMEZONE)
+        if weekday_only and now_jst.weekday() >= 5:
+            return
+        if (now_jst.hour, now_jst.minute) < check_after:
+            return
+        if self._state_recorded_today(success_state_key, now_jst):
+            return
+
+        slot_suffix = f"{now_jst.date().isoformat()}_{success_state_key}"
+        attempt_key = f"watchdog_retry_count_{slot_suffix}"
+        last_attempt_key = f"watchdog_retry_last_{slot_suffix}"
+        running_key = f"watchdog_retry_running_{slot_suffix}"
+        exhausted_key = f"watchdog_retry_exhausted_notified_{slot_suffix}"
+
+        if self.memory.get_state(running_key) == "1":
+            return
+
+        attempts = _to_int(self.memory.get_state(attempt_key) or "0")
+        last_attempt = self._get_state_datetime(last_attempt_key)
+        if last_attempt:
+            elapsed = (now_jst - last_attempt).total_seconds()
+            if elapsed < retry_cooldown_minutes * 60:
+                return
+
+        if attempts >= max_retries:
+            if not self.memory.get_state(exhausted_key):
+                msg = (
+                    f"{task_name} が {max_retries} 回の自動補走後も未完了です。"
+                    f"{check_after[0]:02d}:{check_after[1]:02d} の定常枠を手動確認してください。"
+                )
+                logger.error(f"routine watchdog: retry limit reached for {task_name}")
+                self._maybe_notify_task_failure(task_name, msg)
+                self.memory.set_state(exhausted_key, now_jst.isoformat())
+            return
+
+        next_attempt = attempts + 1
+        logger.warning(
+            f"routine watchdog: {task_name} missing after {check_after[0]:02d}:{check_after[1]:02d} "
+            f"→ auto rerun ({next_attempt}/{max_retries})"
+        )
+        self.memory.set_state(running_key, "1")
+        self.memory.set_state(attempt_key, str(next_attempt))
+        self.memory.set_state(last_attempt_key, now_jst.isoformat())
+        try:
+            await runner()
+        except Exception as e:
+            logger.error(f"routine watchdog: auto rerun failed for {task_name}: {e}", exc_info=True)
+        finally:
+            self.memory.set_state(running_key, "0")
+
+        if self._state_recorded_today(success_state_key):
+            logger.info(f"routine watchdog: recovered {task_name} on retry {next_attempt}/{max_retries}")
+
+    async def _run_critical_routine_watchdogs(self, now: datetime | None = None):
+        """重要な時刻固定タスクの未実行をまとめて補走確認する。"""
+        now_jst = now or datetime.now(_SCHEDULER_TIMEZONE)
+        watchdog_specs = [
+            {
+                "task_name": "daily_addness_digest",
+                "success_state_key": "last_success_daily_addness_digest",
+                "check_after": (8, 45),
+                "runner": self._run_daily_addness_digest,
+            },
+            {
+                "task_name": "daily_report_input",
+                "success_state_key": "last_success_daily_report_input",
+                "check_after": (9, 0),
+                "runner": self._run_daily_report_input,
+            },
+            {
+                "task_name": "daily_report_verify",
+                "success_state_key": "last_success_daily_report_verify",
+                "check_after": (9, 35),
+                "runner": self._run_daily_report_verify,
+            },
+            {
+                "task_name": "looker_csv_download",
+                "success_state_key": "last_success_looker_csv_download",
+                "check_after": (11, 50),
+                "runner": self._run_looker_csv_download,
+            },
+            {
+                "task_name": "daily_report_reminder",
+                "success_state_key": "last_success_daily_report_reminder_12",
+                "check_after": (12, 20),
+                "runner": self._run_daily_report_reminder,
+                "weekday_only": True,
+            },
+            {
+                "task_name": "kpi_daily_import",
+                "success_state_key": "last_success_kpi_daily_import",
+                "check_after": (12, 20),
+                "runner": self._run_kpi_daily_import,
+            },
+            {
+                "task_name": "daily_report_reminder",
+                "success_state_key": "last_success_daily_report_reminder_19",
+                "check_after": (19, 20),
+                "runner": self._run_daily_report_reminder,
+                "weekday_only": True,
+            },
+            {
+                "task_name": "daily_group_digest",
+                "success_state_key": "last_success_daily_group_digest",
+                "check_after": (21, 30),
+                "runner": self._run_daily_group_digest,
+            },
+        ]
+        for spec in watchdog_specs:
+            await self._ensure_routine_slot_completed(now=now_jst, **spec)
+
+    async def run_startup_recovery(self, now: datetime | None = None):
+        """再起動直後に、その日の取りこぼし定常を待たずに補う。"""
+        now_jst = now or datetime.now(_SCHEDULER_TIMEZONE)
+        self.memory.set_state("last_startup_recovery_check", now_jst.isoformat())
+        logger.info("startup recovery: checking critical routine slots")
+        try:
+            await self._run_critical_routine_watchdogs(now=now_jst)
+        except Exception as e:
+            logger.error(f"startup recovery failed: {e}", exc_info=True)
+        else:
+            logger.info("startup recovery: completed")
+
+    def _launchctl_service_running(self, label: str) -> bool:
+        """launchctl の出力差異を吸収して、サービスが稼働中かを判定する。"""
+        import subprocess
+
+        outputs = []
+        try:
+            result = subprocess.run(
+                ["launchctl", "list", label],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                outputs.append(result.stdout)
+        except Exception:
+            pass
+
+        try:
+            detail = subprocess.run(
+                ["launchctl", "print", f"gui/{os.getuid()}/{label}"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if detail.returncode == 0 and detail.stdout.strip():
+                outputs.append(detail.stdout)
+        except Exception:
+            pass
+
+        for output in outputs:
+            pid_match = re.search(r'"PID"\s*=\s*(\d+);', output)
+            if not pid_match:
+                pid_match = re.search(r"\bpid\s*=\s*(\d+)\b", output, flags=re.IGNORECASE)
+            if pid_match:
+                return int(pid_match.group(1)) > 0
+
+            parts = output.strip().split()
+            if parts and parts[0].isdigit():
+                return int(parts[0]) > 0
+
+            if "state = running" in output:
+                return True
+
+        return False
+
     def setup(self):
         schedule_cfg = self.config.get("schedule", {})
 
@@ -455,17 +686,18 @@ class TaskScheduler:
                 logger.info(f"Task '{task_name}' is disabled, skipping")
                 continue
 
+            job_options = self._job_options(task_name, cfg)
             if "cron" in cfg:
                 trigger = _build_cron_trigger_from_expr(cfg["cron"])
-                self.scheduler.add_job(task_fn, trigger, id=task_name, name=task_name, replace_existing=True, misfire_grace_time=60)
+                self.scheduler.add_job(task_fn, trigger, id=task_name, name=task_name, **job_options)
                 logger.info(f"Scheduled '{task_name}' with cron: {cfg['cron']}")
             elif "interval_seconds" in cfg:
                 trigger = IntervalTrigger(seconds=cfg["interval_seconds"])
-                self.scheduler.add_job(task_fn, trigger, id=task_name, name=task_name, replace_existing=True, misfire_grace_time=30)
+                self.scheduler.add_job(task_fn, trigger, id=task_name, name=task_name, **job_options)
                 logger.info(f"Scheduled '{task_name}' every {cfg['interval_seconds']} seconds")
             elif "interval_minutes" in cfg:
                 trigger = IntervalTrigger(minutes=cfg["interval_minutes"])
-                self.scheduler.add_job(task_fn, trigger, id=task_name, name=task_name, replace_existing=True, misfire_grace_time=120)
+                self.scheduler.add_job(task_fn, trigger, id=task_name, name=task_name, **job_options)
                 logger.info(f"Scheduled '{task_name}' every {cfg['interval_minutes']} minutes")
 
     def start(self):
@@ -1097,22 +1329,218 @@ market_trends.md の全文をそのまま出力してください。既存の内
 
     def _find_claude_cmd(self):
         """Claude Code CLIパスを検出（Apple Silicon / Intel Mac 両対応）"""
+        import shutil
         from pathlib import Path
-        for p in [Path("/opt/homebrew/bin/claude"), Path("/usr/local/bin/claude")]:
+        candidates = []
+
+        resolved = shutil.which("claude")
+        if resolved:
+            candidates.append(Path(resolved))
+
+        candidates.extend([
+            Path.home() / ".local" / "bin" / "claude",
+            Path("/opt/homebrew/bin/claude"),
+            Path("/usr/local/bin/claude"),
+        ])
+
+        app_support_root = Path.home() / "Library/Application Support/Claude/claude-code"
+        if app_support_root.exists():
+            candidates.extend(sorted(app_support_root.glob("*/claude"), reverse=True))
+
+        seen = set()
+        for p in candidates:
+            p = p.expanduser()
+            key = str(p)
+            if key in seen:
+                continue
+            seen.add(key)
             if p.exists():
                 return p
         return None
+
+    def _resolve_claude_config_dir(self):
+        """Claude Code の設定ディレクトリを解決する。"""
+        from pathlib import Path
+
+        env_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+        if env_dir:
+            return Path(env_dir).expanduser()
+
+        secretary_dir = Path.home() / ".claude-secretary"
+        default_dir = Path.home() / ".claude"
+
+        if (secretary_dir / ".credentials.json").exists():
+            return secretary_dir
+        if (default_dir / ".credentials.json").exists():
+            return default_dir
+        if (default_dir / "settings.json").exists():
+            return default_dir
+        if (secretary_dir / "settings.json").exists():
+            return secretary_dir
+        if secretary_dir.exists():
+            return secretary_dir
+        if default_dir.exists():
+            return default_dir
+        return secretary_dir
 
     def _build_claude_secretary_env(self, secretary_config):
         """秘書用 Claude Code CLI の実行環境を構築する。"""
         env = os.environ.copy()
         path = env.get("PATH", "")
-        if "/opt/homebrew/bin" not in path:
-            env["PATH"] = f"/opt/homebrew/bin:{path}"
+        path_prefixes = [
+            str((Path.home() / ".local" / "bin").expanduser()),
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+        ]
+        for prefix in reversed(path_prefixes):
+            if prefix and prefix not in path:
+                path = f"{prefix}:{path}" if path else prefix
+        env["PATH"] = path
         env["CLAUDE_CONFIG_DIR"] = str(secretary_config)
         # API key が残っていると Max/OAuth ではなく従量課金の API key 認証に切り替わる。
         env.pop("ANTHROPIC_API_KEY", None)
         return env
+
+    def _run_claude_cli_healthcheck(self, secretary_config, timeout: int = 60):
+        """Claude Code CLI が指定 config で起動できるか確認する。"""
+        import subprocess
+
+        env = self._build_claude_secretary_env(secretary_config)
+        claude_cmd = self._find_claude_cmd()
+        if not claude_cmd:
+            return False, "Claude Code CLI が見つかりません"
+
+        try:
+            result = subprocess.run(
+                [str(claude_cmd), "-p", "--max-turns", "1", "1+1は？"],
+                capture_output=True, text=True, timeout=timeout, env=env,
+            )
+            if result.returncode == 0:
+                return True, ""
+            detail = (result.stderr or result.stdout or "").strip()
+            return False, f"Claude Code 起動失敗（code={result.returncode}）: {detail[:200]}"
+        except subprocess.TimeoutExpired:
+            return False, f"Claude Code タイムアウト（{timeout}秒）"
+        except Exception as e:
+            return False, f"Claude Code 起動例外: {e}"
+
+    def _begin_manual_approval_window(
+        self,
+        state_key: str,
+        cooldown_minutes: int = _MANUAL_APPROVAL_COOLDOWN_MINUTES,
+    ) -> bool:
+        """同じ手動承認導線の起動と通知を短時間に連打しない。"""
+        now_jst = datetime.now(_SCHEDULER_TIMEZONE)
+        last_started = self._get_state_datetime(state_key)
+        if last_started:
+            elapsed = (now_jst - last_started).total_seconds()
+            if elapsed < cooldown_minutes * 60:
+                return False
+        self.memory.set_state(state_key, now_jst.isoformat())
+        return True
+
+    def _open_chrome_url(self, url: str):
+        """Google Chrome で URL を開く。"""
+        import subprocess
+
+        try:
+            subprocess.Popen(
+                ["open", "-a", "Google Chrome", url],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return True, ""
+        except Exception as e:
+            return False, str(e)
+
+    def _start_google_approval_flow(self, page_url: str, state_key: str):
+        """Looker の認証画面を開き、本人の承認だけで復旧しやすい状態にする。"""
+        if not self._begin_manual_approval_window(state_key):
+            return "cooldown", ""
+
+        ok, err = self._open_chrome_url(_normalize_looker_url(page_url))
+        if not ok:
+            return "error", err
+        return "started", ""
+
+    def _start_claude_auth_login_flow(self, secretary_config):
+        """Claude CLI のログインフローを起動し、本人の承認だけで復旧しやすい状態にする。"""
+        import subprocess
+
+        if not self._begin_manual_approval_window("manual_approval_claude_auth"):
+            return "cooldown", ""
+
+        claude_cmd = self._find_claude_cmd()
+        if not claude_cmd:
+            return "error", "Claude Code CLI が見つかりません"
+
+        env = self._build_claude_secretary_env(secretary_config)
+
+        try:
+            subprocess.Popen(
+                [
+                    str(claude_cmd),
+                    "auth",
+                    "login",
+                    "--email",
+                    _CLAUDE_SECRETARY_EMAIL,
+                ],
+                cwd=str(Path.home()),
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return "started", ""
+        except Exception as e:
+            return "error", str(e)
+
+    def _request_google_approval_only(self, task_label: str, page_url: str, state_key: str):
+        """Google 認証が止まったとき、承認だけ依頼する通知に寄せる。"""
+        from .notifier import send_line_notify
+
+        status, detail = self._start_google_approval_flow(page_url, state_key)
+        if status == "cooldown":
+            logger.info(f"{task_label}: Google approval prompt already requested recently")
+            return
+        if status == "started":
+            send_line_notify(
+                f"{task_label} が Google 認証で止まりました。\n"
+                "Mac mini に対象ページを開いてあります。\n"
+                "承認画面が出ていれば、iPhone または画面上で承認だけお願いします。\n"
+                "入力操作は不要です。承認後は次の自動再試行で続行します。"
+            )
+            return
+        send_line_notify(
+            f"{task_label} が Google 認証で止まりました。\n"
+            "承認だけで復旧させる想定ですが、認証画面を自動で開けませんでした。\n"
+            f"{detail[:150]}"
+        )
+
+    def _request_claude_approval_only(self, task_label: str, secretary_config):
+        """Claude 認証が止まったとき、承認だけ依頼する通知に寄せる。"""
+        from .notifier import send_line_notify
+
+        status, detail = self._start_claude_auth_login_flow(secretary_config)
+        if status == "cooldown":
+            logger.info(f"{task_label}: Claude approval prompt already requested recently")
+            return
+        if status == "started":
+            send_line_notify(
+                f"{task_label} が秘書の Claude 認証で止まりました。\n"
+                "Mac mini に Claude の認証フローを起動しました。\n"
+                "画面が出ていれば承認だけお願いします。入力操作は不要です。\n"
+                "承認後は次の自動再試行で続行します。"
+            )
+            return
+        send_line_notify(
+            f"{task_label} が秘書の Claude 認証で止まりました。\n"
+            "承認だけで復旧させる想定ですが、認証フローを自動起動できませんでした。\n"
+            f"{detail[:150]}"
+        )
 
     def _force_local_chrome_mcp_bridge(self, secretary_config):
         """秘書用 Claude が Chrome MCP のローカル native host を使うよう feature flag を固定する。"""
@@ -1154,18 +1582,21 @@ market_trends.md の全文をそのまま出力してください。既存の内
         Returns: (ok: bool, error_msg: str)
         """
         import json
-        import subprocess
         from pathlib import Path
 
         creds_path = Path(secretary_config) / ".credentials.json"
         if not creds_path.exists():
-            return False, f"credentials.json が見つかりません: {creds_path}"
+            logger.info(
+                f"Claude OAuth: {creds_path} が無いため、CLI 起動チェックへフォールバック"
+            )
+            return self._run_claude_cli_healthcheck(secretary_config)
 
         try:
             with open(creds_path) as f:
                 creds = json.load(f)
         except Exception as e:
-            return False, f"credentials.json 読み込みエラー: {e}"
+            logger.warning(f"Claude OAuth: credentials 読み込み失敗 → CLI 起動チェックへフォールバック: {e}")
+            return self._run_claude_cli_healthcheck(secretary_config)
 
         import time
         oauth = creds.get("claudeAiOauth", {})
@@ -1182,28 +1613,11 @@ market_trends.md の全文をそのまま出力してください。既存の内
         logger.info(f"Claude OAuth: トークン更新開始（残り {remaining_hours:.1f}時間）")
         refresh_token = oauth.get("refreshToken")
         if not refresh_token:
-            return False, "refresh_token がありません。再認証が必要です"
-        try:
-            env = self._build_claude_secretary_env(secretary_config)
-
-            # Claude Code CLI を一度起動すれば内部で自動リフレッシュされる
-            claude_cmd = self._find_claude_cmd()
-            if not claude_cmd:
-                return False, "Claude Code CLI が見つかりません"
-
-            result = subprocess.run(
-                [str(claude_cmd), "-p", "--max-turns", "1", "1+1は？"],
-                capture_output=True, text=True, timeout=60, env=env,
-            )
-            if result.returncode == 0:
-                logger.info("Claude OAuth: トークン自動リフレッシュ成功")
-                return True, ""
-            else:
-                return False, f"Claude Code 起動失敗（code={result.returncode}）: {result.stderr[:200]}"
-        except subprocess.TimeoutExpired:
-            return False, "Claude Code タイムアウト（60秒）"
-        except Exception as e:
-            return False, f"リフレッシュ例外: {e}"
+            logger.warning("Claude OAuth: refresh_token 不在 → CLI 起動チェックへフォールバック")
+        ok, err = self._run_claude_cli_healthcheck(secretary_config)
+        if ok:
+            logger.info("Claude OAuth: CLI 起動チェック成功")
+        return ok, err
 
 
     def _get_claude_chrome_extension_page_ws_url(self):
@@ -1520,7 +1934,7 @@ market_trends.md の全文をそのまま出力してください。既存の内
                 ws_url,
                 f"""(() => {{
                   const nodes = [...document.querySelectorAll(
-                    '[aria-label],[title],button,[role=\"button\"],div[role=\"button\"],li,[role=\"menuitem\"],[role=\"option\"]'
+                    '[aria-label],[title],button,[role="button"],div[role="button"],li,[role="menuitem"],[role="option"]'
                   )];
                   const exact = {json.dumps(label)};
                   const target = nodes.find(el => {{
@@ -1658,6 +2072,32 @@ market_trends.md の全文をそのまま出力してください。既存の内
             logger.warning(f"Claude Chrome MCP: reconnect 実行失敗: {e}")
             return False
 
+    def _ensure_claude_chrome_bridge(self, secretary_config):
+        """Chrome CDP と Claude in Chrome 拡張の再接続を確認する。"""
+        import time as _time
+        import urllib.request
+
+        self._force_local_chrome_mcp_bridge(secretary_config)
+
+        last_err = ""
+        for _ in range(10):
+            try:
+                with urllib.request.urlopen(f"{_CLAUDE_CHROME_CDP_ORIGIN}/json/version", timeout=3):
+                    last_err = ""
+                    break
+            except Exception as e:
+                last_err = str(e)
+                _time.sleep(1)
+        if last_err:
+            return False, f"Chrome CDP に接続できません: {last_err[:120]}"
+
+        if not self._sync_claude_chrome_extension_account(secretary_config):
+            return False, (
+                "Claude in Chrome 拡張の再接続に失敗しました。"
+                " Chrome と拡張のログイン状態を確認してください"
+            )
+        return True, ""
+
     def _ensure_claude_chrome_ready(self):
         """Claude Code + Chrome の事前チェック。Chrome 未起動なら自動起動を試みる。
         Returns: (ok, claude_cmd, secretary_config, project_root, error_msg)
@@ -1670,7 +2110,7 @@ market_trends.md の全文をそのまま出力してください。既存の内
         if not claude_cmd:
             return False, None, None, None, "Claude Code CLIが見つかりません"
 
-        secretary_config = Path.home() / ".claude-secretary"
+        secretary_config = self._resolve_claude_config_dir()
         if not secretary_config.exists():
             return False, None, None, None, (
                 f"秘書設定ディレクトリが見つかりません: {secretary_config}\n"
@@ -1682,7 +2122,7 @@ market_trends.md の全文をそのまま出力してください。既存の内
         # Claude Code OAuth トークンチェック + 自動リフレッシュ
         oauth_ok, oauth_err = self._refresh_claude_oauth(secretary_config)
         if not oauth_ok:
-            return False, None, None, None, f"Claude Code OAuth エラー: {oauth_err}"
+            return False, claude_cmd, secretary_config, project_root, f"Claude Code OAuth エラー: {oauth_err}"
 
         # Chrome 起動確認 + 自動起動
         try:
@@ -1701,6 +2141,10 @@ market_trends.md の全文をそのまま出力してください。既存の内
         except Exception as e:
             return False, None, None, None, f"Chrome チェックエラー: {e}"
 
+        bridge_ok, bridge_err = self._ensure_claude_chrome_bridge(secretary_config)
+        if not bridge_ok:
+            return False, None, None, None, bridge_err
+
         return True, claude_cmd, secretary_config, project_root, ""
 
     def _prepare_claude_env(self):
@@ -1709,13 +2153,13 @@ market_trends.md の全文をそのまま出力してください。既存の内
         claude_cmd = self._find_claude_cmd()
         if not claude_cmd:
             return False, None, None, None, "Claude Code CLIが見つかりません"
-        secretary_config = Path.home() / ".claude-secretary"
+        secretary_config = self._resolve_claude_config_dir()
         if not secretary_config.exists():
             return False, None, None, None, f"秘書設定ディレクトリが見つかりません: {secretary_config}"
         project_root = Path(self.config.get("paths", {}).get("repo_root", "~/agents")).expanduser()
         oauth_ok, oauth_err = self._refresh_claude_oauth(secretary_config)
         if not oauth_ok:
-            return False, None, None, None, f"Claude Code OAuth エラー: {oauth_err}"
+            return False, claude_cmd, secretary_config, project_root, f"Claude Code OAuth エラー: {oauth_err}"
         return True, claude_cmd, secretary_config, project_root, ""
 
     def _build_google_login_instructions(self) -> str:
@@ -1989,8 +2433,11 @@ cat {creds_file}
         task_log_id = self.memory.log_task_start(task_label)
 
         if use_chrome:
-            self._force_local_chrome_mcp_bridge(secretary_config)
-            self._sync_claude_chrome_extension_account(secretary_config)
+            bridge_ok, bridge_err = self._ensure_claude_chrome_bridge(secretary_config)
+            if not bridge_ok:
+                self.memory.log_task_end(task_log_id, "error", error_message=bridge_err)
+                self._check_task_health(task_label, False, task_log_id, max_turns, timeout, bridge_err)
+                return False, "", bridge_err
         env = self._build_claude_secretary_env(secretary_config)
         cmd = [str(claude_cmd), "-p", "--model", model,
                "--max-turns", str(max_turns)]
@@ -2075,7 +2522,11 @@ cat {creds_file}
         ok, claude_cmd, secretary_config, project_root, preflight_err = self._ensure_claude_chrome_ready()
         if not ok:
             logger.error(f"日報自動入力: プリフライト失敗 - {preflight_err}")
-            send_line_notify(f"日報の自動入力を始めようとしましたが、準備段階で失敗しました。\n{preflight_err}")
+            preflight_lower = (preflight_err or "").lower()
+            if secretary_config and ("oauth" in preflight_lower or "credential" in preflight_lower):
+                self._request_claude_approval_only("日報の自動入力", secretary_config)
+            else:
+                send_line_notify(f"日報の自動入力を始めようとしましたが、準備段階で失敗しました。\n{preflight_err}")
             return
 
         target_date = date.today() - timedelta(days=1)
@@ -2253,7 +2704,7 @@ python3 System/line_notify.py "日報入力が完了しました。
         )
 
         if success:
-            self.memory.set_state("last_success_daily_report_input", datetime.now().isoformat())
+            self._record_schedule_success("daily_report_input")
             if "===RESULT_START===" in output and "===RESULT_END===" in output:
                 report = output.split("===RESULT_START===")[1].split("===RESULT_END===")[0].strip()
                 logger.info(f"日報自動入力: 完了 - {report[:300]}")
@@ -2263,17 +2714,26 @@ python3 System/line_notify.py "日報入力が完了しました。
                 logger.info(f"日報自動入力: 完了（マーカーなし）- {output[-300:]}")
         else:
             # エラー種別に応じた通知
-            if "ログイン" in error or "login" in error.lower():
-                send_line_notify(
-                    "日報の自動入力が失敗しました。Googleのログインが切れているようです。\n"
-                    "Mac MiniのChromeでLooker Studioに再ログインしてください。\n"
-                    "（koa800sea.nifs → kohara.kaito の順で試す）"
+            error_lower = (error or "").lower()
+            if (
+                "ログイン" in error
+                or "login" in error_lower
+                or "アクセスが拒否" in error
+                or "access denied" in error_lower
+            ):
+                self._request_google_approval_only(
+                    "日報の自動入力",
+                    _LOOKER_DAILY_REPORT_URL,
+                    "manual_approval_google_daily_report",
                 )
-            elif "OAuth" in error or "credential" in error.lower():
-                send_line_notify(
-                    f"日報の自動入力が失敗しました。秘書の認証トークンが切れています。\n"
-                    f"再取得が必要です。"
-                )
+            elif "oauth" in error_lower or "credential" in error_lower:
+                if secretary_config:
+                    self._request_claude_approval_only("日報の自動入力", secretary_config)
+                else:
+                    send_line_notify(
+                        "日報の自動入力が失敗しました。秘書の認証トークンが切れています。\n"
+                        "再取得が必要です。"
+                    )
             elif "Chrome" in error or "MCP" in error:
                 send_line_notify(
                     "日報の自動入力が失敗しました。Chromeとの接続がうまくいきませんでした。\n"
@@ -2295,16 +2755,6 @@ python3 System/line_notify.py "日報入力が完了しました。
         project_root = Path(self.config.get("paths", {}).get("repo_root", "~/agents")).expanduser()
 
         logger.info(f"日報検証: {target_md} のデータ確認開始")
-
-        # タスク実行記録を確認
-        last_success = self.memory.get_state("last_success_daily_report_input")
-        task_ran_today = False
-        if last_success:
-            try:
-                last_dt = datetime.fromisoformat(last_success)
-                task_ran_today = last_dt.date() == date.today()
-            except (ValueError, TypeError):
-                pass
 
         try:
             # 1. ヘッダー行を読み取り → 対象列を特定
@@ -2397,6 +2847,7 @@ python3 System/line_notify.py "日報入力が完了しました。
                     await self._run_daily_report_input()
             else:
                 logger.info(f"日報検証: {target_md} の全データ入力確認OK")
+            self._record_schedule_success("daily_report_verify")
 
         except Exception as e:
             logger.error(f"日報検証: エラー - {e}")
@@ -2415,6 +2866,7 @@ python3 System/line_notify.py "日報入力が完了しました。
         target_date = date.today() - timedelta(days=1)
         target_md = f"{target_date.month}/{target_date.day}"
         project_root = Path(self.config.get("paths", {}).get("repo_root", "~/agents")).expanduser()
+        reminder_slot = "12" if datetime.now(_SCHEDULER_TIMEZONE).hour < 16 else "19"
 
         logger.info(f"日報リマインド: {target_md} の未記入チェック開始")
 
@@ -2441,6 +2893,10 @@ python3 System/line_notify.py "日報入力が完了しました。
 
             if missing_count == 0:
                 logger.info(f"日報リマインド: {target_md} の全データ入力済み")
+                self._record_schedule_success(
+                    "daily_report_reminder",
+                    slot_key=f"daily_report_reminder_{reminder_slot}",
+                )
                 return
 
             # 広告チーム全体LINEグループにリマインド送信
@@ -2462,6 +2918,10 @@ python3 System/line_notify.py "日報入力が完了しました。
 
             send_line_notify("\n".join(lines), group_id=self._AD_TEAM_GROUP_ID)
             logger.info(f"日報リマインド: {missing_count}件の未記入を広告チーム全体に通知（{len(missing_by_person)}名）")
+            self._record_schedule_success(
+                "daily_report_reminder",
+                slot_key=f"daily_report_reminder_{reminder_slot}",
+            )
 
         except _json.JSONDecodeError as e:
             logger.error(f"日報リマインド: JSON解析エラー - {e}")
@@ -2552,19 +3012,7 @@ python3 System/line_notify.py "日報入力が完了しました。
 
         # local_agent.py の生存確認（プロセス存在チェック → ログ更新時刻はフォールバック）
         try:
-            import time
-            agent_alive = False
-            try:
-                result = subprocess.run(
-                    ["launchctl", "list", "com.linebot.localagent"],
-                    capture_output=True, text=True, timeout=5
-                )
-                # launchctl list が成功 & PID が数字ならプロセス生存
-                if result.returncode == 0 and result.stdout.strip():
-                    parts = result.stdout.strip().split()
-                    agent_alive = parts[0].isdigit() if parts else False
-            except Exception:
-                pass
+            agent_alive = self._launchctl_service_running("com.linebot.localagent")
 
             if not agent_alive:
                 logger.warning("local_agent process not found via launchctl — attempting auto-restart")
@@ -2591,6 +3039,9 @@ python3 System/line_notify.py "日報入力が完了しました。
                         self.memory.set_state(state_key, datetime.now().isoformat())
         except Exception as e:
             logger.debug(f"local_agent check error: {e}")
+
+        now_jst = datetime.now(_SCHEDULER_TIMEZONE)
+        await self._run_critical_routine_watchdogs(now=now_jst)
 
         # KPIキャッシュ鮮度チェック（48時間超で警告）
         kpi_cache = os.path.expanduser("~/agents/System/data/kpi_summary.json")
@@ -2866,6 +3317,7 @@ python3 System/line_notify.py "日報入力が完了しました。
 
         if not overdue_items and not in_progress_items:
             logger.info("No urgent Addness tasks for today")
+            self._record_schedule_success("daily_addness_digest")
             return
 
         parts = [f"おはようございます。今日のタスク状況です。"]
@@ -2881,6 +3333,8 @@ python3 System/line_notify.py "日報入力が完了しました。
         ok = send_line_notify(message)
         self.memory.log_task_end(task_id, "success" if ok else "error")
         logger.info(f"Daily digest sent: {len(overdue_items)} overdue, {len(in_progress_items)} in_progress")
+        if ok:
+            self._record_schedule_success("daily_addness_digest")
 
     async def _digest_from_goal_tree(self, path: str, send_line_notify):
         """goal-tree.md から日次ダイジェストを生成（fallback）"""
@@ -2915,6 +3369,7 @@ python3 System/line_notify.py "日報入力が完了しました。
 
         if not overdue and not due_today and not due_soon:
             logger.info("No urgent Addness goals for today")
+            self._record_schedule_success("daily_addness_digest")
             return
 
         parts = [f"Addnessのタスク状況です。"]
@@ -2929,6 +3384,8 @@ python3 System/line_notify.py "日報入力が完了しました。
         ok = send_line_notify("\n".join(parts))
         self.memory.log_task_end(task_id, "success" if ok else "error")
         logger.info("Daily Addness digest sent (from goal tree)")
+        if ok:
+            self._record_schedule_success("daily_addness_digest")
 
     async def _run_render_health_check(self):
         """Renderサーバーの死活監視（30分ごと）"""
@@ -3186,16 +3643,13 @@ python3 System/line_notify.py "日報入力が完了しました。
                 logger.error(f"Gmail({account_name}) token check failed: {err_msg[:200]}")
 
         # Claude Code OAuth トークンもチェック（日報自動入力に必要）
-        from pathlib import Path
-        secretary_config = Path.home() / ".claude-secretary"
+        secretary_config = self._resolve_claude_config_dir()
         if secretary_config.exists():
             oauth_ok, oauth_err = self._refresh_claude_oauth(secretary_config)
             if oauth_ok:
                 logger.info("Claude Code OAuth health check OK")
             else:
-                send_line_notify(
-                    "秘書の認証トークンに問題があります。日報の自動入力が失敗する可能性があります。"
-                )
+                self._request_claude_approval_only("事前認証チェック", secretary_config)
                 logger.error(f"Claude Code OAuth health check failed: {oauth_err}")
 
     async def _run_weekly_stats(self):
@@ -3475,7 +3929,11 @@ python3 System/line_notify.py "日報入力が完了しました。
         ok, claude_cmd, secretary_config, project_root, preflight_err = self._ensure_claude_chrome_ready()
         if not ok:
             logger.error(f"Looker CSV ダウンロード: プリフライト失敗 - {preflight_err}")
-            send_line_notify(f"Looker CSVのダウンロード準備で失敗しました。\n{preflight_err}")
+            preflight_lower = (preflight_err or "").lower()
+            if secretary_config and ("oauth" in preflight_lower or "credential" in preflight_lower):
+                self._request_claude_approval_only("Looker CSVのダウンロード", secretary_config)
+            else:
+                send_line_notify(f"Looker CSVのダウンロード準備で失敗しました。\n{preflight_err}")
             return
 
         csv_dir = Path.home() / "Desktop" / "Looker Studio CSV"
@@ -3487,6 +3945,7 @@ python3 System/line_notify.py "日報入力が完了しました。
         if not missing_dates:
             logger.info("Looker CSV ダウンロード: 不足なし → シート同期のみ実行")
             await self._run_csv_sheet_sync_after_download(project_root)
+            self._record_schedule_success("looker_csv_download")
             return
 
         logger.info(f"Looker CSV ダウンロード: 不足 {len(missing_dates)} 日分 → {[d.isoformat() for d in missing_dates]}")
@@ -3611,7 +4070,7 @@ head -3 "{csv_dir}/{csv_filename}"
                     return
                 report = cdp_report
 
-            self.memory.set_state("last_success_looker_csv_download", datetime.now().isoformat())
+            self._record_schedule_success("looker_csv_download")
             if "===RESULT_START===" in output and "===RESULT_END===" in output:
                 logger.info(f"Looker CSV ダウンロード: 完了 - {report[:300]}")
                 if "エラー" in report:
@@ -3629,7 +4088,25 @@ head -3 "{csv_dir}/{csv_filename}"
                 send_line_notify(f"Looker CSVダウンロード後も {len(still_missing)} 日分が不足: {dates_str}")
                 logger.warning(f"Looker CSV: still missing after download: {dates_str}")
         else:
-            send_line_notify(f"Looker CSVのダウンロードがリトライ後も失敗しました。\n{error[:200]}")
+            error_lower = (error or "").lower()
+            if (
+                "ログイン" in error
+                or "login" in error_lower
+                or "アクセスが拒否" in error
+                or "access denied" in error_lower
+            ):
+                self._request_google_approval_only(
+                    "Looker CSVのダウンロード",
+                    _LOOKER_CSV_REPORT_URL,
+                    "manual_approval_google_looker_csv",
+                )
+            elif "oauth" in error_lower or "credential" in error_lower:
+                if secretary_config:
+                    self._request_claude_approval_only("Looker CSVのダウンロード", secretary_config)
+                else:
+                    send_line_notify(f"Looker CSVのダウンロードがリトライ後も失敗しました。\n{error[:200]}")
+            else:
+                send_line_notify(f"Looker CSVのダウンロードがリトライ後も失敗しました。\n{error[:200]}")
 
     async def _run_csv_sheet_sync_after_download(self, project_root):
         """CSVダウンロード後にcsv_sheet_syncを実行して元データシートを更新する。"""
@@ -3671,8 +4148,10 @@ head -3 "{csv_dir}/{csv_filename}"
             send_line_notify(
                 f"KPIデータの更新が完了しました。{cache_status}"
             )
+            self._record_schedule_success("kpi_daily_import")
         elif result.success and "投入対象なし" in result.output:
             logger.info(f"KPI process: no pending entries to import")
+            self._record_schedule_success("kpi_daily_import")
         else:
             # 投入失敗を通知
             logger.warning(f"KPI process result: {result.output[:200]}")
@@ -3951,6 +4430,7 @@ head -3 "{csv_dir}/{csv_filename}"
         groups = data.get("groups", {})
         if not groups:
             logger.info("daily_group_digest: no group messages today")
+            self._record_schedule_success("daily_group_digest")
             return
 
         self._hydrate_group_names(groups)
@@ -3976,6 +4456,7 @@ head -3 "{csv_dir}/{csv_filename}"
         log_text, total_messages = self._build_group_digest_input(groups, profiles)
         if total_messages == 0:
             logger.info("daily_group_digest: 0 messages across all groups")
+            self._record_schedule_success("daily_group_digest")
             return
 
         try:
@@ -4024,6 +4505,7 @@ head -3 "{csv_dir}/{csv_filename}"
         ok = send_line_notify(message)
         if ok:
             logger.info(f"daily_group_digest sent: {total_messages} messages across {len(groups)} groups")
+            self._record_schedule_success("daily_group_digest")
         else:
             logger.warning("daily_group_digest: LINE notification failed")
 

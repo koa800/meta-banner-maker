@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年3月8日（Addnessの日向承認フロー追加、LINE承認→本人アカウント返信、最小権限ガードレールと定期検知を追加） |
+| 最終更新 | 2026年3月11日（Claude CLI検出拡張、`.claude` fallback、定常watchdogの多段再試行化、起動直後の補走、認証時の承認だけ復旧導線を追加） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -162,6 +162,7 @@
 36. **認証分離**: `~/.claude-secretary/`（秘書アカウント koa800.secretary@gmail.com MAX 5x）で日向エージェント（`~/.claude/`）と完全分離。`CLAUDE_CONFIG_DIR`環境変数でsubprocess起動時に切り替え
 37. **bypassPermissions**: `~/.claude-secretary/settings.json`でBash/WebSearch/Read等の全ツール解放。rm/sudo/kill/force-push等の破壊的操作のみask制限
 38. **人名ハルシネーション防止**: profiles.jsonから全メンバー名を抽出し「社内メンバー一覧」としてプロンプトに注入。「人名ルール: profiles.jsonに存在する正確な名前のみ使用」を出力ルールに追加
+39. **Claude CLI / OAuth fallback**: `claude` は `shutil.which` / `~/.local/bin/claude` / app support 配下まで検出する。`~/.claude-secretary/` に OAuth 実体がない端末では `~/.claude/` を fallback として使い、`.credentials.json` が無い場合も CLI 起動チェックで事前確認する。認証が切れた場合は `claude auth login --email koa800.secretary@gmail.com` を Mac mini 側で自動起動し、本人には承認だけ依頼する
 - **Cursorワークスペース優先**: 秘書のClaude Codeプロンプトに、`cursor/` 配下の `AGENTS.md` / `CLAUDE.md` / `Skills/` / `Project/` / `Master/` / `System/` を正本として読むルールを追加。MacBookのCursorで作業するのと同じ流れで、調査→修復→検証→報告まで一気通貫で行う
 - **既知エラーの先回り修復**: ルールが固まっていて可逆な修復は、報告の前に秘書が自分で実行する方針に変更。CDPの列名揺れ補正のような定型エラーは、まず自動修復を試みる
 
@@ -178,9 +179,9 @@
 49. **Anthropic APIクレジット残高監視**: Orchestratorが週1回（月曜08:20）テストAPIコールで残高チェック。クレジット不足検知時にLINE通知。復旧時にも通知。自動課金はしない
 50. **LINE応答エラー1回リトライ**: Render（app.py）でAnthropic API呼び出し失敗時、クレジット不足以外なら3秒待って1回リトライ。クレジット不足は即エラー通知
 54. **API→CLI移行（API消費削減）**: 非リアルタイムのバッチ/スケジュールタスク7箇所をAnthropic API直接呼び出しからClaude Code CLI（サブスク課金）に移行。対象: weekly_bottleneck, weekly_content_suggestions, daily_group_digest, weekly_hinata_memory, os_sync_session, ai_news要約, sns_analyzer分析。repair_checkは無効化（手動`claude -p`で代替）
-51. **日報検証→自動再実行**: daily_report_verify（09:20）で未入力を検知した場合、daily_report_inputを自動で再実行（1日1回まで）。リトライ後も未完了ならLINE通知
+51. **日報検証→自動再実行 + 定常watchdog**: daily_report_verify（09:20）で未入力を検知した場合、daily_report_inputを自動で再実行（1日1回まで）。さらに Orchestrator 再起動直後にその日の重要定常を即チェックし、取りこぼしがあれば待たずに補走。平常時も `health_check`（1分ごと）が `daily_addness_digest` / `daily_report_input` / `daily_report_verify` / `looker_csv_download` / `kpi_daily_import` / `daily_report_reminder` / `daily_group_digest` の未実行を検知したら、10分クールダウン付きで当日最大3回まで自動補走し、なお未完了なら通知する
 52. **Looker Studioセッション維持**: 毎朝07:00に `looker_session_keepalive` がChrome CDP経由でLooker Studioの2ページを開いてGoogleセッションをリフレッシュ（Claude Code不要の軽量処理）
-53. **Looker Studio自動ログイン**: Googleログイン切れ検知時、`credentials/kohara_google.txt`からパスワードを読み込みChrome MCPで自動ログイン（`kohara.kaito@team.addness.co.jp` を第1候補）。既存の認証済みタブを再利用し、`u/1` 固定URLの開き直しは避ける。2段階認証はLINE通知→甲原のiPhoneで承認
+53. **Looker Studio自動ログイン**: Googleログイン切れ検知時、`credentials/kohara_google.txt`からパスワードを読み込みChrome MCPで自動ログイン（`kohara.kaito@team.addness.co.jp` を第1候補）。既存の認証済みタブを再利用し、`u/1` 固定URLの開き直しは避ける。2段階認証はLINE通知→甲原のiPhoneで承認し、必要時は Mac mini 側で対象ページを自動で開いて「承認だけ」で戻せるようにする
 
 ### Phase 12: ゴール進行モード（実装完了）
 54. **秘書ゴール進行モード**: 定常業務の空き時間（30分ごとにチェック）にAddnessの「定常業務の自動化」ゴールを自律的に進める。Chrome MCPでAddnessを直接操作し、ゴール確認→完了基準定義→アクション一覧作成→実行→報告のサイクルを回す
@@ -524,7 +525,7 @@ bash System/line_bot_local/sync_data.sh
 | Orchestrator SYSTEM_DIR | tools.py の SYSTEM_DIR は __file__ ベースで動的解決（Desktop/Mac Mini両対応）。ハードコードしないこと |
 | local_agent.py _SYSTEM_DIR | スクリプト呼び出しパスも __file__ ベースで動的解決済み。`mail_manager.py` の存在チェックでDesktop/Mac Miniを自動判別（`_AGENT_DIR.parent` → なければ `parent/System/`）|
 | LINE Notify廃止 | LINE Notify は2025年3月終了。Render `/notify` エンドポイント + LINE Messaging API push_message で代替 |
-| Google OAuth token.json | `~/agents/token.json` に保存。access tokenは1時間で失効するがrefresh_tokenで自動更新。oauth_health_checkが毎朝9時に監視 |
+| Google OAuth token.json | `~/agents/token.json` に保存。access tokenは1時間で失効するがrefresh_tokenで自動更新。oauth_health_checkが毎朝8:25に監視 |
 | MacBook機種変更 | `Master/knowledge/MacBook移行ガイド.md` 参照。Mac Mini側は完全自律稼働のため影響なし。SSHキーとpost-commitフックの再設定のみ必要 |
 | 手元PCのスリープ・閉じ蓋 | 定常タスク（Orchestrator・LINE local・メール・日報・Q&A等）は**Mac Mini**で稼働。手元のMacBookをスリープ/閉じ蓋しても**これらの仕組みは止まらない**。閉じ蓋でもスリープしないようにするには下記「クラムシェルモード」を参照 |
 | Chatwork Webhook設定 | Chatwork管理画面 → Webhook設定 → イベント `mention_to_me` → URL: Chatwork Webhook URL |
@@ -602,12 +603,17 @@ bash System/line_bot_local/sync_data.sh
 | 06:30 | `sheets_sync` | 🔴 | Googleスプレッドシート全同期→KPIキャッシュ再生成 | ✅ あり |
 | 08:00 | `addness_fetch` ※3日ごと | 🟡 | Addnessゴールツリー取得 | ✅ あり |
 | 08:10 | `ai_news` | 🟡 | Web検索でAI関連ニュース収集 | なし |
+| 08:25 | `oauth_health_check` | 🟢 | Google認証 + Claude Code OAuth + Chrome接続の事前確認。Claude認証切れ時は Mac mini で認証導線を自動起動 | エラー時のみ |
 | 08:30 | `daily_addness_digest` | 🟡 | ゴール進捗+今日の予定まとめ | ✅ あり |
+| 08:40 | `daily_report_input` | 🔴 | Looker Studio→日報シート自動入力 | ✅ あり |
 | 09:00 | `addness_goal_check` | 🟢 | やることリスト更新 | ✅ あり |
-| 09:10 | `oauth_health_check` | 🟢 | Google認証トークン確認 | エラー時のみ |
+| 09:20 | `daily_report_verify` | 🟢 | 日報入力の実データ検証 + 未入力時は自動再実行 | エラー時のみ |
 | 3h毎 :00 | `mail_inbox_personal` | 🟡 | 個人メール確認・分類 | 返信待ちあれば（12hごと上限） |
 | 3h毎 :05 | `mail_inbox_kohara` | 🟡 | koharaメール確認・分類 | 返信待ちあれば（12hごと上限） |
+| 11:30 | `looker_csv_download` | 🔴 | Looker Studio CSV取得 + 不足分バックフィル | ✅ あり |
+| 12:00 | `daily_report_reminder` | 🟡 | 日報未記入の検出と広告チームへのリマインド | 未記入時のみ |
 | 12:00 | `kpi_daily_import` | 🟡 | CSVからスプレッドシートへKPI取込 | ✅ あり |
+| 19:00 | `daily_report_reminder` | 🟡 | 日報未記入の再チェックと再リマインド | 未記入時のみ |
 | 21:00 | `daily_report` | 🟢 | 日次タスク集計 | 停止 |
 | 21:10 | `daily_group_digest` | 🟡 | グループLINE要点整理（グループ名 / 会話内容 / 秘書メモ） | ✅ あり |
 | 22:00 | `kpi_nightly_cache` | 🟢 | KPIキャッシュ再生成 | なし |
@@ -616,7 +622,7 @@ bash System/line_bot_local/sync_data.sh
 
 | 間隔 | タスク | 重さ | やること |
 |------|--------|------|---------|
-| 5分ごと | `health_check` | 🟢 | 死活監視・自動復旧（停止検知→再起動→LINE通知） |
+| 1分ごと | `health_check` | 🟢 | 死活監視・自動復旧（停止検知→再起動→起動直後に当日分の重要定常を即確認。平常時も未実行の重要定常は10分クールダウン付きで最大3回まで補走） |
 | 5分ごと | `git_pull_sync` | 🟢 | GitHubからpull→rsyncデプロイ→サービス再起動 |
 | 10分ごと | `hinata_addness_feedback_check` | 🟢 | Addness上の日向コメント検知→LINE承認フローへ登録 |
 | 30分ごと | `render_health_check` | 🟢 | Renderサーバー死活監視（ダウン時LINE通知） |
