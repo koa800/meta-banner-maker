@@ -5,12 +5,14 @@ agent:
   log_level: "INFO"
 
 paths:
-  repo_root: "~/agents"
-  system_dir: "~/agents/System"
-  master_dir: "~/agents/Master"
-  skills_dir: "~/agents/Skills"
-  db_path: "~/agents/System/mac_mini/agent_orchestrator/agent.db"
-  log_dir: "~/agents/System/mac_mini/agent_orchestrator/logs"
+  # 既定の deploy root。起動時は orchestrator.py が
+  # ADDNESS_DEPLOY_ROOT / ADDNESS_CONFIG_PATH を優先して正規化する。
+  repo_root: "~/Desktop/cursor"
+  system_dir: "~/Desktop/cursor/System"
+  master_dir: "~/Desktop/cursor/Master"
+  skills_dir: "~/Desktop/cursor/Skills"
+  db_path: "~/Desktop/cursor/System/mac_mini/agent_orchestrator/agent.db"
+  log_dir: "~/Desktop/cursor/System/mac_mini/agent_orchestrator/logs"
 
 # スケジュール設計方針:
 #   - 同じ時刻に複数タスクを並べない（1つずつ順番に実行する）
@@ -36,6 +38,9 @@ schedule:
   addness_fetch:
     cron: "0 8 */3 * *"          # 08:00  Addnessゴールツリー取得（3日ごと）
     enabled: true
+  addness_smoke_test:
+    cron: "45 6 * * *"           # 06:45  Addness主要操作のスモークテスト（テスト配下）
+    enabled: true
   ai_news:
     cron: "10 8 * * *"           # 08:10  AIニュース収集
     enabled: true
@@ -53,6 +58,9 @@ schedule:
     enabled: false
   daily_addness_digest:
     cron: "30 8 * * *"           # 08:30  朝のブリーフィング
+    enabled: true
+  addness_activity_watch:
+    cron: "55 8 * * *"           # 08:55  Addness行動ログを集計して優先操作を更新
     enabled: true
   addness_goal_check:
     cron: "0 9 * * *"            # 09:00  ゴール→やることリスト整理
@@ -88,6 +96,9 @@ schedule:
     enabled: true
   mail_inbox_kohara:
     cron: "5 */3 * * *"          # 3時間ごと :05  koharaメール確認（5分ズラし）
+    enabled: true
+  security_action_watch:
+    cron: "15 */3 * * *"         # 3時間ごと :15  SECURITY ACTION自己宣言IDメール確認
     enabled: true
   kpi_daily_import:
     cron: "0 12 * * *"           # 12:00  KPIデータ投入
@@ -153,7 +164,7 @@ schedule:
 
   # === 常時監視（軽量・ローカル処理） ===
   health_check:
-    interval_minutes: 5          # 死活監視・自動復旧
+    interval_minutes: 1          # 死活監視・自動復旧（重要定常の取りこぼし補走を1分以内に寄せる）
     enabled: true
   git_pull_sync:
     interval_minutes: 5          # GitHubから同期

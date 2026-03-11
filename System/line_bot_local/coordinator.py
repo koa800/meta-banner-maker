@@ -211,11 +211,13 @@ def _build_system_prompt(sender_name: str = "", project_root: Path = None, goal_
 
 【ルール】
 1. 曖昧なゴールや複数解釈できるゴール → 必ず認識確認してから実行
-2. 情報取得系のツール（calendar, mail, kpi, people, addness, sheets, search）は並列で呼んでOK
-3. draft_reply, analyze, generate_image, generate_video は、必要な情報が揃ってから呼ぶ
-4. send_message, ask_human は「送信提案」を返すだけ。実際の送信はユーザーの承認後
-5. 最終報告は簡潔に。箇条書きで。LINEメッセージとして読みやすい形式で
-6. ツールが不要な簡単な質問には、ツールを呼ばず直接回答してもOK
+2. 情報取得系のツール（calendar, mail, kpi, people, addness, addness_ops の current_member/search_goals/get_goal/list_comments/list_ai_threads/get_ai_messages/activity_summary, sheets, search）は並列で呼んでOK
+3. Addness の更新系（addness_ops の create_goal/update_goal_title/update_goal_status/update_goal_due_date/update_goal_description/post_comment/resolve_comment/reparent_goal/archive_goal/start_ai_session/send_ai_message/consult_goal/smoke_test）は、同じゴールや同じ thread に対して並列で呼ばない
+4. Addness の delete_goal / delete_comment は不可逆。ユーザーが明示的に削除を求めた時だけ呼ぶ。delete_goal は confirm=true に加えて expected_title を必ず付ける
+5. draft_reply, analyze, generate_image, generate_video は、必要な情報が揃ってから呼ぶ
+6. send_message, ask_human は「送信提案」を返すだけ。実際の送信はユーザーの承認後
+7. 最終報告は簡潔に。箇条書きで。LINEメッセージとして読みやすい形式で
+8. ツールが不要な簡単な質問には、ツールを呼ばず直接回答してもOK
 
 【生成AI系ツール】
 - search: Web検索が必要なとき（最新情報、企業調査、市場動向）→ Perplexity に委任

@@ -27,9 +27,15 @@ CDP_SHEET_ID = "1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk"
 LEAD_SHEET_ID = "1iD3DGxNhZruyjYcA5n6oXRDk2ZGA3uMDOo0stQS9Y00"
 CS_SHEET_ID = "1XOkJsXzEx4iV9h8F-cywg0FOS4Knf7IfekN78RZAr6I"
 ROUTE_TAB_SHEET_ID = "1l5yD6xUL-1ZC73KrMtCCkDsfhx8D8C4vhylaX3VOoL4"
+CR_ROUTE_SHEET_ID = "1tsNi91jdMYrZr2k4V9N3V0Q6_LROl_JuFg_7EWuRi_w"
+CR_ROUTE_TAB_NAME = "CR別データ"
+CR_ROUTE_SOURCE_URL = f"https://docs.google.com/spreadsheets/d/{CR_ROUTE_SHEET_ID}/edit"
+TRANSITION_LINK_HEADER = "遷移先リンク"
+CR_ROUTE_SYNC_COLUMNS = ("CR名", "CRリンク", TRANSITION_LINK_HEADER)
 DATA_DIR = Path(__file__).resolve().parent / "data"
 CHANGE_LOG_PATH = DATA_DIR / "cdp_change_log.json"
 SYNC_STATE_PATH = DATA_DIR / "cdp_sync_state.json"
+SOURCE_STATUS_HISTORY_PATH = DATA_DIR / "cdp_source_status_history.json"
 SIMILARITY_LOG_PATH = DATA_DIR / "cdp_email_warnings.json"
 LOCK_FILE_PATH = DATA_DIR / "cdp_sync.lock"
 LOCK_TIMEOUT_SECONDS = 600  # 10分でロックタイムアウト
@@ -47,6 +53,11 @@ _HEADER_AUTOFIX_HINTS = {
     "名": ("名",),
     "LINE名": ("LINE名", "LINE表示名", "ライン名"),
     "フルネーム": ("氏名", "お名前", "回答者名", "フルネーム"),
+    "CR名": ("CR名", "クリエイティブ名"),
+    "CRリンク": ("CRリンク", "クリエイティブリンク", "CR URL", "広告リンク"),
+    TRANSITION_LINK_HEADER: (
+        TRANSITION_LINK_HEADER, "遷移先URL", "遷移先URLリンク", "LPリンク", "LP URL"
+    ),
 }
 
 
@@ -76,6 +87,17 @@ def _header_hint_key(value):
         return "LINE名"
     if normalized in {"氏名", "お名前", "回答者名", "フルネーム"}:
         return "フルネーム"
+    if normalized == "cr名" or "クリエイティブ名" in normalized:
+        return "CR名"
+    if normalized == "crリンク" or "クリエイティブリンク" in normalized:
+        return "CRリンク"
+    if normalized in {
+        _normalize_header_text(TRANSITION_LINK_HEADER),
+        "遷移先url",
+        "lpリンク",
+        "lpurl",
+    }:
+        return TRANSITION_LINK_HEADER
     return ""
 
 
@@ -282,6 +304,32 @@ class SyncState:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         self.state_path.write_text(
             json.dumps(self._state, ensure_ascii=False, indent=2)
+        )
+
+
+class SourceStatusHistory:
+    """データソース管理の状態変化履歴をローカル JSON に残す"""
+
+    def __init__(self, log_path=SOURCE_STATUS_HISTORY_PATH, max_entries=5000):
+        self.log_path = Path(log_path)
+        self.max_entries = max_entries
+        self._entries = []
+        self._load()
+
+    def _load(self):
+        if self.log_path.exists():
+            try:
+                self._entries = json.loads(self.log_path.read_text())
+            except (json.JSONDecodeError, IOError):
+                self._entries = []
+
+    def append(self, entry):
+        self._entries.append(entry)
+        if len(self._entries) > self.max_entries:
+            self._entries = self._entries[-self.max_entries:]
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.log_path.write_text(
+            json.dumps(self._entries, ensure_ascii=False, indent=2)
         )
 
 
@@ -590,6 +638,39 @@ def extract_date_only(date_str):
     return f"{m.group(1)}/{int(m.group(2)):02d}/{int(m.group(3)):02d}"
 
 
+def parse_source_datetime(date_str):
+    """ソースの日時文字列を datetime に変換する"""
+    raw = str(date_str or "").strip()
+    if not raw:
+        return None
+
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y/%m/%d %H:%M",
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+    ):
+        try:
+            return datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+
+    normalized = extract_date_only(raw)
+    if not normalized:
+        return None
+    try:
+        return datetime.strptime(normalized, "%Y/%m/%d")
+    except ValueError:
+        return None
+
+
+def ranges_overlap(start_a, end_a, start_b, end_b):
+    """2つの半開区間が重なるか"""
+    return max(start_a, start_b) < min(end_a, end_b)
+
+
 def normalize_customer_text(text):
     """突合用の文字列正規化（NFKC + 小文字化 + 空白除去）"""
     if not text:
@@ -863,6 +944,7 @@ class CDPSync:
         self._sheets_service = None
         self.logger = SyncLogger()
         self.sync_state = SyncState()
+        self.source_status_history = SourceStatusHistory()
 
     # ─── 除外リスト ─────────────────────────────────────
 
@@ -913,6 +995,108 @@ class CDPSync:
         except ValueError:
             return None
 
+    def refresh_master_cache(self):
+        """顧客マスタのキャッシュを捨てて再読込する"""
+        self._master_headers = None
+        self._master_data = None
+        return self.load_master()
+
+    def _ensure_row1_group_merge(self, ws, label, start_col, end_col):
+        """行1のグループ見出しを指定範囲で結合する"""
+        metadata = self.ss.fetch_sheet_metadata({
+            "includeGridData": False,
+            "fields": "sheets(properties.sheetId,merges)",
+        })
+        target_merge = {
+            "sheetId": ws.id,
+            "startRowIndex": 0,
+            "endRowIndex": 1,
+            "startColumnIndex": start_col - 1,
+            "endColumnIndex": end_col,
+        }
+        requests = []
+        desired_merge_exists = False
+
+        for sheet in metadata.get("sheets", []):
+            if sheet.get("properties", {}).get("sheetId") != ws.id:
+                continue
+            for merge in sheet.get("merges", []):
+                if merge.get("startRowIndex") != 0 or merge.get("endRowIndex") != 1:
+                    continue
+                if not ranges_overlap(
+                    merge.get("startColumnIndex", 0),
+                    merge.get("endColumnIndex", 0),
+                    target_merge["startColumnIndex"],
+                    target_merge["endColumnIndex"],
+                ):
+                    continue
+                if merge == target_merge:
+                    desired_merge_exists = True
+                    continue
+                requests.append({"unmergeCells": {"range": merge}})
+            break
+
+        if not desired_merge_exists:
+            requests.append({"mergeCells": {"range": target_merge, "mergeType": "MERGE_ALL"}})
+
+        if requests:
+            self.ss.batch_update({"requests": requests})
+
+        ws.batch_update(
+            [{"range": f"{_col_to_letter(start_col)}1", "values": [[label]]}],
+            value_input_option="USER_ENTERED",
+        )
+
+    def ensure_master_schema(self):
+        """CDP 顧客マスタの列構成とグループ見出しを最新構成に揃える"""
+        ws = self.ss.worksheet("顧客マスタ")
+        row2 = ws.row_values(2)
+        header_map = {name: idx + 1 for idx, name in enumerate(row2) if name}
+        changes = []
+
+        cr_link_col = header_map.get("CRリンク")
+        if not cr_link_col:
+            raise KeyError("顧客マスタに「CRリンク」列が見つかりません")
+
+        transition_col = header_map.get(TRANSITION_LINK_HEADER)
+        if transition_col is None:
+            self.ss.batch_update({
+                "requests": [{
+                    "insertDimension": {
+                        "range": {
+                            "sheetId": ws.id,
+                            "dimension": "COLUMNS",
+                            "startIndex": cr_link_col,
+                            "endIndex": cr_link_col + 1,
+                        },
+                        "inheritFromBefore": True,
+                    }
+                }]
+            })
+            ws.batch_update(
+                [{"range": f"{_col_to_letter(cr_link_col + 1)}2", "values": [[TRANSITION_LINK_HEADER]]}],
+                value_input_option="USER_ENTERED",
+            )
+            changes.append("`遷移先リンク` を `CRリンク` の右に追加")
+        elif transition_col != cr_link_col + 1:
+            raise RuntimeError(
+                "顧客マスタの「遷移先リンク」が `CRリンク` の右にありません。手動確認が必要です。"
+            )
+
+        self.refresh_master_cache()
+        ws = self.ss.worksheet("顧客マスタ")
+        current_pains_col = self.get_col_index("現在の悩み")
+        past_solutions_col = self.get_col_index("過去の解決策")
+        flow_start_col = self.get_col_index("初回流入日")
+        transition_col = self.get_col_index(TRANSITION_LINK_HEADER)
+
+        if None in {current_pains_col, past_solutions_col, flow_start_col, transition_col}:
+            raise KeyError("顧客マスタの必要列が見つかりません")
+
+        self._ensure_row1_group_merge(ws, "定性情報", current_pains_col + 1, past_solutions_col + 1)
+        self._ensure_row1_group_merge(ws, "流入情報", flow_start_col + 1, transition_col + 1)
+        return {"updated": bool(changes), "changes": changes}
+
     def build_email_index(self):
         """メールアドレスでインデックスを構築（名寄せ用）
         カンマ区切りの複数メールにも対応（各メールを個別にインデックス）
@@ -961,7 +1145,7 @@ class CDPSync:
     # タブ別の書式設定（グループ境界列・ヘッダー行数）
     _TAB_FORMAT = {
         "顧客マスタ": {
-            "group_borders": [0, 3, 7, 20, 22, 29, 36, 45],
+            "group_borders": [0, 3, 7, 20, 23, 31, 38, 47],
             "header_rows": 2,  # 行1:グループ名, 行2:カラム名
         },
         "データソース管理": {
@@ -1086,6 +1270,157 @@ class CDPSync:
             )
 
     # ─── データソース管理の読み込み ─────────────────────
+
+    def ensure_cr_source_mappings(self):
+        """CR別データの同期定義をデータソース管理へ再配置・更新する"""
+        ws = self.ss.worksheet("データソース管理")
+        data = ws.get_all_values()
+        if not data:
+            return {"updated": False, "added": 0, "updated_rows": 0, "reordered": False}
+
+        field_order = [
+            "cdp_column", "group", "source", "priority", "url", "tab", "ref_column",
+            "normalize", "input_condition", "status", "last_sync", "count", "error_count", "memo",
+        ]
+        field_count = len(field_order)
+
+        def pad_row(row):
+            return row[:field_count] + [""] * max(0, field_count - len(row))
+
+        body_rows = [pad_row(row) for row in data[1:]]
+
+        desired_rows = [
+            {
+                "cdp_column": "CR名",
+                "group": "流入情報",
+                "source": "スプレッドシート",
+                "url": CR_ROUTE_SOURCE_URL,
+                "tab": CR_ROUTE_TAB_NAME,
+                "ref_column": "CR名",
+                "normalize": "",
+                "input_condition": "メールアドレス→電話番号→名前で一意一致。登録日時が新しい値を採用",
+                "status": "未同期",
+                "last_sync": "",
+                "count": "",
+                "error_count": "0",
+                "memo": "CR別データ",
+            },
+            {
+                "cdp_column": "CRリンク",
+                "group": "流入情報",
+                "source": "スプレッドシート",
+                "url": CR_ROUTE_SOURCE_URL,
+                "tab": CR_ROUTE_TAB_NAME,
+                "ref_column": "CRリンク",
+                "normalize": "URLのみ抽出",
+                "input_condition": "メールアドレス→電話番号→名前で一意一致。登録日時が新しい値を採用",
+                "status": "未同期",
+                "last_sync": "",
+                "count": "",
+                "error_count": "0",
+                "memo": "CR別データ",
+            },
+            {
+                "cdp_column": TRANSITION_LINK_HEADER,
+                "group": "流入情報",
+                "source": "スプレッドシート",
+                "url": CR_ROUTE_SOURCE_URL,
+                "tab": CR_ROUTE_TAB_NAME,
+                "ref_column": TRANSITION_LINK_HEADER,
+                "normalize": "URLのみ抽出",
+                "input_condition": "メールアドレス→電話番号→名前で一意一致。登録日時が新しい値を採用",
+                "status": "未同期",
+                "last_sync": "",
+                "count": "",
+                "error_count": "0",
+                "memo": "CR別データ",
+            },
+        ]
+
+        target_keys = {
+            (row["cdp_column"], row["url"], row["tab"])
+            for row in desired_rows
+        }
+
+        existing_by_key = {}
+        for row in body_rows:
+            key = (row[0].strip(), row[4].strip(), row[5].strip())
+            existing_by_key[key] = row
+
+        def next_priority(cdp_column):
+            priorities = []
+            for row in body_rows:
+                row_key = (row[0].strip(), row[4].strip(), row[5].strip())
+                if row_key in target_keys:
+                    continue
+                if row[0].strip() != cdp_column:
+                    continue
+                raw_priority = row[3].strip()
+                if not raw_priority:
+                    continue
+                try:
+                    priorities.append(int(raw_priority))
+                except ValueError:
+                    continue
+            return str(max(priorities, default=0) + 1 if priorities else 1)
+
+        normalized_rows = []
+        added = 0
+        updated_rows = 0
+        for desired in desired_rows:
+            key = (desired["cdp_column"], desired["url"], desired["tab"])
+            existing = existing_by_key.get(key)
+            row_dict = dict(desired)
+            row_dict["priority"] = next_priority(desired["cdp_column"])
+            if existing:
+                row_dict["status"] = existing[9].strip() or desired["status"]
+                row_dict["last_sync"] = existing[10].strip()
+                row_dict["count"] = existing[11].strip()
+                row_dict["error_count"] = existing[12].strip() or desired["error_count"]
+            else:
+                added += 1
+
+            normalized = [row_dict[field] for field in field_order]
+            normalized_rows.append(normalized)
+            if existing and existing != normalized:
+                updated_rows += 1
+
+        filtered_rows = [
+            row for row in body_rows
+            if (row[0].strip(), row[4].strip(), row[5].strip()) not in target_keys
+        ]
+
+        cr_name_positions = [
+            idx for idx, row in enumerate(filtered_rows)
+            if row[0].strip() == "CR名"
+        ]
+        if cr_name_positions:
+            insert_at = cr_name_positions[-1] + 1
+        else:
+            flow_positions = [
+                idx for idx, row in enumerate(filtered_rows)
+                if row[1].strip() == "流入情報"
+            ]
+            insert_at = flow_positions[-1] + 1 if flow_positions else len(filtered_rows)
+
+        reordered_rows = (
+            filtered_rows[:insert_at]
+            + normalized_rows
+            + filtered_rows[insert_at:]
+        )
+        changed = reordered_rows != body_rows
+        if changed:
+            end_row = len(reordered_rows) + 1
+            ws.update(f"A2:N{end_row}", reordered_rows, value_input_option="USER_ENTERED")
+            if len(body_rows) > len(reordered_rows):
+                ws.batch_clear([f"A{end_row + 1}:N{len(body_rows) + 1}"])
+
+        return {
+            "updated": changed,
+            "added": added,
+            "updated_rows": updated_rows,
+            "reordered": changed,
+        }
 
     def load_source_mappings(self):
         """データソース管理タブからカラムマッピングを読み込む
@@ -1244,7 +1579,8 @@ class CDPSync:
     # ─── 同期（本実装） ────────────────────────────────
 
     def sync(self, source_url, tab_name, column_mapping, email_col,
-             phone_col=None, dry_run=False, incremental=True):
+             phone_col=None, dry_run=False, incremental=True,
+             column_priorities=None):
         """ソースシートからCDP顧客マスタにデータを同期する
 
         Args:
@@ -1260,6 +1596,7 @@ class CDPSync:
         self.load_master()
         email_index = self.build_email_index()
         phone_index = self.build_phone_index()
+        column_priorities = column_priorities or {}
 
         source_headers, source_rows = self.read_source(source_url, tab_name)
         column_mapping = dict(column_mapping)
@@ -1351,7 +1688,7 @@ class CDPSync:
         append_columns = {"セミナー予約日", "個別予約日", "個別着座日"}
 
         # URLバリデーション対象カラム
-        url_columns = {"収録URL", "サポートURL", "CRリンク"}
+        url_columns = {"収録URL", "サポートURL", "CRリンク", TRANSITION_LINK_HEADER}
 
         # フリガナ自動分割用
         sei_idx = self.get_col_index("姓")
@@ -1588,6 +1925,13 @@ class CDPSync:
                     old_val = ""
                     if cdp_idx < len(self._master_data[master_row_idx]):
                         old_val = self._master_data[master_row_idx][cdp_idx]
+
+                    if (
+                        cdp_col not in append_columns
+                        and column_priorities.get(cdp_col, 1) > 1
+                        and old_val.strip()
+                    ):
+                        continue
 
                     # カンマ区切り追記カラム: 既存値に追記（重複チェック付き）
                     if cdp_col in append_columns:
@@ -1947,6 +2291,209 @@ class CDPSync:
 
         return stats
 
+    def sync_identity_source(self, source_url, tab_name, column_mapping,
+                             line_name_col="", surname_col="", given_name_col="",
+                             dry_run=False, incremental=True, column_priorities=None):
+        """メールなしソースを LINE名 / 姓名 で既存顧客へだけ同期する"""
+        self.load_master()
+        lookup = self._build_customer_lookup()
+        column_priorities = column_priorities or {}
+
+        source_headers, source_rows = self.read_source(source_url, tab_name)
+        column_mapping = dict(column_mapping)
+        column_mapping, _, _, repairs = self.repair_source_headers(
+            source_url,
+            tab_name,
+            source_headers,
+            column_mapping,
+            email_col=None,
+            phone_col=None,
+            dry_run=dry_run,
+        )
+        line_name_col = column_mapping.get("LINE名", line_name_col)
+        surname_col = column_mapping.get("姓", surname_col)
+        given_name_col = column_mapping.get("名", given_name_col)
+
+        source_key = f"{source_url}#{tab_name}#identity"
+        last_state = self.sync_state.get_last_sync(source_key)
+        alerts = []
+        if last_state:
+            prev_headers = last_state.get("headers")
+            if prev_headers and prev_headers != source_headers:
+                removed = set(prev_headers) - set(source_headers)
+                added = set(source_headers) - set(prev_headers)
+                if removed:
+                    alerts.append(f"列が削除されました: {removed}")
+                if added:
+                    alerts.append(f"列が追加されました: {added}")
+                mapped_cols = set(column_mapping.values())
+                missing_mapped = mapped_cols - set(source_headers)
+                if missing_mapped:
+                    msg = (f"[同期中断] ソース '{tab_name}' のマッピング対象列が"
+                           f"消失しました: {missing_mapped}")
+                    print(f"\n⚠️ {msg}")
+                    return {"error": msg, "alerts": alerts, "repairs": repairs}
+
+        src_line_idx = source_headers.index(line_name_col) if line_name_col in source_headers else None
+        src_surname_idx = source_headers.index(surname_col) if surname_col in source_headers else None
+        src_given_name_idx = source_headers.index(given_name_col) if given_name_col in source_headers else None
+        if src_line_idx is None and (src_surname_idx is None or src_given_name_idx is None):
+            return {
+                "error": "LINE名 または 姓+名 の突合キーがありません",
+                "alerts": alerts,
+                "repairs": repairs,
+            }
+
+        src_answered_at_idx = None
+        if "回答日時" in source_headers:
+            src_answered_at_idx = source_headers.index("回答日時")
+
+        src_col_indices = {}
+        for cdp_col, src_col in column_mapping.items():
+            if src_col in source_headers:
+                src_col_indices[cdp_col] = source_headers.index(src_col)
+
+        start_row = 0
+        if incremental:
+            last_state = self.sync_state.get_last_sync(source_key)
+            if last_state and last_state.get("last_row_count", 0) > 0:
+                start_row = last_state["last_row_count"]
+                if start_row >= len(source_rows):
+                    print(f"増分同期: 新しい行なし（前回: {start_row}行）")
+                    return {"total": 0, "updated": 0, "inserted": 0, "unmatched": 0, "repairs": repairs}
+                print(f"増分同期: 行{start_row + 1}〜{len(source_rows)}を処理")
+
+        stats = {
+            "total": len(source_rows) - start_row,
+            "updated": 0,
+            "inserted": 0,
+            "unmatched": 0,
+            "matched": 0,
+            "repairs": repairs,
+        }
+        selected = {}
+        update_date_idx = self.get_col_index("最終更新日")
+        url_columns = {"収録URL", "サポートURL", "CRリンク", TRANSITION_LINK_HEADER}
+
+        for row_idx in range(start_row, len(source_rows)):
+            row = source_rows[row_idx]
+            line_name = row[src_line_idx].strip() if src_line_idx is not None and src_line_idx < len(row) else ""
+            surname = row[src_surname_idx].strip() if src_surname_idx is not None and src_surname_idx < len(row) else ""
+            given_name = row[src_given_name_idx].strip() if src_given_name_idx is not None and src_given_name_idx < len(row) else ""
+            full_name = f"{surname}{given_name}".strip()
+            if not is_usable_line_match(line_name) and not full_name:
+                continue
+
+            master_row_idx, match_type = self._find_cdp_row_by_customer(
+                lookup,
+                line_name=line_name,
+                full_name=full_name,
+            )
+            if master_row_idx is None:
+                stats["unmatched"] += 1
+                continue
+
+            stats["matched"] += 1
+            answered_at = ""
+            if src_answered_at_idx is not None and src_answered_at_idx < len(row):
+                answered_at = row[src_answered_at_idx].strip()
+            sort_dt = parse_source_datetime(answered_at)
+            sort_key = sort_dt.strftime("%Y-%m-%d %H:%M:%S") if sort_dt else f"row-{row_idx:07d}"
+            current = selected.get(master_row_idx)
+            if current is None or sort_key >= current["sort_key"]:
+                selected[master_row_idx] = {
+                    "row": row,
+                    "sort_key": sort_key,
+                    "line_name": line_name,
+                    "full_name": full_name,
+                    "match_type": match_type,
+                    "source_row": row_idx + 2,
+                }
+
+        updates = []
+        today = datetime.now().strftime("%Y/%m/%d")
+        for master_row_idx, payload in sorted(selected.items()):
+            row = payload["row"]
+            master_row = self._master_data[master_row_idx]
+            sheet_row = master_row_idx + 3
+            updated_any = False
+            row_key = payload["line_name"] or payload["full_name"] or str(master_row_idx)
+
+            for cdp_col, src_idx in src_col_indices.items():
+                if src_idx >= len(row):
+                    continue
+                if cdp_col in self.COMPUTED_COLUMNS:
+                    continue
+
+                new_val = row[src_idx].strip()
+                if not new_val:
+                    continue
+                if cdp_col in url_columns:
+                    new_val = clean_url_field(new_val)
+                    if not new_val:
+                        continue
+
+                cdp_idx = self.get_col_index(cdp_col)
+                if cdp_idx is None:
+                    continue
+
+                while len(master_row) <= cdp_idx:
+                    master_row.append("")
+                old_val = master_row[cdp_idx].strip()
+                if column_priorities.get(cdp_col, 1) > 1 and old_val:
+                    continue
+                if old_val == new_val:
+                    continue
+
+                master_row[cdp_idx] = new_val
+                updates.append({
+                    "range": f"{_col_to_letter(cdp_idx + 1)}{sheet_row}",
+                    "values": [[new_val]],
+                })
+                self.logger.log(
+                    "update",
+                    row_key,
+                    cdp_col,
+                    old_val,
+                    new_val,
+                    f"{source_url}#{tab_name}!{payload['source_row']}",
+                )
+                updated_any = True
+
+            if updated_any:
+                stats["updated"] += 1
+                if update_date_idx is not None:
+                    while len(master_row) <= update_date_idx:
+                        master_row.append("")
+                    master_row[update_date_idx] = today
+                    updates.append({
+                        "range": f"{_col_to_letter(update_date_idx + 1)}{sheet_row}",
+                        "values": [[today]],
+                    })
+
+        if updates and not dry_run:
+            ws = self.ss.worksheet("顧客マスタ")
+            self._batch_update_ranges(ws, updates)
+
+        if not dry_run:
+            self.sync_state.update(source_key, len(source_rows), headers=source_headers)
+            self.sync_state.save()
+        self.logger.save()
+
+        mode = "ドライラン" if dry_run else "同期完了"
+        print(f"\n=== {mode} ===")
+        print(f"処理対象: {stats['total']}件")
+        print(f"突合: {stats['matched']}件")
+        print(f"未一致: {stats['unmatched']}件")
+        print(f"更新: {stats['updated']}件")
+        if alerts:
+            print(f"ソース変更アラート: {len(alerts)}件")
+            stats["alerts"] = alerts
+        if repairs:
+            print(f"自動修復: {len(repairs)}件")
+
+        return stats
+
     # ─── 経路別タブ → 集客データシートの同期 ─────────────
 
     def sync_route_tabs_to_lead(self, dry_run=False):
@@ -2146,7 +2693,7 @@ class CDPSync:
     # ─── データソース管理ステータス更新 ─────────────────
 
     def update_source_status(self, source_url, source_tab, status,
-                             error_count=0):
+                             error_count=0, detail=""):
         """データソース管理の該当行すべてのステータス・同期日・エラー数を更新
         ※ L列（更新数）はrefresh_source_counts()で実ソースデータ件数を書き込むため、ここでは触らない
 
@@ -2155,24 +2702,62 @@ class CDPSync:
             source_tab: ソースのタブ名
             status: "正常" / "停止"
             error_count: エラー件数
+            detail: 状態変化の補足メモ
         """
         ws = self.ss.worksheet("データソース管理")
         data = ws.get_all_values()
-        now = datetime.now().strftime("%Y/%m/%d")
+        now_dt = datetime.now()
+        now = now_dt.strftime("%Y/%m/%d %H:%M")
 
         updates = []
+        matched_rows = []
         for i, row in enumerate(data[1:], 2):  # 行2〜
             if len(row) < 6:
                 continue
             row_url = row[4].strip()
             row_tab = row[5].strip()
             if row_url == source_url and row_tab == source_tab:
+                previous_status = row[9].strip() if len(row) > 9 else ""
+                previous_sync = row[10].strip() if len(row) > 10 else ""
+                previous_error_raw = row[12].strip() if len(row) > 12 else ""
+                try:
+                    previous_error_count = int(previous_error_raw) if previous_error_raw else 0
+                except ValueError:
+                    previous_error_count = 0
+                matched_rows.append({
+                    "row_no": i,
+                    "cdp_column": row[0].strip() if len(row) > 0 else "",
+                    "previous_status": previous_status,
+                    "previous_sync": previous_sync,
+                    "previous_error_count": previous_error_count,
+                })
                 # J=ステータス, K=最終同期日, M=エラー数（L列は触らない）
                 updates.append({"range": f"J{i}:K{i}", "values": [[status, now]]})
                 updates.append({"range": f"M{i}", "values": [[error_count]]})
 
         if updates:
             ws.batch_update(updates, value_input_option="USER_ENTERED")
+        if matched_rows:
+            changed = any(
+                row["previous_status"] != status
+                or row["previous_error_count"] != error_count
+                for row in matched_rows
+            )
+            if changed:
+                self.source_status_history.append({
+                    "timestamp": now,
+                    "source_url": source_url,
+                    "source_tab": source_tab,
+                    "affected_rows": [row["row_no"] for row in matched_rows],
+                    "affected_columns": [row["cdp_column"] for row in matched_rows],
+                    "previous_statuses": sorted({row["previous_status"] for row in matched_rows if row["previous_status"]}),
+                    "previous_sync_values": sorted({row["previous_sync"] for row in matched_rows if row["previous_sync"]}),
+                    "previous_error_counts": sorted({row["previous_error_count"] for row in matched_rows}),
+                    "new_status": status,
+                    "new_sync": now,
+                    "new_error_count": error_count,
+                    "detail": str(detail or "").strip(),
+                })
 
     def refresh_source_counts(self):
         """データソース管理の更新数を、各行のソーススプレッドシート（E列）を
@@ -2292,7 +2877,9 @@ class CDPSync:
                 continue
 
             try:
-                last_date = datetime.strptime(last_sync, "%Y/%m/%d")
+                last_date = parse_source_datetime(last_sync)
+                if last_date is None:
+                    raise ValueError(last_sync)
                 days = (datetime.now() - last_date).days
                 if days >= 7:
                     stale.append(f"{source}/{tab}: {days}日未同期")
@@ -2798,6 +3385,188 @@ class CDPSync:
         print(f"\nCS返金同期完了: {stats['updated']}件更新")
         return stats
 
+    def sync_cr_route_sheet(self, dry_run=False, incremental=True):
+        """CR別データから CR 情報を同期する"""
+        if not dry_run:
+            self.ensure_master_schema()
+            self.ensure_cr_source_mappings()
+        self.load_master()
+
+        required_headers = [
+            "メールアドレス",
+            "電話番号",
+            "お名前",
+            "登録日時",
+            *CR_ROUTE_SYNC_COLUMNS,
+        ]
+        source_headers, source_rows = self.read_source(CR_ROUTE_SOURCE_URL, CR_ROUTE_TAB_NAME)
+        header_index = {}
+        repairs = []
+        for expected in required_headers:
+            actual = expected
+            if actual not in source_headers:
+                actual = find_best_header_match(expected, source_headers, expected)
+            if not actual:
+                raise KeyError(f"CR別データに必要列が見つかりません: {expected}")
+            if actual != expected:
+                repairs.append({"expected": expected, "actual": actual})
+            header_index[expected] = source_headers.index(actual)
+
+        source_key = f"{CR_ROUTE_SOURCE_URL}#{CR_ROUTE_TAB_NAME}#cr-route"
+        start_row = 0
+        if incremental:
+            last_state = self.sync_state.get_last_sync(source_key)
+            if last_state and last_state.get("last_row_count", 0) > 0:
+                start_row = last_state["last_row_count"]
+                if start_row >= len(source_rows):
+                    print("CR別データ: 新しい行なし")
+                    return {
+                        "processed": 0,
+                        "matched": 0,
+                        "unmatched": 0,
+                        "updated": 0,
+                        "match_breakdown": {},
+                        "repairs": repairs,
+                    }
+                print(f"CR別データ 増分同期: 行{start_row + 2}〜{len(source_rows) + 1}を処理")
+
+        lookup = self._build_customer_lookup()
+        phone_lookup = self.build_phone_index()
+        update_date_idx = self.get_col_index("最終更新日")
+        target_indices = {
+            col_name: self.get_col_index(col_name)
+            for col_name in CR_ROUTE_SYNC_COLUMNS
+        }
+        missing_columns = [name for name, idx in target_indices.items() if idx is None]
+        if missing_columns:
+            raise KeyError(f"顧客マスタに必要列が見つかりません: {', '.join(missing_columns)}")
+
+        stats = {
+            "processed": max(0, len(source_rows) - start_row),
+            "matched": 0,
+            "unmatched": 0,
+            "updated": 0,
+            "match_breakdown": {"email": 0, "phone": 0, "name": 0},
+            "repairs": repairs,
+        }
+        selected = {}
+
+        def cell(row, header_name):
+            idx = header_index[header_name]
+            return row[idx].strip() if idx < len(row) else ""
+
+        for local_idx in range(start_row, len(source_rows)):
+            row = source_rows[local_idx]
+            emails = clean_email_all(cell(row, "メールアドレス"))
+            email = emails[0] if emails else ""
+            phone = normalize_phone(cell(row, "電話番号"))
+            full_name = cell(row, "お名前")
+            if not any([email, phone, full_name]):
+                continue
+
+            match_type = ""
+            row_idx = None
+            email_key = email.lower() if email else ""
+            if email_key and email_key in lookup["email"]:
+                row_idx = lookup["email"][email_key]
+                match_type = "email"
+            elif phone and phone in phone_lookup:
+                row_idx = phone_lookup[phone]
+                match_type = "phone"
+            else:
+                for mapping, key in [
+                    (lookup["name_strict"], normalize_customer_text(full_name)),
+                    (lookup["name_loose"], normalize_customer_name_key(full_name)),
+                ]:
+                    row_idx = self._find_unique_row(mapping, key)
+                    if row_idx is not None:
+                        match_type = "name"
+                        break
+
+            if row_idx is None:
+                stats["unmatched"] += 1
+                continue
+
+            stats["matched"] += 1
+            stats["match_breakdown"][match_type] += 1
+            bucket = selected.setdefault(row_idx, {})
+            sort_dt = parse_source_datetime(cell(row, "登録日時"))
+            sort_key = sort_dt.strftime("%Y-%m-%d %H:%M:%S") if sort_dt else ""
+            source_row_number = local_idx + 2  # ヘッダー込みの行番号
+
+            for col_name in CR_ROUTE_SYNC_COLUMNS:
+                raw_value = cell(row, col_name)
+                if not raw_value:
+                    continue
+                value = clean_url_field(raw_value) if "リンク" in col_name else raw_value
+                if not value:
+                    continue
+                previous_sort_key = bucket.get(f"{col_name}__sort_key", "")
+                if sort_key >= previous_sort_key:
+                    bucket[col_name] = value
+                    bucket[f"{col_name}__sort_key"] = sort_key
+                    bucket[f"{col_name}__source_row"] = source_row_number
+                    bucket["row_key"] = email or phone or full_name
+
+        updates = []
+        today = datetime.now().strftime("%Y/%m/%d")
+        for row_idx, selected_values in sorted(selected.items()):
+            row = self._master_data[row_idx]
+            sheet_row = row_idx + 3
+            row_changed = False
+            row_key = selected_values.get("row_key", "")
+
+            for col_name in CR_ROUTE_SYNC_COLUMNS:
+                new_value = selected_values.get(col_name, "")
+                if not new_value:
+                    continue
+                cdp_idx = target_indices[col_name]
+                while len(row) <= cdp_idx:
+                    row.append("")
+                current_value = row[cdp_idx].strip()
+                if current_value == new_value:
+                    continue
+                updates.append({
+                    "range": f"{_col_to_letter(cdp_idx + 1)}{sheet_row}",
+                    "values": [[new_value]],
+                })
+                row[cdp_idx] = new_value
+                row_changed = True
+                self.logger.log(
+                    "update",
+                    row_key,
+                    col_name,
+                    current_value,
+                    new_value,
+                    f"{CR_ROUTE_TAB_NAME}!{selected_values.get(f'{col_name}__source_row', '')}",
+                )
+
+            if row_changed and update_date_idx is not None:
+                while len(row) <= update_date_idx:
+                    row.append("")
+                row[update_date_idx] = today
+                updates.append({
+                    "range": f"{_col_to_letter(update_date_idx + 1)}{sheet_row}",
+                    "values": [[today]],
+                })
+                stats["updated"] += 1
+
+        if updates and not dry_run:
+            ws_cdp = self.ss.worksheet("顧客マスタ")
+            self._batch_update_ranges(ws_cdp, updates)
+
+        if not dry_run:
+            self.sync_state.update(source_key, len(source_rows), headers=source_headers)
+            self.sync_state.save()
+            self.logger.save()
+
+        print(
+            "CR別データ同期完了: "
+            f"処理 {stats['processed']}件 / 突合 {stats['matched']}件 / "
+            f"未一致 {stats['unmatched']}件 / 更新 {stats['updated']}件"
+        )
+        return stats
+
     def _count_cs_special_source_rows(self, source_tab, ref_col, cs_ss=None):
         """CS管理シートの特殊同期行の更新数を返す"""
         cs_ss = cs_ss or self.client.open_by_key(CS_SHEET_ID)
@@ -2849,6 +3618,9 @@ class CDPSync:
             dry_run: Trueなら書き込みしない
             incremental: Trueなら増分同期
         """
+        if not dry_run:
+            self.ensure_master_schema()
+            self.ensure_cr_source_mappings()
         mappings = self.load_source_mappings()
         if not mappings:
             print("同期対象のマッピングがありません")
@@ -2863,9 +3635,11 @@ class CDPSync:
                     "url": m["url"],
                     "tab": m["tab"],
                     "column_mapping": {},
+                    "column_priorities": {},
                     "source_name": m["source"],
                 }
             sources[key]["column_mapping"][m["cdp_column"]] = m["ref_column"]
+            sources[key]["column_priorities"][m["cdp_column"]] = m["priority"]
 
         print(f"\n自動同期: {len(sources)}ソースを処理")
 
@@ -2886,16 +3660,37 @@ class CDPSync:
                 # メールアドレス列を特定（マッピングから探す）
                 email_col = src["column_mapping"].get("メールアドレス", "")
                 phone_col = src["column_mapping"].get("電話番号", "")
+                line_name_col = src["column_mapping"].get("LINE名", "")
+                surname_col = src["column_mapping"].get("姓", "")
+                given_name_col = src["column_mapping"].get("名", "")
 
                 if not email_col:
-                    print(f"  スキップ: メールアドレスのマッピングがありません")
-                    continue
-
-                stats = self.sync(
-                    src["url"], src["tab"], src["column_mapping"],
-                    email_col, phone_col=phone_col,
-                    dry_run=dry_run, incremental=incremental,
-                )
+                    if src["url"] == CR_ROUTE_SOURCE_URL and src["tab"] == CR_ROUTE_TAB_NAME:
+                        print("  専用同期で処理")
+                        continue
+                    if line_name_col or (surname_col and given_name_col):
+                        print("  LINE名/姓名同期で処理")
+                        stats = self.sync_identity_source(
+                            src["url"],
+                            src["tab"],
+                            src["column_mapping"],
+                            line_name_col=line_name_col,
+                            surname_col=surname_col,
+                            given_name_col=given_name_col,
+                            dry_run=dry_run,
+                            incremental=incremental,
+                            column_priorities=src["column_priorities"],
+                        )
+                    else:
+                        print(f"  スキップ: メールアドレスのマッピングがありません")
+                        continue
+                else:
+                    stats = self.sync(
+                        src["url"], src["tab"], src["column_mapping"],
+                        email_col, phone_col=phone_col,
+                        dry_run=dry_run, incremental=incremental,
+                        column_priorities=src["column_priorities"],
+                    )
 
                 if stats:
                     if stats.get("repairs"):
@@ -2913,7 +3708,7 @@ class CDPSync:
                         if not dry_run:
                             self.update_source_status(
                                 src["url"], src["tab"], "停止",
-                                error_count=1)
+                                error_count=1, detail=stats["error"])
                     else:
                         total_stats["updated"] += stats.get("updated", 0)
                         total_stats["inserted"] += stats.get("inserted", 0)
@@ -2935,7 +3730,7 @@ class CDPSync:
                     try:
                         self.update_source_status(
                             src["url"], src["tab"], "停止",
-                            error_count=1)
+                            error_count=1, detail=str(e))
                     except Exception:
                         pass
 
@@ -2959,7 +3754,7 @@ class CDPSync:
                     cs_url = f"https://docs.google.com/spreadsheets/d/{CS_SHEET_ID}/edit"
                     for cs_tab in self._CS_TABS:
                         self.update_source_status(
-                            cs_url, cs_tab["tab"], "停止", error_count=1)
+                            cs_url, cs_tab["tab"], "停止", error_count=1, detail=str(e))
                 except Exception:
                     pass
 
@@ -2981,8 +3776,37 @@ class CDPSync:
                     cs_url = f"https://docs.google.com/spreadsheets/d/{CS_SHEET_ID}/edit"
                     for cs_tab in self._CS_REFUND_TABS:
                         self.update_source_status(
-                            cs_url, cs_tab["tab"], "停止", error_count=1
+                            cs_url, cs_tab["tab"], "停止", error_count=1, detail=str(e)
                         )
+                except Exception:
+                    pass
+
+        # CR別データからの CR 情報同期
+        try:
+            cr_stats = self.sync_cr_route_sheet(
+                dry_run=dry_run,
+                incremental=incremental,
+            )
+            total_stats["updated"] += cr_stats.get("updated", 0)
+            if cr_stats.get("repairs"):
+                for repair in cr_stats["repairs"]:
+                    total_stats["repairs"].append(
+                        f"CR別データ {repair['expected']}: {repair['actual']}"
+                    )
+            if not dry_run:
+                self.update_source_status(CR_ROUTE_SOURCE_URL, CR_ROUTE_TAB_NAME, "正常")
+        except Exception as e:
+            total_stats["errors"] += 1
+            print(f"  CR別データ同期エラー: {e}")
+            if not dry_run:
+                try:
+                    self.update_source_status(
+                        CR_ROUTE_SOURCE_URL,
+                        CR_ROUTE_TAB_NAME,
+                        "停止",
+                        error_count=1,
+                        detail=str(e),
+                    )
                 except Exception:
                     pass
 
@@ -3100,6 +3924,8 @@ CDP同期スクリプト
   python3 cdp_sync.py sync              全ソース自動同期
   python3 cdp_sync.py sync --dry-run    全ソース自動同期（ドライラン）
   python3 cdp_sync.py sync --full       全ソース全件同期（増分なし）
+  python3 cdp_sync.py ensure-schema     CDP列構成とデータソース定義を整える
+  python3 cdp_sync.py sync-cr-route     CR別データのみ同期する
   python3 cdp_sync.py dry-run <ソースURL> <タブ名> <メールカラム名>
   python3 cdp_sync.py exclusion-list
   python3 cdp_sync.py status
@@ -3128,6 +3954,46 @@ CDP同期スクリプト
         except RuntimeError as e:
             print(f"エラー: {e}")
             sys.exit(1)
+
+    elif cmd == "ensure-schema":
+        result = sync.ensure_master_schema()
+        mapping_result = sync.ensure_cr_source_mappings()
+        sync.refresh_master_cache()
+        sync.ensure_borders()
+        sync.refresh_source_counts()
+        if result["changes"]:
+            for change in result["changes"]:
+                print(f"  - {change}")
+        print(
+            "スキーマ整備完了: "
+            f"列変更 {len(result['changes'])}件 / "
+            f"データソース追加 {mapping_result['added']}件 / "
+            f"データソース更新 {mapping_result['updated_rows']}件"
+        )
+
+    elif cmd == "sync-cr-route":
+        dry_run = "--dry-run" in sys.argv
+        incremental = "--full" not in sys.argv
+        result = sync.sync_cr_route_sheet(dry_run=dry_run, incremental=incremental)
+        if not dry_run:
+            try:
+                sync.update_source_status(CR_ROUTE_SOURCE_URL, CR_ROUTE_TAB_NAME, "正常")
+            except Exception as e:
+                print(f"  ステータス更新は次回に回します: {e}")
+            try:
+                sync.refresh_source_counts()
+            except Exception as e:
+                print(f"  更新数反映は次回に回します: {e}")
+            try:
+                sync.ensure_borders()
+            except Exception as e:
+                print(f"  罫線補正は次回に回します: {e}")
+        print(
+            "CR別データ単独同期: "
+            f"突合 {result.get('matched', 0)}件 / "
+            f"未一致 {result.get('unmatched', 0)}件 / "
+            f"更新 {result.get('updated', 0)}件"
+        )
 
     elif cmd == "dry-run":
         if len(sys.argv) < 5:

@@ -119,6 +119,173 @@
       }
     },
     {
+      "name": "addness_ops",
+      "description": "Addnessを直接操作する。ゴール作成・更新・コメント・親変更・AI相談・行動ログ集計まで扱う。削除系は confirm=true が必須",
+      "confirmation_level": "L1",
+      "handler_type": "subprocess",
+      "handler_path": "hinata/addness_cli.py",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "current_member",
+              "search_goals",
+              "get_goal",
+              "create_goal",
+              "update_goal_title",
+              "update_goal_status",
+              "update_goal_due_date",
+              "update_goal_description",
+              "list_comments",
+              "post_comment",
+              "resolve_comment",
+              "delete_comment",
+              "reparent_goal",
+              "archive_goal",
+              "delete_goal",
+              "list_ai_threads",
+              "get_ai_messages",
+              "start_ai_session",
+              "send_ai_message",
+              "consult_goal",
+              "activity_summary",
+              "smoke_test"
+            ],
+            "description": "実行する Addness 操作"
+          },
+          "query": {
+            "type": "string",
+            "description": "ゴール検索クエリ"
+          },
+          "goal_id": {
+            "type": "string",
+            "description": "対象ゴールID"
+          },
+          "parent_id": {
+            "type": "string",
+            "description": "新規作成時の親 goal_id"
+          },
+          "goal_url": {
+            "type": "string",
+            "description": "対象ゴールURL"
+          },
+          "title": {
+            "type": "string",
+            "description": "新しいゴール名、または AI スレッドタイトル"
+          },
+          "status": {
+            "type": "string",
+            "description": "ゴール状態。completed / none など"
+          },
+          "due_date": {
+            "type": "string",
+            "description": "期日。YYYY-MM-DD / YYYY/MM/DD / ISO8601"
+          },
+          "description": {
+            "type": "string",
+            "description": "完了の基準"
+          },
+          "new_parent_id": {
+            "type": "string",
+            "description": "親変更先の goal_id"
+          },
+          "comment_id": {
+            "type": "string",
+            "description": "対象コメントID"
+          },
+          "text": {
+            "type": "string",
+            "description": "投稿するコメント本文"
+          },
+          "message": {
+            "type": "string",
+            "description": "AIに送るメッセージ"
+          },
+          "instruction": {
+            "type": "string",
+            "description": "AI相談時の補足指示"
+          },
+          "thread_id": {
+            "type": "string",
+            "description": "AIスレッドID"
+          },
+          "purpose": {
+            "type": "string",
+            "description": "AI会話の用途。brainstorm / completion_criteria / task_breakdown / execution"
+          },
+          "model": {
+            "type": "string",
+            "description": "AIモデル名"
+          },
+          "mode": {
+            "type": "string",
+            "description": "AIチャットモード"
+          },
+          "confirm": {
+            "type": "boolean",
+            "description": "delete_goal / delete_comment 実行時の明示確認"
+          },
+          "expected_title": {
+            "type": "string",
+            "description": "delete_goal 実行時に一致確認する対象タイトル"
+          },
+          "expected_parent_id": {
+            "type": "string",
+            "description": "delete_goal 実行時に一致確認する親 goal_id"
+          },
+          "allow_non_test_goal": {
+            "type": "boolean",
+            "description": "delete_goal をテスト配下以外にも許可するか"
+          },
+          "resolved": {
+            "type": "boolean",
+            "description": "list_comments で resolved コメントを取得するか"
+          },
+          "offset": {
+            "type": "integer",
+            "description": "一覧取得の offset"
+          },
+          "sort": {
+            "type": "string",
+            "description": "一覧取得のソート順。asc / desc"
+          },
+          "member_id": {
+            "type": "string",
+            "description": "行動ログを見たい member_id。未指定なら自分"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "検索件数または一覧取得件数"
+          },
+          "pages": {
+            "type": "integer",
+            "description": "activity_summary で何ページ集計するか"
+          },
+          "page_size": {
+            "type": "integer",
+            "description": "activity_summary の1ページ件数"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "description": "AI返答待ち秒数"
+          },
+          "save_report": {
+            "type": "boolean",
+            "description": "activity_summary の結果をローカル保存するか"
+          },
+          "keep_artifacts": {
+            "type": "boolean",
+            "description": "smoke_test 失敗時にテストゴールを残すか"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      }
+    },
+    {
       "name": "sheets",
       "description": "Googleスプレッドシートのデータを読み取る",
       "confirmation_level": "L1",

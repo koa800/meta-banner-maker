@@ -190,8 +190,293 @@ class HandlerRunner:
         elif tool_name == "confirm_video_learning":
             cmd.append("confirm")
 
-        # video_reader は動画DL+フレーム抽出で時間がかかる
-        timeout = 600 if tool_name == "video_reader" else 120
+        elif tool_name == "addness_ops":
+            action = arguments.get("action", "")
+            if action == "current_member":
+                cmd.extend(["current-member", "--headless"])
+            elif action == "search_goals":
+                query = arguments.get("query", "")
+                if not query:
+                    return "query が必要です"
+                cmd.extend(["search-goals", "--query", query, "--headless"])
+                limit = arguments.get("limit")
+                if limit:
+                    cmd.extend(["--limit", str(limit)])
+            elif action == "get_goal":
+                goal_id = arguments.get("goal_id", "")
+                if not goal_id:
+                    return "goal_id が必要です"
+                cmd.extend(["get-goal", "--goal-id", goal_id, "--headless"])
+            elif action == "create_goal":
+                parent_id = arguments.get("parent_id", "")
+                title = arguments.get("title", "")
+                if not parent_id or not title:
+                    return "parent_id と title が必要です"
+                cmd.extend([
+                    "create-goal",
+                    "--parent-id",
+                    parent_id,
+                    "--title",
+                    title,
+                    "--headless",
+                ])
+                due_date = arguments.get("due_date", "")
+                if due_date:
+                    cmd.extend(["--due-date", due_date])
+                description = arguments.get("description")
+                if description is not None:
+                    cmd.extend(["--description", str(description)])
+                status = arguments.get("status", "")
+                if status:
+                    cmd.extend(["--status", status])
+            elif action == "update_goal_title":
+                goal_id = arguments.get("goal_id", "")
+                title = arguments.get("title", "")
+                if not goal_id or not title:
+                    return "goal_id と title が必要です"
+                cmd.extend([
+                    "update-goal-title",
+                    "--goal-id",
+                    goal_id,
+                    "--title",
+                    title,
+                    "--headless",
+                ])
+            elif action == "update_goal_status":
+                goal_id = arguments.get("goal_id", "")
+                status = arguments.get("status", "")
+                if not goal_id or not status:
+                    return "goal_id と status が必要です"
+                cmd.extend([
+                    "update-goal-status",
+                    "--goal-id",
+                    goal_id,
+                    "--status",
+                    status,
+                    "--headless",
+                ])
+            elif action == "update_goal_due_date":
+                goal_id = arguments.get("goal_id", "")
+                due_date = arguments.get("due_date", "")
+                if not goal_id or not due_date:
+                    return "goal_id と due_date が必要です"
+                cmd.extend([
+                    "update-goal-due-date",
+                    "--goal-id",
+                    goal_id,
+                    "--due-date",
+                    due_date,
+                    "--headless",
+                ])
+            elif action == "update_goal_description":
+                goal_id = arguments.get("goal_id", "")
+                description = arguments.get("description")
+                if not goal_id or description is None:
+                    return "goal_id と description が必要です"
+                cmd.extend([
+                    "update-goal-description",
+                    "--goal-id",
+                    goal_id,
+                    "--description",
+                    str(description),
+                    "--headless",
+                ])
+            elif action == "list_comments":
+                goal_id = arguments.get("goal_id", "")
+                if not goal_id:
+                    return "goal_id が必要です"
+                cmd.extend(["list-comments", "--goal-id", goal_id, "--headless"])
+                if arguments.get("resolved"):
+                    cmd.append("--resolved")
+                limit = arguments.get("limit")
+                if limit:
+                    cmd.extend(["--limit", str(limit)])
+                offset = arguments.get("offset")
+                if offset:
+                    cmd.extend(["--offset", str(offset)])
+                sort = arguments.get("sort", "")
+                if sort:
+                    cmd.extend(["--sort", sort])
+            elif action == "post_comment":
+                text = arguments.get("text", "")
+                if not text:
+                    return "text が必要です"
+                cmd.extend(["post-comment", "--text", text, "--headless"])
+                goal_id = arguments.get("goal_id", "")
+                goal_url = arguments.get("goal_url", "")
+                if goal_url:
+                    cmd.extend(["--goal-url", goal_url])
+                elif goal_id:
+                    cmd.extend(["--goal-id", goal_id])
+            elif action == "resolve_comment":
+                comment_id = arguments.get("comment_id", "")
+                if not comment_id:
+                    return "comment_id が必要です"
+                cmd.extend(["resolve-comment", "--comment-id", comment_id, "--headless"])
+            elif action == "delete_comment":
+                comment_id = arguments.get("comment_id", "")
+                if not comment_id:
+                    return "comment_id が必要です"
+                if not arguments.get("confirm"):
+                    return "delete_comment には confirm=true が必要です"
+                cmd.extend(["delete-comment", "--comment-id", comment_id, "--yes", "--headless"])
+            elif action == "reparent_goal":
+                goal_id = arguments.get("goal_id", "")
+                new_parent_id = arguments.get("new_parent_id", "")
+                if not goal_id or not new_parent_id:
+                    return "goal_id と new_parent_id が必要です"
+                cmd.extend([
+                    "reparent-goal",
+                    "--goal-id",
+                    goal_id,
+                    "--new-parent-id",
+                    new_parent_id,
+                    "--headless",
+                ])
+            elif action == "archive_goal":
+                goal_id = arguments.get("goal_id", "")
+                if not goal_id:
+                    return "goal_id が必要です"
+                cmd.extend(["archive-goal", "--goal-id", goal_id, "--headless"])
+            elif action == "delete_goal":
+                goal_id = arguments.get("goal_id", "")
+                if not goal_id:
+                    return "goal_id が必要です"
+                if not arguments.get("confirm"):
+                    return "delete_goal には confirm=true が必要です"
+                expected_title = arguments.get("expected_title", "")
+                if not expected_title:
+                    return "delete_goal には expected_title が必要です"
+                cmd.extend(["delete-goal", "--goal-id", goal_id, "--expected-title", expected_title, "--yes", "--headless"])
+                expected_parent_id = arguments.get("expected_parent_id", "")
+                if expected_parent_id:
+                    cmd.extend(["--expected-parent-id", expected_parent_id])
+                if arguments.get("allow_non_test_goal"):
+                    cmd.append("--allow-non-test-goal")
+            elif action == "list_ai_threads":
+                goal_id = arguments.get("goal_id", "")
+                if not goal_id:
+                    return "goal_id が必要です"
+                cmd.extend(["list-ai-threads", "--goal-id", goal_id, "--headless"])
+                limit = arguments.get("limit")
+                if limit:
+                    cmd.extend(["--limit", str(limit)])
+                offset = arguments.get("offset")
+                if offset:
+                    cmd.extend(["--offset", str(offset)])
+            elif action == "get_ai_messages":
+                thread_id = arguments.get("thread_id", "")
+                if not thread_id:
+                    return "thread_id が必要です"
+                cmd.extend(["get-ai-messages", "--thread-id", thread_id, "--headless"])
+                limit = arguments.get("limit")
+                if limit:
+                    cmd.extend(["--limit", str(limit)])
+            elif action == "start_ai_session":
+                goal_id = arguments.get("goal_id", "")
+                if not goal_id:
+                    return "goal_id が必要です"
+                cmd.extend(["start-ai-session", "--goal-id", goal_id, "--headless"])
+                purpose = arguments.get("purpose", "")
+                if purpose:
+                    cmd.extend(["--purpose", purpose])
+                title = arguments.get("title", "")
+                if title:
+                    cmd.extend(["--title", title])
+            elif action == "send_ai_message":
+                thread_id = arguments.get("thread_id", "")
+                message = arguments.get("message", "")
+                if not thread_id or not message:
+                    return "thread_id と message が必要です"
+                cmd.extend([
+                    "send-ai-message",
+                    "--thread-id",
+                    thread_id,
+                    "--message",
+                    message,
+                    "--headless",
+                ])
+                goal_id = arguments.get("goal_id", "")
+                if goal_id:
+                    cmd.extend(["--goal-id", goal_id])
+                model = arguments.get("model", "")
+                if model:
+                    cmd.extend(["--model", model])
+                mode = arguments.get("mode", "")
+                if mode:
+                    cmd.extend(["--mode", mode])
+                timeout_seconds = arguments.get("timeout_seconds")
+                if timeout_seconds:
+                    cmd.extend(["--timeout-seconds", str(timeout_seconds)])
+            elif action == "consult_goal":
+                cmd.extend(["consult", "--headless"])
+                goal_id = arguments.get("goal_id", "")
+                goal_url = arguments.get("goal_url", "")
+                if goal_url:
+                    cmd.extend(["--goal-url", goal_url])
+                elif goal_id:
+                    cmd.extend(["--goal-id", goal_id])
+                thread_id = arguments.get("thread_id", "")
+                if thread_id:
+                    cmd.extend(["--thread-id", thread_id])
+                purpose = arguments.get("purpose", "")
+                if purpose:
+                    cmd.extend(["--purpose", purpose])
+                message = arguments.get("message", "")
+                instruction = arguments.get("instruction", "")
+                if message:
+                    cmd.extend(["--message", message])
+                elif instruction:
+                    cmd.extend(["--instruction", instruction])
+                title = arguments.get("title", "")
+                if title:
+                    cmd.extend(["--title", title])
+                model = arguments.get("model", "")
+                if model:
+                    cmd.extend(["--model", model])
+                mode = arguments.get("mode", "")
+                if mode:
+                    cmd.extend(["--mode", mode])
+                timeout_seconds = arguments.get("timeout_seconds")
+                if timeout_seconds:
+                    cmd.extend(["--timeout-seconds", str(timeout_seconds)])
+            elif action == "activity_summary":
+                cmd.extend(["activity-summary", "--headless"])
+                member_id = arguments.get("member_id", "")
+                if member_id:
+                    cmd.extend(["--member-id", member_id])
+                pages = arguments.get("pages")
+                if pages:
+                    cmd.extend(["--pages", str(pages)])
+                page_size = arguments.get("page_size")
+                if page_size:
+                    cmd.extend(["--page-size", str(page_size)])
+                if arguments.get("save_report"):
+                    cmd.append("--save-report")
+            elif action == "smoke_test":
+                cmd.extend(["smoke-test", "--headless"])
+                parent_id = arguments.get("parent_id", "")
+                if parent_id:
+                    cmd.extend(["--parent-id", parent_id])
+                timeout_seconds = arguments.get("timeout_seconds")
+                if timeout_seconds:
+                    cmd.extend(["--timeout-seconds", str(timeout_seconds)])
+                if arguments.get("keep_artifacts"):
+                    cmd.append("--keep-artifacts")
+            else:
+                return (
+                    "addness_ops の action が不正です。"
+                    " current_member / search_goals / get_goal / create_goal /"
+                    " update_goal_title / update_goal_status / update_goal_due_date /"
+                    " update_goal_description / list_comments / post_comment /"
+                    " resolve_comment / delete_comment / reparent_goal / archive_goal /"
+                    " delete_goal / list_ai_threads / get_ai_messages /"
+                    " start_ai_session / send_ai_message / consult_goal /"
+                    " activity_summary / smoke_test を使ってください"
+                )
+
+        # video_reader と Addness 操作は時間がかかることがある
+        timeout = 600 if tool_name == "video_reader" else 300 if tool_name == "addness_ops" else 120
 
         result = subprocess.run(
             cmd,

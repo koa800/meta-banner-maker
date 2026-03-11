@@ -28,12 +28,34 @@ from . import tools
 
 logger = get_logger("orchestrator")
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.yaml")
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(os.environ.get("ADDNESS_DEPLOY_ROOT", SCRIPT_DIR.parents[2])).expanduser().resolve()
+SYSTEM_DIR = PROJECT_ROOT / "System"
+MASTER_DIR = PROJECT_ROOT / "Master"
+SKILLS_DIR = PROJECT_ROOT / "Skills"
+ORCH_DIR = SYSTEM_DIR / "mac_mini" / "agent_orchestrator"
+CONFIG_PATH = str(Path(os.environ.get("ADDNESS_CONFIG_PATH", ORCH_DIR / "config.yaml")).expanduser())
+
+
+def _normalize_runtime_paths(config: dict) -> dict:
+    paths = config.setdefault("paths", {})
+    paths["repo_root"] = str(PROJECT_ROOT)
+    paths["project_root"] = str(PROJECT_ROOT)
+    paths["system_dir"] = str(SYSTEM_DIR)
+    paths["master_dir"] = str(MASTER_DIR)
+    paths["skills_dir"] = str(SKILLS_DIR)
+    paths["db_path"] = str(ORCH_DIR / "agent.db")
+    paths["log_dir"] = str(ORCH_DIR / "logs")
+    runtime = config.setdefault("_runtime", {})
+    runtime["config_path"] = CONFIG_PATH
+    runtime["project_root"] = str(PROJECT_ROOT)
+    return config
 
 
 def load_config(path: str = CONFIG_PATH) -> dict:
     with open(path, "r") as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+    return _normalize_runtime_paths(config or {})
 
 
 class AgentOrchestrator:
@@ -51,33 +73,36 @@ class AgentOrchestrator:
         @app.get("/health")
         async def health():
             summary = self.memory.get_daily_summary()
+            schedule_cfg = self.config.get("schedule", {})
             return {
                 "status": "ok",
                 "agent": self.config["agent"]["name"],
                 "today": summary,
+                "config_path": self.config.get("_runtime", {}).get("config_path"),
+                "project_root": self.config.get("_runtime", {}).get("project_root"),
+                "schedule_total": len(schedule_cfg),
+                "schedule_enabled": sum(1 for item in schedule_cfg.values() if item.get("enabled", False)),
             }
 
         @app.get("/sync-status")
         async def sync_status():
             import json
             import subprocess
-            status_path = os.path.expanduser(
-                "~/agents/System/mac_mini/agent_orchestrator/sync_status.json"
-            )
-            repo_dir = os.path.expanduser("~/agents/_repo")
+            status_path = Path(self.config.get("paths", {}).get("system_dir", str(SYSTEM_DIR))) / "mac_mini" / "agent_orchestrator" / "sync_status.json"
+            repo_dir = Path(self.config.get("paths", {}).get("repo_root", str(PROJECT_ROOT))) / "_repo"
             result = {"mac_mini": None, "repo_head": None}
-            if os.path.exists(status_path):
+            if status_path.exists():
                 with open(status_path) as f:
                     result["mac_mini"] = json.load(f)
             try:
                 head = subprocess.check_output(
-                    ["git", "rev-parse", "HEAD"], cwd=repo_dir, text=True
+                    ["git", "rev-parse", "HEAD"], cwd=str(repo_dir), text=True
                 ).strip()
                 msg = subprocess.check_output(
-                    ["git", "log", "-1", "--format=%s", "HEAD"], cwd=repo_dir, text=True
+                    ["git", "log", "-1", "--format=%s", "HEAD"], cwd=str(repo_dir), text=True
                 ).strip()
                 ts = subprocess.check_output(
-                    ["git", "log", "-1", "--format=%ci", "HEAD"], cwd=repo_dir, text=True
+                    ["git", "log", "-1", "--format=%ci", "HEAD"], cwd=str(repo_dir), text=True
                 ).strip()
                 result["repo_head"] = {"commit": head, "message": msg, "date": ts}
             except Exception:
@@ -220,6 +245,7 @@ class AgentOrchestrator:
 
         self.task_scheduler.setup()
         self.task_scheduler.start()
+        asyncio.create_task(self.task_scheduler.run_startup_recovery())
 
         webhook_cfg = self.config.get("webhook", {})
         if webhook_cfg.get("enabled", False):
@@ -263,6 +289,17 @@ def setup_logging(level: str = "INFO"):
 def main():
     config = load_config()
     setup_logging(config.get("agent", {}).get("log_level", "INFO"))
+    schedule_cfg = config.get("schedule", {})
+    enabled_count = sum(1 for item in schedule_cfg.values() if item.get("enabled", False))
+    logger.info(
+        "Loaded orchestrator config",
+        extra={
+            "config_path": config.get("_runtime", {}).get("config_path"),
+            "project_root": config.get("_runtime", {}).get("project_root"),
+            "schedule_total": len(schedule_cfg),
+            "schedule_enabled": enabled_count,
+        },
+    )
 
     orchestrator = AgentOrchestrator(config)
 

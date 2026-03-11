@@ -213,7 +213,7 @@ scp System/token_calendar_personal.json koa800@mac-mini-agent.local:~/agents/Sys
 
 以下はすべて Mac Mini または GitHub に保存されているため、**新MacBookでは何もしなくてよい**:
 
-- SkillPlus Q&Aデータ（Mac Miniの qa_sync/）
+- スキルプラス Q&Aデータ（Mac Miniの qa_sync/）
 - LINE秘書の学習データ（Renderの永続ディスク）
 - Addnessゴールツリー（Mac Miniの ~/agents/Master/）
 - Google OAuth token.json（Mac Miniの ~/agents/token.json）

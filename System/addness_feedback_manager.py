@@ -38,6 +38,8 @@ GOOGLE_EMAIL_CANDIDATES = [
     "kohara.kaito@team.addness.co.jp",
 ]
 HINATA_NAME_CANDIDATES = ("日向", "ひなた", "hinata")
+THREAD_CONTEXT_LIMIT = 6
+THREAD_CONTEXT_TEXT_LIMIT = 180
 
 
 def load_json(path: Path, default: Any):
@@ -511,6 +513,48 @@ def normalize_comment(goal_id: str, goal_title: str, comment: dict) -> dict:
     }
 
 
+def build_thread_context(comments: list[dict], target_comment_id: str, limit: int = THREAD_CONTEXT_LIMIT) -> list[dict]:
+    ordered = sorted(
+        comments,
+        key=lambda item: (
+            str(item.get("created_at") or ""),
+            str(item.get("comment_id") or ""),
+        ),
+    )
+    if not ordered:
+        return []
+
+    target_index = next(
+        (index for index, item in enumerate(ordered) if item.get("comment_id") == target_comment_id),
+        len(ordered) - 1,
+    )
+
+    if target_index >= len(ordered) - 2:
+        start = max(0, len(ordered) - limit)
+        end = len(ordered)
+    else:
+        start = max(0, target_index - (limit - 2))
+        end = min(len(ordered), target_index + 2)
+        if end - start < limit:
+            start = max(0, end - limit)
+
+    context = []
+    for item in ordered[start:end]:
+        text = re.sub(r"\s+", " ", str(item.get("text") or "")).strip()
+        if not text:
+            continue
+        if len(text) > THREAD_CONTEXT_TEXT_LIMIT:
+            text = text[: THREAD_CONTEXT_TEXT_LIMIT - 1].rstrip() + "…"
+        context.append({
+            "comment_id": item.get("comment_id", ""),
+            "author_name": str(item.get("author_name") or "").strip() or "不明",
+            "text": text,
+            "created_at": str(item.get("created_at") or "").strip(),
+            "is_target": item.get("comment_id") == target_comment_id,
+        })
+    return context
+
+
 def extract_dom_comments(page, goal_id: str, goal_title: str) -> list[dict]:
     items = page.evaluate(
         """() => {
@@ -611,6 +655,7 @@ def register_feedback(feedback: dict) -> tuple[bool, str]:
         "sender_name": "日向",
         "original_text": feedback["text"],
         "created_at": feedback.get("created_at", ""),
+        "thread_context": feedback.get("thread_context", []),
     }
 
     response = requests.post(
@@ -728,6 +773,7 @@ def scan(limit_goals: int, headless: bool) -> dict:
 
                 hinata_comments.sort(key=lambda item: item.get("created_at", ""))
                 for comment in hinata_comments:
+                    comment["thread_context"] = build_thread_context(comments, comment["comment_id"])
                     ok, response_preview = register_feedback(comment)
                     if ok:
                         state.setdefault("processed", {})[comment["comment_id"]] = datetime.now().isoformat()

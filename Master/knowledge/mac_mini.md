@@ -44,23 +44,30 @@
 
 ## パス構造（重要・頻出トラブル原因）
 
+### 現在の正本ルール（2026-03-11更新）
+- `install_orchestrator.sh` / `git_pull_sync.sh` / `service_watchdog.sh` / `health_check.sh` は、スクリプト自身が置かれた repo root を deploy root として解決する
+- `orchestrator.py` / `scheduler.py` / `tools.py` も `ADDNESS_DEPLOY_ROOT` を優先して `System/` / `Master/` / `Skills/` を解決する
+- `ADDNESS_DEPLOY_ROOT` を渡した場合だけ、その値を優先する
+- deploy root は固定ではない。2026-03-11 21時時点の実機 launchd は `~/agents` で稼働中。`~/Desktop/cursor` から再インストールした場合だけそちらへ切り替わる
+- Orchestrator の `/health` は `config_path` / `project_root` / `schedule_enabled` を返す
+
 | 用途 | MacBook | Mac Mini |
 |------|---------|----------|
-| ソースコード | `~/Desktop/cursor/System/` | `~/agents/System/` |
-| local_agent実行 | `~/Library/LineBot/` | `~/agents/line_bot_local/`（plist WorkingDir） |
-| local_agent.py 実体 | — | `~/agents/System/line_bot_local/local_agent.py` |
-| local_agent.py シンボリックリンク | — | `~/agents/line_bot_local/local_agent.py` → 実体 |
-| credentials | `System/credentials/` | `~/agents/System/credentials/` |
-| Orchestrator | — | `~/agents/System/mac_mini/agent_orchestrator/` |
-| Orchestratorログ | — | `~/agents/System/mac_mini/agent_orchestrator/logs/` |
-| git_pull_sync.sh | — | `~/agents/System/mac_mini/git_pull_sync.sh` |
+| ソースコード | `~/Desktop/cursor/System/` | `$DEPLOY_ROOT/System/`（現行: `~/agents/System/`） |
+| local_agent実行 | `~/Library/LineBot/` | `$DEPLOY_ROOT/line_bot_local/`（現行: `~/agents/line_bot_local/`） |
+| local_agent.py 正本 | `~/Desktop/cursor/System/line_bot_local/local_agent.py` | `$DEPLOY_ROOT/System/line_bot_local/local_agent.py` |
+| local_agent.py 配置先 | — | `$DEPLOY_ROOT/line_bot_local/local_agent.py`（`git_pull_sync.sh` が同期） |
+| credentials | `System/credentials/` | `$DEPLOY_ROOT/System/credentials/`（現行: `~/agents/System/credentials/`） |
+| Orchestrator | — | `$DEPLOY_ROOT/System/mac_mini/agent_orchestrator/`（現行: `~/agents/System/mac_mini/agent_orchestrator/`） |
+| Orchestratorログ | — | `$DEPLOY_ROOT/System/mac_mini/agent_orchestrator/logs/`（現行: `~/agents/System/mac_mini/agent_orchestrator/logs/`） |
+| git_pull_sync.sh | — | `$DEPLOY_ROOT/System/mac_mini/git_pull_sync.sh`（現行: `~/agents/System/mac_mini/git_pull_sync.sh`） |
 
 ## qa_monitor_state.json のパス問題（2026-02-25 解決）
 
-- `qa_monitor.py` の `STATE_FILE = Path(__file__).parent / "qa_monitor_state.json"`
-- Mac Miniでは実体が `~/agents/System/line_bot_local/` にあるため state は `~/agents/System/line_bot_local/qa_monitor_state.json` に書かれる
-- しかし plist の WorkingDir は `~/agents/line_bot_local/` → ランタイムデータはこちらに溜まる
-- **両方のパスにstateが必要**。initしたら両方にコピーすること
+- 現行コードでは `qa_monitor.py` / `local_agent.py` ともに runtime state を `~/agents/data/` に集約している
+- `qa_monitor_state.json` の正本は `~/agents/data/qa_monitor_state.json`
+- `contact_state.json` / `os_sync_state.json` / `config.json` も同じ `~/agents/data/` に置かれる
+- deploy root は `~/Desktop/cursor` だが、runtime data は `~/agents/data` に残るので混同しないこと
 - stateが消えると過去のQ&A全件（6926件超）が新規として通知される大事故になる
 
 ## rsync で絶対に削除してはいけないファイル（2026-02-26 事故）
@@ -72,10 +79,10 @@
     --exclude='*.log' --exclude='__pycache__' \
     --exclude='qa_monitor_state.json' --exclude='contact_state.json' \
     --exclude='config.json' --exclude='*.db' \
-    ~/agents/_repo/System/line_bot_local/ ~/agents/line_bot_local/
+    $DEPLOY_ROOT/_repo/System/line_bot_local/ $DEPLOY_ROOT/line_bot_local/
   ```
 - `--delete` を使う場合、stateファイルは全て除外する
-- 復旧: `cd ~/agents/line_bot_local && ~/agent-env/bin/python3 qa_monitor.py init`
+- 復旧: `cd $DEPLOY_ROOT/line_bot_local && ~/agent-env/bin/python3 qa_monitor.py init`
 
 ## credentials が Mac Mini に同期されない問題
 
@@ -92,28 +99,28 @@
 
 ## git_pull_sync が反映されない場合
 
-- bareリポジトリ (`~/agents/_repo/`) の fetch + rsync だが、rsyncエラーが出ることがある
+- bareリポジトリは `$DEPLOY_ROOT/_repo/`。現行稼働では `~/agents/_repo/`
+- 2026-03-11 以降の `git_pull_sync.sh` は `~/agents` 固定ではなく、スクリプト配置から deploy root を決める
 - 緊急時は `scp` で直接ファイルを転送するのが最速
 - Orchestrator再起動: `ssh koa800@mac-mini-agent "launchctl unload ~/Library/LaunchAgents/com.addness.agent-orchestrator.plist && launchctl load ~/Library/LaunchAgents/com.addness.agent-orchestrator.plist"`
 
 ## local_agent.py が起動しない場合
 
-- `~/agents/line_bot_local/agent_error.log` を確認
-- よくある原因: シンボリックリンク切れ（`local_agent.py` → `~/agents/System/line_bot_local/local_agent.py`）
-- 修復: `ln -sf ~/agents/System/line_bot_local/local_agent.py ~/agents/line_bot_local/local_agent.py`
+- `$DEPLOY_ROOT/line_bot_local/agent_error.log` を確認
+- よくある原因: 同期先 `$DEPLOY_ROOT/line_bot_local/` が古い、または rsync 後に必要ファイルが欠けている
+- 修復: `rsync` を再実行し、`$DEPLOY_ROOT/System/line_bot_local/` から `$DEPLOY_ROOT/line_bot_local/` へ再同期する
 - **qa_monitor.py 等の依存モジュールもシンボリックリンクが必要**:
   ```bash
-  cd ~/agents/line_bot_local
-  for f in ~/agents/System/line_bot_local/*.py; do
-    ln -sf "$f" "$(basename $f)"
-  done
+  cd $DEPLOY_ROOT/line_bot_local
+  rsync -av --exclude='config.json' --exclude='*.log' \
+    $DEPLOY_ROOT/System/line_bot_local/ ./
   ```
 
 ## token.json の配置（3箇所必要）
 
 launchd環境ではシンボリックリンクの `__file__` 解決が通常と異なるため、以下の全箇所に配置:
-- `~/agents/System/credentials/token.json`（resolve()パス）
-- `~/agents/credentials/token.json`（非resolve()パス）
+- `$DEPLOY_ROOT/System/credentials/token.json`
+- `$DEPLOY_ROOT/credentials/token.json`
 - qa_monitor.py は4候補を順番に探索するよう修正済み（2026-02-25）
 
 ## Python 3.12 パッケージ（Mac Mini）

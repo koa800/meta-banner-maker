@@ -6,9 +6,11 @@
 
 set -u
 
-DEPLOY_DIR="$HOME/agents"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+DEPLOY_DIR="${ADDNESS_DEPLOY_ROOT:-$PROJECT_ROOT}"
 LOG_FILE="$SCRIPT_DIR/service_watchdog.log"
+ORCH_FINGERPRINT_FILE="$SCRIPT_DIR/.orchestrator_fingerprint"
 
 # --- ログ ---
 log() {
@@ -34,6 +36,45 @@ notify_line() {
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $token" \
     -d "{\"message\": $escaped_msg}" >/dev/null 2>&1 &
+}
+
+restart_service() {
+  local label="$1"
+  local plist="$HOME/Library/LaunchAgents/${label}.plist"
+  launchctl unload "$plist" 2>/dev/null || true
+  sleep 2
+  launchctl load "$plist" 2>/dev/null || true
+}
+
+orchestrator_fingerprint() {
+  local files=(
+    "$DEPLOY_DIR/System/mac_mini/agent_orchestrator/config.yaml"
+    "$DEPLOY_DIR/System/mac_mini/agent_orchestrator/orchestrator.py"
+    "$DEPLOY_DIR/System/mac_mini/agent_orchestrator/scheduler.py"
+    "$DEPLOY_DIR/System/mac_mini/agent_orchestrator/tools.py"
+  )
+  local existing=()
+  local f
+  for f in "${files[@]}"; do
+    [ -f "$f" ] && existing+=("$f")
+  done
+  [ "${#existing[@]}" -gt 0 ] || return 0
+  shasum -a 256 "${existing[@]}" 2>/dev/null | shasum -a 256 | awk '{print $1}'
+}
+
+ensure_orchestrator_reloaded() {
+  local label="com.addness.agent-orchestrator"
+  local current previous
+  current="$(orchestrator_fingerprint)"
+  [ -n "$current" ] || return 0
+  previous="$(cat "$ORCH_FINGERPRINT_FILE" 2>/dev/null || true)"
+  if [ "$current" = "$previous" ]; then
+    return 0
+  fi
+  log "CHANGE: orchestrator config/code changed → reload"
+  restart_service "$label"
+  printf '%s' "$current" > "$ORCH_FINGERPRINT_FILE"
+  return 1
 }
 
 # --- サービス監視 ---
@@ -65,9 +106,7 @@ check_and_recover() {
   if [ "$pid" = "-" ] || [ "$pid" = "0" ]; then
     # 登録はされているが停止中 → unload/load で再起動
     log "DOWN: $label（停止中, PID=$pid）→ 再起動"
-    launchctl unload "$plist" 2>/dev/null || true
-    sleep 2
-    launchctl load "$plist" 2>/dev/null || true
+    restart_service "$label"
     notify_line "🚨 サービス自動復旧
 ━━━━━━━━━━━━
 サービス: $label
@@ -88,6 +127,10 @@ for SERVICE in "com.linebot.localagent" "com.addness.agent-orchestrator"; do
     RECOVERED=$((RECOVERED + 1))
   fi
 done
+
+if ! ensure_orchestrator_reloaded; then
+  RECOVERED=$((RECOVERED + 1))
+fi
 
 if [ "$RECOVERED" -eq 0 ]; then
   # 正常時は定期的にログ（10回に1回だけ）

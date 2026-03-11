@@ -1,0 +1,4 @@
+interface:
+  display_name: "経理運用"
+  short_description: "freee、証憑、月次運用を同じ基準で回し、個人経理を整える"
+  default_prompt: "Use $accounting-ops to sort this month's accounting items and update freee using the project accounting rules."

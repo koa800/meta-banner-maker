@@ -5,8 +5,10 @@
 
 set -euo pipefail
 
-REPO_DIR="$HOME/agents/_repo"
-DEPLOY_DIR="$HOME/agents"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+DEPLOY_DIR="${ADDNESS_DEPLOY_ROOT:-$PROJECT_ROOT}"
+REPO_DIR="${ADDNESS_REPO_MIRROR:-$DEPLOY_DIR/_repo}"
 REPO_URL="https://github.com/koa800/meta-banner-maker.git"
 LOG_FILE="$DEPLOY_DIR/System/mac_mini/agent_orchestrator/logs/git_sync.log"
 STATUS_FILE="$DEPLOY_DIR/System/mac_mini/agent_orchestrator/sync_status.json"

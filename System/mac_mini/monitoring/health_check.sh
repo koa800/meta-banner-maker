@@ -4,7 +4,10 @@
 
 PLIST_NAME="com.addness.agent-orchestrator"
 HEALTH_URL="http://localhost:8500/health"
-LOG_DIR="$HOME/Desktop/cursor/System/mac_mini/agent_orchestrator/logs"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+DEPLOY_DIR="${ADDNESS_DEPLOY_ROOT:-$PROJECT_ROOT}"
+LOG_DIR="$DEPLOY_DIR/System/mac_mini/agent_orchestrator/logs"
 
 echo "========================================"
 echo "  Agent Health Check - $(date)"

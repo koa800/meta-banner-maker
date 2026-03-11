@@ -4,6 +4,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ORCH_DIR="$SCRIPT_DIR/agent_orchestrator"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 VENV_PYTHON="$HOME/agent-env/bin/python3"
 PLIST_NAME="com.addness.agent-orchestrator"
 PLIST_DST="$HOME/Library/LaunchAgents/${PLIST_NAME}.plist"
@@ -51,6 +52,10 @@ cat > "$PLIST_DST" <<PLIST
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>PYTHONPATH</key>
         <string>${SCRIPT_DIR}</string>
+        <key>ADDNESS_DEPLOY_ROOT</key>
+        <string>${PROJECT_ROOT}</string>
+        <key>ADDNESS_CONFIG_PATH</key>
+        <string>${ORCH_DIR}/config.yaml</string>
     </dict>
     <key>ThrottleInterval</key>
     <integer>10</integer>

@@ -6,19 +6,30 @@
 #   伝達率を1%も落とさないために、引き継ぎを構造化・自動化する。
 #
 # 使い方:
-#   ai "広告CRの競合分析して"       → 自動判別で起動
-#   ai codex "企画を練りたい"       → 明示的にCodex
-#   ai claude "これ実装して"        → 明示的にClaude Code
+#   ai "広告CRの競合分析して"       → 自動判別でCodex
+#   ai "このバグ直して"             → 自動判別でCodex
+#   ai claude "Looker Studioを確認して" → 明示的にClaude Code
 #   ai switch                      → ツール間切り替え（自動引き継ぎ）
 #   ai status                      → 現在の状態を表示
+#   ai sessions 導線              → 保存済みセッションを検索
+#   ai restore 導線ツール         → キーワードからセッション再開
+#   ai restore --fork 019c...      → セッションを分岐復元
+#   ai pin 導線ツール 019c...      → 復元用の別名を保存
+#   ai pins                        → 保存済み別名を一覧表示
+#   ai "導線のセッションを復元したい" → 日本語の自然文で復元
 
 set -euo pipefail
 
 CODEX_CMD="/Users/koa800/.npm-global/bin/codex"
 CLAUDE_CMD="/Users/koa800/.local/bin/claude"
-HANDOFF_FILE="$HOME/.ai_handoff.md"
-STATE_FILE="$HOME/.ai_state.json"
 PROJECT_DIR="/Users/koa800/Desktop/cursor"
+ROOT_HANDOFF_FILE="$PROJECT_DIR/.ai_handoff.md"
+LEGACY_HANDOFF_FILE="$PROJECT_DIR/Master/output/ai_handoff.md"
+STATE_FILE="$HOME/.ai_state.json"
+CODEX_SESSIONS_DIR="$HOME/.codex/sessions"
+CLAUDE_HISTORY_FILE="$HOME/.claude/history.jsonl"
+SESSION_ALIAS_FILE="$PROJECT_DIR/Master/output/session_aliases.json"
+SESSION_INDEX_FILE="$PROJECT_DIR/Master/output/session_restore_index.json"
 
 # ============================================================
 # 状態管理
@@ -46,6 +57,1138 @@ json.dump(state, open('$STATE_FILE', 'w'), ensure_ascii=False, indent=2)
 "
 }
 
+get_handoff_file() {
+    if [ -f "$ROOT_HANDOFF_FILE" ]; then
+        echo "$ROOT_HANDOFF_FILE"
+    elif [ -f "$LEGACY_HANDOFF_FILE" ]; then
+        echo "$LEGACY_HANDOFF_FILE"
+    else
+        echo "$ROOT_HANDOFF_FILE"
+    fi
+}
+
+read_handoff_snapshot_json() {
+    local handoff_file
+    handoff_file="$(get_handoff_file)"
+
+    python3 - "$handoff_file" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+
+sections = {
+    "purpose": "",
+    "confirmed": [],
+    "completed": [],
+    "remaining": [],
+    "decisions": [],
+    "references": [],
+    "changed_files": [],
+    "next": [],
+}
+
+if not path.exists():
+    print(json.dumps(sections, ensure_ascii=False))
+    sys.exit(0)
+
+current = None
+for raw_line in path.read_text(errors="replace").splitlines():
+    line = raw_line.rstrip()
+    if line.startswith("## "):
+        title = line[3:].strip()
+        current = {
+            "目的": "purpose",
+            "確定事項": "confirmed",
+            "完了したこと": "completed",
+            "未完了": "remaining",
+            "判断とその理由（最重要）": "decisions",
+            "参照先": "references",
+            "変更したファイル": "changed_files",
+            "次の担当へ": "next",
+        }.get(title)
+        continue
+
+    if not current:
+        continue
+
+    stripped = line.strip()
+    if not stripped:
+        continue
+
+    if current == "purpose":
+        sections["purpose"] = f"{sections['purpose']} {stripped}".strip()
+        continue
+
+    if stripped.startswith("- "):
+        sections[current].append(stripped[2:].strip())
+    elif sections[current]:
+        sections[current][-1] = f"{sections[current][-1]} {stripped}".strip()
+
+print(json.dumps(sections, ensure_ascii=False))
+PY
+}
+
+read_session_record_json() {
+    local query="$1"
+    python3 - "$SESSION_ALIAS_FILE" "$SESSION_INDEX_FILE" "$query" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+alias_path = Path(sys.argv[1])
+index_path = Path(sys.argv[2])
+query = sys.argv[3]
+query_lc = query.lower()
+is_sid = bool(re.fullmatch(r"[0-9a-fA-F-]{36}", query))
+
+def load_json(path):
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
+
+aliases = load_json(alias_path)
+index = load_json(index_path)
+aliases_by_sid = {}
+for alias, record in aliases.items():
+    sid = record.get("session_id")
+    if sid:
+        aliases_by_sid.setdefault(sid, []).append(alias)
+
+def merged_record(sid, preferred_alias=None):
+    if not sid:
+        return {}
+    record = {}
+    if isinstance(index.get(sid), dict):
+        record.update(index[sid])
+    aliases_for_sid = aliases_by_sid.get(sid, [])
+    alias = preferred_alias or (aliases_for_sid[0] if aliases_for_sid else "")
+    if alias and isinstance(aliases.get(alias), dict):
+        record.update(aliases[alias])
+    if alias:
+        record["alias"] = alias
+    if aliases_for_sid:
+        record["aliases"] = aliases_for_sid
+    record["session_id"] = sid
+    return record
+
+for alias, record in aliases.items():
+    if alias.lower() == query_lc:
+        out = merged_record(record.get("session_id"), alias)
+        print(json.dumps(out, ensure_ascii=False))
+        sys.exit(0)
+
+if is_sid:
+    out = merged_record(query)
+    if out:
+        print(json.dumps(out, ensure_ascii=False))
+        sys.exit(0)
+
+print("{}")
+PY
+}
+
+latest_session_record_json() {
+    local tool="$1"
+    python3 - "$PROJECT_DIR" "$CODEX_SESSIONS_DIR" "$CLAUDE_HISTORY_FILE" "$tool" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+project_dir = sys.argv[1]
+codex_dir = Path(sys.argv[2]).expanduser()
+claude_history = Path(sys.argv[3]).expanduser()
+tool = sys.argv[4]
+
+def normalize(text):
+    return " ".join(str(text).split())
+
+def is_meaningful(text):
+    text = normalize(text)
+    if len(text) < 10:
+        return False
+    if text.startswith("/"):
+        return False
+    if text in {"続けて", "進めて", "了解です", "了解", "OK", "ありがとう", "あとでよいよ"}:
+        return False
+    return True
+
+latest = {}
+
+if tool == "codex" and codex_dir.exists():
+    for path in codex_dir.rglob("*.jsonl"):
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            continue
+
+        sid = None
+        end = None
+        preview = ""
+        fallback_preview = ""
+
+        for line in text.splitlines():
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+
+            if obj.get("type") == "session_meta":
+                sid = obj.get("payload", {}).get("id") or sid
+
+            ts = obj.get("timestamp")
+            if ts:
+                try:
+                    end = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                except ValueError:
+                    pass
+
+            payload = obj.get("payload", {})
+            if obj.get("type") == "response_item" and payload.get("type") == "message" and payload.get("role") == "user":
+                content = normalize(" ".join((c.get("text") or c.get("output_text") or "") for c in payload.get("content", [])))
+                if content and not content.startswith("# AGENTS.md instructions"):
+                    if is_meaningful(content):
+                        preview = content[:120]
+                    elif not fallback_preview:
+                        fallback_preview = content[:120]
+
+        if not sid or not end:
+            continue
+        if not latest or end >= latest["end"]:
+            latest = {
+                "tool": "codex",
+                "session_id": sid,
+                "preview": preview or fallback_preview or "(no summary)",
+                "end": end.isoformat(),
+            }
+
+elif tool == "claude" and claude_history.exists():
+    grouped = {}
+    for line in claude_history.read_text(errors="replace").splitlines():
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+
+        if obj.get("project") != project_dir:
+            continue
+
+        sid = obj.get("sessionId")
+        raw_ts = obj.get("timestamp")
+        if not sid or raw_ts is None:
+            continue
+
+        try:
+            dt = datetime.fromtimestamp(raw_ts / 1000, tz=timezone.utc)
+        except Exception:
+            continue
+
+        display = normalize(obj.get("display", ""))
+        record = grouped.setdefault(sid, {
+            "end": dt,
+            "preview": "",
+            "fallback_preview": "",
+        })
+        if dt >= record["end"]:
+            record["end"] = dt
+            if display and is_meaningful(display):
+                record["preview"] = display[:120]
+            elif display:
+                record["fallback_preview"] = display[:120]
+
+    for sid, record in grouped.items():
+        if not latest or record["end"] >= datetime.fromisoformat(latest["end"]):
+            latest = {
+                "tool": "claude",
+                "session_id": sid,
+                "preview": record["preview"] or record["fallback_preview"] or "(no summary)",
+                "end": record["end"].isoformat(),
+            }
+
+print(json.dumps(latest, ensure_ascii=False))
+PY
+}
+
+upsert_session_snapshot_record() {
+    local tool="$1"
+    local session_id="$2"
+    local preview="${3:-}"
+    local handoff_file snapshot_json
+
+    handoff_file="$(get_handoff_file)"
+    snapshot_json="$(read_handoff_snapshot_json)"
+
+    python3 - "$SESSION_INDEX_FILE" "$SESSION_ALIAS_FILE" "$tool" "$session_id" "$preview" "$snapshot_json" "$handoff_file" <<'PY'
+import json
+import sys
+from datetime import datetime
+from pathlib import Path
+
+index_path = Path(sys.argv[1])
+alias_path = Path(sys.argv[2])
+tool = sys.argv[3]
+session_id = sys.argv[4]
+preview = sys.argv[5]
+snapshot = json.loads(sys.argv[6])
+handoff_file = sys.argv[7]
+
+FIELDS = (
+    ("purpose", ""),
+    ("confirmed", []),
+    ("completed", []),
+    ("remaining", []),
+    ("decisions", []),
+    ("references", []),
+    ("changed_files", []),
+    ("next", []),
+)
+
+def load_json(path):
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
+
+def has_snapshot_content(data):
+    if data.get("purpose"):
+        return True
+    return any(data.get(key) for key, _ in FIELDS if key != "purpose")
+
+def merge_snapshot(target, data):
+    if not has_snapshot_content(data):
+        return target
+    for key, default in FIELDS:
+        value = data.get(key, default)
+        if isinstance(default, list):
+            target[key] = list(value or [])
+        else:
+            target[key] = value or ""
+    return target
+
+now = datetime.now().isoformat()
+index = load_json(index_path)
+aliases = load_json(alias_path)
+
+record = dict(index.get(session_id, {}))
+record["tool"] = tool or record.get("tool", "")
+record["session_id"] = session_id
+record["updated_at"] = now
+if preview:
+    record["title"] = preview
+if handoff_file:
+    record["handoff_file"] = handoff_file
+record = merge_snapshot(record, snapshot)
+
+index_path.parent.mkdir(parents=True, exist_ok=True)
+index[session_id] = record
+index_path.write_text(json.dumps(index, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+
+updated_aliases = False
+for alias, alias_record in aliases.items():
+    if alias_record.get("session_id") != session_id:
+        continue
+    merged = dict(alias_record)
+    merged["tool"] = tool or merged.get("tool", "")
+    merged["session_id"] = session_id
+    merged["updated_at"] = now
+    if preview:
+        merged["title"] = preview
+    if handoff_file:
+        merged["handoff_file"] = handoff_file
+    merged = merge_snapshot(merged, snapshot)
+    aliases[alias] = merged
+    updated_aliases = True
+
+if updated_aliases:
+    alias_path.parent.mkdir(parents=True, exist_ok=True)
+    alias_path.write_text(json.dumps(aliases, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+PY
+}
+
+capture_latest_session_snapshot() {
+    local tool="$1"
+    local session_id="${2:-}"
+    local preview="${3:-}"
+    local latest_json
+
+    if [ -z "$session_id" ] || [ -z "$preview" ]; then
+        latest_json="$(latest_session_record_json "$tool")"
+        if [ -z "$session_id" ]; then
+            session_id="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1] or "{}").get("session_id",""))' "$latest_json")"
+        fi
+        if [ -z "$preview" ]; then
+            preview="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1] or "{}").get("preview",""))' "$latest_json")"
+        fi
+    fi
+
+    if [ -z "$session_id" ]; then
+        return 0
+    fi
+
+    upsert_session_snapshot_record "$tool" "$session_id" "$preview"
+}
+
+build_restore_prompt() {
+    local record_json="$1"
+    local extra_prompt="${2:-}"
+
+    python3 - "$record_json" "$extra_prompt" <<'PY'
+import json
+import sys
+
+record = json.loads(sys.argv[1] or "{}")
+extra_prompt = sys.argv[2].strip()
+
+def clean(text, limit=220):
+    text = " ".join(str(text).split())
+    if not text:
+        return ""
+    return text[:limit]
+
+def bullet_lines(items, limit):
+    out = []
+    for item in items[:limit]:
+        text = clean(item, 180)
+        if text:
+            out.append(f"- {text}")
+    return out
+
+parts = []
+alias = clean(record.get("alias", ""), 80)
+purpose = clean(record.get("purpose", ""), 220)
+completed = bullet_lines(record.get("completed") or [], 2)
+remaining = bullet_lines(record.get("remaining") or [], 3)
+next_items = bullet_lines(record.get("next") or [], 2)
+
+if alias or purpose or completed or remaining or next_items:
+    lines = ["前回の復元メモを踏まえて続けてください。"]
+    if alias:
+        lines.append(f"別名: {alias}")
+    if purpose:
+        lines.append(f"目的: {purpose}")
+    if completed:
+        lines.append("完了:")
+        lines.extend(completed)
+    if remaining:
+        lines.append("未完了:")
+        lines.extend(remaining)
+    if next_items:
+        lines.append("次にやること:")
+        lines.extend(next_items)
+    parts.append("\n".join(lines))
+
+if extra_prompt:
+    parts.append(extra_prompt)
+
+print("\n\n".join(part for part in parts if part))
+PY
+}
+
+is_session_id() {
+    [[ "$1" =~ ^[0-9a-fA-F-]{36}$ ]]
+}
+
+list_sessions() {
+    local query="${1:-}"
+    local limit="${2:-20}"
+
+    python3 - "$PROJECT_DIR" "$CODEX_SESSIONS_DIR" "$CLAUDE_HISTORY_FILE" "$SESSION_ALIAS_FILE" "$SESSION_INDEX_FILE" "$query" "$limit" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+
+project_dir = sys.argv[1]
+codex_dir = Path(sys.argv[2]).expanduser()
+claude_history = Path(sys.argv[3]).expanduser()
+alias_file = Path(sys.argv[4]).expanduser()
+index_file = Path(sys.argv[5]).expanduser()
+query = sys.argv[6].strip().lower()
+limit = int(sys.argv[7])
+jst = timezone(timedelta(hours=9))
+
+
+def fmt_ts(dt):
+    if not dt:
+        return "-"
+    return dt.astimezone(jst).strftime("%m-%d %H:%M")
+
+
+def normalize(text):
+    return " ".join(str(text).split())
+
+
+def is_meaningful(text):
+    text = normalize(text)
+    if len(text) < 10:
+        return False
+    if text.startswith("/"):
+        return False
+    if text in {"続けて", "進めて", "了解です", "了解", "OK", "ありがとう", "あとでよいよ"}:
+        return False
+    return True
+
+
+def load_json(path):
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
+
+def load_aliases():
+    raw = load_json(alias_file)
+    alias_to_target = {}
+    aliases_by_sid = {}
+    records_by_alias = {}
+    for alias, record in raw.items():
+        sid = record.get("session_id")
+        tool = record.get("tool")
+        if not alias or not sid or not tool:
+            continue
+        alias_to_target[alias.lower()] = (tool, sid, alias)
+        aliases_by_sid.setdefault(sid, []).append(alias)
+        records_by_alias[alias] = record
+    return alias_to_target, aliases_by_sid, records_by_alias
+
+def load_index():
+    raw = load_json(index_file)
+    return {sid: record for sid, record in raw.items() if isinstance(record, dict)}
+
+
+alias_to_target, aliases_by_sid, records_by_alias = load_aliases()
+records_by_sid = load_index()
+exact_alias_target = alias_to_target.get(query) if query else None
+
+
+def merged_record(sid):
+    record = {}
+    if isinstance(records_by_sid.get(sid), dict):
+        record.update(records_by_sid[sid])
+    aliases = aliases_by_sid.get(sid, [])
+    if aliases and isinstance(records_by_alias.get(aliases[0]), dict):
+        record.update(records_by_alias[aliases[0]])
+    return record
+
+def record_search_text(sid):
+    record = merged_record(sid)
+    parts = [record.get("title", ""), record.get("purpose", "")]
+    for key in ("confirmed", "completed", "remaining", "decisions", "references", "changed_files", "next"):
+        parts.extend(record.get(key) or [])
+    return "\n".join(normalize(part).lower() for part in parts if normalize(part))
+
+def session_summary(sid, fallback_preview):
+    record = merged_record(sid)
+    title = normalize(record.get("title", ""))
+    purpose = normalize(record.get("purpose", ""))
+    remaining = record.get("remaining") or []
+    if title and purpose and title != purpose:
+        return f"{title} / {purpose}"[:120]
+    if purpose and remaining:
+        return f"{purpose} / 残: {normalize(remaining[0])}"[:120]
+    if title and remaining:
+        return f"{title} / 残: {normalize(remaining[0])}"[:120]
+    if title:
+        return title[:120]
+    if purpose:
+        return purpose[:120]
+    return fallback_preview
+
+
+def codex_rows():
+    rows = []
+    if not codex_dir.exists():
+        return rows
+
+    for path in codex_dir.rglob("*.jsonl"):
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            continue
+
+        sid = None
+        start = None
+        end = None
+        first_user = ""
+        last_user = ""
+        last_meaningful_user = ""
+
+        for line in text.splitlines():
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+
+            ts = obj.get("timestamp")
+            if ts:
+                try:
+                    end = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                except ValueError:
+                    pass
+
+            if obj.get("type") == "session_meta":
+                payload = obj.get("payload", {})
+                sid = payload.get("id") or sid
+                raw_start = payload.get("timestamp")
+                if raw_start:
+                    try:
+                        start = datetime.fromisoformat(raw_start.replace("Z", "+00:00"))
+                    except ValueError:
+                        pass
+
+            payload = obj.get("payload", {})
+            if obj.get("type") == "response_item" and payload.get("type") == "message" and payload.get("role") == "user":
+                content = normalize(" ".join((c.get("text") or c.get("output_text") or "") for c in payload.get("content", [])))
+                if not content or content.startswith("# AGENTS.md instructions"):
+                    continue
+                if not first_user:
+                    first_user = content
+                last_user = content
+                if is_meaningful(content):
+                    last_meaningful_user = content
+
+        if sid and end:
+            if exact_alias_target and (exact_alias_target[0] != "codex" or exact_alias_target[1] != sid):
+                continue
+            alias_text = " ".join(aliases_by_sid.get(sid, [])).lower()
+            index_text = record_search_text(sid)
+            haystack = text.lower()
+            if query and query not in haystack and query not in sid.lower() and query not in alias_text and query not in index_text:
+                continue
+            preview = last_meaningful_user or last_user or first_user or "(no summary)"
+            preview = session_summary(sid, preview)
+            rows.append({
+                "tool": "codex",
+                "sid": sid,
+                "start": start,
+                "end": end,
+                "preview": preview[:120],
+                "search_text": haystack,
+                "aliases": aliases_by_sid.get(sid, []),
+            })
+    return rows
+
+
+def claude_rows():
+    rows = {}
+    if not claude_history.exists():
+        return []
+
+    for line in claude_history.read_text(errors="replace").splitlines():
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+
+        if obj.get("project") != project_dir:
+            continue
+
+        sid = obj.get("sessionId")
+        raw_ts = obj.get("timestamp")
+        if not sid or raw_ts is None:
+            continue
+
+        try:
+            dt = datetime.fromtimestamp(raw_ts / 1000, tz=timezone.utc)
+        except Exception:
+            continue
+
+        display = normalize(obj.get("display", ""))
+        record = rows.setdefault(sid, {
+            "tool": "claude",
+            "sid": sid,
+            "start": dt,
+            "end": dt,
+            "preview": "",
+            "fallback_preview": "",
+            "search_text_parts": [],
+        })
+        if dt < record["start"]:
+            record["start"] = dt
+        if dt >= record["end"]:
+            record["end"] = dt
+            if display and is_meaningful(display):
+                record["preview"] = display[:120]
+            elif display:
+                record["fallback_preview"] = display[:120]
+        if display:
+            record["search_text_parts"].append(display.lower())
+
+    out = []
+    for record in rows.values():
+        if exact_alias_target and (exact_alias_target[0] != "claude" or exact_alias_target[1] != record["sid"]):
+            continue
+        search_text = "\n".join(record.pop("search_text_parts"))
+        alias_text = " ".join(aliases_by_sid.get(record["sid"], [])).lower()
+        index_text = record_search_text(record["sid"])
+        if query and query not in search_text and query not in record["sid"].lower() and query not in alias_text and query not in index_text:
+            continue
+        record["search_text"] = "\n".join(part for part in (search_text, index_text) if part)
+        if not record["preview"]:
+            record["preview"] = record.get("fallback_preview") or "(no summary)"
+        record["preview"] = session_summary(record["sid"], record["preview"])
+        record["aliases"] = aliases_by_sid.get(record["sid"], [])
+        out.append(record)
+    return out
+
+
+rows = codex_rows() + claude_rows()
+rows.sort(key=lambda row: row["end"], reverse=True)
+
+if not rows:
+    label = query or "recent"
+    print(f"一致するセッションがありません: {label}")
+    sys.exit(1)
+
+print("tool     last_active   started      session_id                             alias                 summary")
+print("-" * 145)
+for row in rows[:limit]:
+    alias = ",".join(row.get("aliases", [])[:2])[:20] or "-"
+    print(
+        f"{row['tool']:<8} {fmt_ts(row['end']):<12} {fmt_ts(row['start']):<12} "
+        f"{row['sid']:<36} {alias:<20} {row['preview']}"
+    )
+PY
+}
+
+resolve_session() {
+    local query="$1"
+
+    python3 - "$PROJECT_DIR" "$CODEX_SESSIONS_DIR" "$CLAUDE_HISTORY_FILE" "$SESSION_ALIAS_FILE" "$SESSION_INDEX_FILE" "$query" <<'PY'
+import json
+import re
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+project_dir = sys.argv[1]
+codex_dir = Path(sys.argv[2]).expanduser()
+claude_history = Path(sys.argv[3]).expanduser()
+alias_file = Path(sys.argv[4]).expanduser()
+index_file = Path(sys.argv[5]).expanduser()
+query = sys.argv[6].strip()
+query_lc = query.lower()
+is_sid = bool(re.fullmatch(r"[0-9a-fA-F-]{36}", query))
+
+
+def normalize(text):
+    return " ".join(str(text).split())
+
+def is_meaningful(text):
+    text = normalize(text)
+    if len(text) < 10:
+        return False
+    if text.startswith("/"):
+        return False
+    if text in {"続けて", "進めて", "了解です", "了解", "OK", "ありがとう", "あとでよいよ"}:
+        return False
+    return True
+
+def load_json(path):
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
+
+aliases = load_json(alias_file)
+index = load_json(index_file)
+aliases_by_sid = {}
+for alias, record in aliases.items():
+    sid = record.get("session_id")
+    if sid:
+        aliases_by_sid.setdefault(sid, []).append(alias)
+
+def merged_record(sid):
+    record = {}
+    if isinstance(index.get(sid), dict):
+        record.update(index[sid])
+    aliases_for_sid = aliases_by_sid.get(sid, [])
+    if aliases_for_sid and isinstance(aliases.get(aliases_for_sid[0]), dict):
+        record.update(aliases[aliases_for_sid[0]])
+    if aliases_for_sid:
+        record["alias"] = aliases_for_sid[0]
+        record["aliases"] = aliases_for_sid
+    return record
+
+def record_preview(sid, fallback):
+    record = merged_record(sid)
+    title = normalize(record.get("title", ""))
+    purpose = normalize(record.get("purpose", ""))
+    remaining = record.get("remaining") or []
+    if title and purpose and title != purpose:
+        return f"{title} / {purpose}"[:120]
+    if purpose and remaining:
+        return f"{purpose} / 残: {normalize(remaining[0])}"[:120]
+    if title and remaining:
+        return f"{title} / 残: {normalize(remaining[0])}"[:120]
+    if title:
+        return title[:120]
+    if purpose:
+        return purpose[:120]
+    return fallback
+
+def record_search_text(sid):
+    record = merged_record(sid)
+    parts = [record.get("title", ""), record.get("purpose", "")]
+    for key in ("confirmed", "completed", "remaining", "decisions", "references", "changed_files", "next"):
+        parts.extend(record.get(key) or [])
+    return "\n".join(normalize(part).lower() for part in parts if normalize(part))
+
+for alias, record in aliases.items():
+    if alias.lower() == query_lc:
+        tool = record.get("tool")
+        sid = record.get("session_id")
+        if tool and sid:
+            print(f"{tool}\t{sid}\t{record_preview(sid, f'alias:{alias}')}")
+            sys.exit(0)
+
+
+rows = []
+
+if codex_dir.exists():
+    for path in codex_dir.rglob("*.jsonl"):
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            continue
+
+        sid = None
+        end = None
+        preview = ""
+        fallback_preview = ""
+        for line in text.splitlines():
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            if obj.get("type") == "session_meta":
+                sid = obj.get("payload", {}).get("id") or sid
+            ts = obj.get("timestamp")
+            if ts:
+                try:
+                    end = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                except ValueError:
+                    pass
+            payload = obj.get("payload", {})
+            if obj.get("type") == "response_item" and payload.get("type") == "message" and payload.get("role") == "user":
+                content = normalize(" ".join((c.get("text") or c.get("output_text") or "") for c in payload.get("content", [])))
+                if content and not content.startswith("# AGENTS.md instructions"):
+                    if is_meaningful(content):
+                        preview = content[:120]
+                    elif not fallback_preview:
+                        fallback_preview = content[:120]
+        if not sid:
+            continue
+        haystack = text.lower()
+        extra_search = record_search_text(sid)
+        if is_sid:
+            if sid.lower() != query_lc:
+                continue
+        elif query_lc not in haystack and query_lc not in extra_search and query_lc not in " ".join(aliases_by_sid.get(sid, [])).lower():
+            continue
+        preview_text = preview or fallback_preview or "(no summary)"
+        rows.append(("codex", sid, end or datetime.fromtimestamp(0, tz=timezone.utc), record_preview(sid, preview_text)))
+
+if claude_history.exists():
+    grouped = {}
+    for line in claude_history.read_text(errors="replace").splitlines():
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+        if obj.get("project") != project_dir:
+            continue
+        sid = obj.get("sessionId")
+        raw_ts = obj.get("timestamp")
+        if not sid or raw_ts is None:
+            continue
+        dt = datetime.fromtimestamp(raw_ts / 1000, tz=timezone.utc)
+        display = normalize(obj.get("display", ""))
+        rec = grouped.setdefault(sid, {"end": dt, "preview": "", "fallback_preview": "", "search": []})
+        if dt >= rec["end"]:
+            rec["end"] = dt
+            if display and is_meaningful(display):
+                rec["preview"] = display[:120]
+            elif display:
+                rec["fallback_preview"] = display[:120]
+        if display:
+            rec["search"].append(display.lower())
+    for sid, rec in grouped.items():
+        haystack = "\n".join(rec["search"])
+        if is_sid:
+            if sid.lower() != query_lc:
+                continue
+        elif query_lc not in haystack and query_lc not in sid.lower() and query_lc not in record_search_text(sid) and query_lc not in " ".join(aliases_by_sid.get(sid, [])).lower():
+            continue
+        preview_text = rec["preview"] or rec["fallback_preview"] or "(no summary)"
+        rows.append(("claude", sid, rec["end"], record_preview(sid, preview_text)))
+
+rows.sort(key=lambda row: row[2], reverse=True)
+
+if len(rows) == 1:
+    tool, sid, _, preview = rows[0]
+    print(f"{tool}\t{sid}\t{preview}")
+    sys.exit(0)
+
+if not rows:
+    print(f"一致するセッションがありません: {query}", file=sys.stderr)
+    sys.exit(1)
+
+print(f"候補が複数あります: {query}", file=sys.stderr)
+for tool, sid, _, preview in rows[:10]:
+    print(f"- {tool} {sid} {preview}", file=sys.stderr)
+sys.exit(2)
+PY
+}
+
+restore_session() {
+    local mode="resume"
+    if [ "${1:-}" = "--fork" ]; then
+        mode="fork"
+        shift
+    fi
+
+    if [ $# -lt 1 ]; then
+        echo "使い方: ai restore [--fork] <session_id|キーワード> [追加プロンプト]"
+        return 1
+    fi
+
+    local query="$1"
+    shift
+    local extra_prompt="${*:-}"
+    local resolved
+
+    if ! resolved=$(resolve_session "$query" 2> >(cat >&2)); then
+        return 1
+    fi
+
+    local tool session_id preview record_json overview restore_prompt rc
+    tool=$(printf '%s' "$resolved" | cut -f1)
+    session_id=$(printf '%s' "$resolved" | cut -f2)
+    preview=$(printf '%s' "$resolved" | cut -f3-)
+    record_json="$(read_session_record_json "$session_id")"
+
+    overview="$(python3 - "$record_json" "$tool" "$session_id" "$preview" <<'PY'
+import json
+import sys
+
+record = json.loads(sys.argv[1] or "{}")
+tool = sys.argv[2]
+session_id = sys.argv[3]
+preview = sys.argv[4]
+
+def clean(text, limit=220):
+    text = " ".join(str(text).split())
+    if not text:
+        return ""
+    return text[:limit]
+
+lines = [f"復元対象: {tool} {session_id}"]
+alias = clean(record.get("alias", ""), 80)
+title = clean(record.get("title", ""), 120)
+purpose = clean(record.get("purpose", ""), 220)
+completed = [clean(item, 160) for item in (record.get("completed") or []) if clean(item, 160)]
+remaining = [clean(item, 160) for item in (record.get("remaining") or []) if clean(item, 160)]
+
+if alias:
+    lines.append(f"別名: {alias}")
+if title and title != preview:
+    lines.append(f"概要: {title}")
+elif preview:
+    lines.append(f"概要: {clean(preview, 120)}")
+if purpose:
+    lines.append(f"目的: {purpose}")
+if completed:
+    lines.append(f"完了: {completed[0]}")
+if remaining:
+    lines.append(f"未完了: {remaining[0]}")
+
+print("\n".join(lines))
+PY
+)"
+    printf '%s\n' "$overview"
+    restore_prompt="$(build_restore_prompt "$record_json" "$extra_prompt")"
+
+    cd "$PROJECT_DIR"
+
+    if [ "$tool" = "codex" ]; then
+        set_current_tool "codex"
+        set +e
+        if [ "$mode" = "fork" ]; then
+            if [ -n "$restore_prompt" ]; then
+                "$CODEX_CMD" fork "$session_id" "$restore_prompt"
+            else
+                "$CODEX_CMD" fork "$session_id"
+            fi
+        else
+            if [ -n "$restore_prompt" ]; then
+                "$CODEX_CMD" resume "$session_id" "$restore_prompt"
+            else
+                "$CODEX_CMD" resume "$session_id"
+            fi
+        fi
+        rc=$?
+        set -e
+    else
+        set_current_tool "claude"
+        set +e
+        if [ "$mode" = "fork" ]; then
+            if [ -n "$restore_prompt" ]; then
+                "$CLAUDE_CMD" -r "$session_id" --fork-session "$restore_prompt"
+            else
+                "$CLAUDE_CMD" -r "$session_id" --fork-session
+            fi
+        else
+            if [ -n "$restore_prompt" ]; then
+                "$CLAUDE_CMD" -r "$session_id" "$restore_prompt"
+            else
+                "$CLAUDE_CMD" -r "$session_id"
+            fi
+        fi
+        rc=$?
+        set -e
+    fi
+
+    capture_latest_session_snapshot "$tool" "$session_id" "$preview"
+    return "$rc"
+}
+
+pin_session_alias() {
+    if [ $# -lt 2 ]; then
+        echo "使い方: ai pin <別名> <session_id|キーワード>"
+        return 1
+    fi
+
+    local alias="$1"
+    shift
+    local query="$*"
+    local resolved
+
+    if ! resolved=$(resolve_session "$query" 2> >(cat >&2)); then
+        return 1
+    fi
+
+    local tool session_id preview record_json
+    tool=$(printf '%s' "$resolved" | cut -f1)
+    session_id=$(printf '%s' "$resolved" | cut -f2)
+    preview=$(printf '%s' "$resolved" | cut -f3-)
+    record_json="$(read_session_record_json "$session_id")"
+
+    python3 - "$SESSION_ALIAS_FILE" "$alias" "$tool" "$session_id" "$preview" "$record_json" <<'PY'
+import json
+import sys
+from datetime import datetime
+from pathlib import Path
+
+path = Path(sys.argv[1])
+alias = sys.argv[2]
+tool = sys.argv[3]
+session_id = sys.argv[4]
+preview = sys.argv[5]
+record = json.loads(sys.argv[6] or "{}")
+
+data = {}
+if path.exists():
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        data = {}
+
+path.parent.mkdir(parents=True, exist_ok=True)
+entry = dict(data.get(alias, {}))
+entry["tool"] = tool
+entry["session_id"] = session_id
+entry["updated_at"] = datetime.now().isoformat()
+if preview:
+    entry["title"] = preview
+
+for key in ("purpose", "confirmed", "completed", "remaining", "decisions", "references", "changed_files", "next", "handoff_file"):
+    if key in record and record.get(key):
+        entry[key] = record[key]
+
+data[alias] = entry
+path.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+PY
+
+    echo "別名を保存しました: $alias -> $tool $session_id"
+}
+
+list_session_aliases() {
+    python3 - "$SESSION_ALIAS_FILE" "$SESSION_INDEX_FILE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+alias_path = Path(sys.argv[1])
+index_path = Path(sys.argv[2])
+
+if not alias_path.exists():
+    print("保存済み別名はまだありません。")
+    sys.exit(0)
+
+def load_json(path):
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
+
+try:
+    data = load_json(alias_path)
+    index = load_json(index_path)
+except Exception:
+    print("別名ファイルを読めませんでした。")
+    sys.exit(1)
+
+if not data:
+    print("保存済み別名はまだありません。")
+    sys.exit(0)
+
+def normalize(text):
+    return " ".join(str(text).split())
+
+def summary(record):
+    title = normalize(record.get("title", ""))
+    purpose = normalize(record.get("purpose", ""))
+    remaining = record.get("remaining") or []
+    if title and purpose and title != purpose:
+        return f"{title} / {purpose}"[:72]
+    if purpose and remaining:
+        return f"{purpose} / 残: {normalize(remaining[0])}"[:72]
+    if title and remaining:
+        return f"{title} / 残: {normalize(remaining[0])}"[:72]
+    if title:
+        return title[:72]
+    if purpose:
+        return purpose[:72]
+    return "復元メモ未登録"
+
+print("alias                tool     updated_at                  summary")
+print("-" * 120)
+for alias, record in sorted(data.items()):
+    merged = {}
+    sid = record.get("session_id", "")
+    if isinstance(index.get(sid), dict):
+        merged.update(index[sid])
+    merged.update(record)
+    tool = record.get("tool", "-")
+    updated_at = record.get("updated_at", "-")
+    print(f"{alias:<20} {tool:<8} {updated_at:<26} {summary(merged)}")
+PY
+}
+
 # ============================================================
 # 自動引き継ぎコンテキスト生成
 # ツールに「書き出して」と頼むのではなく、スクリプトが自動で収集する
@@ -54,6 +1197,8 @@ generate_auto_context() {
     cd "$PROJECT_DIR"
 
     local context=""
+    local handoff_file
+    handoff_file="$(get_handoff_file)"
 
     # 1. git の変更状態（何が変わったか）
     local git_status
@@ -67,8 +1212,8 @@ generate_auto_context() {
 
     # 3. 引き継ぎファイルがあれば含める（前のツールが書き出したもの）
     local handoff_content=""
-    if [ -f "$HANDOFF_FILE" ]; then
-        handoff_content=$(cat "$HANDOFF_FILE")
+    if [ -f "$handoff_file" ]; then
+        handoff_content=$(cat "$handoff_file")
     fi
 
     # 4. 状態ファイルから前回の情報
@@ -117,7 +1262,7 @@ HANDOFF
 
 ## あなたへの指示
 1. 上記のコンテキストを踏まえて作業を続けてください
-2. 作業を終了する前に、必ず以下を ~/.ai_handoff.md に書き出してください:
+2. 作業を終了する前に、必ず以下を .ai_handoff.md に書き出してください:
    - **目的**: 何のためにこの作業をしていたか
    - **完了したこと**: 具体的に何を終わらせたか
    - **未完了**: 残っているタスク
@@ -130,20 +1275,77 @@ INSTRUCTION
 }
 
 # ============================================================
-# 上流/下流の自動判別
+# 自動判別
 # ============================================================
 classify_task() {
     local prompt="$1"
-    # 上流キーワード（戦略・リサーチ・企画・分析・レビュー・壁打ち）
-    if echo "$prompt" | grep -qiE '戦略|分析|リサーチ|企画|設計|レビュー|壁打ち|競合|市場|訴求|優先順位|方針|P&L|KPI.*解釈|判断|提案|アイデア|フレームワーク|思考|考え|意思決定|施策|研究|調査|比較|評価|ライティング|コピー|inspect|review|analyze|research|strategy|plan|writing'; then
-        echo "codex"
-    # 下流キーワード（実装・ブラウザ・修正・デプロイ・操作）
-    elif echo "$prompt" | grep -qiE '実装|コード|修正|バグ|デプロイ|ブラウザ|Looker|Addness|Chrome|ファイル|git|コミット|push|スクリプト|API接続|日報|KPI取得|メール確認|CSV|同期|インストール|設定変更|fix|implement|build|deploy|browse'; then
+    # Claude Code はブラウザ操作や UI 操作が必要なときだけ使う
+    if echo "$prompt" | grep -qiE 'ブラウザ|Looker|Addness.*画面|Addnessを開|Chrome|MCP|DOM|スクリーンショット|スクショ|画面確認|ページを開|クリック|ログイン|フォーム入力|browse|open page|screenshot'; then
         echo "claude"
     else
-        # デフォルトはCodex（上流優先）
+        # 原則は Codex。実装・修正・git 操作もまずこちら
         echo "codex"
     fi
+}
+
+parse_natural_session_request() {
+    local prompt="$1"
+    python3 - "$prompt" <<'PY'
+import re
+import sys
+
+text = " ".join(sys.argv[1].split())
+if not text:
+    sys.exit(0)
+
+restore_markers = ["復元", "再開", "続き", "戻りたい", "開きたい", "開いて"]
+search_markers = ["探したい", "探して", "一覧", "候補", "見たい", "見せて", "調べたい"]
+session_markers = ["セッション", "会話", "スレッド", "チャット"]
+fork_markers = ["分岐", "別セッション", "fork"]
+non_restore_markers = ["実装", "機能", "作って", "作成", "修正", "追加", "改善", "対応", "レビュー", "設計"]
+
+has_session_marker = any(marker in text for marker in session_markers)
+is_restore = any(marker in text for marker in restore_markers)
+is_search = any(marker in text for marker in search_markers)
+
+if not has_session_marker:
+    sys.exit(0)
+if any(marker in text for marker in non_restore_markers):
+    sys.exit(0)
+
+action = ""
+if is_restore:
+    action = "restore"
+elif is_search:
+    action = "sessions"
+else:
+    sys.exit(0)
+
+mode = "fork" if any(marker in text for marker in fork_markers) else "resume"
+
+quoted = re.findall(r'[「"\']([^「」"\']+)[」"\']', text)
+query = quoted[0].strip() if quoted else text
+
+patterns = [
+    r'^(?:前回の?|前の|この|その)?',
+    r'(?:について|関連)?の?(?:セッション|会話|スレッド|チャット)',
+    r'(?:を|は|が|の)?(?:分岐して)?(?:復元|再開|検索|表示|一覧表示|一覧|確認|探索|調査)',
+    r'(?:を|は|が|の)?(?:探したい|探して|見たい|見せて|開きたい|開いて|戻りたい|続きから(?:開きたい)?|続き(?:を)?(?:見たい|開きたい)?)',
+    r'(?:ください|下さい|お願い(?:します)?|してほしい|したい|できますか|して)$',
+]
+for pattern in patterns:
+    query = re.sub(pattern, " ", query)
+
+query = re.sub(r'\b(?:session|sessions|restore|resume|search|fork)\b', ' ', query, flags=re.IGNORECASE)
+query = re.sub(r'[?？!！、。]', ' ', query)
+query = re.sub(r'\s+', ' ', query).strip()
+query = query.strip(" のをはがにへと")
+
+if not query:
+    sys.exit(0)
+
+print(f"{action}\t{mode}\t{query}")
+PY
 }
 
 # ============================================================
@@ -152,37 +1354,55 @@ classify_task() {
 launch_codex() {
     local prompt="${1:-}"
     local context
+    local final_prompt
+    local rc
     context=$(generate_auto_context)
     set_current_tool "codex"
     cd "$PROJECT_DIR"
 
     if [ -n "$prompt" ]; then
-        exec $CODEX_CMD "${context}
+        final_prompt="${context}
 
 ---
 
 ユーザーからの指示: ${prompt}"
     else
-        exec $CODEX_CMD "$context"
+        final_prompt="$context"
     fi
+
+    set +e
+    "$CODEX_CMD" "$final_prompt"
+    rc=$?
+    set -e
+    capture_latest_session_snapshot "codex"
+    return "$rc"
 }
 
 launch_claude() {
     local prompt="${1:-}"
     local context
+    local final_prompt
+    local rc
     context=$(generate_auto_context)
     set_current_tool "claude"
     cd "$PROJECT_DIR"
 
     if [ -n "$prompt" ]; then
-        exec $CLAUDE_CMD -p "${context}
+        final_prompt="${context}
 
 ---
 
 ユーザーからの指示: ${prompt}"
     else
-        exec $CLAUDE_CMD -p "$context"
+        final_prompt="$context"
     fi
+
+    set +e
+    "$CLAUDE_CMD" -p "$final_prompt"
+    rc=$?
+    set -e
+    capture_latest_session_snapshot "claude"
+    return "$rc"
 }
 
 # ============================================================
@@ -191,18 +1411,19 @@ launch_claude() {
 case "${1:-}" in
     switch)
         current=$(get_current_tool)
+        handoff_file="$(get_handoff_file)"
         if [ "$current" = "codex" ]; then
             echo "🔄 Codex → Claude Code に切り替えます"
             echo ""
             # 自動でgit状態を収集するので、手動書き出し不要
             # ただし、前ツールが引き継ぎメモを書いてくれていれば最高
-            if [ ! -f "$HANDOFF_FILE" ]; then
-                echo "⚠️  引き継ぎメモ（~/.ai_handoff.md）がありません。"
+            if [ ! -f "$handoff_file" ]; then
+                echo "⚠️  引き継ぎメモ（.ai_handoff.md）がありません。"
                 echo "   Codex セッションで「引き継ぎメモを書いて」と言ってから終了するのがベストです。"
                 echo "   ただし、git状態は自動で引き継がれます。"
                 echo ""
             else
-                echo "✅ 引き継ぎメモあり（$(wc -l < "$HANDOFF_FILE" | tr -d ' ') 行）"
+                echo "✅ 引き継ぎメモあり（$(wc -l < "$handoff_file" | tr -d ' ') 行）"
                 echo ""
             fi
             echo "Enter で Claude Code を起動..."
@@ -211,13 +1432,13 @@ case "${1:-}" in
         elif [ "$current" = "claude" ]; then
             echo "🔄 Claude Code → Codex に切り替えます"
             echo ""
-            if [ ! -f "$HANDOFF_FILE" ]; then
-                echo "⚠️  引き継ぎメモ（~/.ai_handoff.md）がありません。"
+            if [ ! -f "$handoff_file" ]; then
+                echo "⚠️  引き継ぎメモ（.ai_handoff.md）がありません。"
                 echo "   Claude Code セッションで「引き継ぎメモを書いて」と言ってから終了するのがベストです。"
                 echo "   ただし、git状態は自動で引き継がれます。"
                 echo ""
             else
-                echo "✅ 引き継ぎメモあり（$(wc -l < "$HANDOFF_FILE" | tr -d ' ') 行）"
+                echo "✅ 引き継ぎメモあり（$(wc -l < "$handoff_file" | tr -d ' ') 行）"
                 echo ""
             fi
             echo "Enter で Codex を起動..."
@@ -233,16 +1454,17 @@ case "${1:-}" in
 
     status)
         current=$(get_current_tool)
+        handoff_file="$(get_handoff_file)"
         echo "=== AI ツール状態 ==="
         echo "アクティブ: $current"
         if [ -f "$STATE_FILE" ]; then
             echo "最終切替: $(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('switched_at','?'))" 2>/dev/null)"
         fi
         echo ""
-        if [ -f "$HANDOFF_FILE" ]; then
-            echo "📋 引き継ぎメモ: あり ($(wc -l < "$HANDOFF_FILE" | tr -d ' ') 行)"
+        if [ -f "$handoff_file" ]; then
+            echo "📋 引き継ぎメモ: あり ($(wc -l < "$handoff_file" | tr -d ' ') 行)"
             echo "━━━━━━━━━━━━━━━━━━"
-            cat "$HANDOFF_FILE"
+            cat "$handoff_file"
             echo "━━━━━━━━━━━━━━━━━━"
         else
             echo "📋 引き継ぎメモ: なし"
@@ -251,6 +1473,25 @@ case "${1:-}" in
         echo "=== Git 状態 ==="
         cd "$PROJECT_DIR"
         git status --short 2>/dev/null || echo "git unavailable"
+        ;;
+
+    sessions)
+        shift
+        list_sessions "${*:-}" "20"
+        ;;
+
+    restore)
+        shift
+        restore_session "$@"
+        ;;
+
+    pin)
+        shift
+        pin_session_alias "$@"
+        ;;
+
+    pins)
+        list_session_aliases
         ;;
 
     codex)
@@ -273,16 +1514,26 @@ ai - Claude Code / Codex CLI シームレス切り替え
   ai claude "タスク"      Claude Code を起動
   ai switch              ツール間切り替え（自動引き継ぎ）
   ai status              現在の状態 + 引き継ぎメモを表示
+  ai sessions [検索語]    保存済みセッションを一覧/検索
+  ai restore <ID|語>      セッションをそのまま再開
+  ai restore --fork <...> セッションを分岐復元
+  ai pin <別名> <ID|語>   セッションに人間向けの別名を付ける
+  ai pins                保存済み別名を一覧表示
+  ai "導線のセッションを復元したい"  日本語の自然文で復元
+  ai "導線のセッションを探したい"    日本語の自然文で候補表示
 
 自動判別ルール:
-  上流（→Codex）: 戦略/分析/リサーチ/企画/設計/レビュー/壁打ち/ライティング
-  下流（→Claude）: 実装/コード/修正/ブラウザ/デプロイ/日報/CSV
+  原則（→Codex）: 実装/修正/git操作/分析/企画を含む通常作業全般
+  例外（→Claude）: ブラウザ操作/Looker/Addness画面/Chrome MCP/画面確認
   デフォルト: Codex
 
 引き継ぎの仕組み:
   1. git状態（status/diff/最近のcommit）は自動で引き継がれる
-  2. 判断の背景・次にやるべきことは ~/.ai_handoff.md に書き出す
-  3. 各ツールにはセッション終了時の引き継ぎメモ作成が指示される
+  2. 判断の背景・次にやるべきことは .ai_handoff.md に書き出す
+  3. セッション終了時に、目的/完了/未完了を session_restore_index.json に自動保存する
+  4. ai sessions / ai pins で目的や残タスクの要約まで見える
+  5. ai restore は保存済み要約を表示し、復元メモを自動注入して再開する
+  6. よく使うセッションは ai pin で別名保存しておくと、ai restore <別名> ですぐ戻せる
 HELP
         ;;
 
@@ -292,14 +1543,30 @@ HELP
         ;;
 
     *)
-        # タスク内容から自動判別
-        tool=$(classify_task "$*")
-        if [ "$tool" = "codex" ]; then
-            echo "🧠 → Codex (上流: 戦略・分析)"
-            launch_codex "$*"
+        natural_session_request="$(parse_natural_session_request "$*")"
+        if [ -n "${natural_session_request:-}" ]; then
+            action="$(printf '%s' "$natural_session_request" | cut -f1)"
+            mode="$(printf '%s' "$natural_session_request" | cut -f2)"
+            query="$(printf '%s' "$natural_session_request" | cut -f3-)"
+            if [ "$action" = "restore" ]; then
+                if [ "$mode" = "fork" ]; then
+                    restore_session --fork "$query"
+                else
+                    restore_session "$query"
+                fi
+            else
+                list_sessions "$query" "20"
+            fi
         else
-            echo "🔧 → Claude Code (下流: 実装・操作)"
-            launch_claude "$*"
+            # タスク内容から自動判別
+            tool=$(classify_task "$*")
+            if [ "$tool" = "codex" ]; then
+                echo "🧠 → Codex (原則: 通常作業)"
+                launch_codex "$*"
+            else
+                echo "🌐 → Claude Code (例外: ブラウザ操作)"
+                launch_claude "$*"
+            fi
         fi
         ;;
 esac

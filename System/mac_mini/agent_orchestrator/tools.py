@@ -9,6 +9,7 @@ import sys
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from .shared_logger import get_logger
@@ -16,7 +17,16 @@ from .shared_logger import get_logger
 logger = get_logger("tools")
 
 _orch_dir = os.path.dirname(os.path.abspath(__file__))   # agent_orchestrator/
-SYSTEM_DIR = os.path.dirname(os.path.dirname(_orch_dir))  # System/
+PROJECT_ROOT = Path(
+    os.environ.get("ADDNESS_DEPLOY_ROOT", str(Path(__file__).resolve().parents[3]))
+).expanduser().resolve()
+SYSTEM_DIR = str(PROJECT_ROOT / "System")
+MASTER_DIR = Path(
+    os.environ.get("MASTER_DIR", str(PROJECT_ROOT / "Master"))
+).expanduser()
+RUNTIME_DATA_DIR = Path(
+    os.environ.get("ADDNESS_RUNTIME_DATA_DIR", str(Path.home() / "agents" / "data"))
+).expanduser()
 VENV_PYTHON = os.path.expanduser("~/agent-env/bin/python3")
 
 
@@ -118,6 +128,13 @@ def mail_status(account: str = "personal") -> ToolResult:
     return _run_script(
         os.path.join(SYSTEM_DIR, "mail_manager.py"),
         ["--account", account, "status"]
+    )
+
+
+def security_action_watch() -> ToolResult:
+    return _run_script(
+        os.path.join(SYSTEM_DIR, "security_action_monitor.py"),
+        timeout=180,
     )
 
 
@@ -310,6 +327,34 @@ def addness_hinata_feedback_scan(limit_goals: int = 10) -> ToolResult:
         os.path.join(SYSTEM_DIR, "addness_feedback_manager.py"),
         ["scan", "--headless", "--limit-goals", str(limit_goals)],
         timeout=600,
+    )
+
+
+def addness_activity_watch(pages: int = 5, page_size: int = 100) -> ToolResult:
+    args = [
+        "activity-summary",
+        "--headless",
+        "--pages",
+        str(pages),
+        "--page-size",
+        str(page_size),
+        "--save-report",
+    ]
+    return _run_script(
+        os.path.join(SYSTEM_DIR, "hinata", "addness_cli.py"),
+        args,
+        timeout=600,
+    )
+
+
+def addness_smoke_test(parent_id: str = "", timeout_seconds: int = 60) -> ToolResult:
+    args = ["smoke-test", "--headless", "--timeout-seconds", str(timeout_seconds)]
+    if parent_id:
+        args.extend(["--parent-id", parent_id])
+    return _run_script(
+        os.path.join(SYSTEM_DIR, "hinata", "addness_cli.py"),
+        args,
+        timeout=900,
     )
 
 
@@ -528,9 +573,7 @@ def update_people_profiles(person_name: str, group_insights: dict, comm_profile_
     import json as _json
     import tempfile
 
-    master_dir = os.path.expanduser(
-        os.environ.get("MASTER_DIR", "~/agents/Master")
-    )
+    master_dir = str(MASTER_DIR)
     profiles_path = os.path.join(master_dir, "people", "profiles.json")
 
     if not os.path.exists(profiles_path):
@@ -589,7 +632,7 @@ def os_sync_session() -> ToolResult:
     import json as _json
     from .notifier import send_line_notify
 
-    master_dir = os.path.expanduser("~/agents/Master")
+    master_dir = str(MASTER_DIR)
 
     # OS関連ファイルを読み込む
     os_sections = []
@@ -732,14 +775,14 @@ def os_sync_session() -> ToolResult:
     sent = send_line_notify(os_report)
     if sent:
         # OS sync state を保存（local_agent が応答を検知するため）
-        os_sync_state_path = os.path.expanduser("~/agents/data/os_sync_state.json")
-        os.makedirs(os.path.dirname(os_sync_state_path), exist_ok=True)
+        os_sync_state_path = RUNTIME_DATA_DIR / "os_sync_state.json"
+        os_sync_state_path.parent.mkdir(parents=True, exist_ok=True)
         sync_state = {
             "status": "pending",
             "sent_at": datetime.now().isoformat(),
             "report": os_report,
         }
-        tmp = os_sync_state_path + ".tmp"
+        tmp = os_sync_state_path.with_suffix(".json.tmp")
         with open(tmp, "w", encoding="utf-8") as f:
             _json.dump(sync_state, f, ensure_ascii=False, indent=2)
         os.replace(tmp, os_sync_state_path)
@@ -752,6 +795,7 @@ def os_sync_session() -> ToolResult:
 TOOL_REGISTRY = {
     "mail_run": {"fn": mail_run, "description": "受信メールの処理・自動返信下書き作成"},
     "mail_status": {"fn": mail_status, "description": "メール処理のステータス確認"},
+    "security_action_watch": {"fn": security_action_watch, "description": "SECURITY ACTION自己宣言IDメールを監視"},
     "calendar_list": {"fn": calendar_list, "description": "今後の予定一覧を取得"},
     "sheets_read": {"fn": sheets_read, "description": "Googleスプレッドシートのデータを読み取り"},
     "sheets_sync": {"fn": sheets_sync, "description": "管理シートのCSVキャッシュを同期"},
@@ -763,6 +807,8 @@ TOOL_REGISTRY = {
     "addness_fetch": {"fn": addness_fetch, "description": "Addnessからゴールツリーデータをスクレイピング"},
     "addness_to_context": {"fn": addness_to_context, "description": "Addnessデータをコンテキスト用マークダウンに変換"},
     "addness_hinata_feedback_scan": {"fn": addness_hinata_feedback_scan, "description": "Addness上の日向コメントを検知して秘書承認フローへ登録"},
+    "addness_activity_watch": {"fn": addness_activity_watch, "description": "Addness行動ログを集計してローカル保存"},
+    "addness_smoke_test": {"fn": addness_smoke_test, "description": "Addnessの主要操作をテスト配下で一括検証"},
     "qa_search": {"fn": qa_search, "description": "Q&Aナレッジベースを検索"},
     "qa_answer": {"fn": qa_answer, "description": "質問に対してAI回答を生成"},
     "qa_stats": {"fn": qa_stats, "description": "Q&Aナレッジベースの統計情報"},

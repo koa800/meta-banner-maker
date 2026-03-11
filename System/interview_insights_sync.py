@@ -22,7 +22,7 @@ import time
 import unicodedata
 import warnings
 from collections import Counter
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -54,6 +54,7 @@ CACHE_DIR = DATA_DIR / "interview_insights_cache"
 STATE_PATH = DATA_DIR / "interview_insights_state.json"
 ANALYSIS_PATH = DATA_DIR / "interview_insights_analysis.json"
 AILEAD_AUTH_PATH = DATA_DIR / "ailead_auth_record.json"
+LOCK_PATH = DATA_DIR / "interview_insights_sync.lock"
 MASTER_DIR = Path(__file__).resolve().parent.parent / "Master"
 ANALYSIS_MARKDOWN_PATH = MASTER_DIR / "knowledge" / "面談定性比較.md"
 DEFAULT_LIMIT = 10
@@ -65,6 +66,7 @@ PAST_SOLUTIONS_MAX_CHARS = 70
 WRITE_FLUSH_ROW_COUNT = 5
 ROW_ERROR_COOLDOWN_HOURS = 24
 ROW_LOW_CONFIDENCE_COOLDOWN_HOURS = 168
+LOCK_STALE_HOURS = 6
 CALL_URL_RE = re.compile(r"/call/([0-9a-fA-F-]{36})")
 YOUTUBE_URL_RE = re.compile(r"https?://(?:www\.)?(?:youtu\.be/[A-Za-z0-9_-]{11}[^\s]*)|https?://(?:www\.)?youtube\.com/[^\s]+")
 LOOM_URL_RE = re.compile(r"https?://(?:www\.)?loom\.com/share/[A-Za-z0-9]+[^\s]*")
@@ -179,6 +181,10 @@ class AuthError(RuntimeError):
     pass
 
 
+class ExecutionLockError(RuntimeError):
+    pass
+
+
 def now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
@@ -202,6 +208,47 @@ def load_json(path: Path, default: Any) -> Any:
 def save_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+@contextmanager
+def interview_sync_lock(command_name: str):
+    LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "pid": os.getpid(),
+        "command": command_name,
+        "started_at": now_iso(),
+    }
+    while True:
+        try:
+            fd = os.open(LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, ensure_ascii=False, indent=2))
+            break
+        except FileExistsError:
+            existing = load_json(LOCK_PATH, {})
+            started_at = parse_iso_datetime(existing.get("started_at", ""))
+            if started_at:
+                elapsed_hours = max(0.0, (datetime.now() - started_at).total_seconds() / 3600)
+                if elapsed_hours < LOCK_STALE_HOURS:
+                    raise ExecutionLockError(
+                        "面談定性補完はすでに実行中です: "
+                        f"pid={existing.get('pid', 'unknown')} "
+                        f"command={collapse_ws(existing.get('command', 'unknown'))}"
+                    )
+            try:
+                LOCK_PATH.unlink()
+            except FileNotFoundError:
+                continue
+
+    try:
+        yield
+    finally:
+        try:
+            existing = load_json(LOCK_PATH, {})
+            if int(existing.get("pid") or 0) == os.getpid():
+                LOCK_PATH.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def collapse_ws(text: str) -> str:
@@ -1117,7 +1164,7 @@ class AileadClient:
     def graphql(
         self,
         operation_name: str,
-        query: str,
+        query: str | None,
         variables: dict[str, Any],
         operation_hash: str,
         recording_url: str = "",
@@ -1126,20 +1173,28 @@ class AileadClient:
             raise RuntimeError("AILEAD session が初期化されていません")
 
         build_id = self._ensure_build_id(recording_url)
+        payload: dict[str, Any] = {
+            "operationName": operation_name,
+            "variables": variables,
+            "extensions": {
+                "operationHash": operation_hash,
+                "buildId": build_id,
+            },
+        }
+        # AILEAD は persisted query が正本なので、ローカルの query 本文は原則送らない。
+        # こうしておくと schema drift が起きても local query の validation error に引っ張られにくい。
+        if collapse_ws(query or ""):
+            payload["query"] = query
+
         response = self.session.post(
             GRAPHQL_URL,
-            json={
-                "operationName": operation_name,
-                "query": query,
-                "variables": variables,
-                "extensions": {
-                    "operationHash": operation_hash,
-                    "buildId": build_id,
-                },
-            },
+            json=payload,
             timeout=60,
         )
-        response.raise_for_status()
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"AILEAD GraphQL HTTP {response.status_code}: {collapse_ws(response.text)[:500]}"
+            )
         data = response.json()
         if data.get("errors"):
             raise RuntimeError(
@@ -1155,7 +1210,7 @@ class AileadClient:
 
         result_data = self.graphql(
             "callResult",
-            CALL_RESULT_QUERY,
+            "",
             {"callResultId": call_result_id},
             CALL_RESULT_HASH,
             recording_url=recording_url,
@@ -1164,7 +1219,7 @@ class AileadClient:
         try:
             summary_data = self.graphql(
                 "callSummary",
-                CALL_SUMMARY_QUERY,
+                "",
                 {"callResultId": call_result_id},
                 CALL_SUMMARY_HASH,
                 recording_url=recording_url,
@@ -2265,17 +2320,20 @@ def main() -> None:
     )
 
     if args.command == "ensure-schema":
-        result = syncer.ensure_sheet_schema()
+        with interview_sync_lock(args.command):
+            result = syncer.ensure_sheet_schema()
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
 
     if args.command == "sync":
-        result = syncer.sync()
+        with interview_sync_lock(args.command):
+            result = syncer.sync()
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
 
     if args.command == "backfill":
-        result = syncer.backfill(max_batches=args.max_batches)
+        with interview_sync_lock(args.command):
+            result = syncer.backfill(max_batches=args.max_batches)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
 
@@ -2290,13 +2348,27 @@ def main() -> None:
         return
 
     if args.command == "analyze":
-        result = syncer.analyze(
-            output_path=Path(args.output) if args.output else ANALYSIS_PATH,
-            markdown_output_path=Path(args.markdown_output) if args.markdown_output else ANALYSIS_MARKDOWN_PATH,
-        )
+        with interview_sync_lock(args.command):
+            result = syncer.analyze(
+                output_path=Path(args.output) if args.output else ANALYSIS_PATH,
+                markdown_output_path=Path(args.markdown_output) if args.markdown_output else ANALYSIS_MARKDOWN_PATH,
+            )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ExecutionLockError as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "locked",
+                    "message": str(exc),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        raise SystemExit(2)

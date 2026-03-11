@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年3月11日（Claude CLI検出拡張、`.claude` fallback、定常watchdogの多段再試行化、起動直後の補走、認証時の承認だけ復旧導線を追加） |
+| 最終更新 | 2026年3月11日（Codex first ルーティング化、Addness会話文脈付き返信、CDP正常通知の1日1回化、返信通知の簡素化） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -43,11 +43,11 @@
                                │  - 長期記憶 + 短期記憶（チャネル別）│
                                │  - engine_version: v1/v2 切替    │
                                │                                │
-                               │  【Claude Code 自律モード】      │
-                               │  - claude -p --chrome で自律実行 │
-                               │  - Chrome MCP: ブラウザ操作可能  │
-                               │  - 失敗時: v2エンジンに          │
-                               │    フォールバック                │
+                               │  【実行ルーティング】             │
+                               │  - 通常タスク: Codex first       │
+                               │  - ブラウザ系: Claude Code only  │
+                               │  - `secretary_execution_policy`  │
+                               │    を正本にして同期              │
                                │                                │
                                │  【Coordinator（司令塔）】       │
                                │  - coordinator.py              │
@@ -111,7 +111,7 @@
 
 ### Phase 2: 自然言語タスク実行（完了）
 5. **Googleカレンダー連携**: 「明日14時に会議入れて」で予定追加
-6. **PC委譲タスク**: 複雑タスクをMac Miniで自律実行（Claude Code + Chrome MCPでブラウザ操作も可能）
+6. **PC委譲タスク**: 複雑タスクをMac Miniで自律実行（通常は Codex first、ブラウザ操作が必要な処理だけ Claude Code + Chrome MCP）
 7. **ゴール実行エンジン接続（execute_goal）**: LINE→Render(app.py)→task_queue→local_agent.py→coordinator.py→LINE通知のE2Eフロー完了。調査・リサーチ系タスクをCoordinatorにルーティング。MacBookは`~/Library/LineBot/`にデプロイ（TCC制限対策）
 
 ### Phase 3: Mac Mini 常駐エージェント（完了）
@@ -155,15 +155,16 @@
 27. **自動再起動改善**: `git_pull_sync.sh`が`line_bot_local/`配下の`.py`ファイル変更を検知すると自動で`local_agent`を再起動。成功通知は送らず、手動確認が必要な異常だけLINE通知してノイズを抑制
 28. **plistパス自動修正**: `git_pull_sync.sh`が毎回実行時にlaunchctl plistのパス整合性をチェック。Library版（`~/Library/LineBot/`）など古いパスを参照していた場合、正しいデプロイ先（`~/agents/line_bot_local/`）に自動修正＆再起動。config.jsonも旧パスから自動マイグレーション
 
-### Phase 8: Claude Code 自律モード（完了）
-33. **Claude Code CLI統合**: `claude -p --chrome`（非対話モード + Chrome MCP有効）で返信案生成・タスク実行を自律的に実行。ファイル読み取り・Grep検索・スクリプト実行・Web検索・ブラウザ操作を自分で判断して使用
-34. **返信案のハイブリッド生成**: Pythonが事前に送信者プロファイル・学習データを計算 → Claude Codeが自律的にprofiles.json検索・goal-tree.md参照で追加文脈を取得 → マーカー（`===REPLY_START===`/`===REPLY_END===`）で返信文を抽出。失敗時は既存Claude API直接呼び出しにフォールバック
-35. **汎用タスク実行**: LINEからの自然言語指示をClaude Codeが自律実行。sheets_manager.py/mail_manager.py/Google API等のスクリプトをBashで実行可能。Chrome MCPでLooker Studio等のブラウザ操作も可能。破壊的操作（ファイル削除・git操作・デプロイ・プロセスkill・環境変数変更）は明示的に禁止
+### Phase 8: Codex first + Claude Code 例外ルーティング（完了）
+33. **Codex exec統合**: 非ブラウザ系の通常タスクと Addness 返信補助は `script + codex exec --json` で実行。`gpt-5.4 / xhigh / workspace-write` を固定し、結果はマーカーまたは最終メッセージから抽出
+34. **共有実行ポリシーの正本化**: `System/config/secretary_execution_policy.json` を追加。`reply_generation / general_task / goal_execution / browser_task` の実行順を repo 内の JSON で管理し、MacBook と Mac mini で同じ優先順位を共有
+35. **Claude Code の役割限定**: `claude -p --chrome` はブラウザ操作や Chrome MCP が必要なタスクだけに限定。`input_daily_report` と `generate_image` は引き続き Claude Code を使い、通常タスクは Codex first で処理
 36. **認証分離**: `~/.claude-secretary/`（秘書アカウント koa800.secretary@gmail.com MAX 5x）で日向エージェント（`~/.claude/`）と完全分離。`CLAUDE_CONFIG_DIR`環境変数でsubprocess起動時に切り替え
 37. **bypassPermissions**: `~/.claude-secretary/settings.json`でBash/WebSearch/Read等の全ツール解放。rm/sudo/kill/force-push等の破壊的操作のみask制限
 38. **人名ハルシネーション防止**: profiles.jsonから全メンバー名を抽出し「社内メンバー一覧」としてプロンプトに注入。「人名ルール: profiles.jsonに存在する正確な名前のみ使用」を出力ルールに追加
 39. **Claude CLI / OAuth fallback**: `claude` は `shutil.which` / `~/.local/bin/claude` / app support 配下まで検出する。`~/.claude-secretary/` に OAuth 実体がない端末では `~/.claude/` を fallback として使い、`.credentials.json` が無い場合も CLI 起動チェックで事前確認する。認証が切れた場合は `claude auth login --email koa800.secretary@gmail.com` を Mac mini 側で自動起動し、本人には承認だけ依頼する
 - **Cursorワークスペース優先**: 秘書のClaude Codeプロンプトに、`cursor/` 配下の `AGENTS.md` / `CLAUDE.md` / `Skills/` / `Project/` / `Master/` / `System/` を正本として読むルールを追加。MacBookのCursorで作業するのと同じ流れで、調査→修復→検証→報告まで一気通貫で行う
+- **legacy `auto_mode` の扱い**: `auto_mode=claude` は後方互換のため残すが、実行時は `codex` に正規化する。Cursor強制送信は `auto_mode=cursor` のときだけ使う
 - **既知エラーの先回り修復**: ルールが固まっていて可逆な修復は、報告の前に秘書が自分で実行する方針に変更。CDPの列名揺れ補正のような定型エラーは、まず自動修復を試みる
 
 ### Phase 9: 画像生成（実装完了）
@@ -189,7 +190,7 @@
 56. **サイクル間状態引き継ぎ**: MemoryStore（SQLite）でフェーズ・完了基準・アクション一覧・進捗を永続化。30分後の次サイクルで前回の続きから再開
 57. **学習ループ**: `Master/learning/secretary_action_log.json`（最大50件）にアクション履歴を自動記録。直近5件+行動ルール+学習記憶をプロンプトに注入し、同じ失敗を繰り返さない。秘書自律ワークの成果物は `Master/addness/proactive_output/` に保存しつつ、`Master/output/` にもレビュー形式で自動ミラーする。自動ミラーは最初から `rules` 化せず、`再利用候補 / 根拠件数 / 昇格判定` を付けて `output 止まり` で蓄積する
 58. **連続失敗通知**: 3回連続失敗でLINE通知。1サイクル最大15分（900秒タイムアウト）で定常業務を妨げない
-59. **通知の整理**: `daily_report` の21:00稼働報告LINEは停止。`mail_inbox_*` の「返信待ちがあります」通知はメール確認自体は維持しつつ、LINE通知だけ12時間クールダウンを入れてノイズを削減
+59. **通知の整理**: `daily_report` の21:00稼働報告LINEは停止。`mail_inbox_*` の「返信待ちがあります」通知はメール確認自体は維持しつつ、LINE通知だけ12時間クールダウンを入れてノイズを削減。`cdp_sync` の正常完了通知は1日1回だけ送り、`確認が必要 / 失敗 / タイムアウト` はその都度すぐ通知する
 60. **グループLINEまとめ改善**: `daily_group_digest` は件数報告ではなく、`グループ名 / どんな会話だったか / 秘書の学び・所感 / 見るべき点` を優先して報告。Claude Code失敗時もグループ名ベースの人間向けフォールバックを返す
 
 ### Phase 13: クローン脳分離基盤（実装完了）
@@ -207,6 +208,9 @@
 70. **投稿失敗時の復帰**: Addness返信失敗時は `pending_messages` を `pending` に戻し、同じ承認で再実行できるようにした
 71. **秘書コマンド直実行API**: `/api/secretary-command` を追加。認証付きで `承認` / `編集` などの秘書コマンドを直接実行できるため、本番の Addness 承認フローを外部から検証できる
 72. **pending詳細debug**: `/debug/pending/<message_id>` を追加。特定の Addness エントリについて `post_error` と関連タスク状態を直接確認できる
+73. **会話文脈付き Addness 返信**: `addness_feedback_manager.py` が対象コメントだけでなく直近のやり取りも `thread_context` として収集し、`/api/addness/hinata-feedback` -> `pending_messages` -> `generate_reply_suggestion` まで引き回すようにした。秘書グループの確認メッセージにも直近のやり取りを表示するため、日向との往復を見ながら返信案を判断できる
+74. **返信前の内部整理を明示**: `local_agent.py` と `conversation.py` の返信生成プロンプトに `今何が起きているか -> 相手が今ほしいもの -> この返信で何を前に進めるか -> 次アクション` の内部手順を追加。相手の意図を汲み取って、次の行動が明確な返答に寄せた
+75. **返信通知の情報量を整理**: 秘書グループ向けの初回通知・返信案通知は、送信者メタ情報を絞って `誰から来たか` がすぐ分かる形に変更。元メッセージのプレビューも 80 文字固定から可変の長めプレビューへ変更し、途中で意味が切れる問題を減らした
 
 ### Phase 10: OS共有基盤・自己認識（実装完了）
 46. **行動ルール（OS）の動的同期**: `execution_rules.json` をSingle Source of Truthとし、app.py（Render）へは `/api/sync_execution_rules` APIで自動同期。local_agent起動時+ルール更新時に自動実行。永続ディスクに保存しフォールバックにハードコード版を併用
