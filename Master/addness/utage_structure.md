@@ -76,10 +76,20 @@
 - operator login URL は `System/credentials/utage.json` に保存している
 - 自動ログイン補助:
   - `python3 System/scripts/utage_login_helper.py --target <開きたいURL>`
+- page runtime 抜き取り:
+  - `python3 System/scripts/utage_page_runtime_snapshot.py <edit URL>`
 - できること
   - 既存 Chrome CDP セッションを再利用する
   - 未ログイン時は `email / password` を自動入力する
   - ログイン後に target URL をそのまま開く
+  - edit 画面の runtime から
+    - `is_high_speed_mode`
+    - `first_view_css`
+    - `css`
+    - `js_head`
+    - `js_body_top`
+    - `js_body`
+    を JSON で抜ける
 
 ## 1. ファネル
 
@@ -288,6 +298,21 @@
   - scenario: `AIカレッジ：FB広告【7桁オプトインシナリオ】`
   - action: `★使用中★　AIカレッジFB：オプトイン　※変更時、宮代に確認※`
   - 遷移先: `https://school.addness.co.jp/p/BDDVNnsFzVO9`
+  - runtime helper 実測
+    - `is_high_speed_mode = 1`
+    - `first_view_css` あり
+    - `js_head` あり
+    - `js_body_top` あり
+    - `js_body` あり
+  - `js_head` では
+    - Google Tag Manager
+    - Meta Pixel
+    - TikTok Pixel
+    が入っていた
+  - `js_body` では
+    - email domain typo check
+    - Yahoo メールの弾き
+    が入っていた
 
 #### AI: `AIカレッジ_Thanksページ(15分)`
 
