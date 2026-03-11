@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lステップ liveテスト証跡 2026-03-10</title>
+  <style>
+    :root {
+      --bg: #f6f7f4;
+      --card: #ffffff;
+      --line: #dde2d8;
+      --text: #1f2a1f;
+      --muted: #617061;
+      --accent: #2f6f48;
+      --accent-soft: #edf6ef;
+      --shadow: 0 18px 48px rgba(25, 42, 30, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+      background: linear-gradient(180deg, #fbfcfa 0%, var(--bg) 100%);
+      color: var(--text);
+      line-height: 1.7;
+    }
+    .wrap {
+      width: min(1120px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 32px 0 80px;
+    }
+    .hero {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      box-shadow: var(--shadow);
+      padding: 28px;
+      margin-bottom: 24px;
+    }
+    .eyebrow {
+      display: inline-flex;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .03em;
+    }
+    h1 {
+      margin: 14px 0 12px;
+      font-size: clamp(28px, 4vw, 42px);
+      line-height: 1.1;
+      letter-spacing: -0.03em;
+      font-weight: 700;
+    }
+    .lead {
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+      margin-top: 24px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .card-head {
+      padding: 20px 22px 0;
+    }
+    .card-title {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.25;
+      letter-spacing: -0.02em;
+    }
+    .card-copy {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 16px 22px 0;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 32px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fafbf8;
+      color: #405040;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .shots {
+      display: grid;
+      gap: 14px;
+      padding: 18px 22px 22px;
+    }
+    figure {
+      margin: 0;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      overflow: hidden;
+      background: #f3f5f0;
+    }
+    img {
+      display: block;
+      width: 100%;
+      height: auto;
+      background: #eef2eb;
+    }
+    figcaption {
+      padding: 12px 14px;
+      font-size: 13px;
+      color: var(--muted);
+      background: #fbfcfa;
+    }
+    .note {
+      margin-top: 24px;
+      padding: 20px 22px;
+      background: #18231b;
+      color: #ecf3ee;
+      border-radius: 24px;
+    }
+    .note strong { color: #ffffff; }
+    ul {
+      margin: 10px 0 0;
+      padding-left: 20px;
+    }
+    @media (max-width: 860px) {
+      .wrap { width: min(100vw - 20px, 1120px); padding-top: 20px; }
+      .hero, .card { border-radius: 22px; }
+      .grid { grid-template-columns: 1fr; }
+      .card-head { padding: 18px 18px 0; }
+      .meta { padding: 14px 18px 0; }
+      .shots { padding: 16px 18px 18px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="hero">
+      <div class="eyebrow">保存なし liveテスト</div>
+      <h1>Lステップで実際に見た画面だけを、証跡として残したページです。</h1>
+      <p class="lead">
+        2026年3月10日に、ログイン済みの Lステップ 画面で実際に開いたページだけをまとめています。
+        どのテストも保存はしていません。目的は、今後こちらが安全に設定できるレベルまで exact な操作を把握することです。
+      </p>
+      <div class="meta">
+        <span class="pill">保存なし</span>
+        <span class="pill">実画面キャプチャ</span>
+        <span class="pill">【予約窓口】スキルプラス合宿中心</span>
+        <span class="pill">Lステップ機能の exact 操作確認</span>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="card">
+        <div class="card-head">
+          <h2 class="card-title">1. リッチメニュー</h2>
+          <p class="card-copy">一覧画面まで開いて確認しました。作成ボタンの位置と、新規作成の入口がどこかを押さえる目的です。</p>
+        </div>
+        <div class="meta">
+          <span class="pill">一覧URL: /line/richmenu</span>
+          <span class="pill">保存なし</span>
+        </div>
+        <div class="shots">
+          <figure>
+            <img src="../../System/data/lstep_live_test/01_richmenu_list.png" alt="リッチメニュー一覧">
+            <figcaption>リッチメニュー一覧。ここから新規作成、フォルダ作成、並び替えに入れます。</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <h2 class="card-title">2. 流入経路分析</h2>
+          <p class="card-copy">実際の current 流入経路と、新規作成画面を確認しました。URL、QR、広告挿入タグ、流入直後の action をどこで設定するかが分かります。</p>
+        </div>
+        <div class="meta">
+          <span class="pill">一覧URL: /line/landing</span>
+          <span class="pill">作成URL: /line/landing/edit</span>
+        </div>
+        <div class="shots">
+          <figure>
+            <img src="../../System/data/lstep_live_test/04_landing_list.png" alt="流入経路一覧">
+            <figcaption>流入経路一覧。current row に URLコピー、QR、広告挿入タグ、テンプレ送信、タグ追加が並びます。</figcaption>
+          </figure>
+          <figure>
+            <img src="../../System/data/lstep_live_test/06_landing_create.png" alt="流入経路登録画面">
+            <figcaption>流入経路登録画面。流入経路名、QRコード表示用テキスト、有効期間、アクション、友だち追加時設定の扱いをここで決めます。</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <h2 class="card-title">3. クロス分析</h2>
+          <p class="card-copy">新規作成画面まで開いて確認しました。これは閲覧機能ではなく、分析軸を定義して保存する機能だと分かります。</p>
+        </div>
+        <div class="meta">
+          <span class="pill">一覧URL: /line/board</span>
+          <span class="pill">作成URL: /line/board/edit/new</span>
+        </div>
+        <div class="shots">
+          <figure>
+            <img src="../../System/data/lstep_live_test/07_cross_analysis_create.png" alt="クロス分析登録画面">
+            <figcaption>クロス分析登録画面。管理名、評価対象、縦軸、横軸をここで定義します。</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <h2 class="card-title">4. イベント予約とカレンダー予約</h2>
+          <p class="card-copy">予約系は使い分けが重要なので、event と calendar の両方を開いて確認しました。</p>
+        </div>
+        <div class="meta">
+          <span class="pill">イベント予約: /line/reserve/event</span>
+          <span class="pill">カレンダー予約: /line/reserve/salon</span>
+        </div>
+        <div class="shots">
+          <figure>
+            <img src="../../System/data/lstep_live_test/08_event_reservation_list.png" alt="イベント予約一覧">
+            <figcaption>イベント予約一覧。友だち予約URL、予約枠一覧、CSV出力、予約者一覧、プレビューまで1行で触れます。</figcaption>
+          </figure>
+          <figure>
+            <img src="../../System/data/lstep_live_test/09_calendar_reservation_intro.png" alt="カレンダー予約初期画面">
+            <figcaption>カレンダー予約。今回の account では intro 画面寄りで、current 本線はイベント予約側でした。</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <h2 class="card-title">5. タグ管理</h2>
+          <p class="card-copy">タグの一覧画面を開き、フォルダ構造と新規作成入口を確認しました。今回 visible だったのは合宿系フォルダです。</p>
+        </div>
+        <div class="meta">
+          <span class="pill">一覧URL: /line/tag</span>
+          <span class="pill">新しいタグ</span>
+          <span class="pill">CSVアップロード</span>
+        </div>
+        <div class="shots">
+          <figure>
+            <img src="../../System/data/lstep_live_test/14_tag_list_top.png" alt="タグ管理一覧上部">
+            <figcaption>タグ管理の一覧上部。新しいタグ、CSVアップロード、フォルダ構造が見えます。</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <h2 class="card-title">6. 回答フォーム</h2>
+          <p class="card-copy">回答フォーム一覧を開き、current のフォーム名、回答数、公開状態、新規作成入口を確認しました。</p>
+        </div>
+        <div class="meta">
+          <span class="pill">一覧URL: /line/form</span>
+          <span class="pill">新しい回答フォーム</span>
+          <span class="pill">公開状態を一覧確認</span>
+        </div>
+        <div class="shots">
+          <figure>
+            <img src="../../System/data/lstep_live_test/15_form_list_top.png" alt="回答フォーム一覧上部">
+            <figcaption>回答フォーム一覧上部。フォーム名、スプレッドシート連携、回答状態、登録日、公開状態が見えます。</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <h2 class="card-title">7. 一斉配信</h2>
+          <p class="card-copy">一斉配信の一覧を開き、current の配信履歴、配信条件、内容種別、新規作成入口を確認しました。</p>
+        </div>
+        <div class="meta">
+          <span class="pill">一覧URL: /line/magazine</span>
+          <span class="pill">新規配信</span>
+          <span class="pill">テンプレート配信</span>
+        </div>
+        <div class="shots">
+          <figure>
+            <img src="../../System/data/lstep_live_test/16_magazine_list_top.png" alt="一斉配信一覧上部">
+            <figcaption>一斉配信一覧上部。新規配信、テンプレート配信、配信日時絞り込み、配信履歴一覧が見えます。</figcaption>
+          </figure>
+        </div>
+      </article>
+    </section>
+
+    <section class="note">
+      <strong>今回のテストで確認したかったこと</strong>
+      <ul>
+        <li>どの画面が current 実務の入口か</li>
+        <li>新規作成時に、何をどこで設定するのか</li>
+        <li>保存せずに exact な操作の位置だけ把握できるか</li>
+      </ul>
+      <ul>
+        <li>まだ残っている差分は、リッチメニュー editor 内部と、保存後の再利用フローです。</li>
+        <li>ただし、今回で exact な click path はかなり固まりました。</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>

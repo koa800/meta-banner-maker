@@ -459,33 +459,72 @@ def write_rows(ws, rows: list[list[str]]) -> None:
     ws.update(range_name="A1", values=rows, value_input_option="USER_ENTERED")
 
 
-def apply_hyperlink_formulas(ws, rows: list[list[str]], url_columns: list[int]) -> None:
+def apply_clickable_links(ss, ws, rows: list[list[str]], url_columns: list[int]) -> None:
     if not rows:
         return
-    updates = []
-    last_row = len(rows) + 1
+    id_map = worksheet_id_map(ss)
+    if ws.title not in id_map:
+        return
+    sheet_id = id_map[ws.title]
+    requests = []
+    link_format = {
+        "foregroundColor": {"red": 0.067, "green": 0.333, "blue": 0.8},
+        "underline": True,
+    }
     for col_index in url_columns:
-        col_values = []
-        has_formula = False
+        row_values = []
+        has_link = False
         for row in rows:
             url = row[col_index].strip() if col_index < len(row) else ""
             if url.startswith("http"):
-                safe_url = url.replace('"', '""')
-                col_values.append([f'=HYPERLINK("{safe_url}","{safe_url}")'])
-                has_formula = True
+                row_values.append(
+                    {
+                        "values": [
+                            {
+                                "userEnteredValue": {"stringValue": url},
+                                "textFormatRuns": [
+                                    {
+                                        "startIndex": 0,
+                                        "format": {
+                                            **link_format,
+                                            "link": {"uri": url},
+                                        },
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                )
+                has_link = True
             else:
-                col_values.append([url])
-        if not has_formula:
+                row_values.append(
+                    {
+                        "values": [
+                            {
+                                "userEnteredValue": {"stringValue": url},
+                            }
+                        ]
+                    }
+                )
+        if not has_link:
             continue
-        col_letter = gspread_a1(1, col_index + 1)[:-1]
-        updates.append(
+        requests.append(
             {
-                "range": f"{col_letter}2:{col_letter}{last_row}",
-                "values": col_values,
+                "updateCells": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": 1,
+                        "endRowIndex": len(rows) + 1,
+                        "startColumnIndex": col_index,
+                        "endColumnIndex": col_index + 1,
+                    },
+                    "rows": row_values,
+                    "fields": "userEnteredValue,textFormatRuns",
+                }
             }
         )
-    if updates:
-        ws.batch_update(updates, value_input_option="USER_ENTERED")
+    if requests:
+        ss.batch_update({"requests": requests})
 
 
 def apply_sheet_format(ss, ws, headers: list[str], column_widths: list[int]) -> None:
@@ -594,6 +633,23 @@ def apply_sheet_format(ss, ws, headers: list[str], column_widths: list[int]) -> 
                 }
             }
         },
+        {
+            "updateBorders": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": 0,
+                    "endRowIndex": ws.row_count,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": len(headers),
+                },
+                "top": {"style": "SOLID", "color": {"red": 0.82, "green": 0.86, "blue": 0.8}},
+                "bottom": {"style": "SOLID", "color": {"red": 0.82, "green": 0.86, "blue": 0.8}},
+                "left": {"style": "SOLID", "color": {"red": 0.82, "green": 0.86, "blue": 0.8}},
+                "right": {"style": "SOLID", "color": {"red": 0.82, "green": 0.86, "blue": 0.8}},
+                "innerHorizontal": {"style": "SOLID", "color": {"red": 0.82, "green": 0.86, "blue": 0.8}},
+                "innerVertical": {"style": "SOLID", "color": {"red": 0.82, "green": 0.86, "blue": 0.8}},
+            }
+        },
     ])
     for idx, width in enumerate(column_widths):
         requests.append(
@@ -611,6 +667,55 @@ def apply_sheet_format(ss, ws, headers: list[str], column_widths: list[int]) -> 
             }
         )
     ss.batch_update({"requests": requests})
+
+
+def merge_funnel_name_cells(ss, ws, rows: list[list[str]], funnel_col_index: int = 0) -> None:
+    if not rows:
+        return
+    id_map = worksheet_id_map(ss)
+    if ws.title not in id_map:
+        return
+    sheet_id = id_map[ws.title]
+    requests = [
+        {
+            "unmergeCells": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": 1,
+                    "endRowIndex": len(rows) + 1,
+                    "startColumnIndex": funnel_col_index,
+                    "endColumnIndex": funnel_col_index + 1,
+                }
+            }
+        }
+    ]
+    run_start = 0
+    while run_start < len(rows):
+        funnel_name = rows[run_start][funnel_col_index].strip() if funnel_col_index < len(rows[run_start]) else ""
+        run_end = run_start + 1
+        while run_end < len(rows):
+            next_name = rows[run_end][funnel_col_index].strip() if funnel_col_index < len(rows[run_end]) else ""
+            if next_name != funnel_name:
+                break
+            run_end += 1
+        if funnel_name and run_end - run_start >= 2:
+            requests.append(
+                {
+                    "mergeCells": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": run_start + 1,
+                            "endRowIndex": run_end + 1,
+                            "startColumnIndex": funnel_col_index,
+                            "endColumnIndex": funnel_col_index + 1,
+                        },
+                        "mergeType": "MERGE_ALL",
+                    }
+                }
+            )
+        run_start = run_end
+    if requests:
+        ss.batch_update({"requests": requests})
 
 
 def current_sheet_order(ss) -> list[str]:
@@ -682,6 +787,8 @@ def delete_obsolete_sheets(ss, keep_titles: set[str]) -> list[str]:
 def normalize_media_name(media_value: str, link_title: str, funnel_name: str = "") -> str:
     if funnel_name.strip() == "共通導線":
         return "共通"
+    if "リンクエラー用" in link_title:
+        return "その他"
     candidates = []
     title_head = link_title.split("_", 1)[0].strip() if link_title else ""
     if title_head:
@@ -801,12 +908,13 @@ def cmd_rebuild_sheet_views(args: argparse.Namespace) -> None:
             cols=len(VISIBLE_SHEET_HEADERS),
         )
         write_rows(ws, [VISIBLE_SHEET_HEADERS] + grouped[title])
-        apply_hyperlink_formulas(ws, grouped[title], [3, 5])
         apply_sheet_format(ss, ws, VISIBLE_SHEET_HEADERS, VISIBLE_COLUMN_WIDTHS)
+        apply_clickable_links(ss, ws, grouped[title], [3, 5])
+        merge_funnel_name_cells(ss, ws, grouped[title], 0)
         created_or_updated.append({"title": title, "rows": len(grouped[title])})
 
     apply_sheet_format(ss, master_ws, MASTER_SHEET_HEADERS, MASTER_COLUMN_WIDTHS)
-    apply_hyperlink_formulas(master_ws, normalized_rows, [4, 6])
+    apply_clickable_links(ss, master_ws, normalized_rows, [4, 6])
     set_sheet_visibility_and_order(ss, args.master_sheet, ordered_titles)
     deleted_titles = []
     if args.delete_obsolete:

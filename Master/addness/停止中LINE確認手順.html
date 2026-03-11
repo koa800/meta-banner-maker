@@ -1,0 +1,2446 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>停止中LINE誤接続 修正ガイド</title>
+  <style>
+    :root {
+      --page-width: 1220px;
+      --bg: #f3f5f0;
+      --surface: rgba(255, 253, 249, 0.98);
+      --surface-soft: #f7faf5;
+      --surface-warm: #fff5ee;
+      --surface-ok: #eef8f2;
+      --surface-blue: #f1f6ff;
+      --line: #d7ded3;
+      --line-strong: #c3cdc0;
+      --text: #122018;
+      --muted: #617065;
+      --accent: #1e6a47;
+      --accent-soft: #edf6f0;
+      --accent-blue: #3568d4;
+      --accent-gold: #c07c1f;
+      --warn: #b64024;
+      --warn-soft: #fff4ed;
+      --shadow: 0 20px 46px rgba(16, 28, 19, 0.06);
+      --radius-lg: 28px;
+      --radius-md: 22px;
+      --radius-sm: 16px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      padding: 18px 16px 72px;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(30, 106, 71, 0.08), transparent 28%),
+        radial-gradient(circle at top right, rgba(182, 64, 36, 0.05), transparent 24%),
+        linear-gradient(180deg, #f9faf7 0%, var(--bg) 100%);
+      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+      font-size: 16px;
+      line-height: 1.72;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+      font-synthesis-weight: none;
+    }
+
+    img {
+      display: block;
+      max-width: 100%;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+      border-bottom: 1px solid rgba(30, 106, 71, 0.22);
+      overflow-wrap: anywhere;
+    }
+
+    a:hover {
+      border-bottom-color: rgba(30, 106, 71, 0.56);
+    }
+
+    p {
+      margin: 0 0 10px;
+    }
+
+    ul,
+    ol {
+      margin: 0;
+      padding-left: 18px;
+    }
+
+    code {
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: #274536;
+      font-size: 0.92em;
+    }
+
+    .page {
+      max-width: var(--page-width);
+      margin: 0 auto;
+    }
+
+    .surface {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow);
+    }
+
+    .nav-shell {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .nav-toggle {
+      justify-self: end;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px 10px 16px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.88);
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      box-shadow: 0 12px 28px rgba(17, 31, 21, 0.08);
+    }
+
+    .nav-toggle::after {
+      content: "+";
+      display: grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      border-radius: 999px;
+      border: 1px solid var(--line-strong);
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 16px;
+      line-height: 1;
+      font-weight: 700;
+    }
+
+    .nav-shell.is-open .nav-toggle::after {
+      content: "−";
+    }
+
+    .topnav-inner {
+      display: none;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      padding: 10px;
+      border: 1px solid rgba(18, 32, 24, 0.08);
+      border-radius: 24px;
+      background: rgba(255, 255, 255, 0.86);
+      backdrop-filter: blur(18px);
+      box-shadow: 0 18px 40px rgba(17, 31, 21, 0.08);
+    }
+
+    .nav-shell.is-open .topnav-inner {
+      display: grid;
+    }
+
+    .topnav-link {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+      padding: 14px 14px 13px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--text);
+    }
+
+    .nav-index {
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      line-height: 1;
+    }
+
+    .nav-label {
+      font-size: 18px;
+      font-weight: 800;
+      line-height: 1.18;
+    }
+
+    section[id] {
+      scroll-margin-top: 28px;
+    }
+
+    .hero {
+      padding: 42px 34px 30px;
+      margin-bottom: 16px;
+      position: relative;
+      overflow: hidden;
+      isolation: isolate;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(249, 251, 246, 0.98)),
+        linear-gradient(135deg, rgba(30, 106, 71, 0.08), rgba(255, 255, 255, 0));
+    }
+
+    .hero::before,
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto;
+      border-radius: 999px;
+      filter: blur(30px);
+      opacity: 0.72;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .hero::before {
+      width: 220px;
+      height: 220px;
+      right: -40px;
+      top: -40px;
+      background: radial-gradient(circle, rgba(53, 104, 212, 0.18), rgba(53, 104, 212, 0));
+    }
+
+    .hero::after {
+      width: 260px;
+      height: 260px;
+      left: -60px;
+      bottom: -100px;
+      background: radial-gradient(circle, rgba(192, 124, 31, 0.14), rgba(192, 124, 31, 0));
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.12fr) minmax(320px, 392px);
+      gap: 40px;
+      align-items: start;
+      position: relative;
+      z-index: 1;
+    }
+
+    .eyebrow {
+      margin: 0 0 12px;
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0 0 18px;
+      max-inline-size: 14.2ch;
+      font-size: clamp(32px, 4.6vw, 56px);
+      line-height: 1.02;
+      letter-spacing: -0.05em;
+      font-weight: 700;
+      color: #173026;
+      text-wrap: balance;
+    }
+
+    .hero-highlight {
+      position: relative;
+      display: inline;
+      padding-inline: 0.08em;
+      background:
+        linear-gradient(180deg, transparent 0 62%, rgba(30, 106, 71, 0.14) 62% 100%);
+      box-decoration-break: clone;
+      -webkit-box-decoration-break: clone;
+    }
+
+    .lead {
+      max-inline-size: 39ch;
+      color: #2c3c32;
+      font-size: 17px;
+      line-height: 1.86;
+    }
+
+    .hero-meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #fbfcfa;
+      color: #4f6155;
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .hero-note {
+      padding: 24px 22px 22px;
+      border: 1px solid rgba(18, 32, 24, 0.08);
+      border-radius: 30px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(246, 249, 244, 0.92)),
+        radial-gradient(circle at top right, rgba(53, 104, 212, 0.07), transparent 42%);
+      position: relative;
+      overflow: hidden;
+      box-shadow: 0 20px 40px rgba(17, 31, 21, 0.06);
+    }
+
+    .hero-note p:last-child {
+      margin-bottom: 0;
+    }
+
+    .hero-note::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(135deg, rgba(53, 104, 212, 0.06), transparent 32%),
+        linear-gradient(210deg, rgba(30, 106, 71, 0.05), transparent 34%);
+      pointer-events: none;
+    }
+
+    .hero-side-head {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .hero-side-title {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.16;
+      letter-spacing: -0.03em;
+      font-weight: 700;
+      color: #1b3026;
+    }
+
+    .hero-side-copy {
+      margin: 0;
+      color: #57675c;
+      font-size: 14px;
+      line-height: 1.72;
+    }
+
+    .quick-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 0;
+    }
+
+    .quick-item {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 14px;
+      align-items: start;
+      padding: 16px 16px 15px;
+      border: 1px solid rgba(18, 32, 24, 0.08);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.86);
+      position: relative;
+      box-shadow: 0 10px 22px rgba(18, 32, 24, 0.03);
+    }
+
+    .quick-item.is-warn {
+      background: linear-gradient(180deg, rgba(255, 244, 237, 0.96), rgba(255, 249, 245, 0.92));
+      border-color: rgba(182, 64, 36, 0.14);
+    }
+
+    .quick-item.is-ok {
+      background: linear-gradient(180deg, rgba(238, 248, 242, 0.96), rgba(249, 252, 250, 0.92));
+      border-color: rgba(30, 106, 71, 0.14);
+    }
+
+    .quick-step {
+      display: inline-grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      border-radius: 10px;
+      background: rgba(18, 32, 24, 0.05);
+      color: #44564a;
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+    }
+
+    .quick-label {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .quick-item strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 18px;
+      line-height: 1.36;
+      letter-spacing: -0.02em;
+      font-weight: 700;
+      color: #1b3026;
+    }
+
+    .quick-body p {
+      margin-bottom: 0;
+      color: #526258;
+      font-size: 14px;
+      line-height: 1.66;
+    }
+
+    .flow-strip {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 26px;
+      position: relative;
+      align-items: stretch;
+    }
+
+    .flow-strip::before {
+      content: "";
+      position: absolute;
+      left: 14%;
+      right: 14%;
+      top: 26px;
+      height: 2px;
+      background: linear-gradient(90deg, rgba(30, 106, 71, 0.1), rgba(53, 104, 212, 0.14), rgba(30, 106, 71, 0.1));
+      pointer-events: none;
+    }
+
+    .flow-card {
+      display: grid;
+      grid-template-columns: 52px minmax(0, 1fr);
+      gap: 14px;
+      padding: 18px;
+      border: 1px solid rgba(18, 32, 24, 0.08);
+      border-radius: 22px;
+      background: rgba(255, 255, 255, 0.88);
+      position: relative;
+      box-shadow: 0 12px 28px rgba(18, 32, 24, 0.04);
+      z-index: 1;
+    }
+
+    .flow-icon {
+      width: 52px;
+      height: 52px;
+      padding: 8px;
+      border-radius: 16px;
+      border: 1px solid rgba(18, 32, 24, 0.08);
+      background: linear-gradient(180deg, #fffefb, #f7faf5);
+      object-fit: contain;
+    }
+
+    .flow-kicker {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .flow-card strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 16px;
+      line-height: 1.35;
+      font-weight: 700;
+    }
+
+    .flow-card p {
+      margin-bottom: 0;
+      color: #526258;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .stat-card {
+      padding: 20px 18px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(248, 250, 245, 0.92));
+      box-shadow: var(--shadow);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .stat-card::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto auto 0;
+      width: 100%;
+      height: 4px;
+      background: linear-gradient(90deg, rgba(30, 106, 71, 0.34), rgba(30, 106, 71, 0));
+    }
+
+    .stat-card.is-warn {
+      background: linear-gradient(180deg, #fff7f1, #fffdf9);
+      border-color: rgba(182, 64, 36, 0.15);
+    }
+
+    .stat-card.is-warn::before {
+      background: linear-gradient(90deg, rgba(182, 64, 36, 0.36), rgba(182, 64, 36, 0));
+    }
+
+    .stat-card.is-ok {
+      background: linear-gradient(180deg, #eef8f2, #f9fcfa);
+      border-color: rgba(30, 106, 71, 0.14);
+    }
+
+    .stat-card.is-ok::before {
+      background: linear-gradient(90deg, rgba(53, 104, 212, 0.34), rgba(53, 104, 212, 0));
+    }
+
+    .stat-label {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .stat-value {
+      margin: 0;
+      font-size: 33px;
+      line-height: 1;
+      letter-spacing: -0.05em;
+      font-weight: 780;
+    }
+
+    .stat-copy {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .block {
+      padding: 30px 24px;
+      margin-bottom: 16px;
+    }
+
+    .block-tone-plain {
+      background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(249,251,246,.98));
+    }
+
+    .block-tone-soft {
+      background: linear-gradient(180deg, #fbfdfb, #f5f8f3);
+    }
+
+    .block-tone-warm {
+      background: linear-gradient(180deg, #fffdf9, #fbf1e7);
+    }
+
+    .block-tone-blue {
+      background: linear-gradient(180deg, #fbfcff, #f3f7ff);
+    }
+
+    .block-head {
+      display: grid;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .block-head-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: flex-start;
+      gap: 12px;
+    }
+
+    .section-index {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .section-index::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--accent);
+    }
+
+    h2 {
+      margin: 0;
+      font-size: clamp(30px, 3vw, 38px);
+      line-height: 1.15;
+      letter-spacing: -0.04em;
+    }
+
+    .block-desc {
+      max-inline-size: 60ch;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.72;
+      text-align: left;
+    }
+
+    .block-toggle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 34px;
+      height: 34px;
+      padding: 0;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      color: transparent;
+      font-size: 0;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .block-toggle::after {
+      content: "+";
+      display: grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
+      border: 1px solid var(--line-strong);
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 15px;
+      line-height: 1;
+      font-weight: 700;
+    }
+
+    .block:not(.is-collapsed) .block-toggle::after {
+      content: "−";
+    }
+
+    .block-content {
+      display: grid;
+      gap: 18px;
+    }
+
+    .block.is-collapsed .block-content {
+      display: none;
+    }
+
+    .callout {
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: linear-gradient(180deg, rgba(248, 251, 246, 0.98), rgba(252, 253, 250, 0.98));
+    }
+
+    .callout strong {
+      font-size: 16px;
+      line-height: 1.45;
+    }
+
+    .signal-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .panel {
+      padding: 18px 16px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: #fff;
+    }
+
+    .panel.is-warn {
+      background: var(--warn-soft);
+      border-color: rgba(182, 64, 36, 0.16);
+    }
+
+    .panel.is-ok {
+      background: var(--surface-ok);
+      border-color: rgba(30, 106, 71, 0.16);
+    }
+
+    .panel strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 18px;
+      line-height: 1.4;
+    }
+
+    .subtle-note {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .scenario-stack {
+      display: grid;
+      gap: 16px;
+    }
+
+    .jump-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .jump-card {
+      display: block;
+      padding: 18px 16px 16px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: #fff;
+      box-shadow: 0 12px 26px rgba(18, 32, 24, 0.04);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .jump-card::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 4px;
+      background: linear-gradient(180deg, rgba(30, 106, 71, 0.84), rgba(30, 106, 71, 0.12));
+    }
+
+    .jump-card.is-sns::before {
+      background: linear-gradient(180deg, rgba(182, 64, 36, 0.84), rgba(182, 64, 36, 0.12));
+    }
+
+    .jump-card.is-aix::before {
+      background: linear-gradient(180deg, rgba(53, 104, 212, 0.84), rgba(53, 104, 212, 0.12));
+    }
+
+    .jump-card.is-aifb::before {
+      background: linear-gradient(180deg, rgba(30, 106, 71, 0.84), rgba(30, 106, 71, 0.12));
+    }
+
+    .jump-card strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 18px;
+      line-height: 1.35;
+    }
+
+    .jump-card .quick-label {
+      margin-bottom: 10px;
+    }
+
+    .jump-card p:last-child {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    details.scenario-panel {
+      position: relative;
+      overflow: hidden;
+      padding: 0;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: #fff;
+      box-shadow: 0 14px 28px rgba(18, 32, 24, 0.04);
+    }
+
+    details.scenario-panel[open] {
+      box-shadow: 0 18px 36px rgba(18, 32, 24, 0.06);
+    }
+
+    details.scenario-panel::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 6px;
+      background: linear-gradient(180deg, rgba(30, 106, 71, 0.85), rgba(30, 106, 71, 0.12));
+    }
+
+    details.scenario-panel.scenario-sns::before {
+      background: linear-gradient(180deg, rgba(182, 64, 36, 0.85), rgba(182, 64, 36, 0.12));
+    }
+
+    details.scenario-panel.scenario-aix::before {
+      background: linear-gradient(180deg, rgba(53, 104, 212, 0.85), rgba(53, 104, 212, 0.12));
+    }
+
+    details.scenario-panel.scenario-aifb::before {
+      background: linear-gradient(180deg, rgba(30, 106, 71, 0.85), rgba(30, 106, 71, 0.12));
+    }
+
+    .scenario-panel.scenario-sns > summary {
+      background: linear-gradient(180deg, rgba(255, 247, 241, 0.98), rgba(255, 252, 249, 0.98));
+    }
+
+    .scenario-panel.scenario-aix > summary {
+      background: linear-gradient(180deg, rgba(241, 246, 255, 0.98), rgba(252, 253, 255, 0.98));
+    }
+
+    .scenario-panel.scenario-aifb > summary {
+      background: linear-gradient(180deg, rgba(245, 249, 243, 0.98), rgba(252, 253, 251, 0.98));
+    }
+
+    .scenario-panel > summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 24px 78px 22px 30px;
+      position: relative;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.98), rgba(249,251,246,.98));
+    }
+
+    .scenario-panel > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .scenario-panel > summary::after {
+      content: "+";
+      position: absolute;
+      right: 18px;
+      top: 22px;
+      display: grid;
+      place-items: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 999px;
+      border: 1px solid var(--line-strong);
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 15px;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .scenario-panel[open] > summary::after {
+      content: "−";
+    }
+
+    .scenario-panel[open] > summary {
+      border-bottom: 1px solid var(--line);
+    }
+
+    .scenario-head {
+      display: grid;
+      gap: 14px;
+      align-items: start;
+    }
+
+    .scenario-kicker {
+      margin: 0 0 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .scenario-title {
+      margin: 0 0 6px;
+      font-size: 22px;
+      line-height: 1.2;
+      letter-spacing: -0.03em;
+      font-weight: 760;
+    }
+
+    .scenario-copy {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.65;
+    }
+
+    .scenario-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-start;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #f9fbf7;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .badge-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--accent);
+      flex-shrink: 0;
+    }
+
+    .scenario-path {
+      margin: 0 0 16px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .scenario-body {
+      display: grid;
+      gap: 16px;
+      padding: 18px 20px 20px 28px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.96), rgba(252,252,249,.96));
+    }
+
+    .repair-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .repair-card {
+      padding: 18px 16px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: #fcfcfa;
+    }
+
+    .repair-card-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .repair-card strong {
+      font-size: 16px;
+      line-height: 1.45;
+      font-weight: 760;
+    }
+
+    .wait-pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: var(--warn-soft);
+      color: var(--warn);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+    }
+
+    .detail-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .detail-row {
+      display: grid;
+      grid-template-columns: 140px minmax(0, 1fr);
+      gap: 10px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(18, 32, 24, 0.08);
+    }
+
+    .detail-row:first-child {
+      padding-top: 0;
+      border-top: none;
+    }
+
+    .detail-label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .detail-value {
+      min-width: 0;
+    }
+
+    .detail-value p:last-child {
+      margin-bottom: 0;
+    }
+
+    .link-stack {
+      display: grid;
+      gap: 8px;
+    }
+
+    .link-card {
+      padding: 12px 12px 11px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #fff;
+    }
+
+    .link-card.is-warn {
+      background: var(--warn-soft);
+      border-color: rgba(182, 64, 36, 0.16);
+    }
+
+    .link-card.is-ok {
+      background: var(--surface-ok);
+      border-color: rgba(30, 106, 71, 0.14);
+    }
+
+    .link-label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13px;
+      font-weight: 800;
+      line-height: 1.5;
+      color: var(--text);
+    }
+
+    .link-url {
+      display: block;
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .action-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .action-card {
+      padding: 18px 16px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: #fff;
+    }
+
+    .action-step {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 34px;
+      height: 34px;
+      margin-bottom: 12px;
+      border-radius: 12px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 16px;
+      font-weight: 800;
+    }
+
+    .action-card strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 17px;
+      line-height: 1.4;
+      font-weight: 760;
+    }
+
+    .rule-box {
+      padding: 18px 16px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--surface-soft);
+    }
+
+    .rule-box strong {
+      display: block;
+      margin-bottom: 10px;
+      font-size: 18px;
+    }
+
+    .rule-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .rule-item {
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #fff;
+      font-size: 14px;
+      line-height: 1.65;
+    }
+
+    .process-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .method-flow {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 12px;
+      position: relative;
+    }
+
+    .method-flow::before {
+      content: "";
+      position: absolute;
+      left: 8%;
+      right: 8%;
+      top: 40px;
+      height: 1px;
+      background: linear-gradient(90deg, rgba(30, 106, 71, 0.08), rgba(30, 106, 71, 0.2), rgba(30, 106, 71, 0.08));
+      z-index: 0;
+    }
+
+    .flow-step {
+      position: relative;
+      z-index: 1;
+      padding: 16px 14px 14px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: rgba(255,255,255,0.96);
+      box-shadow: 0 12px 26px rgba(18, 32, 24, 0.04);
+    }
+
+    .flow-step strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 16px;
+      line-height: 1.42;
+      font-weight: 760;
+    }
+
+    .flow-step p:last-child {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.62;
+    }
+
+    .flow-number {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      margin-bottom: 10px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 800;
+      border: 1px solid rgba(30, 106, 71, 0.12);
+    }
+
+    .audit-grid {
+      display: grid;
+      grid-template-columns: 1.15fr 1fr;
+      gap: 14px;
+    }
+
+    .audit-card {
+      padding: 18px 16px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: #fff;
+    }
+
+    .audit-card strong {
+      display: block;
+      margin-bottom: 10px;
+      font-size: 17px;
+      line-height: 1.42;
+      font-weight: 760;
+    }
+
+    .audit-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .audit-item {
+      padding: 12px 12px 11px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #fbfcfa;
+      font-size: 14px;
+      line-height: 1.62;
+    }
+
+    .process-card {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: #fff;
+    }
+
+    .process-card strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 16px;
+      line-height: 1.45;
+      font-weight: 760;
+    }
+
+    .check-list {
+      padding: 18px 16px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: #f7faf5;
+    }
+
+    .check-list strong {
+      display: block;
+      margin-bottom: 10px;
+      font-size: 17px;
+      line-height: 1.45;
+    }
+
+    .evidence-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .proof-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .proof-card {
+      padding: 18px 16px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: #fff;
+      box-shadow: 0 12px 26px rgba(18, 32, 24, 0.04);
+    }
+
+    .proof-card.is-ok {
+      background: linear-gradient(180deg, #f6fbf8, #ffffff);
+      border-color: rgba(30, 106, 71, 0.14);
+    }
+
+    .proof-card.is-warn {
+      background: linear-gradient(180deg, #fff8f3, #ffffff);
+      border-color: rgba(182, 64, 36, 0.14);
+    }
+
+    .proof-card strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 18px;
+      line-height: 1.4;
+      font-weight: 760;
+    }
+
+    .snapshot-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .snapshot-card {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: #fff;
+      box-shadow: 0 12px 24px rgba(18, 32, 24, 0.04);
+    }
+
+    .snapshot-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .snapshot-head strong {
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.4;
+      font-weight: 760;
+    }
+
+    .snapshot-meta {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .snapshot-summary {
+      padding: 14px 14px 12px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: linear-gradient(180deg, #f9fbf8, #ffffff);
+      margin-bottom: 12px;
+    }
+
+    .snapshot-summary strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 15px;
+      line-height: 1.45;
+      font-weight: 700;
+      color: #20352b;
+    }
+
+    .snapshot-summary p {
+      margin: 0;
+      color: #54645a;
+      font-size: 13px;
+      line-height: 1.62;
+    }
+
+    .snapshot-list {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .snapshot-item {
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fbfcfa;
+      font-size: 13px;
+      line-height: 1.58;
+    }
+
+    .snapshot-facts {
+      display: grid;
+      gap: 8px;
+    }
+
+    .snapshot-fact {
+      display: grid;
+      grid-template-columns: 88px minmax(0, 1fr);
+      gap: 10px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(18, 32, 24, 0.08);
+    }
+
+    .snapshot-fact:first-child {
+      padding-top: 0;
+      border-top: none;
+    }
+
+    .snapshot-fact-label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .snapshot-fact-value {
+      color: #20352b;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .evidence-card {
+      padding: 18px 16px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: #fff;
+    }
+
+    .evidence-card strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 16px;
+      line-height: 1.4;
+      font-weight: 760;
+    }
+
+    .evidence-meta {
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .reveal-up {
+      opacity: 0;
+      transform: translateY(18px);
+      transition:
+        opacity 0.6s ease,
+        transform 0.6s ease;
+    }
+
+    .reveal-up.is-visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .inline-strong {
+      color: var(--warn);
+      font-weight: 800;
+    }
+
+    @media (hover: hover) {
+      .topnav-link:hover,
+      .action-card:hover,
+      .repair-card:hover,
+      .scenario-panel:hover,
+      .stat-card:hover,
+      .flow-card:hover,
+      .quick-item:hover,
+      .evidence-card:hover {
+        transform: translateY(-2px);
+        transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
+        box-shadow: 0 18px 34px rgba(15, 28, 19, 0.08);
+        border-color: rgba(30, 106, 71, 0.16);
+      }
+
+      .block-toggle:hover,
+      .nav-toggle:hover {
+        box-shadow: 0 12px 24px rgba(15, 28, 19, 0.08);
+      }
+    }
+
+    @media (max-width: 1180px) {
+      .hero-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .flow-strip,
+      .evidence-grid,
+      .jump-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .flow-strip::before {
+        display: none;
+      }
+    }
+
+    @media (max-width: 980px) {
+      body {
+        padding: 16px 14px 56px;
+      }
+
+      .hero,
+      .block {
+        padding: 24px 18px;
+      }
+
+      .stat-grid,
+      .action-grid,
+      .process-grid,
+      .signal-grid,
+      .proof-grid,
+      .audit-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .scenario-badges {
+        justify-content: flex-start;
+      }
+
+      .jump-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .method-flow,
+      .snapshot-grid,
+      .evidence-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .method-flow::before {
+        display: none;
+      }
+    }
+
+    @media (max-width: 760px) {
+      h1 {
+        max-inline-size: none;
+        font-size: clamp(28px, 10.2vw, 40px);
+        line-height: 1.01;
+      }
+
+      .lead {
+        max-inline-size: none;
+        font-size: 17px;
+      }
+
+      .detail-row {
+        grid-template-columns: 1fr;
+        gap: 4px;
+      }
+
+      .flow-strip {
+        grid-template-columns: 1fr;
+      }
+
+      .block-head-row {
+        gap: 10px;
+      }
+
+      .scenario-panel > summary {
+        padding: 20px 60px 18px 22px;
+      }
+
+      .scenario-panel > summary::after {
+        right: 16px;
+        top: 18px;
+      }
+
+      .block-desc {
+        max-inline-size: none;
+      }
+
+      .stat-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (min-width: 960px) {
+      .nav-shell {
+        position: sticky;
+        top: 12px;
+        z-index: 12;
+      }
+
+      .nav-toggle {
+        display: none;
+      }
+
+      .topnav-inner {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+      }
+
+      section[id] {
+        scroll-margin-top: 36px;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .stat-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .topnav-inner {
+        grid-template-columns: 1fr;
+      }
+
+      .nav-label {
+        font-size: 15px;
+      }
+
+      .nav-toggle {
+        padding-inline: 14px 10px;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+
+      *,
+      *::before,
+      *::after {
+        transition: none !important;
+      }
+
+      .reveal-up {
+        opacity: 1 !important;
+        transform: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <nav class="nav-shell" aria-label="ページ内ナビ" id="page-nav">
+      <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="section-nav" aria-label="目次">
+        <span id="nav-toggle-label">目次</span>
+      </button>
+      <div class="topnav-inner" id="section-nav">
+        <a class="topnav-link" href="#purpose"><span class="nav-index">01</span><span class="nav-label">目的</span></a>
+        <a class="topnav-link" href="#summary"><span class="nav-index">02</span><span class="nav-label">結論</span></a>
+        <a class="topnav-link" href="#structure"><span class="nav-index">03</span><span class="nav-label">問題点</span></a>
+        <a class="topnav-link" href="#actions"><span class="nav-index">04</span><span class="nav-label">改善</span></a>
+        <a class="topnav-link" href="#method"><span class="nav-index">05</span><span class="nav-label">背景と確認</span></a>
+        <a class="topnav-link" href="#evidence"><span class="nav-index">06</span><span class="nav-label">根拠</span></a>
+      </div>
+    </nav>
+
+    <main>
+      <section class="surface hero">
+        <div class="hero-grid">
+          <div>
+            <p class="eyebrow">共有・修正ガイド</p>
+            <h1>停止中LINE誤接続を、<span class="hero-highlight">今日直せる</span>修正ガイド。</h1>
+            <p class="lead">2026年3月9日時点で、送信待ちが残る 5 メールだけを対象に、どのメールのどのリンクが、どの UTAGE ページで停止中の LINE につながるかを、修正順のまま整理しています。</p>
+            <div class="hero-meta-row">
+              <span class="pill">対象は送信待ち人数が残っているメールのみ</span>
+              <span class="pill">主問題は UTAGE ページ内の停止中LINE直リンク</span>
+              <span class="pill">運用原則は LINE リンクを必ず short.io にすること</span>
+            </div>
+          </div>
+          <aside class="hero-note" aria-label="今日の判断">
+            <div class="hero-side-head">
+              <p class="eyebrow">今日の判断</p>
+              <p class="hero-side-title">まず見るべきことは、3つだけです。</p>
+              <p class="hero-side-copy">読む順番ではなく、直す順番で並べています。最初にここを見れば、修正担当者が何から手を付けるべきかがすぐ分かります。</p>
+            </div>
+            <div class="quick-list">
+              <div class="quick-item is-warn">
+                <span class="quick-step">01</span>
+                <div class="quick-body">
+                  <span class="quick-label">今日直す対象</span>
+                  <strong>3 シナリオ / 5 メール / 6 ページ</strong>
+                  <p>古い残骸や停止中メールではなく、今も送信待ちが残っているものだけに絞っています。</p>
+                </div>
+              </div>
+              <div class="quick-item">
+                <span class="quick-step">02</span>
+                <div class="quick-body">
+                  <span class="quick-label">問題の場所</span>
+                  <strong>Mailchimp ではなく、リンク先の UTAGE ページです。</strong>
+                  <p>メール本文を開いた先で、停止中の「みかみ」へ飛ぶ LINE 直リンクが残っています。</p>
+                </div>
+              </div>
+              <div class="quick-item is-ok">
+                <span class="quick-step">03</span>
+                <div class="quick-body">
+                  <span class="quick-label">直し方</span>
+                  <strong>停止中LINE直リンクを消し、正しい short.io に差し替えます。</strong>
+                  <p>直す場所は UTAGE ページ内の LINE リンクだけです。差し替え後は実際に押して確認します。</p>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+        <div class="flow-strip" aria-label="確認した導線">
+          <article class="flow-card">
+            <img class="flow-icon" src="https://mailchimp.com/release/plums/3a3e92cfc284c7bc.ico" alt="Mailchimp 公式アイコン" width="52" height="52" referrerpolicy="no-referrer">
+            <div>
+              <span class="flow-kicker">起点</span>
+              <strong>Mailchimp</strong>
+              <p>送信待ちが残る 5 メールだけを対象に確認しています。</p>
+            </div>
+          </article>
+          <article class="flow-card">
+            <img class="flow-icon" src="https://utage-system.com/favicon/android-chrome-256x256.png" alt="UTAGE 公式アイコン" width="52" height="52" referrerpolicy="no-referrer">
+            <div>
+              <span class="flow-kicker">原因</span>
+              <strong>UTAGE</strong>
+              <p>メールリンクの着地先ページ内に、誤った LINE リンクが残っています。</p>
+            </div>
+          </article>
+          <article class="flow-card">
+            <img class="flow-icon" src="https://line.me/favicon.ico" alt="LINE 公式アイコン" width="52" height="52" referrerpolicy="no-referrer">
+            <div>
+              <span class="flow-kicker">結果</span>
+              <strong>LINE</strong>
+              <p>停止中の「みかみ」へ飛ぶため、ここで誤接続が起きます。</p>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="stat-grid" aria-label="概要">
+        <article class="stat-card is-warn">
+          <p class="stat-label">送信待ち人数合計</p>
+          <p class="stat-value">72人</p>
+          <p class="stat-copy">2026年3月9日時点で、この誤接続に触れる可能性がある送信待ち人数の合計です。</p>
+        </article>
+        <article class="stat-card">
+          <p class="stat-label">対象シナリオ数</p>
+          <p class="stat-value">3本</p>
+          <p class="stat-copy">SNS Facebook、AI X、AI Facebook の 3 本だけを主対象にしています。</p>
+        </article>
+        <article class="stat-card">
+          <p class="stat-label">修正対象</p>
+          <p class="stat-value">5メール</p>
+          <p class="stat-copy">5 メール・6 ページまで絞り、どこを直せばいいかを確定しています。</p>
+        </article>
+        <article class="stat-card is-ok">
+          <p class="stat-label">誤接続の下限日</p>
+          <p class="stat-value">2024-09-17</p>
+          <p class="stat-copy">停止中の「みかみ」が利用停止になった日です。少なくともこの日以降は誤接続です。</p>
+        </article>
+      </section>
+
+      <section class="surface block block-tone-plain" id="purpose">
+        <div class="block-head">
+          <div class="block-head-row">
+            <div>
+              <p class="section-index">01</p>
+              <h2>目的</h2>
+            </div>
+            <button class="block-toggle" type="button" aria-label="目的を開閉"></button>
+          </div>
+          <p class="block-desc">今回の文書で何を判断し、どこまで直すかを最初に固定します。</p>
+        </div>
+        <div class="block-content">
+          <div class="callout">
+            <p><strong>目的は、今も送信待ちが残っているメールの中で、停止中LINEに飛ぶ誤接続だけを特定し、修正担当者が迷わず差し替えられる状態にすることです。</strong></p>
+            <p class="subtle-note">技術上は、Mailchimp 上でそのメールが停止されておらず、送信待ち人数が残っているものだけを対象にしています。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="surface block block-tone-soft" id="summary">
+        <div class="block-head">
+          <div class="block-head-row">
+            <div>
+              <p class="section-index">02</p>
+              <h2>結論</h2>
+            </div>
+            <button class="block-toggle" type="button" aria-label="結論を開閉"></button>
+          </div>
+          <p class="block-desc">最初に判断に必要な事実だけを置きます。詳細な証拠はこの下で追えます。</p>
+        </div>
+        <div class="block-content">
+          <div class="signal-grid">
+            <div class="panel is-warn">
+              <strong>何が起きているか</strong>
+              <p><span class="inline-strong">AI / SNS の個別3日間シナリオのうち、今も送信待ちが残っている 5 メールのリンク先に、停止中の「みかみ」（ID: @804mrsmd）へ飛ぶ直リンクが残っています。</span></p>
+              <p><span class="inline-strong">少なくとも 2024年9月17日以降</span> は、このリンク先は誤りです。Lステップの停止中一覧で、このアカウントの利用停止日が 2024年9月17日になっているためです。</p>
+            </div>
+            <div class="panel is-ok">
+              <strong>どこまで現役だと判断できたか</strong>
+              <p>2026年3月9日時点で、Mailchimp 上で対象メールが停止されておらず、送信待ち人数も残っていました。つまり、まだ送信待ちの対象者が残っています。</p>
+              <p>一方で、7桁オプトイン本線にも送信待ちは残っていますが、今回と同じ停止中LINE誤接続は確認されていません。</p>
+            </div>
+          </div>
+          <div class="callout">
+            <p><strong>今回の主対象から外したもの</strong></p>
+            <p>一時停止中のメール、配信停止メール、送信待ちが残っていないメールは対象外にしています。</p>
+            <p class="subtle-note">今回の修正対象は、2026年3月9日時点で実際に送信待ちが残っているメールだけです。</p>
+          </div>
+          <div class="jump-grid" aria-label="最初に開くシナリオ">
+            <a class="jump-card is-sns" href="#scenario-sns">
+              <span class="quick-label">最優先</span>
+              <strong>SNS Facebook 個別3日間</strong>
+              <p>送信待ち 70人。まずここから直すと影響が最も大きいです。</p>
+            </a>
+            <a class="jump-card is-aix" href="#scenario-aix">
+              <span class="quick-label">次に確認</span>
+              <strong>AI X 個別3日間</strong>
+              <p>送信待ち 1人ですが、2ページに同じ誤リンクが残っています。</p>
+            </a>
+            <a class="jump-card is-aifb" href="#scenario-aifb">
+              <span class="quick-label">最後に確認</span>
+              <strong>AI Facebook 個別3日間</strong>
+              <p>送信待ち 1人。メインページ側の誤リンクだけを直せば完了します。</p>
+            </a>
+          </div>
+        </div>
+      </section>
+
+      <section class="surface block block-tone-warm" id="structure">
+        <div class="block-head">
+          <div class="block-head-row">
+            <div>
+              <p class="section-index">03</p>
+              <h2>具体的な問題点</h2>
+            </div>
+            <button class="block-toggle" type="button" aria-label="具体的な問題点を開閉"></button>
+          </div>
+          <p class="block-desc">どのシナリオの、どのメールの、どの場所から開く UTAGE ページに、どの停止中リンクが残っているかを、修正順のまま置いています。</p>
+        </div>
+        <div class="block-content">
+          <div class="callout">
+            <p><strong>UTAGE上の場所</strong></p>
+            <p>AI は <code>AI：メインファネル_Meta広告 / AIロードマップ作成会_FV変更 系ページ</code>、SNS は <code>SNS：メインファネル_Meta広告 / センサーズ_ロードマップ作成会（FV変更）系ページ</code> です。</p>
+            <p class="subtle-note">同じページ内で見つかった short.io は、参考情報として併記しています。差し替え先だと断定しているわけではありません。</p>
+          </div>
+
+          <div class="jump-grid" aria-label="修正順ショートカット">
+            <a class="jump-card is-sns" href="#scenario-sns">
+              <span class="quick-label">1番目に修正</span>
+              <strong>SNS Facebook 個別3日間</strong>
+              <p>送信待ち 70人。AB テストを含む 3メールが対象です。</p>
+            </a>
+            <a class="jump-card is-aix" href="#scenario-aix">
+              <span class="quick-label">2番目に修正</span>
+              <strong>AI X 個別3日間</strong>
+              <p>送信待ち 1人。2ページに同じ停止中リンクが残っています。</p>
+            </a>
+            <a class="jump-card is-aifb" href="#scenario-aifb">
+              <span class="quick-label">3番目に修正</span>
+              <strong>AI Facebook 個別3日間</strong>
+              <p>送信待ち 1人。メインページのリンクだけを直せば完了です。</p>
+            </a>
+          </div>
+
+          <div class="scenario-stack">
+            <details class="scenario-panel scenario-sns" id="scenario-sns" open>
+              <summary>
+                <div class="scenario-head">
+                  <div>
+                    <p class="scenario-kicker">Mailchimp シナリオ</p>
+                    <h3 class="scenario-title">SNS Facebook 個別3日間シナリオ 2025-10-15</h3>
+                    <p class="scenario-copy">2026年3月9日時点で送信待ち 70人 / 対象メール 3通 / 確認ページ 3ページ</p>
+                  </div>
+                  <div class="scenario-badges">
+                    <span class="badge"><span class="badge-dot"></span>Mailchimp</span>
+                    <span class="badge"><span class="badge-dot"></span>UTAGE</span>
+                    <span class="badge"><span class="badge-dot"></span>LINE</span>
+                  </div>
+                </div>
+              </summary>
+              <div class="scenario-body">
+                <p class="scenario-path">UTAGE上の場所: SNS：メインファネル_Meta広告 / センサーズ_ロードマップ作成会（FV変更）系ページ</p>
+                <div class="repair-grid">
+                  <article class="repair-card">
+                    <div class="repair-card-head">
+                      <strong>センサーズFB広告_個別3日間シナリオ_1通目ABテストB</strong>
+                      <span class="wait-pill">送信待ち 1人</span>
+                    </div>
+                    <div class="detail-list">
+                      <div class="detail-row">
+                        <div class="detail-label">メール内の設置場所</div>
+                        <div class="detail-value">
+                          <p>画像をタップすると遷移します。</p>
+                        </div>
+                      </div>
+                      <div class="detail-row">
+                        <div class="detail-label">UTAGEページ</div>
+                        <div class="detail-value">
+                          <div class="link-stack">
+                            <div class="link-card">
+                              <span class="link-label">SNSロードマップ作成会 Facebook ABテストB 1通目ページ</span>
+                              <a class="link-url" href="https://school.addness.co.jp/page/vQ8ZuYjSpxuh" target="_blank" rel="noopener noreferrer">https://school.addness.co.jp/page/vQ8ZuYjSpxuh</a>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="detail-row">
+                        <div class="detail-label">間違っているリンク</div>
+                        <div class="detail-value">
+                          <div class="link-stack">
+                            <div class="link-card is-warn">
+                              <span class="link-label">SNSロードマップ作成会 Facebook ABテストB 1通目ページにあった 停止中LINE直リンク（みかみ）</span>
+                              <a class="link-url" href="https://liff.line.me/2003793581-w9y6NG72/landing?follow=%40804mrsmd&amp;lp=aYvC7j&amp;liff_id=2003793581-w9y6NG72" target="_blank" rel="noopener noreferrer">https://liff.line.me/2003793581-w9y6NG72/landing?follow=%40804mrsmd&amp;lp=aYvC7j&amp;liff_id=2003793581-w9y6NG72</a>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="detail-row">
+                        <div class="detail-label">同じページで確認した short.io</div>
+                        <div class="detail-value">
+                          <div class="link-stack">
+                            <div class="link-card is-ok">
+                              <span class="link-label">SNS Facebook ABテストB 1通目LINE誘導 short.io</span>
+                              <a class="link-url" href="https://skill.addness.co.jp/oFZWbR" target="_blank" rel="noopener noreferrer">https://skill.addness.co.jp/oFZWbR</a>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+
+                  <article class="repair-card">
+                    <div class="repair-card-head">
+                      <strong>個別３日間シナリオ2通目-ABテストA</strong>
+                      <span class="wait-pill">送信待ち 67人</span>
+                    </div>
+                    <div class="detail-list">
+                      <div class="detail-row">
+                        <div class="detail-label">メール内の設置場所</div>
+                        <div class="detail-value">
+                          <p>ボタンと画像の両方から遷移します。</p>
+                        </div>
+                      </div>
+                      <div class="detail-row">
+                        <div class="detail-label">UTAGEページ</div>
+                        <div class="detail-value">
+                          <div class="link-stack">
+                            <div class="link-card">
+                              <span class="link-label">SNSロードマップ作成会 Facebook ABテストA 2通目ページ</span>
+                              <a class="link-url" href="https://school.addness.co.jp/page/fksI4L8hNu4E?ftid=a2D07pvYFVvN" target="_blank" rel="noopener noreferrer">https://school.addness.co.jp/page/fksI4L8hNu4E?ftid=a2D07pvYFVvN</a>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="detail-row">
+                        <div class="detail-label">間違っているリンク</div>
+                        <div class="detail-value">
+                          <div class="link-stack">
+                            <div class="link-card is-warn">
+                              <span class="link-label">SNSロードマップ作成会 Facebook ABテストA 2通目ページにあった 停止中LINE直リンク（みかみ）</span>
+                              <a class="link-url" href="https://liff.line.me/2003793581-w9y6NG72/landing?follow=%40804mrsmd&amp;lp=QBbEoM&amp;liff_id=2003793581-w9y6NG72" target="_blank" rel="noopener noreferrer">https://liff.line.me/2003793581-w9y6NG72/landing?follow=%40804mrsmd&amp;lp=QBbEoM&amp;liff_id=2003793581-w9y6NG72</a>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="detail-row">
+                        <div class="detail-label">同じページで確認した short.io</div>
+                        <div class="detail-value">
+                          <div class="link-stack">
+                            <div class="link-card is-ok">
+                              <span class="link-label">SNS Facebook 2通目LINE誘導 short.io</span>
+                              <a class="link-url" href="https://skill.addness.co.jp/9lhTJx" target="_blank" rel="noopener noreferrer">https://skill.addness.co.jp/9lhTJx</a>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+
+                  <article class="repair-card">
+                    <div class="repair-card-head">
+                      <strong>個別３日間シナリオ3通目ABテストB</strong>
+                      <span class="wait-pill">送信待ち 2人</span>
+                    </div>
+                    <div class="detail-list">
+                      <div class="detail-row">
+                        <div class="detail-label">メール内の設置場所</div>
+                        <div class="detail-value">
+                          <p>テキストと画像の両方から遷移します。</p>
+                        </div>
+                      </div>
+                      <div class="detail-row">
+                        <div class="detail-label">UTAGEページ</div>
+                        <div class="detail-value">
+                          <div class="link-stack">
+                            <div class="link-card">
+                              <span class="link-label">SNSロードマップ作成会 Facebook ABテストB 3通目ページ</span>
+                              <a class="link-url" href="https://school.addness.co.jp/page/bbwZzf9MxRUb" target="_blank" rel="noopener noreferrer">https://school.addness.co.jp/page/bbwZzf9MxRUb</a>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="detail-row">
+                        <div class="detail-label">間違っているリンク</div>
+                        <div class="detail-value">
+                          <div class="link-stack">
+                            <div class="link-card is-warn">
+                              <span class="link-label">SNSロードマップ作成会 Facebook ABテストB 3通目ページにあった 停止中LINE直リンク（みかみ）</span>
+                              <a class="link-url" href="https://liff.line.me/2003793581-w9y6NG72/landing?follow=%40804mrsmd&amp;lp=aYvC7j&amp;liff_id=2003793581-w9y6NG72" target="_blank" rel="noopener noreferrer">https://liff.line.me/2003793581-w9y6NG72/landing?follow=%40804mrsmd&amp;lp=aYvC7j&amp;liff_id=2003793581-w9y6NG72</a>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="detail-row">
+                        <div class="detail-label">同じページで確認した short.io</div>
+                        <div class="detail-value">
+                          <div class="link-stack">
+                            <div class="link-card is-ok">
+                              <span class="link-label">SNS Facebook ABテストB 3通目LINE誘導 short.io</span>
+                              <a class="link-url" href="https://skill.addness.co.jp/kVOFxL" target="_blank" rel="noopener noreferrer">https://skill.addness.co.jp/kVOFxL</a>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+                </div>
+              </div>
+            </details>
+
+            <details class="scenario-panel scenario-aix" id="scenario-aix">
+              <summary>
+                <div class="scenario-head">
+                  <div>
+                    <p class="scenario-kicker">Mailchimp シナリオ</p>
+                    <h3 class="scenario-title">AI X 個別3日間シナリオ</h3>
+                    <p class="scenario-copy">2026年3月9日時点で送信待ち 1人 / 対象メール 1通 / 確認ページ 2ページ</p>
+                  </div>
+                  <div class="scenario-badges">
+                    <span class="badge"><span class="badge-dot"></span>Mailchimp</span>
+                    <span class="badge"><span class="badge-dot"></span>UTAGE</span>
+                    <span class="badge"><span class="badge-dot"></span>LINE</span>
+                  </div>
+                </div>
+              </summary>
+              <div class="scenario-body">
+                <p class="scenario-path">UTAGE上の場所: AI：メインファネル_Meta広告 / AIロードマップ作成会_FV変更 系ページ</p>
+                <div class="repair-grid">
+                  <article class="repair-card">
+                    <div class="repair-card-head">
+                      <strong>AIカレッジX広告_個別3日間シナリオ_2日目</strong>
+                      <span class="wait-pill">送信待ち 1人</span>
+                    </div>
+                    <div class="detail-list">
+                      <div class="detail-row">
+                        <div class="detail-label">メール内の設置場所</div>
+                        <div class="detail-value">
+                          <p>画像からはメインページへ、ボタンと画像からは 2通目ページへ遷移します。</p>
+                        </div>
+                      </div>
+                      <div class="detail-row">
+                        <div class="detail-label">UTAGEページ</div>
+                        <div class="detail-value">
+                          <div class="link-stack">
+                            <div class="link-card">
+                              <span class="link-label">AIロードマップ作成会 X用メインページ</span>
+                              <a class="link-url" href="https://school.addness.co.jp/p/XcFB1Re3138v" target="_blank" rel="noopener noreferrer">https://school.addness.co.jp/p/XcFB1Re3138v</a>
+                            </div>
+                            <div class="link-card">
+                              <span class="link-label">AIロードマップ作成会 X用 2通目ページ</span>
+                              <a class="link-url" href="https://school.addness.co.jp/page/1zIgM0ov1N6l" target="_blank" rel="noopener noreferrer">https://school.addness.co.jp/page/1zIgM0ov1N6l</a>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="detail-row">
+                        <div class="detail-label">間違っているリンク</div>
+                        <div class="detail-value">
+                          <div class="link-stack">
+                            <div class="link-card is-warn">
+                              <span class="link-label">どちらのページにも残っていた 停止中LINE直リンク（みかみ）</span>
+                              <a class="link-url" href="https://liff.line.me/2003793581-w9y6NG72/landing?follow=%40804mrsmd&amp;lp=aYvC7j&amp;liff_id=2003793581-w9y6NG72" target="_blank" rel="noopener noreferrer">https://liff.line.me/2003793581-w9y6NG72/landing?follow=%40804mrsmd&amp;lp=aYvC7j&amp;liff_id=2003793581-w9y6NG72</a>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="detail-row">
+                        <div class="detail-label">同じページで確認した short.io</div>
+                        <div class="detail-value">
+                          <div class="link-stack">
+                            <div class="link-card is-ok">
+                              <span class="link-label">AI X メインLINE誘導 short.io</span>
+                              <a class="link-url" href="https://skill.addness.co.jp/xad-ai3" target="_blank" rel="noopener noreferrer">https://skill.addness.co.jp/xad-ai3</a>
+                            </div>
+                            <div class="link-card is-ok">
+                              <span class="link-label">AI X 2通目LINE誘導 short.io</span>
+                              <a class="link-url" href="https://skill.addness.co.jp/s1KcsS" target="_blank" rel="noopener noreferrer">https://skill.addness.co.jp/s1KcsS</a>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+                </div>
+              </div>
+            </details>
+
+            <details class="scenario-panel scenario-aifb" id="scenario-aifb">
+              <summary>
+                <div class="scenario-head">
+                  <div>
+                    <p class="scenario-kicker">Mailchimp シナリオ</p>
+                    <h3 class="scenario-title">AI Facebook 個別3日間シナリオ</h3>
+                    <p class="scenario-copy">2026年3月9日時点で送信待ち 1人 / 対象メール 1通 / 確認ページ 1ページ</p>
+                  </div>
+                  <div class="scenario-badges">
+                    <span class="badge"><span class="badge-dot"></span>Mailchimp</span>
+                    <span class="badge"><span class="badge-dot"></span>UTAGE</span>
+                    <span class="badge"><span class="badge-dot"></span>LINE</span>
+                  </div>
+                </div>
+              </summary>
+              <div class="scenario-body">
+                <p class="scenario-path">UTAGE上の場所: AI：メインファネル_Meta広告 / AIロードマップ作成会_FV変更 系ページ</p>
+                <div class="repair-grid">
+                  <article class="repair-card">
+                    <div class="repair-card-head">
+                      <strong>AIカレッジFB広告_個別3日間シナリオ_2日目</strong>
+                      <span class="wait-pill">送信待ち 1人</span>
+                    </div>
+                    <div class="detail-list">
+                      <div class="detail-row">
+                        <div class="detail-label">メール内の設置場所</div>
+                        <div class="detail-value">
+                          <p>画像とボタンの両方から遷移します。</p>
+                        </div>
+                      </div>
+                      <div class="detail-row">
+                        <div class="detail-label">UTAGEページ</div>
+                        <div class="detail-value">
+                          <div class="link-stack">
+                            <div class="link-card">
+                              <span class="link-label">AIロードマップ作成会 メインページ</span>
+                              <a class="link-url" href="https://school.addness.co.jp/p/uUfErKGsQYZ2?ftid=eXgykfkQawhf" target="_blank" rel="noopener noreferrer">https://school.addness.co.jp/p/uUfErKGsQYZ2?ftid=eXgykfkQawhf</a>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="detail-row">
+                        <div class="detail-label">間違っているリンク</div>
+                        <div class="detail-value">
+                          <div class="link-stack">
+                            <div class="link-card is-warn">
+                              <span class="link-label">AIロードマップ作成会 メインページにあった 停止中LINE直リンク（みかみ）</span>
+                              <a class="link-url" href="https://liff.line.me/2003793581-w9y6NG72/landing?follow=%40804mrsmd&amp;lp=aYvC7j&amp;liff_id=2003793581-w9y6NG72" target="_blank" rel="noopener noreferrer">https://liff.line.me/2003793581-w9y6NG72/landing?follow=%40804mrsmd&amp;lp=aYvC7j&amp;liff_id=2003793581-w9y6NG72</a>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="detail-row">
+                        <div class="detail-label">同じページで確認した short.io</div>
+                        <div class="detail-value">
+                          <div class="link-stack">
+                            <div class="link-card is-ok">
+                              <span class="link-label">AI Facebook メインLINE誘導 short.io</span>
+                              <a class="link-url" href="https://skill.addness.co.jp/meta-ai3" target="_blank" rel="noopener noreferrer">https://skill.addness.co.jp/meta-ai3</a>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+                </div>
+              </div>
+            </details>
+          </div>
+        </div>
+      </section>
+
+      <section class="surface block block-tone-blue" id="actions">
+        <div class="block-head">
+          <div class="block-head-row">
+            <div>
+              <p class="section-index">04</p>
+              <h2>具体的な改善アクション</h2>
+            </div>
+            <button class="block-toggle" type="button" aria-label="具体的な改善アクションを開閉"></button>
+          </div>
+          <p class="block-desc">実際に直す順番にしています。ここだけ読めば作業に入れます。</p>
+        </div>
+        <div class="block-content">
+          <div class="action-grid">
+            <article class="action-card">
+              <span class="action-step">1</span>
+              <strong>正しい遷移先リンクを用意する</strong>
+              <p>まず、どの LINE へ送るのが正しいかを確認し、その LINE へ送る short.io を用意します。既存の short.io が正しいと確認できた場合はそれを使い、新しく必要なら追加で発行します。</p>
+            </article>
+            <article class="action-card">
+              <span class="action-step">2</span>
+              <strong>LINEリンクを直張りしている場合は short.io を活用する</strong>
+              <p>UTAGE ページ内の LINE 直リンクを削除し、用意した short.io に差し替えます。LINE の直リンクは残しません。</p>
+            </article>
+            <article class="action-card">
+              <span class="action-step">3</span>
+              <strong>差し替え後に実際に押して確認する</strong>
+              <p>メールから UTAGE ページを開き、UTAGE ページから LINE へ進んで、意図した LINE に着地することを確認します。</p>
+            </article>
+          </div>
+          <div class="rule-box">
+            <strong>このページで守る判断ルール</strong>
+            <div class="rule-list">
+              <div class="rule-item">LINEリンクは必ず short.io で管理する。</div>
+              <div class="rule-item">ここに載せた short.io は参考情報であり、差し替え先だと断定しない。</div>
+              <div class="rule-item">停止中LINEへの直リンクは残さない。</div>
+              <div class="rule-item">差し替え後はメールから順に自分で押して確認する。</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="surface block block-tone-plain start-collapsed" id="method">
+        <div class="block-head">
+          <div class="block-head-row">
+            <div>
+              <p class="section-index">05</p>
+              <h2>問題発見の背景と確認方法</h2>
+            </div>
+            <button class="block-toggle" type="button" aria-label="問題発見の背景と確認方法を開閉"></button>
+          </div>
+          <p class="block-desc">まず今も送信待ちが残っているかを確認し、その後でメール本文、UTAGE ページ、LINE 着地先の順に辿って確認しました。</p>
+        </div>
+        <div class="block-content">
+          <div class="method-flow" aria-label="確認フロー">
+            <article class="flow-step">
+              <span class="flow-number">01</span>
+              <strong>Mailchimpで候補を絞る</strong>
+              <p>送信待ちが残っているメールだけを対象にしました。</p>
+            </article>
+            <article class="flow-step">
+              <span class="flow-number">02</span>
+              <strong>停止中メールを除外する</strong>
+              <p>シナリオ全体が稼働中でも、メール単位で止まっているものは外しました。</p>
+            </article>
+            <article class="flow-step">
+              <span class="flow-number">03</span>
+              <strong>メール内リンクを開く</strong>
+              <p>画像、ボタン、テキストのどこから飛ぶかまで確認しました。</p>
+            </article>
+            <article class="flow-step">
+              <span class="flow-number">04</span>
+              <strong>UTAGEページを確認する</strong>
+              <p>ページ内の LINE 直リンクと short.io を切り分けました。</p>
+            </article>
+            <article class="flow-step">
+              <span class="flow-number">05</span>
+              <strong>停止中LINEと照合する</strong>
+              <p>Lステップの停止中一覧で「みかみ」に当たるかを確認しました。</p>
+            </article>
+            <article class="flow-step">
+              <span class="flow-number">06</span>
+              <strong>残す対象を確定する</strong>
+              <p>今も送信待ちが残っているものだけを主対象に残しました。</p>
+            </article>
+          </div>
+          <div class="audit-grid">
+            <article class="audit-card">
+              <strong>自分で確認するときの手順</strong>
+              <ol>
+                <li>Mailchimp で対象シナリオを開く</li>
+                <li>対象メールが停止されておらず、送信待ち人数が残っていることを確認する</li>
+                <li>そのメール内の画像、ボタン、テキストのリンク先 URL を開く</li>
+                <li>開いた UTAGE ページの中で、ページ内に置かれている LINE リンクを確認する</li>
+                <li>同じページ内に short.io がある場合は、その short.io の向き先も確認する</li>
+                <li>Lステップの停止中一覧で「みかみ」の利用停止日が 2024年9月17日であることを確認する</li>
+              </ol>
+              <p class="subtle-note" style="margin-top:10px;">技術上は、Mailchimp の送信待ち人数が 0 より大きいかで確認しています。</p>
+            </article>
+            <article class="audit-card">
+              <strong>今回の主対象から外したもの</strong>
+              <div class="audit-list">
+                <div class="audit-item">一時停止中のメール</div>
+                <div class="audit-item">配信停止メール</div>
+                <div class="audit-item">送信待ちが残っていないメール</div>
+                <div class="audit-item">主線ではない古い残骸導線</div>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="surface block block-tone-soft start-collapsed" id="evidence">
+        <div class="block-head">
+          <div class="block-head-row">
+            <div>
+              <p class="section-index">06</p>
+              <h2>問題だと確信した根拠</h2>
+            </div>
+            <button class="block-toggle" type="button" aria-label="問題だと確信した根拠を開閉"></button>
+          </div>
+          <p class="block-desc">今も動いていると判断した根拠と、本当に問題だと判断した根拠を分けて整理しています。</p>
+        </div>
+        <div class="block-content">
+          <div class="proof-grid">
+            <article class="proof-card is-ok">
+              <strong>今も動いていると判断した根拠</strong>
+              <p>2026年3月9日時点で、Mailchimp 上で対象メールが停止されておらず、送信待ち人数も残っていました。</p>
+              <p>SNS Facebook 個別3日間シナリオ 2025-10-15 で 70人、AI X 個別3日間シナリオで 1人、AI Facebook 個別3日間シナリオで 1人の送信待ちを確認しています。</p>
+            </article>
+            <article class="proof-card is-warn">
+              <strong>本当に問題だと判断した根拠</strong>
+              <p>各メールのリンク先 UTAGE ページを実際に開くと、停止中の「みかみ」へ飛ぶ LINE 直リンクが残っていました。</p>
+              <p>Lステップの停止中一覧では、この「みかみ」の利用停止日が <span class="inline-strong">2024年9月17日</span> です。したがって、少なくともこの日以降は誤接続です。</p>
+            </article>
+          </div>
+          <div class="snapshot-grid">
+            <article class="snapshot-card">
+              <div class="snapshot-head">
+                <strong>SNS Facebook 個別3日間</strong>
+                <span class="snapshot-meta">証拠 01</span>
+              </div>
+              <div class="snapshot-summary">
+                <strong>もっとも優先度が高い主対象です。</strong>
+                <p>送信待ち人数が最も多く、3通のメールから 3ページへ分岐して、すべてで停止中LINE直リンクを確認しました。</p>
+              </div>
+              <div class="snapshot-list">
+                <div class="snapshot-item">送信待ち 70人</div>
+                <div class="snapshot-item">対象メール 3通</div>
+                <div class="snapshot-item">確認ページ 3ページ</div>
+              </div>
+              <div class="snapshot-facts">
+                <div class="snapshot-fact">
+                  <div class="snapshot-fact-label">Mailchimp</div>
+                  <div class="snapshot-fact-value">2026年3月9日時点で、対象メール3通すべてに送信待ち人数が残っています。</div>
+                </div>
+                <div class="snapshot-fact">
+                  <div class="snapshot-fact-label">UTAGE</div>
+                  <div class="snapshot-fact-value">ABテストB 1通目、ABテストA 2通目、ABテストB 3通目の各ページを開いて確認しました。</div>
+                </div>
+                <div class="snapshot-fact">
+                  <div class="snapshot-fact-label">LINE</div>
+                  <div class="snapshot-fact-value"><code>follow=@804mrsmd</code> の停止中LINE直リンクが残っています。</div>
+                </div>
+              </div>
+            </article>
+            <article class="snapshot-card">
+              <div class="snapshot-head">
+                <strong>AI X 個別3日間</strong>
+                <span class="snapshot-meta">証拠 02</span>
+              </div>
+              <div class="snapshot-summary">
+                <strong>1通のメールから、2ページに誤接続が残っています。</strong>
+                <p>メインページと 2通目ページの両方で、同じ停止中LINE直リンクを確認しました。</p>
+              </div>
+              <div class="snapshot-list">
+                <div class="snapshot-item">送信待ち 1人</div>
+                <div class="snapshot-item">対象メール 1通</div>
+                <div class="snapshot-item">確認ページ 2ページ</div>
+              </div>
+              <div class="snapshot-facts">
+                <div class="snapshot-fact">
+                  <div class="snapshot-fact-label">Mailchimp</div>
+                  <div class="snapshot-fact-value">2日目メールに、2026年3月9日時点で送信待ち 1人が残っています。</div>
+                </div>
+                <div class="snapshot-fact">
+                  <div class="snapshot-fact-label">UTAGE</div>
+                  <div class="snapshot-fact-value">X用メインページと X用2通目ページの両方を開いて確認しました。</div>
+                </div>
+                <div class="snapshot-fact">
+                  <div class="snapshot-fact-label">LINE</div>
+                  <div class="snapshot-fact-value">両ページとも <code>follow=@804mrsmd</code> で同じ停止中アカウントへ飛びます。</div>
+                </div>
+              </div>
+            </article>
+            <article class="snapshot-card">
+              <div class="snapshot-head">
+                <strong>AI Facebook 個別3日間</strong>
+                <span class="snapshot-meta">証拠 03</span>
+              </div>
+              <div class="snapshot-summary">
+                <strong>メインページ1ページだけを直せば解消できます。</strong>
+                <p>対象メールは 1通で、リンク先の AIロードマップ作成会メインページに停止中LINE直リンクが残っています。</p>
+              </div>
+              <div class="snapshot-list">
+                <div class="snapshot-item">送信待ち 1人</div>
+                <div class="snapshot-item">対象メール 1通</div>
+                <div class="snapshot-item">確認ページ 1ページ</div>
+              </div>
+              <div class="snapshot-facts">
+                <div class="snapshot-fact">
+                  <div class="snapshot-fact-label">Mailchimp</div>
+                  <div class="snapshot-fact-value">2日目メールに、2026年3月9日時点で送信待ち 1人が残っています。</div>
+                </div>
+                <div class="snapshot-fact">
+                  <div class="snapshot-fact-label">UTAGE</div>
+                  <div class="snapshot-fact-value">AIロードマップ作成会メインページを開いて確認しました。</div>
+                </div>
+                <div class="snapshot-fact">
+                  <div class="snapshot-fact-label">LINE</div>
+                  <div class="snapshot-fact-value"><code>follow=@804mrsmd</code> が残っており、停止中の「みかみ」へ遷移します。</div>
+                </div>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const navShell = document.getElementById("page-nav");
+    const navToggle = document.getElementById("nav-toggle");
+
+    if (navToggle && navShell) {
+      navToggle.addEventListener("click", () => {
+        const isOpen = navShell.classList.toggle("is-open");
+        navToggle.setAttribute("aria-expanded", String(isOpen));
+      });
+    }
+
+    const revealBlock = (target) => {
+      if (target && target.classList && target.classList.contains("block")) {
+        target.classList.remove("is-collapsed");
+      }
+    };
+
+    const openTarget = (target, scroll = true) => {
+      if (!target) return;
+      if (target.tagName === "DETAILS") {
+        target.open = true;
+      }
+      revealBlock(target);
+      let parent = target.parentElement;
+      while (parent) {
+        if (parent.tagName === "DETAILS") {
+          parent.open = true;
+        }
+        if (parent.classList && parent.classList.contains("block")) {
+          parent.classList.remove("is-collapsed");
+        }
+        parent = parent.parentElement;
+      }
+      if (scroll) {
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    };
+
+    document.querySelectorAll(".block").forEach((block) => {
+      const button = block.querySelector(".block-toggle");
+      if (!button) return;
+      if (block.classList.contains("start-collapsed")) {
+        block.classList.add("is-collapsed");
+      }
+      button.addEventListener("click", () => {
+        block.classList.toggle("is-collapsed");
+      });
+    });
+
+    document.querySelectorAll("a[href^='#']").forEach((link) => {
+      link.addEventListener("click", (event) => {
+        const id = link.getAttribute("href").slice(1);
+        const target = document.getElementById(id);
+        if (!target) return;
+        event.preventDefault();
+        openTarget(target);
+        if (navShell && navShell.classList.contains("is-open")) {
+          navShell.classList.remove("is-open");
+          if (navToggle) {
+            navToggle.setAttribute("aria-expanded", "false");
+          }
+        }
+        history.replaceState(null, "", `#${id}`);
+      });
+    });
+
+    const openHashTarget = () => {
+      const id = decodeURIComponent(window.location.hash.replace("#", ""));
+      if (!id) return;
+      const target = document.getElementById(id);
+      if (!target) return;
+      window.setTimeout(() => {
+        openTarget(target, true);
+      }, 60);
+    };
+
+    window.addEventListener("hashchange", openHashTarget);
+    openHashTarget();
+
+    const revealTargets = document.querySelectorAll(".block, .jump-card, .scenario-panel");
+    const revealObserver = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add("is-visible");
+          revealObserver.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.14, rootMargin: "0px 0px -6% 0px" });
+
+    revealTargets.forEach((element) => {
+      element.classList.add("reveal-up");
+      const rect = element.getBoundingClientRect();
+      if (rect.top < window.innerHeight * 0.9) {
+        element.classList.add("is-visible");
+      } else {
+        revealObserver.observe(element);
+      }
+    });
+  </script>
+</body>
+</html>

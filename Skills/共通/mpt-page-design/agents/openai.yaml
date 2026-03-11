@@ -1,0 +1,4 @@
+interface:
+  display_name: "MPTページ設計"
+  short_description: "人がすぐ理解して動ける高MPTページの設計基準と改善手順"
+  default_prompt: "Use $mpt-page-design to redesign this page so it becomes easier to understand and act on."

@@ -1,0 +1,931 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ページタイトルを入れる</title>
+  <style>
+    :root {
+      --page-width: 1220px;
+      --bg: #f3f5f0;
+      --surface: rgba(255, 253, 249, 0.98);
+      --surface-soft: #f7faf5;
+      --surface-warm: #fff5ee;
+      --surface-ok: #eef8f2;
+      --line: #d7ded3;
+      --line-strong: #c3cdc0;
+      --text: #122018;
+      --muted: #617065;
+      --accent: #1e6a47;
+      --accent-soft: #edf6f0;
+      --warn: #b64024;
+      --warn-soft: #fff4ed;
+      --shadow: 0 20px 46px rgba(16, 28, 19, 0.06);
+      --radius-lg: 28px;
+      --radius-md: 22px;
+      --radius-sm: 16px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      padding: 18px 16px 72px;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(30, 106, 71, 0.08), transparent 28%),
+        radial-gradient(circle at top right, rgba(182, 64, 36, 0.05), transparent 24%),
+        linear-gradient(180deg, #f9faf7 0%, var(--bg) 100%);
+      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+      font-size: 16px;
+      line-height: 1.72;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    img {
+      display: block;
+      max-width: 100%;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+      border-bottom: 1px solid rgba(30, 106, 71, 0.22);
+      overflow-wrap: anywhere;
+    }
+
+    p { margin: 0 0 10px; }
+    ul, ol { margin: 0; padding-left: 18px; }
+
+    .page {
+      max-width: var(--page-width);
+      margin: 0 auto;
+    }
+
+    .surface {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow);
+    }
+
+    .nav-shell {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .nav-toggle {
+      justify-self: end;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px 10px 16px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.88);
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      box-shadow: 0 12px 28px rgba(17, 31, 21, 0.08);
+    }
+
+    .nav-toggle::after {
+      content: "+";
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 999px;
+      border: 1px solid var(--line-strong);
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 18px;
+      line-height: 1;
+      font-weight: 700;
+    }
+
+    .nav-shell.is-open .nav-toggle::after {
+      content: "−";
+    }
+
+    .topnav-inner {
+      display: none;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      padding: 10px;
+      border: 1px solid rgba(18, 32, 24, 0.08);
+      border-radius: 24px;
+      background: rgba(255, 255, 255, 0.86);
+      backdrop-filter: blur(18px);
+      box-shadow: 0 18px 40px rgba(17, 31, 21, 0.08);
+    }
+
+    .nav-shell.is-open .topnav-inner {
+      display: grid;
+    }
+
+    .topnav-link {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+      padding: 12px 14px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--text);
+    }
+
+    .nav-index {
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      line-height: 1;
+    }
+
+    .nav-label {
+      font-size: 18px;
+      font-weight: 800;
+      line-height: 1.18;
+    }
+
+    section[id] { scroll-margin-top: 28px; }
+
+    .hero {
+      padding: 42px 34px 30px;
+      margin-bottom: 16px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(249, 251, 246, 0.98)),
+        linear-gradient(135deg, rgba(30, 106, 71, 0.08), rgba(255, 255, 255, 0));
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.12fr) minmax(320px, 392px);
+      gap: 40px;
+      align-items: start;
+    }
+
+    .eyebrow {
+      margin: 0 0 12px;
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0 0 18px;
+      max-inline-size: 14.2ch;
+      font-size: clamp(32px, 4.6vw, 56px);
+      line-height: 1.02;
+      letter-spacing: -0.05em;
+      font-weight: 700;
+    }
+
+    .lead {
+      max-inline-size: 39ch;
+      color: #2c3c32;
+      font-size: 17px;
+      line-height: 1.86;
+    }
+
+    .hero-meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #fbfcfa;
+      color: #4f6155;
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .hero-note {
+      padding: 24px 22px 22px;
+      border: 1px solid rgba(18, 32, 24, 0.08);
+      border-radius: 30px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(246, 249, 244, 0.92)),
+        radial-gradient(circle at top right, rgba(53, 104, 212, 0.07), transparent 42%);
+    }
+
+    .hero-side-head {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .hero-side-title {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.16;
+      letter-spacing: -0.03em;
+      font-weight: 700;
+      color: #1b3026;
+    }
+
+    .hero-side-copy {
+      margin: 0;
+      color: #57675c;
+      font-size: 14px;
+      line-height: 1.72;
+    }
+
+    .quick-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 0;
+    }
+
+    .quick-item {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 14px;
+      align-items: start;
+      padding: 16px 16px 15px;
+      border: 1px solid rgba(18, 32, 24, 0.08);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.86);
+      box-shadow: 0 10px 22px rgba(18, 32, 24, 0.03);
+    }
+
+    .quick-item.is-warn {
+      background: linear-gradient(180deg, rgba(255, 244, 237, 0.96), rgba(255, 249, 245, 0.92));
+      border-color: rgba(182, 64, 36, 0.14);
+    }
+
+    .quick-item.is-ok {
+      background: linear-gradient(180deg, rgba(238, 248, 242, 0.96), rgba(249, 252, 250, 0.92));
+      border-color: rgba(30, 106, 71, 0.14);
+    }
+
+    .quick-step {
+      display: inline-grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      border-radius: 10px;
+      background: rgba(18, 32, 24, 0.05);
+      color: #44564a;
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+    }
+
+    .quick-label {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .quick-item strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 18px;
+      line-height: 1.36;
+      letter-spacing: -0.02em;
+      font-weight: 700;
+      color: #1b3026;
+    }
+
+    .quick-body p {
+      margin-bottom: 0;
+      color: #526258;
+      font-size: 14px;
+      line-height: 1.66;
+    }
+
+    .flow-strip {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 26px;
+      position: relative;
+      align-items: stretch;
+    }
+
+    .flow-strip::before {
+      content: "";
+      position: absolute;
+      left: 14%;
+      right: 14%;
+      top: 26px;
+      height: 2px;
+      background: linear-gradient(90deg, rgba(30, 106, 71, 0.1), rgba(53, 104, 212, 0.14), rgba(30, 106, 71, 0.1));
+      pointer-events: none;
+    }
+
+    .flow-card {
+      display: grid;
+      grid-template-columns: 52px minmax(0, 1fr);
+      gap: 14px;
+      padding: 18px;
+      border: 1px solid rgba(18, 32, 24, 0.08);
+      border-radius: 22px;
+      background: rgba(255, 255, 255, 0.88);
+      box-shadow: 0 12px 28px rgba(18, 32, 24, 0.04);
+      position: relative;
+      z-index: 1;
+    }
+
+    .flow-icon {
+      width: 52px;
+      height: 52px;
+      padding: 8px;
+      border-radius: 16px;
+      border: 1px solid rgba(18, 32, 24, 0.08);
+      background: linear-gradient(180deg, #fffefb, #f7faf5);
+      object-fit: contain;
+    }
+
+    .flow-kicker {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .flow-card strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 16px;
+      line-height: 1.35;
+      font-weight: 700;
+    }
+
+    .flow-card p {
+      margin-bottom: 0;
+      color: #526258;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .stat-card {
+      padding: 20px 18px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(248, 250, 245, 0.92));
+      box-shadow: var(--shadow);
+    }
+
+    .stat-label {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .stat-value {
+      margin: 0;
+      font-size: 36px;
+      line-height: 1;
+      letter-spacing: -0.05em;
+      font-weight: 850;
+    }
+
+    .stat-copy {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .block {
+      padding: 30px 24px;
+      margin-bottom: 16px;
+    }
+
+    .block-head {
+      display: grid;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .block-head-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .section-index {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .section-index::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--accent);
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 30px;
+      line-height: 1.15;
+      letter-spacing: -0.04em;
+    }
+
+    .block-desc {
+      max-inline-size: 58ch;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.72;
+    }
+
+    .block-toggle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 38px;
+      height: 38px;
+      padding: 0;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      color: transparent;
+      font-size: 0;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .block-toggle::after {
+      content: "+";
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border: 1px solid var(--line-strong);
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 18px;
+      line-height: 1;
+      font-weight: 700;
+    }
+
+    .block:not(.is-collapsed) .block-toggle::after {
+      content: "−";
+    }
+
+    .block-content {
+      display: grid;
+      gap: 18px;
+    }
+
+    .block.is-collapsed .block-content {
+      display: none;
+    }
+
+    .card-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .card-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .card-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+    .card {
+      padding: 18px 16px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: #fff;
+    }
+
+    .card strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 17px;
+      line-height: 1.42;
+    }
+
+    .callout {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: #f7faf5;
+    }
+
+    .subtle-note {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    @media (min-width: 960px) {
+      .nav-shell {
+        position: sticky;
+        top: 12px;
+        z-index: 12;
+      }
+
+      .nav-toggle { display: none; }
+      .topnav-inner {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+      }
+      section[id] { scroll-margin-top: 36px; }
+    }
+
+    @media (max-width: 1180px) {
+      .hero-grid,
+      .flow-strip,
+      .stat-grid,
+      .card-grid.three {
+        grid-template-columns: 1fr;
+      }
+
+      .flow-strip::before {
+        display: none;
+      }
+    }
+
+    @media (max-width: 760px) {
+      body { padding: 16px 14px 56px; }
+      .hero,
+      .block { padding: 24px 18px; }
+      h1 {
+        max-inline-size: none;
+        font-size: clamp(30px, 10vw, 40px);
+      }
+      .lead {
+        max-inline-size: none;
+        font-size: 17px;
+      }
+      .topnav-inner,
+      .card-grid.two,
+      .stat-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .flow-strip {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <nav class="nav-shell" aria-label="ページ内ナビ" id="page-nav">
+      <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="section-nav" aria-label="目次">
+        <span id="nav-toggle-label">目次</span>
+      </button>
+      <div class="topnav-inner" id="section-nav">
+        <a class="topnav-link" href="#purpose"><span class="nav-index">01</span><span class="nav-label">目的</span></a>
+        <a class="topnav-link" href="#summary"><span class="nav-index">02</span><span class="nav-label">結論</span></a>
+        <a class="topnav-link" href="#issues"><span class="nav-index">03</span><span class="nav-label">問題点</span></a>
+        <a class="topnav-link" href="#actions"><span class="nav-index">04</span><span class="nav-label">改善</span></a>
+        <a class="topnav-link" href="#method"><span class="nav-index">05</span><span class="nav-label">背景と確認</span></a>
+        <a class="topnav-link" href="#evidence"><span class="nav-index">06</span><span class="nav-label">根拠</span></a>
+      </div>
+    </nav>
+
+    <main>
+      <section class="surface hero">
+        <div class="hero-grid">
+          <div>
+            <p class="eyebrow">共有ページテンプレート</p>
+            <h1>必要な意味を削らず、今日判断できるページにする土台です。</h1>
+            <p class="lead">最初の 1 画面で「何のページか」「何を見ればいいか」「何から直せばいいか」が入る構造を前提にしています。説明より先に判断を置き、詳細は必要な人だけが追えるようにしてください。</p>
+            <div class="hero-meta-row">
+              <span class="pill">目的を最初に固定する</span>
+              <span class="pill">結論を先に見せる</span>
+              <span class="pill">詳細は塊ごとに下げる</span>
+            </div>
+          </div>
+          <aside class="hero-note">
+            <div class="hero-side-head">
+              <p class="eyebrow">今日の判断</p>
+              <p class="hero-side-title">まず見るべきことを、3つに絞ります。</p>
+              <p class="hero-side-copy">最初に「対象」「問題の場所」「直し方」を固定して、詳細はこの下で必要な人だけが追えるようにします。</p>
+            </div>
+            <div class="quick-list">
+              <div class="quick-item is-warn">
+                <span class="quick-step">01</span>
+                <div class="quick-body">
+                  <span class="quick-label">今日の対象</span>
+                  <strong>何件見ればいいかを先に出す</strong>
+                  <p>シナリオ数、メール数、ページ数など、作業単位をひと目で分かるようにします。</p>
+                </div>
+              </div>
+              <div class="quick-item">
+                <span class="quick-step">02</span>
+                <div class="quick-body">
+                  <span class="quick-label">問題の中心</span>
+                  <strong>どこが悪いのかをひとことで言う</strong>
+                  <p>「Mailchimp ではなく UTAGE ページ内」「リンク先が違う」など、本体の問題を明確にします。</p>
+                </div>
+              </div>
+              <div class="quick-item is-ok">
+                <span class="quick-step">03</span>
+                <div class="quick-body">
+                  <span class="quick-label">直し方</span>
+                  <strong>修正の原則を最初に置く</strong>
+                  <p>「正しいリンクを用意する」「直リンクをやめる」など、判断ルールを先に固定します。</p>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+        <div class="flow-strip" aria-label="確認フロー">
+          <article class="flow-card">
+            <img class="flow-icon" src="https://mailchimp.com/release/plums/3a3e92cfc284c7bc.ico" alt="Mailchimp 公式アイコン" width="52" height="52" referrerpolicy="no-referrer">
+            <div>
+              <span class="flow-kicker">起点</span>
+              <strong>サービス1</strong>
+              <p>例: 配信元、入口、判断基準</p>
+            </div>
+          </article>
+          <article class="flow-card">
+            <img class="flow-icon" src="https://utage-system.com/favicon/android-chrome-256x256.png" alt="UTAGE 公式アイコン" width="52" height="52" referrerpolicy="no-referrer">
+            <div>
+              <span class="flow-kicker">原因</span>
+              <strong>サービス2</strong>
+              <p>例: 着地先、問題が起きる場所</p>
+            </div>
+          </article>
+          <article class="flow-card">
+            <img class="flow-icon" src="https://line.me/favicon.ico" alt="LINE 公式アイコン" width="52" height="52" referrerpolicy="no-referrer">
+            <div>
+              <span class="flow-kicker">結果</span>
+              <strong>サービス3</strong>
+              <p>例: 最終着地、影響が出る場所</p>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="stat-grid" aria-label="概要">
+        <article class="stat-card">
+          <p class="stat-label">対象数</p>
+          <p class="stat-value">3</p>
+          <p class="stat-copy">例: 対象シナリオ数、対象パターン数など</p>
+        </article>
+        <article class="stat-card">
+          <p class="stat-label">修正数</p>
+          <p class="stat-value">5</p>
+          <p class="stat-copy">例: 実際に確認するメール数、ページ数など</p>
+        </article>
+        <article class="stat-card">
+          <p class="stat-label">重要日付</p>
+          <p class="stat-value">03-09</p>
+          <p class="stat-copy">例: 確認日、停止日、公開日など</p>
+        </article>
+        <article class="stat-card">
+          <p class="stat-label">判断軸</p>
+          <p class="stat-value">1</p>
+          <p class="stat-copy">何を主対象にするのかをひとつに絞って明示します。</p>
+        </article>
+      </section>
+
+      <section class="surface block" id="purpose">
+        <div class="block-head">
+          <div class="block-head-row">
+            <div>
+              <p class="section-index">01</p>
+              <h2>目的</h2>
+            </div>
+            <button class="block-toggle" type="button" aria-label="目的を開閉"></button>
+          </div>
+          <p class="block-desc">この文書で何を判断し、どこまで進めるかを最初に固定します。</p>
+        </div>
+        <div class="block-content">
+          <div class="callout">
+            <p><strong>ここに、このページの目的を一文で書きます。</strong></p>
+            <p class="subtle-note">読む人が「何のためのページか」を最初に理解できることが最優先です。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="surface block" id="summary">
+        <div class="block-head">
+          <div class="block-head-row">
+            <div>
+              <p class="section-index">02</p>
+              <h2>結論</h2>
+            </div>
+            <button class="block-toggle" type="button" aria-label="結論を開閉"></button>
+          </div>
+          <p class="block-desc">最初に判断に必要な事実だけを置きます。詳細はこの下で追えるようにします。</p>
+        </div>
+        <div class="block-content">
+          <div class="card-grid two">
+            <article class="card">
+              <strong>何が起きているか</strong>
+              <p>最重要の問題を、固有名詞と具体数を含めてひと目で分かるように書きます。</p>
+            </article>
+            <article class="card">
+              <strong>どこまで現役だと言えるか</strong>
+              <p>送信待ち、更新日、現行導線など、今も対象にすべき根拠だけを短く書きます。</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="surface block" id="issues">
+        <div class="block-head">
+          <div class="block-head-row">
+            <div>
+              <p class="section-index">03</p>
+              <h2>具体的な問題点</h2>
+            </div>
+            <button class="block-toggle" type="button" aria-label="具体的な問題点を開閉"></button>
+          </div>
+          <p class="block-desc">どのシナリオの、どのメールの、どのページの、どのリンクが問題かを、そのまま直せる順で並べます。</p>
+        </div>
+        <div class="block-content">
+          <div class="callout">
+            <p><strong>一覧は表より、修正単位のカードで見せます。</strong></p>
+            <p class="subtle-note">メール名、設置場所、UTAGEページ名、問題リンク、同じページで見つかった short.io の順が安定です。</p>
+          </div>
+          <div class="card-grid three">
+            <article class="card"><strong>修正カード 1</strong><p>ここに修正対象を 1 件ずつ置きます。</p></article>
+            <article class="card"><strong>修正カード 2</strong><p>誰が見ても、何をどこで直せばいいかがすぐに分かる書き方にします。</p></article>
+            <article class="card"><strong>修正カード 3</strong><p>シナリオごとにまとめるか、メールごとに切るかは認知負荷が低い方を選びます。</p></article>
+          </div>
+        </div>
+      </section>
+
+      <section class="surface block" id="actions">
+        <div class="block-head">
+          <div class="block-head-row">
+            <div>
+              <p class="section-index">04</p>
+              <h2>具体的な改善アクション</h2>
+            </div>
+            <button class="block-toggle" type="button" aria-label="具体的な改善アクションを開閉"></button>
+          </div>
+          <p class="block-desc">実際に直す順番にしています。ここだけ読めば作業に入れる構造にします。</p>
+        </div>
+        <div class="block-content">
+          <div class="card-grid three">
+            <article class="card"><strong>1. 先に用意する</strong><p>正しいリンク、正本データ、判断材料など、修正前に必要なものを整理します。</p></article>
+            <article class="card"><strong>2. 差し替える</strong><p>直リンクをやめる、URL を入れ替えるなど、変更内容を簡潔に書きます。</p></article>
+            <article class="card"><strong>3. 確認する</strong><p>差し替え後は、実際に押して確認する手順まで必ず含めます。</p></article>
+          </div>
+        </div>
+      </section>
+
+      <section class="surface block start-collapsed" id="method">
+        <div class="block-head">
+          <div class="block-head-row">
+            <div>
+              <p class="section-index">05</p>
+              <h2>問題発見の背景と確認方法</h2>
+            </div>
+            <button class="block-toggle" type="button" aria-label="問題発見の背景と確認方法を開閉"></button>
+          </div>
+          <p class="block-desc">どうやって見つけたかと、自分で再確認する方法を同じ場所にまとめます。</p>
+        </div>
+        <div class="block-content">
+          <div class="callout">
+            <ol>
+              <li>対象を絞る</li>
+              <li>実際のリンク先を開く</li>
+              <li>着地先や差分を確認する</li>
+              <li>根拠として残す</li>
+            </ol>
+          </div>
+        </div>
+      </section>
+
+      <section class="surface block start-collapsed" id="evidence">
+        <div class="block-head">
+          <div class="block-head-row">
+            <div>
+              <p class="section-index">06</p>
+              <h2>問題だと確信した根拠</h2>
+            </div>
+            <button class="block-toggle" type="button" aria-label="問題だと確信した根拠を開閉"></button>
+          </div>
+          <p class="block-desc">今も動いている根拠と、本当に問題だと判断した根拠を分けて置きます。</p>
+        </div>
+        <div class="block-content">
+          <div class="card-grid two">
+            <article class="card"><strong>今も動いている根拠</strong><p>送信待ち人数、直近の更新、現行導線での利用などを書きます。</p></article>
+            <article class="card"><strong>問題だと判断した根拠</strong><p>停止日、誤リンク、実際の着地先などの事実を置きます。</p></article>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const navShell = document.getElementById("page-nav");
+    const navToggle = document.getElementById("nav-toggle");
+    if (navToggle && navShell) {
+      navToggle.addEventListener("click", () => {
+        const isOpen = navShell.classList.toggle("is-open");
+        navToggle.setAttribute("aria-expanded", String(isOpen));
+      });
+    }
+
+    const revealBlock = (target) => {
+      if (target && target.classList && target.classList.contains("block")) {
+        target.classList.remove("is-collapsed");
+      }
+    };
+
+    const openTarget = (target, scroll = true) => {
+      if (!target) return;
+      revealBlock(target);
+      let parent = target.parentElement;
+      while (parent) {
+        if (parent.classList && parent.classList.contains("block")) {
+          parent.classList.remove("is-collapsed");
+        }
+        parent = parent.parentElement;
+      }
+      if (scroll) {
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    };
+
+    document.querySelectorAll(".block").forEach((block) => {
+      const button = block.querySelector(".block-toggle");
+      if (!button) return;
+      if (block.classList.contains("start-collapsed")) {
+        block.classList.add("is-collapsed");
+      }
+      button.addEventListener("click", () => {
+        block.classList.toggle("is-collapsed");
+      });
+    });
+
+    document.querySelectorAll("a[href^='#']").forEach((link) => {
+      link.addEventListener("click", (event) => {
+        const id = link.getAttribute("href").slice(1);
+        const target = document.getElementById(id);
+        if (!target) return;
+        event.preventDefault();
+        openTarget(target);
+        if (navShell && navShell.classList.contains("is-open")) {
+          navShell.classList.remove("is-open");
+          if (navToggle) {
+            navToggle.setAttribute("aria-expanded", "false");
+          }
+        }
+        history.replaceState(null, "", `#${id}`);
+      });
+    });
+
+    const openHashTarget = () => {
+      const id = decodeURIComponent(window.location.hash.replace("#", ""));
+      if (!id) return;
+      const target = document.getElementById(id);
+      if (!target) return;
+      window.setTimeout(() => {
+        openTarget(target, true);
+      }, 60);
+    };
+
+    window.addEventListener("hashchange", openHashTarget);
+    openHashTarget();
+  </script>
+</body>
+</html>

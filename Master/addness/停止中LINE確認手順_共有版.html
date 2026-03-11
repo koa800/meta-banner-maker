@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>停止中LINE誤接続 共有版</title>
+  <style>
+    :root {
+      --bg: #f3f5ef;
+      --card: rgba(255, 253, 248, 0.98);
+      --line: #d7ded1;
+      --text: #172218;
+      --muted: #5f6b61;
+      --accent: #1f6a4a;
+      --accent-soft: #edf6f1;
+      --warn: #b84024;
+      --warn-soft: #fff4ee;
+      --ok-soft: #edf8f1;
+      --shadow: 0 18px 42px rgba(19, 29, 21, 0.06);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 16px 14px 40px;
+      background:
+        radial-gradient(circle at top left, rgba(31, 106, 74, 0.08), transparent 34%),
+        linear-gradient(180deg, #f8f9f5 0%, var(--bg) 100%);
+      color: var(--text);
+      font: 15px/1.72 -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+    }
+    .wrap {
+      max-width: 880px;
+      margin: 0 auto;
+      display: grid;
+      gap: 14px;
+    }
+    .surface {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      box-shadow: var(--shadow);
+    }
+    .hero {
+      padding: 24px 20px;
+    }
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .08em;
+    }
+    h1 {
+      margin: 0 0 12px;
+      font-size: clamp(30px, 8vw, 44px);
+      line-height: 1.08;
+      letter-spacing: -.04em;
+    }
+    h2 {
+      margin: 0 0 10px;
+      font-size: 19px;
+      line-height: 1.3;
+    }
+    p, li { margin: 0 0 10px; }
+    ul { margin: 10px 0 0 18px; padding: 0; }
+    .meta {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 16px;
+    }
+    .pill {
+      display: inline-flex;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #f7f8f4;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .grid {
+      display: grid;
+      gap: 12px;
+    }
+    .panel {
+      padding: 18px 16px;
+      border-radius: 22px;
+      border: 1px solid var(--line);
+      background: #fcfcf9;
+    }
+    .warn-panel {
+      background: var(--warn-soft);
+      border-color: rgba(184, 64, 36, .18);
+    }
+    .ok-panel {
+      background: var(--ok-soft);
+      border-color: rgba(23, 98, 69, .16);
+    }
+    .section {
+      padding: 18px 16px;
+    }
+    .section-note {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .action-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .action-card {
+      padding: 16px;
+      border-radius: 20px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+    .action-card strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 16px;
+      line-height: 1.4;
+    }
+    table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      margin-top: 14px;
+      font-size: 14px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      overflow: hidden;
+      background: #fffdfa;
+    }
+    th, td {
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+      border-right: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    th:last-child, td:last-child { border-right: none; }
+    tbody tr:last-child td { border-bottom: none; }
+    th {
+      background: #f1f5ef;
+      font-size: 13px;
+    }
+    .warn { color: var(--warn); font-weight: 800; }
+    code {
+      padding: 2px 7px;
+      border-radius: 8px;
+      background: var(--accent-soft);
+      color: #214736;
+      font-size: .92em;
+    }
+    @media (max-width: 720px) {
+      table, tbody, tr, td {
+        display: block;
+        width: 100%;
+      }
+      thead { display: none; }
+      table {
+        border: none;
+        background: transparent;
+      }
+      tr {
+        margin-bottom: 10px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: #fffdfa;
+        overflow: hidden;
+      }
+      td {
+        border: none;
+        border-bottom: 1px solid var(--line);
+      }
+      td:last-child { border-bottom: none; }
+      td::before {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+      }
+      td:nth-child(1)::before { content: "シナリオ"; }
+      td:nth-child(2)::before { content: "直近の開始記録"; }
+      td:nth-child(3)::before { content: "いま問題になっている点"; }
+    }
+    @media (min-width: 760px) {
+      body { padding: 22px 20px 56px; font-size: 16px; }
+      .hero { padding: 30px 28px; }
+      .section { padding: 22px 22px; }
+      .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="surface hero">
+      <p class="eyebrow">LINE共有用の要約版</p>
+      <h1>最近まで送信実績が確認できた導線の一部で、停止中のLINEへ飛ぶリンクが残っています。</h1>
+      <p><span class="warn">問題の本体は Mailchimp ではなく、その先の UTAGE ページ内リンクです。</span> メールから飛んだ先のページで、停止中の「みかみ」（ID: <code>@804mrsmd</code>）へ遷移してしまう箇所が残っています。</p>
+      <p class="meta">最終更新: 2026-03-08</p>
+      <div class="pill-row">
+        <span class="pill">対象は2025年12月から2026年1月に送信実績が確認できたメールのみ</span>
+        <span class="pill">一時停止中メールは対象外</span>
+        <span class="pill">修正は short.io 前提</span>
+      </div>
+    </section>
+
+    <section class="grid two">
+      <div class="surface panel warn-panel">
+        <h2>今回の結論</h2>
+        <p><span class="warn">AI / SNS の個別3日間シナリオの一部メールから、停止中の「みかみ」へ飛ぶ導線が残っています。</span></p>
+        <p>少なくとも 2024年9月17日以降は誤接続です。Lステップの停止中一覧で、このアカウントの利用停止日が 2024年9月17日になっているためです。</p>
+      </div>
+      <div class="surface panel ok-panel">
+        <h2>どこまで送信実績を確認できたか</h2>
+        <p>個別3日間シナリオ自体では、2025年12月23日から 2026年1月14日までの開始記録と送信記録を確認しています。3月に送られた記録までは、今回の確認範囲では取れていません。</p>
+        <p>一方で、入口の 7桁オプトイン本線は 2026年2月3日まで開始記録があり、ファネル全体は2月時点でも動いていました。</p>
+      </div>
+    </section>
+
+    <section class="surface section">
+      <h2>影響範囲</h2>
+      <p class="section-note">この一覧は、メール自体が稼働中で、直近の開始記録が 2025年12月以降に確認できたものだけを残しています。</p>
+      <table>
+        <thead>
+          <tr>
+            <th>シナリオ</th>
+            <th>直近の開始記録</th>
+            <th>いま問題になっている点</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>AI Facebook 個別3日間 2025-10-15</td>
+            <td>2026-01-03</td>
+            <td>メールの画像・ボタンから飛ぶ UTAGE ページ内に、停止中LINE直リンクが残っている</td>
+          </tr>
+          <tr>
+            <td>AI X 個別3日間</td>
+            <td>2026-01-03</td>
+            <td>メールの画像・ボタンから飛ぶ UTAGE ページ内に、停止中LINE直リンクが残っている</td>
+          </tr>
+          <tr>
+            <td>AI TikTok 個別3日間</td>
+            <td>2026-01-03</td>
+            <td>メールの画像・ボタンから飛ぶ UTAGE ページ内に、停止中LINE直リンクが残っている</td>
+          </tr>
+          <tr>
+            <td>SNS Facebook 個別3日間 2025-10-15</td>
+            <td>2026-01-14</td>
+            <td>メールの画像・ボタンから飛ぶ UTAGE ページ内に、停止中LINE直リンクが残っている</td>
+          </tr>
+          <tr>
+            <td>SNS Facebook 個別3日間（旧名称）</td>
+            <td>2026-01-03</td>
+            <td>メールの画像・ボタンから飛ぶ UTAGE ページ内に、停止中LINE直リンクが残っている</td>
+          </tr>
+          <tr>
+            <td>SNS X 個別3日間 2025-10-15</td>
+            <td>2025-12-23</td>
+            <td>メールの画像・ボタンから飛ぶ UTAGE ページ内に、停止中LINE直リンクが残っている</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="surface section">
+      <h2>具体的な改善アクション</h2>
+      <div class="action-list">
+        <div class="action-card">
+          <strong>正しい遷移先リンクを用意する</strong>
+          <p>差し替え先は、LINE名の印象ではなく、Lステップで実際に付くタグ、入るシナリオ、予約導線を見て確定します。</p>
+        </div>
+        <div class="action-card">
+          <strong>LINEリンクを直張りしている場合は short.io を使う</strong>
+          <p>UTAGE ページ内の停止中LINE直リンクを、正しい遷移先を持つ short.io に置き換えます。</p>
+        </div>
+        <div class="action-card">
+          <strong>差し替え後に実際に押して確認する</strong>
+          <p>想定どおりのLINEに着地するか、短縮リンクの向き先が正しいか、古い直リンクが残っていないかを確認します。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="surface section">
+      <h2>詳細版で見られること</h2>
+      <ul>
+        <li>どの Mailchimp シナリオのどのメールが対象か</li>
+        <li>メール内のどこに UTAGE のURLが置かれているか（画像 / ボタン / テキスト）</li>
+        <li>その UTAGE ページの中で、どのLINEリンクが問題か</li>
+        <li>ページごとに、停止中LINE直リンクと short.io がどう並んでいるか</li>
+      </ul>
+      <p class="section-note">詳細版ファイル名: <code>停止中LINE確認手順.html</code></p>
+    </section>
+  </div>
+</body>
+</html>

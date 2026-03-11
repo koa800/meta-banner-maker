@@ -1,6 +1,6 @@
 # addness レイヤー
 
-最終更新: 2026-03-10
+最終更新: 2026-03-11
 
 `Master/addness/` は、Addness 事業の実務 knowledge をまとめる詳細層です。4層で見ると主に `knowledge` に属します。
 
@@ -73,9 +73,9 @@
 
 ### 現在の自己評価
 
-- Lステップ: `9.6 / 10`
-- UTAGE: `8.8 / 10`
-- Mailchimp: `9.0 / 10`
+- Lステップ: `9.97 / 10`
+- UTAGE: `9.7 / 10`
+- Mailchimp: `9.75 / 10`
 - short.io: `10 / 10`
 - 全体理解: `9.0〜9.2 / 10`
 
@@ -100,11 +100,46 @@
     - タグ管理
     - 回答フォーム
     - 一斉配信
-  - 役割理解は `スキルプラス【サポートLINE】` まで current 反映済み
+  - `スキルプラス【サポートLINE】` で
+    - 流入経路
+    - タグ管理
+    - 回答フォーム
+    - 一斉配信
+    - リッチメニュー
+    - クロス分析
+  - 役割理解だけでなく、主要画面の exact UI も `スキルプラス【サポートLINE】` まで current 反映済み
+  - `アクション管理` の create modal で
+    - `テンプレート送信`
+    - `タグ操作`
+    - `シナリオ操作`
+    - `メニュー操作`
+    - `イベント予約操作`
+    の具体 field まで確認済み
+  - template editor 側では
+    - `URL訪問時アクションを設定する場合は、サイト設定ページから設定`
+    という current の責務分離も確認済み
+  - シナリオ配信は
+    - 一覧 = `/line/content/group?group={group_id}`
+    - editor = `/line/content/{content_group_id}?group={group_id}`
+    の current route を確認済み
+  - シナリオ editor では row 単位に
+    - `編集 / 挿入 / コピー / プレビュー / 別窓 / テスト / 削除`
+    を使う構造まで確認済み
+  - クロス分析は `作成 -> 再読込 -> 削除` まで live テスト済み
+    - `POST /line/board/edit`
+    - `GET /api/board/data/{id}`
+    - `DELETE /api/boards/{id}`
+    まで実確認済み
+  - リッチメニューは current edit 画面の内部項目まで fixed
+    - `タイトル / フォルダ / 初期状態 / 各ボタンの URL・テンプレ・action・回答フォーム・その他`
+    - `一覧へ戻る / 保存`
+    まで確認済み
+  - ログイン補助も固定済み
+    - `python3 System/scripts/lstep_login_helper.py --target <開きたいURL>`
+    - ログイン済みならそのまま target を開く
+    - 未ログインなら `System/credentials/lstep.json` から自動入力する
+    - reCAPTCHA の画像 challenge が出た場合だけ手動確認が必要
 - 残差
-  - `スキルプラス【サポートLINE】` で same exact 操作を固める
-  - リッチメニュー editor 内部を1本固定する
-  - クロス分析の保存後再利用まで通す
   - hidden / legacy / 命名規則違反の判断辞書を増やす
 
 ### UTAGE
@@ -123,11 +158,56 @@
 - current で理解できていること
   - Mailchimp がメール本線
   - UTAGE はページ / 会員サイト / 商品 / action の基盤
+  - `【センサーズ関連】` は過去のメインファネル群として重要
   - `product -> detail -> action -> 会員サイト解放` の representative path は実値で確認済み
+  - representative funnel の `データ(合算) / データ(日別) / 登録経路` も live で確認済み
+    - 例: `AI：メインファネル_Meta広告`
+    - funnel id: `TXUOxBYkYr9e`
+    - `.../data`
+    - `.../data/daily`
+    - `.../tracking`
   - representative page も current 実装を複数本見ている
+  - `登録経路` は「広告IDだから分ける」ではなく、「どこから来たかを知りたい時に分ける」分析軸として理解している
+  - `登録経路` の create route と field も確認済み
+    - `.../tracking/create`
+    - `グループ / 管理名称 / ファネルステップ / ページ`
+  - current page editor の settings UI も live で固定できた
+    - `基本情報`
+    - `デザイン`
+    - `高速表示モード`
+    - `メタデータ・検索`
+    - `カスタムJS`
+    - `カスタムCSS`
+  - `カスタムJS` は
+    - `headタグの最後`
+    - `bodyタグの最初`
+    - `bodyタグの最後`
+    の3箇所
+  - `高速表示モード` は current UI 上では `is_high_speed_mode` の切替のみ visible
+    で、`first_view_css` は独立 field としては見えていない
+  - `utage_login_helper.py` は edit 画面でも自動ログイン判定できるように補強済み
+  - runtime の Vue app では `#app.__vue_app__._container._vnode.component.data.page.first_view_css`
+    に `first_view_css` 実値が載っていることを確認済み
+  - edit HTML には current save endpoint として
+    - `/update/basic`
+    - `/update/pcwidth`
+    - `/update/meta`
+    - `/update/js`
+    - `/update/css`
+    - `/update/speed`
+    - `/update/ads`
+    - `/update/deadline`
+    - `/update/onetimeoffer`
+    - `/update/password`
+    が埋まっていることも確認済み
+  - ログイン補助も固定済み
+    - `python3 System/scripts/utage_login_helper.py --target <開きたいURL>`
+  - 商品販売設定の current 標準手順も live route まで固定できた
+    - `商品追加 = /product/create`
+    - `detail 追加 = /product/{product_id}/detail/create`
+    - `action 編集 = /action/{action_id}/edit`
+    - `bundle 編集 = /site/{site_id}/bundle/{bundle_id}/edit`
 - 残差
-  - `first_view_css` の保存経路の最終断定
-  - 新規案件を `ページ -> 商品 -> detail -> action -> 会員サイト解放` まで手順化
   - code 領域の current 改修パターンをさらに型化
 
 ### Mailchimp
@@ -165,11 +245,28 @@
     で本文 HTML を取得し、UTAGE / short.io / 外部リンクを抜く
   - `GET /reports/{campaign_id}/click-details`
     で実際に押されている URL を読む
-- current を誤読しない基準も固まった
+  - current のメールは short.io を介して UTAGE ページに送る前提が多いので、`click-details -> short.io -> UTAGE data` を 1 本で見るのが次の標準
+- current のコンテンツ意図も読み始めている
+  - 本線 7桁オプトインは `人物ストーリー / authority / open loop` で教育する
+  - 途中の `コンサル / 本気オファー` は距離を縮めて直CTAへ寄せる
+  - `スキルプラスフリープラン` は無料オファーで口を広げる横展開
+  - `個別3日間` は `あなた専用 / 反響 / 締切` の順で面談系CTAに押し込む
+  - 本文まで確認できた representative 例
+    - AI本線1通目: `東大生社長みかみがAI未経験から年収2億ベースで稼ぐまでの軌跡`
+    - AI直オファー: `【緊急告知！！】直接コンサルしましょうか？笑`
+    - SNS本線1通目: `元東大生社長みかみが年商2億稼ぐまでの軌跡`
+    - SNS直オファー: `間も無く締め切ります`
+    - SNS個別3日間: `【今だけ無料！】"あなた専用" SNS運用 1st副業スタートプログラム開催！！`
+  - current を誤読しない基準も固まった
   - `journey が sending` でも、`step が paused` なら current メール扱いしない
   - `last_started_at` だけでは current 判定しない
   - `queue_count > 0` を最優先で見る
   - `copy` が付くものでも、queue が残っていれば current として扱う
+  - current 実例として
+    - `スキルプラスフリープラン1通目 (copy 03) = queue 191 / sent 31,173`
+    - `センサーズFB広告_本気コンサルオファー (copy 05) = queue 1 / sent 17,987`
+    - `AIカレッジFB広告_個別3日間シナリオ_3日目 (copy 02) = queue 1 / sent 28,146`
+    を確認済み
 - current の代表例
   - `UTAGE_AIカレッジ_Facebook_7桁オプトイン2025-10-15`
     - `started 31,902 / in_progress 4,504 / completed 27,394`
@@ -194,16 +291,61 @@
   - 例: AI Facebook の `スキルプラスフリープラン1通目 (copy 03)` は本文内に `school.addness.co.jp/p/TzYRwepfqzFq?...` を持つ
   - 例: click report では `skill.addness.co.jp/ytad-ai2A` のような short.io が実際に押されている
 - live UI の exact 画面も確認済み
-  - ログインは `login.mailchimp.com` -> `us5.admin.mailchimp.com/login/tfa` -> `Home`
+  - ログインは `login.mailchimp.com` -> `login/unifiedLoginPost` -> `us5.admin.mailchimp.com/login/verify`
+  - `python3 System/scripts/mailchimp_login_helper.py --target <開きたいURL>` で email / password 自動入力までは固定済み
+  - 2段階認証は `Send code via SMS` -> LINE の `Mailchimp認証` グループでコード確認 -> verify 画面へ入力 の順
   - Automations 一覧には `Build from scratch` `Choose flow template` `Search by name` `Status` `Objective` `Sort by: Last created` がある
   - `Build from scratch` から `customer-journey/create-new-journey/` に入り、`Name flow` `Audience` `Choose a trigger` の順で新規作成を始める
+  - `Choose a trigger` を押した時点で `builder?id={id}&stepModal=trigger` に変わり draft を作るので、live テスト時は同セッションで `Actions -> Delete -> Delete flow` まで戻す
   - Journey 名クリックで `customer-journey/builder?id={id}` に入る
   - builder 上部には `Send Test Emails` `View Report` `Pause & Edit` `Save and close flow` がある
   - builder 本体では `Contact tagged ...` `Filter who can enter` `Send email ...` `Contact exits` を map 上で管理し、右パネルは `Data / Settings` で切り替える
+  - `Tag added` trigger の current 画面では `Set a tag` `Filter who can enter` `Save Trigger` が出る
+  - `View Report` は `customer-journey/report?id={id}` に入り
+    - `Days active`
+    - `Total started`
+    - `Total in progress`
+    - `Total completed`
+    - `Open rate`
+    - `Click rate`
+    - `Unsubscribe rate`
+    - `Delivery rate`
+    を flow 単位で読む
+  - tag は英語で作る前提に寄せる
+  - 基本構造は `media_funnel_event`
+  - Journey は `エバーグリーン用`
+  - Campaign は `1回きりのセグメント配信用`
+    として使い分ける前提
+  - representative campaign
+    - `3/11 AIキャリアセミナーPR_2通目` = `Subscribed` 全体へ 255,250 通
+    - `3/10 セミナーPR_3通目 (フリープラン)` = `freeplan_Buy` tagged contacts に 5,044 通
+  - API でも `regular campaign` の create / content / delete が通ることを確認済み
+    - `ZZ_TEST_DELETE_20260311` を作成し、本文設定後に削除して最終 `404` を確認
+  - Campaign Manager の current route は `/campaigns/`
+  - current の create 入口は `Campaign Manager -> Create -> campaigns/#/create-campaign`
+  - row 上では `Regular email / Automation flow / Draft / Sent / Segment / Exclude` まで visible
 - 残差
-  - Journey step の trigger 選択から save までを live で通していない
   - メール本文 / 件名 / 分岐条件 / queue の読み方を標準手順化していない
   - current 本線と legacy copy を完全辞書化していない
+  - `送信 -> 開封 -> クリック -> UTAGE訪問 -> コンバージョン` を 1 本で可視化する動線データ基盤はまだ未構築
+
+### 動線データ基盤
+
+- 目的
+  - 分析用の可視化
+  - マーケティング施策立案に直結するデータ収集
+- 最初に追う主要変数
+  - CPA
+  - 個別相談数
+  - 営業成約率
+  - 解約率
+- そのために必要な導線データ
+  - メール送信数
+  - 開封数 / 開封率
+  - リンククリック数 / クリック率
+  - UTAGE 訪問者数
+  - コンバージョン数
+- このレイヤーは CDP とは別で設計する前提
 
 ### short.io
 
@@ -294,9 +436,13 @@
   - visible タブは `共通 / Meta広告 / TikTok広告 / YouTube広告 / 𝕏広告 / LINE広告 / Yahoo広告 / リスティング広告 / アフィリエイト広告 / YouTube / 𝕏 / Instagram / Threads / TikTok / 一般検索 / 広報 / オフライン / その他`
   - `01_全体台帳` の列は `ファネル名 / 集客媒体 / 設置場所 / リンクタイトル / リンクURL / 遷移先名 / 遷移先リンク / 更新日 / 状態`
   - visible タブの列は `ファネル名 / 設置場所 / リンクタイトル / リンクURL / 遷移先名 / 遷移先リンク / 更新日 / 状態`
-  - `リンクURL` と `遷移先リンク` は plain text ではなく `HYPERLINK(...)` 数式で入れているため、そのままクリックできる
+  - `リンクURL` と `遷移先リンク` は plain text ではなく、セル自体にリンク属性を持たせているため、そのままクリックできる
+  - 更新順は `値を書き込む -> 体裁を整える -> リンク属性を付ける`。先にリンク属性を付けると、書式再適用で消える
   - `共通導線` の行は `共通` タブへ寄せる
   - 各タブ内の並び順は `センサーズ -> AI -> アドプロ -> スキルプラス -> ライトプラン -> 書籍 -> その他`
+  - `リンクエラー用` の行は `広報` ではなく `その他` タブへ寄せる
+  - visible タブでは、連続する同一 `ファネル名` を A列で縦結合する
+  - visible タブの罫線は全範囲で統一する
   - old tab の `飛び先URL` は `遷移先リンク` に統合し、`最新（YYYY/MM/DD）` は行単位の `更新日` に正規化した
   - `未作成` の行は master / visible ともに削除した
   - 体裁は `スプレッドシート設計ルール` に合わせて、ヘッダー色、フィルタ、凍結、交互色、列幅、`切り詰める(CLIP)` を再適用した
