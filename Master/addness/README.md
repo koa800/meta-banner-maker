@@ -11,6 +11,17 @@
 - 導線、Lステップ、広告、リサーチの事実を持つ
 - 秘書の自律ワークが参照する運用 knowledge を持つ
 
+## Addness 操作基盤の現在方針
+
+UI は頻繁に変わるので、`操作できる` の定義を UI 手順暗記に置かない。
+
+- 読み取りは Addness API を正本にする
+- 書き込みは公開 API があればそれを使う
+- 公開 API がなければ goal ページの server action を再生する
+- UI クリックは endpoint 発見と fallback の位置づけに留める
+- 甲原海人の `activity-logs/by-member` を見て、よく使う操作から CLI と秘書ツールへ実装する
+- 不可逆削除は既定の自動化対象にしない
+
 ## 主なファイル
 
 - `goal-tree.md`
@@ -27,6 +38,8 @@
   外部調査・市場観察
 - `ui_operations.md`
   Addness UI の操作 knowledge
+- `System/hinata/addness_cli.py`
+  Codex / 秘書が使う Addness 操作 CLI。検索、詳細取得、親変更、コメント、行動ログ集計の入口
 - `proactive_output/`
   legacy の成果物出力先
 
@@ -73,9 +86,9 @@
 
 ### 現在の自己評価
 
-- Lステップ: `9.99 / 10`
-- UTAGE: `9.85 / 10`
-- Mailchimp: `9.9 / 10`
+- Lステップ: `10 / 10 にかなり近い`
+- UTAGE: `9.9 / 10`
+- Mailchimp: `9.93 / 10`
 - short.io: `10 / 10`
 - 全体理解: `9.0〜9.2 / 10`
 
@@ -125,6 +138,19 @@
   - シナリオ editor では row 単位に
     - `編集 / 挿入 / コピー / プレビュー / 別窓 / テスト / 削除`
     を使う構造まで確認済み
+  - step 編集 modal では
+    - `配信タイミング`
+    - `pause`
+    - `送信先を絞り込む`
+    - `テンプレート詳細`
+    - `アクションを設定しない / する`
+    が 1 画面に並ぶ current 構造まで確認済み
+  - つまり Lステップ の step は
+    - いつ送るか
+    - 誰に送るか
+    - 何を送るか
+    - 送信後に何を起こすか
+    を同時に決める battlefield と理解している
   - クロス分析は `作成 -> 再読込 -> 削除` まで live テスト済み
     - `POST /line/board/edit`
     - `GET /api/board/data/{id}`
@@ -214,8 +240,12 @@
     - `js_body = 遅延でよい補助処理`
     - `css = page 全体補正`
     - `first_view_css = 高速表示レイヤーの FV 補正`
+  - `【センサーズ関連】` の representative public page でも
+    - `15分OTO は content page`
+    - `ロードマップ作成会は visible CTA に停止中 LIFF が残る`
+    という差分まで current 反映済み
 - 残差
-  - representative page をもう少し増やし、code 領域の good / bad 事例を厚くする
+  - representative page をさらに増やし、code 領域の good / bad 事例を厚くする
   - `first_view_css` を触るべきケースと触るべきでないケースの具体例をさらに増やす
 
 ### Mailchimp
@@ -257,6 +287,14 @@
 - current のコンテンツ意図も読み始めている
   - 本線 7桁オプトインは `人物ストーリー / authority / open loop` で教育する
   - 途中の `コンサル / 本気オファー` は距離を縮めて直CTAへ寄せる
+  - `スキルプラスフリープラン` は無料オファーで横展開する
+  - `個別3日間 / プロンプト企画3日目 / 本気コンサルRe` は締切と実例で最後の一押しをする
+  - つまり current メールは
+    - `本線ストーリー型`
+    - `直オファー型`
+    - `横展開オファー型`
+    - `短期締切ブースト型`
+    の 4 型で読むとズレにくい
   - `スキルプラスフリープラン` は無料オファーで口を広げる横展開
   - `個別3日間` は `あなた専用 / 反響 / 締切` の順で面談系CTAに押し込む
   - 本文まで確認できた representative 例

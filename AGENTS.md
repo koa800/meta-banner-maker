@@ -181,6 +181,19 @@
 - `仮説`: 次回の検証前提で置く作業仮説
 - `仮説` の段階では `Master/rules/` に上げず、`Master/output/` または `Master/knowledge/` に残す
 
+## URL設置の検証ルール
+
+**UTAGE や Mailchimp で URL を設置したら、見た目の文字列ではなく、実際に押した時の遷移先まで確認する。**
+
+- ハイパーリンクは、表示文字列と内部 URL がズレる事故がある前提で扱う
+- `見えている URL` と `実際に埋め込まれている URL` は別物になりうる
+- URL を新規設置・差し替え・複製した時は、必ず次を行う
+  - 実際にリンクをクリックする
+  - 意図した URL に飛ぶか確認する
+  - short.io を使う導線なら、short.io 経由の最終遷移先まで確認する
+- 表示文字列だけ見て `正しい` と判断しない
+- 特に Mailchimp 本文、UTAGE ボタン画像、UTAGE テキストリンク、ハイパーリンク付き文言では必須
+
 ## 前提更新ルール
 
 **`前提` レイヤーの意味変更は自動でやらない。入口整理や同期は自動でよいが、定義変更は確認を入れる。**
@@ -367,8 +380,20 @@ ai "このバグ直して"             # → まずCodexで進める
 ai codex "デプロイして"         # → Codexで進める
 ai claude "Looker Studioを確認して" # → ブラウザ操作が必要なときだけ
 ai switch                      # → 必要になった地点で切り替える
+ai sessions 導線              # → 保存済みセッションを検索
+ai restore 導線ツール         # → キーワード一致のセッションを再開
+ai restore --fork 019c...     # → セッションを分岐復元
+ai pin 導線ツール 019c...     # → 復元用の別名を保存
+ai pins                       # → 保存済み別名を表示
 ai                             # → デフォルトでCodex起動
 ```
+
+- セッション復元が必要になったら、まず `ai sessions [キーワード]` で候補を見る
+- 一致が1件なら `ai restore <session_id|キーワード>` でそのまま再開できる
+- 元の会話を壊したくない時は `ai restore --fork <session_id|キーワード>` を使う
+- よく使うセッションは `ai pin <別名> <session_id|キーワード>` で固定し、以後は `ai restore <別名>` で戻る
+- 別名の正本は `Master/output/session_aliases.json` に置く
+- 強制終了時も `~/.codex/sessions/` や `~/.claude/history.jsonl` を手で掘る前に、まずこの入口を使う
 
 ### Cursor ターミナル命名
 
