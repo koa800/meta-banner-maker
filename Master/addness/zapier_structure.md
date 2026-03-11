@@ -107,6 +107,26 @@
 - representative tag
   - `metaad_himitsu_optin`
 
+#### current 実値で確認できた representative
+
+- `Meta広告_秘密の部屋_オプトイン`
+  - step 1
+    - app: `Webhooks by Zapier`
+    - action: `Catch Hook`
+  - step 2
+    - app: `Mailchimp`
+    - action: `Add/Update Subscriber`
+    - audience: `アドネス株式会社`
+    - member_status: `subscribed`
+    - update_existing: `true`
+    - tag: `metaad_himitsu_optin`
+    - email mapping: webhook payload の `メールアドレス`
+- つまり current のオプトイン relay も
+  - webhook で event を受け
+  - email を引き
+  - audience に optin tag を付ける
+  という 2 step 構造
+
 ### pattern 2: 購入 relay
 
 - Zap 名
