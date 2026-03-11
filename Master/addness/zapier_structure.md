@@ -1,6 +1,6 @@
 # Zapier 構造と作法
 
-最終更新: 2026-03-11
+最終更新: 2026-03-12
 
 ## この文書の役割
 
@@ -88,6 +88,23 @@
 - create 入口: `https://zapier.com/webintent/create-zap?...`
 - create 直後は `https://zapier.com/editor?attempt_id=...` の untitled builder に入る
 - current の代表型は `Webhooks by Zapier -> Mailchimp Add/Update Subscriber`
+
+## Addness の運用ルール
+
+- 今後、Addness 株式会社の業務で新しく作る Zapier 資産は、原則 `甲原` フォルダ配下に置く
+- 対象は
+  - Zap
+  - 関連する subfolder
+  - 今後増える Addness 専用の relay 資産
+- 既存の current Zap は、動いているものを無理に移動しない
+- つまり運用方針は
+  - 既存 = そのまま読む
+  - 新規 = `甲原` に置く
+ で固定する
+- 置き場所のルールを先に固定する理由は
+  - Addness 業務の relay を他用途と混ぜない
+  - 後から見た時に `これは Addness 用の Zapier 資産か` を folder で即判定できる
+  - 保守や棚卸しのコストを下げる
 
 2026-03-11 時点で live 一覧上は `263 Zap` があり、本文テキストから見える current の主戦場は以下。
 
