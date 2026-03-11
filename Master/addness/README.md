@@ -73,9 +73,9 @@
 
 ### 現在の自己評価
 
-- Lステップ: `9.97 / 10`
-- UTAGE: `9.7 / 10`
-- Mailchimp: `9.75 / 10`
+- Lステップ: `9.98 / 10`
+- UTAGE: `9.8 / 10`
+- Mailchimp: `9.85 / 10`
 - short.io: `10 / 10`
 - 全体理解: `9.0〜9.2 / 10`
 
@@ -207,8 +207,14 @@
     - `detail 追加 = /product/{product_id}/detail/create`
     - `action 編集 = /action/{action_id}/edit`
     - `bundle 編集 = /site/{site_id}/bundle/{bundle_id}/edit`
+  - code 領域の current 使い分けもかなり固定できた
+    - `js_head = 計測タグ`
+    - `js_body_top = 自動遷移 / 初回即時演出`
+    - `js_body = 遅延でよい補助処理`
+    - `css = page 全体補正`
+    - `first_view_css = 高速表示レイヤーの FV 補正`
 - 残差
-  - code 領域の current 改修パターンをさらに型化
+  - representative page をもう少し増やし、code 領域の good / bad 事例を厚くする
 
 ### Mailchimp
 
@@ -319,14 +325,18 @@
   - representative campaign
     - `3/11 AIキャリアセミナーPR_2通目` = `Subscribed` 全体へ 255,250 通
     - `3/10 セミナーPR_3通目 (フリープラン)` = `freeplan_Buy` tagged contacts に 5,044 通
+  - current / legacy 判定辞書もかなり固定できた
+    - `active + queue > 0 = current`
+    - `active + queue = 0 + sentあり = completed but still valid`
+    - `paused + sentあり = historical evidence`
+    - `paused + queue 0 + sent 0 = draft / legacy candidate`
   - API でも `regular campaign` の create / content / delete が通ることを確認済み
     - `ZZ_TEST_DELETE_20260311` を作成し、本文設定後に削除して最終 `404` を確認
   - Campaign Manager の current route は `/campaigns/`
   - current の create 入口は `Campaign Manager -> Create -> campaigns/#/create-campaign`
   - row 上では `Regular email / Automation flow / Draft / Sent / Segment / Exclude` まで visible
 - 残差
-  - メール本文 / 件名 / 分岐条件 / queue の読み方を標準手順化していない
-  - current 本線と legacy copy を完全辞書化していない
+  - current 本線と legacy copy の辞書をさらに厚くする
   - `送信 -> 開封 -> クリック -> UTAGE訪問 -> コンバージョン` を 1 本で可視化する動線データ基盤はまだ未構築
 
 ### 動線データ基盤
