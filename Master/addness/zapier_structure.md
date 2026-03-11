@@ -500,6 +500,13 @@
   - header: `Untitled Zap`
   - status: `Draft`
   - editor 内の `zap.id`: `sandbox`
+- 右上の `Zap details` を開くと、少なくとも
+  - `Folder`
+  - current value: `Home`
+  - `Timezone`
+  - `Create a template`
+  が見える
+- つまり `folder` は step 設定ではなく、`Zap details` 側の管理項目として扱う
 - つまり create 入口を開いた時点では、published relay ができたのではなく、`sandbox draft builder が始まった状態` と読む
 - つまり Zapier の新規 relay は
   - 先に event を決める
