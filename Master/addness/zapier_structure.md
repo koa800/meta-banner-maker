@@ -164,6 +164,21 @@
 - `サンクスメール relay` 系
   - `みかみの秘密合宿_サンクスメール`
 
+2026-03-12 に visible current 25 本を一括で再確認したところ、step family は次の分布でした。
+
+- `Webhooks by Zapier -> Mailchimp Add/Update Subscriber`
+  - 22 本
+  - app version 違いを含む
+    - `WebHookCLIAPI@1.1.0 -> MailchimpCLIAPI@1.15.1`: 17 本
+    - `WebHookCLIAPI@1.0.37 -> MailchimpCLIAPI@1.15.1`: 2 本
+    - `WebHookCLIAPI@1.1.1 -> MailchimpCLIAPI@1.15.1`: 2 本
+    - `WebHookCLIAPI@1.0.29 -> MailchimpCLIAPI@1.15.1`: 1 本
+- `Google Sheets Updated Spreadsheet Row -> Webhooks by Zapier POST`
+  - 3 本
+  - すべて SMS 例外 relay
+
+つまり Addness の current Zapier は、`webhook で business event を受けて Mailchimp tag に変換する` のが圧倒的な主戦場で、`Google Sheets -> external SMS API` は例外 family と見てよい。
+
 ## representative pattern
 
 ### pattern 1: オプトイン relay
@@ -478,10 +493,31 @@
   - `Trigger`
   - `Action`
   の 2 step が見え、ここから app と event を選ぶ
+- create 入口の URL は
+  - `https://zapier.com/webintent/create-zap?useCase=from-scratch`
+- この URL を開いた直後の current 状態は
+  - title: `New Zap | Zapier`
+  - header: `Untitled Zap`
+  - status: `Draft`
+  - editor 内の `zap.id`: `sandbox`
+- つまり create 入口を開いた時点では、published relay ができたのではなく、`sandbox draft builder が始まった状態` と読む
 - つまり Zapier の新規 relay は
   - 先に event を決める
   - 次に relay 先 action を決める
   の順で組む
+
+### bulk family を一気に見る helper
+
+- `python3 System/scripts/zapier_family_snapshot.py --limit 25`
+- visible current の row を開いて
+  - `signature`
+  - `件数`
+  - `主要 param key`
+  を先に掴む
+- 使いどころ
+  - `今の主戦場が何系か`
+  - `例外 family がどれだけあるか`
+  を editor を 1 本ずつ開く前に判断したい時
 
 ## current の判断基準
 
