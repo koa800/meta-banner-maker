@@ -89,6 +89,33 @@
 - create 直後は `https://zapier.com/editor?attempt_id=...` の untitled builder に入る
 - current の代表型は `Webhooks by Zapier -> Mailchimp Add/Update Subscriber`
 
+### live 一覧でまず見る場所
+
+- 一覧の主要列は
+  - `Name`
+  - `Apps`
+  - `Location`
+  - `Last modified`
+  - `Status`
+  - `Owner`
+  です
+- 2026-03-12 時点の visible current には、少なくとも次が並んでいました
+  - `AI個別_SMS送信`
+  - `AIコンテンツ完全習得Live_購入時`
+  - `AICAN_月額_購入時`
+  - `みかみの秘密合宿_サンクスメール`
+  - `X_AI_3days合宿購入時39SMS`
+  - `共通_秘密の部屋_年間プラン購入`
+  - `共通_秘密の部屋_月額プラン購入_導線内用`
+  - `共通_秘密の部屋_月額プラン購入_OTO用`
+  - `X広告_秘密の部屋_オプトイン`
+  - `Meta広告_秘密の部屋_オプトイン`
+- つまり current 一覧では
+  - `Name` で event family を見る
+  - `Location` と `Owner` で置き場と責任範囲を見る
+  - `Last modified` と `Status` で current / legacy を判断する
+  の順で読むと速い
+
 ## Addness の運用ルール
 
 - 今後、Addness 株式会社の業務で新しく作る Zapier 資産は、原則 `甲原` フォルダ配下に置く
@@ -389,6 +416,12 @@
 - `python3 System/scripts/zapier_editor_snapshot.py <zap_id>`
 - current Chrome CDP セッションから editor を開き、`__NEXT_DATA__` の Zap 定義を安全に抜く
 - secret っぽい key は `[REDACTED]` に置き換える
+- `python3 System/scripts/zapier_login_helper.py`
+- current Chrome CDP セッションを再利用し、`System/credentials/zapier.json` の認証情報で
+  - assets 一覧へ直接入れるか
+  - login 画面で email / password を埋められるか
+  を先に確認する
+- current 実動作では `ALREADY_LOGGED_IN` で `https://zapier.com/app/assets/zaps` へ入れることを確認済み
 
 ### create 入口で分かること
 
