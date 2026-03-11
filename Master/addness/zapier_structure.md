@@ -506,6 +506,66 @@
   - 次に relay 先 action を決める
   の順で組む
 
+#### current の exact create 導線
+
+- trigger 側
+  - `Trigger`
+  - `Select the event that starts your Zap`
+  - app picker の current major category
+    - `Apps`
+    - `AI`
+    - `Flow controls`
+    - `Utilities`
+    - `Products`
+    - `Custom`
+  - app search input
+    - `Search 7,000+ apps and tools...`
+  - `Webhooks by Zapier` を選ぶと
+    - `App *`
+    - `Webhooks by Zapier`
+    - `Trigger event *`
+    - `Choose an event`
+    が出る
+  - `Choose an event` を開くと current では少なくとも
+    - `Catch Hook`
+    - `Catch Raw Hook`
+    - `Retrieve Poll`
+    が出る
+  - `Catch Hook` を選ぶと
+    - `Setup`
+    - `Configure`
+    - `Test`
+    - `Continue`
+    が出る
+
+- action 側
+  - `Action`
+  - `Select the event for your Zap to run`
+  - `Mailchimp` を選ぶと
+    - `App *`
+    - `Mailchimp`
+    - `Action event *`
+    - `Choose an event`
+    - `Account *`
+    - `Select an account`
+    が出る
+  - `Choose an event` を開くと current では少なくとも
+    - `Add/Update Subscriber`
+    - `Create Tag`
+    - `Create Campaign`
+    - `Send Campaign`
+    - `Add Subscriber to Tag`
+    - `Remove Subscriber from Tag`
+    - `Find a Subscriber`
+    が出る
+
+- 読み方
+  - Addness の current relay は、ここで
+    - trigger に `Webhooks by Zapier / Catch Hook`
+    - action に `Mailchimp / Add/Update Subscriber`
+    を置くのが主戦場
+  - つまり create builder でも、まずこの current 主戦場に寄せて考える
+
 ### bulk family を一気に見る helper
 
 - `python3 System/scripts/zapier_family_snapshot.py --limit 25`
