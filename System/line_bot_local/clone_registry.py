@@ -219,6 +219,8 @@ def default_hinata_manifest() -> dict[str, Any]:
         "update_policy": "verified_facts_only_to_company",
         "sections": {
             "persona": "Master/brains/hinata/persona.md",
+            "manager_principles": "Master/brains/hinata/manager_principles.md",
+            "domain_knowledge": "Master/brains/hinata/domain_knowledge.md",
             "reference": "Project/4_AI基盤/日向エージェント.md",
         },
         "private_people_model_path": "Master/brains/hinata/people_private.json",
@@ -445,6 +447,8 @@ def load_hinata_brain() -> dict[str, Any]:
     return {
         "manifest": manifest,
         "persona": sections.get("persona", ""),
+        "manager_principles": sections.get("manager_principles", ""),
+        "domain_knowledge": sections.get("domain_knowledge", ""),
         "reference": sections.get("reference", ""),
         "private_people_model": load_private_people_model("hinata"),
     }

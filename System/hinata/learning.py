@@ -10,6 +10,7 @@
 
 import json
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -18,15 +19,97 @@ logger = logging.getLogger("hinata.learning")
 
 # ---- パス設定 ----
 SCRIPT_DIR = Path(__file__).parent
-_agents_dir = Path.home() / "agents" / "_repo"
-REPO_DIR = _agents_dir if _agents_dir.exists() else Path.home() / "Cursor"
+
+
+def _resolve_repo_dir() -> Path:
+    candidates: list[Path] = []
+    for env_key in ("HINATA_PROJECT_ROOT", "LINEBOT_PROJECT_ROOT"):
+        env_value = os.environ.get(env_key, "").strip()
+        if env_value:
+            candidates.append(Path(env_value).expanduser())
+
+    candidates.extend([
+        Path.home() / "agents" / "_repo",
+        SCRIPT_DIR.parent.parent,
+        Path.home() / "Desktop" / "cursor",
+        Path.home() / "Cursor",
+    ])
+
+    for candidate in candidates:
+        if (candidate / "Master").is_dir() and (candidate / "System").is_dir():
+            return candidate
+    return SCRIPT_DIR.parent.parent
+
+
+REPO_DIR = _resolve_repo_dir()
 LEARNING_DIR = REPO_DIR / "Master" / "learning"
+HINATA_BRAIN_DIR = REPO_DIR / "Master" / "brains" / "hinata"
+KOHARA_CLONE_DIR = REPO_DIR / "Master" / "self_clone" / "kohara"
+MIKAMI_CLONE_DIR = REPO_DIR / "Master" / "self_clone" / "mikami"
+KNOWLEDGE_DIR = REPO_DIR / "Master" / "knowledge"
+RULES_DIR = REPO_DIR / "Master" / "rules"
+PREMISE_DIR = REPO_DIR / "Master" / "前提"
 
 ACTION_LOG_PATH = LEARNING_DIR / "action_log.json"
 FEEDBACK_LOG_PATH = LEARNING_DIR / "feedback_log.json"
 EXECUTION_RULES_PATH = LEARNING_DIR / "execution_rules.json"
 MEMORY_PATH = LEARNING_DIR / "hinata_memory.md"
 INSIGHTS_PATH = LEARNING_DIR / "insights.md"
+MANAGER_PRINCIPLES_PATH = HINATA_BRAIN_DIR / "manager_principles.md"
+DOMAIN_KNOWLEDGE_PATH = HINATA_BRAIN_DIR / "domain_knowledge.md"
+
+SHARED_OPERATING_CONTEXT_SOURCES = [
+    {
+        "title": "甲原OS",
+        "path": KOHARA_CLONE_DIR / "BRAIN_OS.md",
+        "max_chars": 1400,
+    },
+    {
+        "title": "甲原の現在重点",
+        "path": KOHARA_CLONE_DIR / "USER.md",
+        "max_chars": 1000,
+    },
+    {
+        "title": "三上OS / Addness OS",
+        "path": MIKAMI_CLONE_DIR / "BRAIN_OS.md",
+        "max_chars": 1600,
+    },
+    {
+        "title": "会社の最上位目的",
+        "path": PREMISE_DIR / "目的.md",
+        "max_chars": 1000,
+    },
+    {
+        "title": "再現ルール",
+        "path": RULES_DIR / "rules.md",
+        "max_chars": 900,
+    },
+    {
+        "title": "広告・導線の具体ルール",
+        "path": RULES_DIR / "広告・導線ルール.md",
+        "max_chars": 1200,
+    },
+    {
+        "title": "業務優先順位",
+        "path": KNOWLEDGE_DIR / "業務棚卸し_AI化優先順位.md",
+        "max_chars": 1100,
+    },
+    {
+        "title": "会社の視界",
+        "path": KNOWLEDGE_DIR / "秘書の視界マップ.md",
+        "max_chars": 1000,
+    },
+    {
+        "title": "環境と仕組み",
+        "path": KNOWLEDGE_DIR / "環境マップ.md",
+        "max_chars": 1000,
+    },
+    {
+        "title": "Orchestrator定常運用",
+        "path": KNOWLEDGE_DIR / "orchestrator.md",
+        "max_chars": 900,
+    },
+]
 
 MAX_ACTION_LOG = 50  # 保持する最大アクション数
 MAX_FEEDBACK_LOG = 50  # 保持する最大フィードバック数
@@ -148,6 +231,9 @@ def build_learning_context() -> str:
     """
     Claude Code のプロンプトに注入する学習コンテキストを構築する。
     - 甲原さんの行動ルール（execution_rules.json）
+    - 日向の判断原則（manager_principles.md）
+    - アドネス各領域の知見（domain_knowledge.md）
+    - 共有OSと会社運用コンテキスト（正本から動的読み込み）
     - 直近のアクション履歴（5件）
     - 直近のフィードバック（5件）
     - 蓄積された記憶（hinata_memory.md）
@@ -168,24 +254,39 @@ def build_learning_context() -> str:
             + "\n".join(rules_lines)
         )
 
-    # 1. 直近のアクション履歴
+    # 1. 日向専用の判断原則
+    manager_text = _load_text(MANAGER_PRINCIPLES_PATH, max_chars=2500)
+    if manager_text:
+        sections.append(f"### 日向の判断原則\n{manager_text}")
+
+    # 2. 会社の各領域知見
+    domain_text = _load_text(DOMAIN_KNOWLEDGE_PATH, max_chars=3000)
+    if domain_text:
+        sections.append(f"### アドネス各領域の知見\n{domain_text}")
+
+    # 3. 共有OSと会社運用コンテキスト
+    shared_context_text = _build_shared_operating_context()
+    if shared_context_text:
+        sections.append(shared_context_text)
+
+    # 4. 直近のアクション履歴
     actions_text = _format_recent_actions(5)
     if actions_text:
         sections.append(f"### 直近のアクション履歴\n{actions_text}")
 
-    # 2. 直近のフィードバック（最重要）
+    # 5. 直近のフィードバック（最重要）
     feedback_text = _format_recent_feedback(5)
     if feedback_text:
         sections.append(
             f"### 甲原さんからのフィードバック（必ず反映すること）\n{feedback_text}"
         )
 
-    # 3. 蓄積された記憶
+    # 6. 蓄積された記憶
     memory_text = _load_text(MEMORY_PATH, max_chars=2000)
     if memory_text:
         sections.append(f"### 学んだこと（記憶）\n{memory_text}")
 
-    # 4. insights.md
+    # 7. insights.md
     insights_text = _load_text(INSIGHTS_PATH, max_chars=1000)
     if insights_text:
         sections.append(f"### 業務の知見\n{insights_text}")
@@ -233,6 +334,25 @@ def _format_recent_feedback(n: int) -> str:
             f" → 甲原さん「{fb.get('feedback', '?')[:100]}」"
         )
     return "\n".join(lines)
+
+
+def _build_shared_operating_context() -> str:
+    """
+    会社共通の最新前提を、正本ファイルから動的に読み込んで構築する。
+    ここは複製ではなく live 参照を優先し、日向が毎サイクル current 状態を読む。
+    """
+    blocks = []
+    for source in SHARED_OPERATING_CONTEXT_SOURCES:
+        text = _load_text(source["path"], max_chars=source["max_chars"])
+        if not text:
+            continue
+        blocks.append(f"#### {source['title']}\n{text}")
+    if not blocks:
+        return ""
+    return (
+        "### 共有OSと会社運用コンテキスト（正本から動的読み込み）\n"
+        + "\n\n".join(blocks)
+    )
 
 
 # ====================================================================

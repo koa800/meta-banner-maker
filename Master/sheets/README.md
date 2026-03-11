@@ -10,7 +10,7 @@
 | `16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk` | 【広告チーム】報告シート | [リンク](https://docs.google.com/spreadsheets/d/16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk/edit) | チーム報告シート（日報・週報・月報・年報）。目標と現状のギャップ把握→アクション導出用。**毎日使用** | API経由で都度取得 |
 | `1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk` | 【アドネス株式会社】顧客データ（複数イベント） | [リンク](https://docs.google.com/spreadsheets/d/1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk/edit) | CDP顧客マスタ。イベント発生者（セミナー予約・購入等）の統合データ | API経由で都度取得 |
 | `1iD3DGxNhZruyjYcA5n6oXRDk2ZGA3uMDOo0stQS9Y00` | 【アドネス株式会社】顧客データ（メールアドレスのみ） | [リンク](https://docs.google.com/spreadsheets/d/1iD3DGxNhZruyjYcA5n6oXRDk2ZGA3uMDOo0stQS9Y00/edit) | リードプール。メールアドレスのみのリード（イベント未発生） | API経由で都度取得 |
-| `1nkmeWcHmzxPJH1d5veXwTpDoZrsPFH4_3txevqj225Y` | 言葉の定義 | [リンク](https://docs.google.com/spreadsheets/d/1nkmeWcHmzxPJH1d5veXwTpDoZrsPFH4_3txevqj225Y/edit) | 甲原さんが使う言葉の定義集。入力口はシート、AI参照正本は `Master/前提/用語定義.md` / `.json` | ✅ 03/11 00:46 (125行) |
+| `1nkmeWcHmzxPJH1d5veXwTpDoZrsPFH4_3txevqj225Y` | 言葉の定義 | [リンク](https://docs.google.com/spreadsheets/d/1nkmeWcHmzxPJH1d5veXwTpDoZrsPFH4_3txevqj225Y/edit) | 甲原さんが使う言葉の定義集。入力口はシート、AI参照正本は `Master/前提/用語定義.md` / `.json` | ✅ 03/12 00:25 (128行) |
 
 ## ディレクトリ構成
 

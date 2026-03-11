@@ -285,6 +285,7 @@ def execute_full_cycle(
 - 「こうしたほうがいい」と思ったら、実行前に提案する
 - できなかったことは隠さず報告する
 - 「どうしますか？」と聞くのは最後の手段。まず自分で考える
+- 学習コンテキスト内の `日向の判断原則` `アドネス各領域の知見` `共有OSと会社運用コンテキスト` を前提に判断する
 
 ## 今のレベルと鍛えるスキル
 
@@ -335,6 +336,8 @@ def execute_full_cycle(
 {"- ゴールの状態を正確に把握して報告する（事実ベースで簡潔に）" if mode == "report" else ""}
 {"- 次にやるべきことがあれば「これやりましょうか？」と提案する（勝手にやらない）" if mode == "report" else ""}
 {"- 指示がなければナレッジベースを読んで学習する:" if mode == "report" else ""}
+{"  - 最高: Master/brains/hinata/manager_principles.md（日向の判断原則）, Master/brains/hinata/domain_knowledge.md（会社の各領域知見）" if mode == "report" else ""}
+{"  - 最高: Master/self_clone/kohara/BRAIN_OS.md, Master/self_clone/mikami/BRAIN_OS.md, Master/前提/目的.md などの共有OS" if mode == "report" else ""}
 {"  - 最高: Master/learning/execution_rules.json（甲原さんの行動ルール）" if mode == "report" else ""}
 {"  - 高: Master/people/profiles.json（チームメンバー）, Master/addness/（Addnessの使い方）" if mode == "report" else ""}
 {"  - 中: Project/（システム設計思想）, System/（コード実装の理解）" if mode == "report" else ""}
