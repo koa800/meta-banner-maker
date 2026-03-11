@@ -131,6 +131,7 @@
   - email を引き
   - audience に optin tag を付ける
   という 2 step 構造
+  - その結果、次に Mailchimp の evergreen 教育コンテンツへ入る条件を作る
 
 ### pattern 2: 購入 relay
 
@@ -170,8 +171,41 @@
   - 購入者の email を引く
   - Mailchimp audience に対して購入 tag を付ける
   という、かなり素直な 2 step 構造
+  - その結果、購入後コンテンツやアップセル判定の分岐条件を作る
 
-### pattern 3: historical / exception relay
+### pattern 3: コンテンツ切替 relay として読む
+
+- Zap 名の読み方
+  - `...オプトイン`
+  - `...購入時`
+  - `...月額_購入時`
+  のように、名前に event が明示されている
+- Addness での本質
+  - Zapier はコンテンツを直接作らない
+  - 代わりに `次にどのコンテンツを出してよい状態か` を downstream system に伝える
+- 具体
+  - オプトイン relay は
+    - `未登録`
+    - を
+    - `教育開始できる`
+    に変える
+  - 購入 relay は
+    - `見込み客`
+    - を
+    - `購入後案内を出してよい`
+    に変える
+  - 月額 relay は
+    - `単発購入`
+    - を
+    - `継続利用者向け案内を出してよい`
+    に変える
+- つまり、Zapier の正しい読み方は
+  - `何の event を受けたか`
+  - `どの tag を付けたか`
+  - `その tag で次にどのコンテンツが解禁されるか`
+  の 3 点で見ること
+
+### pattern 4: historical / exception relay
 
 - Zap 名
   - `AI個別_SMS送信`
@@ -183,6 +217,22 @@
   - current の main relay ではなく、シート更新を SMS 送信へ変換する historical / exception pattern
 - 読み方
   - Addness の Zapier を理解する時は、これを main と見ない
+
+## relay から見た良い / 悪いの判断
+
+### 良い relay
+
+- 1 event に対して 1 meaning で tag が付く
+- tag を見れば、次にどのコンテンツを出す前提か読める
+- event 名と Zap 名が一致していて、あとから見返しても意味がズレない
+- source system と downstream system が明確
+
+### 悪い relay
+
+- 1 Zap で複数の unrelated event を混ぜる
+- tag 名だけでは次のコンテンツが読めない
+- `購入` なのか `予約` なのか `登録` なのかが名前で区別できない
+- relay の結果として、Mailchimp 側でどの Journey に入るか説明できない
 
 ## current の読み方
 
