@@ -213,6 +213,40 @@
   という、かなり素直な 2 step 構造
   - その結果、購入後コンテンツやアップセル判定の分岐条件を作る
 
+### pattern 2.5: 商品 family の course-specific purchase relay
+
+- Zap 名
+  - `マインドセットコース_アクションマップ購入`
+- trigger
+  - `Webhooks by Zapier`
+  - `Catch Hook`
+- action
+  - `Mailchimp`
+  - `Add/Update Subscriber`
+- meaning
+  - 共通商品ではなく、コース別購入 event をコース別購入 tag に変換する
+- representative tag
+  - `mindset_actionmap_buy`
+
+#### current 実値で確認できた representative
+
+- `マインドセットコース_アクションマップ購入`
+  - step 1
+    - app: `Webhooks by Zapier`
+    - action: `Catch Hook`
+  - step 2
+    - app: `Mailchimp`
+    - action: `Add/Update Subscriber`
+    - audience: `アドネス株式会社`
+    - member_status: `subscribed`
+    - update_existing: `true`
+    - tag: `mindset_actionmap_buy`
+    - email mapping: webhook payload の `メールアドレス`
+- 読み方
+  - `全コース_アクションマップ購入` のような共通 relay と、
+    `マインドセット / 生成AI / SNSマーケ / 広告マーケ` のような course-specific relay が並立している
+  - つまり Addness の Zapier は、`商品購入` だけでなく `どの商品のどの系統か` まで tag で切り分ける relay layer として読む
+
 ### pattern 3: コンテンツ切替 relay として読む
 
 - Zap 名の読み方
@@ -257,6 +291,63 @@
   - current の main relay ではなく、シート更新を SMS 送信へ変換する historical / exception pattern
 - 読み方
   - Addness の Zapier を理解する時は、これを main と見ない
+
+#### current 実値で確認できた representative
+
+- `AI個別_SMS送信`
+  - step 1
+    - app: `Google Sheets`
+    - action: `Updated Spreadsheet Row`
+    - spreadsheet: `AI個別電話番号リスト`
+    - worksheet: `RAWDATA`
+    - dedupe column: `電話番号`
+  - step 2
+    - app: `Webhooks by Zapier`
+    - action: `POST`
+    - destination: `https://www.sms-console.jp/api/`
+    - payload: `mobilenumber = COL$C`, `smstext = COL$D`
+  - state
+    - `is_enabled = false`
+- 読み方
+  - この系統は `Mailchimp tag relay` ではなく、sheet をトリガーにした業務例外系
+  - enabled でも本線とは限らないので、`source = Google Sheets` かつ `destination = external SMS API` の時点で exception と読む
+
+### pattern 5: promotion relay
+
+- Zap 名
+  - `フリープラン入会時_女性訴求プロモーション`
+- trigger
+  - `Webhooks by Zapier`
+  - `Catch Hook`
+- action
+  - `Mailchimp`
+  - `Add/Update Subscriber`
+- meaning
+  - 通常の購入 tag に加えて、promotion 用の slice tag を重ねる
+- representative tag
+  - `freeplan_Buy_PR_woman`
+  - `freeplan_Buy`
+
+#### current 実値で確認できた representative
+
+- `フリープラン入会時_女性訴求プロモーション`
+  - step 1
+    - app: `Webhooks by Zapier`
+    - action: `Catch Hook`
+  - step 2
+    - app: `Mailchimp`
+    - action: `Add/Update Subscriber`
+    - audience: `アドネス株式会社`
+    - tags:
+      - `freeplan_Buy_PR_woman`
+      - `freeplan_Buy`
+    - email mapping: webhook payload の `メールアドレス`
+- 読み方
+  - Addness の promotion relay は、`本体 tag` と `施策切り口 tag` を同時に付けることがある
+  - つまり downstream では、
+    - 事業や商品で切る
+    - 施策や訴求でも切る
+    の 2 軸で audience を読めるようにしている
 
 ## relay から見た良い / 悪いの判断
 
