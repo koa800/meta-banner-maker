@@ -73,9 +73,9 @@
 
 ### 現在の自己評価
 
-- Lステップ: `9.98 / 10`
-- UTAGE: `9.8 / 10`
-- Mailchimp: `9.85 / 10`
+- Lステップ: `9.99 / 10`
+- UTAGE: `9.85 / 10`
+- Mailchimp: `9.9 / 10`
 - short.io: `10 / 10`
 - 全体理解: `9.0〜9.2 / 10`
 
@@ -140,7 +140,8 @@
     - 未ログインなら `System/credentials/lstep.json` から自動入力する
     - reCAPTCHA の画像 challenge が出た場合だけ手動確認が必要
 - 残差
-  - hidden / legacy / 命名規則違反の判断辞書を増やす
+  - hidden / legacy / 命名規則違反の判断辞書をさらに増やす
+  - 特に `旧 / 作成中 / 下書き / 日付付き` が混在する folder を、実導線参照込みで切るサンプルを増やす
 
 ### UTAGE
 
@@ -215,6 +216,7 @@
     - `first_view_css = 高速表示レイヤーの FV 補正`
 - 残差
   - representative page をもう少し増やし、code 領域の good / bad 事例を厚くする
+  - `first_view_css` を触るべきケースと触るべきでないケースの具体例をさらに増やす
 
 ### Mailchimp
 
