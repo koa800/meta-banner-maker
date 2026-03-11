@@ -422,6 +422,17 @@
   - login 画面で email / password を埋められるか
   を先に確認する
 - current 実動作では `ALREADY_LOGGED_IN` で `https://zapier.com/app/assets/zaps` へ入れることを確認済み
+- `python3 System/scripts/zapier_assets_snapshot.py --limit 12`
+- assets 一覧の visible row を JSON で抜き、
+  - `name`
+  - `location`
+  - `last_modified`
+  をまとめて棚卸しできる
+- current 実動作では
+  - title: `Zaps | Zapier`
+  - columns: `Name / Apps / Location / Last modified / Status / Owner`
+  - rows: `AI個別_SMS送信` など 12 件
+  を JSON 出力できることを確認済み
 
 ### create 入口で分かること
 
