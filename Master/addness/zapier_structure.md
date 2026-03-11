@@ -468,7 +468,7 @@
 - current 実動作では
   - title: `Zaps | Zapier`
   - columns: `Name / Apps / Location / Last modified / Status / Owner`
-  - rows: `AI個別_SMS送信` など 12 件
+  - rows: `AI個別_SMS送信` など 20 件
   を JSON 出力できることを確認済み
 
 ### create 入口で分かること

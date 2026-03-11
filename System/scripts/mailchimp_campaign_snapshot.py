@@ -38,7 +38,7 @@ def classify_href(href: str) -> str:
         return "short.io"
     if "school.addness.co.jp" in lowered:
         return "UTAGE"
-    if "liff.line.me" in lowered or "line.me/" in lowered:
+    if "liff.line.me" in lowered or "line.me/" in lowered or "liff-gateway.lineml.jp" in lowered:
         return "direct LINE"
     return "other"
 
