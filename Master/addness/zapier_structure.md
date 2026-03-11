@@ -161,6 +161,8 @@
   - `AI個別_SMS送信`
   - `X_AI_3days合宿購入時39SMS`
   - `YT_AI_OTO合宿購入時39SMS`
+- `サンクスメール relay` 系
+  - `みかみの秘密合宿_サンクスメール`
 
 ## representative pattern
 
@@ -376,6 +378,39 @@
     - 施策や訴求でも切る
     の 2 軸で audience を読めるようにしている
 
+### pattern 6: サンクスメール起点の購入 relay
+
+- Zap 名
+  - `みかみの秘密合宿_サンクスメール`
+- trigger
+  - `Webhooks by Zapier`
+  - `Catch Hook`
+- action
+  - `Mailchimp`
+  - `Add/Update Subscriber`
+- meaning
+  - 購入後サンクスメールの送信条件を、Mailchimp 側の購入 tag に変換する
+- representative tag
+  - `mikami_gassyuku_20260307_buy`
+
+#### current 実値で確認できた representative
+
+- `みかみの秘密合宿_サンクスメール`
+  - step 1
+    - app: `Webhooks by Zapier`
+    - action: `Catch Hook`
+  - step 2
+    - app: `Mailchimp`
+    - action: `Add/Update Subscriber`
+    - audience: `アドネス株式会社`
+    - member_status: `subscribed`
+    - update_existing: `true`
+    - tag: `mikami_gassyuku_20260307_buy`
+    - email mapping: webhook payload の `メールアドレス`
+- 読み方
+  - Addness の relay は `購入直後の教育・案内を出してよい状態を作る` ところまで持つ
+  - つまり `買った` を `購入後コンテンツを出せる` に変える relay としても読む
+
 ## relay から見た良い / 悪いの判断
 
 ### 良い relay
@@ -425,6 +460,8 @@
 - `python3 System/scripts/zapier_assets_snapshot.py --limit 12`
 - assets 一覧の visible row を JSON で抜き、
   - `name`
+  - `zap_id`
+  - `edit_path`
   - `location`
   - `last_modified`
   をまとめて棚卸しできる

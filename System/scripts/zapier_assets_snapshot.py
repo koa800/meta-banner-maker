@@ -28,36 +28,27 @@ async def fetch_assets(limit: int) -> dict[str, Any]:
             raw = await page.evaluate(
                 """
 () => {
-  const body = document.body.innerText || "";
-  const lines = body.split("\\n").map(x => x.trim()).filter(Boolean);
   const columns = ["Name", "Apps", "Location", "Last modified", "Status", "Owner"];
   const rows = [];
-  const start = lines.findIndex(line => line === "Name");
-  if (start >= 0) {
-    let i = start + 6;
-    while (i < lines.length) {
-      const line = lines[i];
-      if (line === "Options" || line === "Create" || line === "Search by name or webhook") {
-        i += 1;
-        continue;
-      }
-      if (line === "Loading") {
-        i += 1;
-        continue;
-      }
-      if (line === "Trash" || line === "Tables" || line === "Forms" || line === "Chatbots" || line === "Canvases" || line === "Agents") {
-        break;
-      }
-      const name = lines[i];
-      const location = lines[i + 1] || "";
-      const lastModified = lines[i + 2] || "";
-      rows.push({
-        name,
-        location,
-        last_modified: lastModified,
-      });
-      i += 3;
-    }
+  const seen = new Set();
+  const links = Array.from(document.querySelectorAll('a[href*="/webintent/edit-zap/"]'));
+  for (const link of links) {
+    const name = (link.textContent || "").trim();
+    const href = link.getAttribute('href') || '';
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    const idMatch = href.match(/\\/webintent\\/edit-zap\\/(\\d+)/);
+    const row = link.closest('tr');
+    const cells = row ? Array.from(row.querySelectorAll('td')).map(td => (td.innerText || '').trim()) : [];
+    rows.push({
+      name,
+      zap_id: idMatch ? idMatch[1] : null,
+      edit_path: href,
+      location: cells[2] || '',
+      last_modified: cells[3] || '',
+      status: cells[4] || '',
+      owner: cells[5] || '',
+    });
   }
   return {
     title: document.title,
