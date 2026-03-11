@@ -95,6 +95,29 @@
 - 購入 relay
 - 一部の SMS relay
 
+2026-03-12 に live 一覧から追加で見えた current family は次の通り。
+
+- `秘密の部屋` 系
+  - `Meta広告_秘密の部屋_オプトイン`
+  - `X広告_秘密の部屋_オプトイン`
+  - `...年間プラン購入`
+  - `...月額プラン購入_導線内用`
+  - `...月額プラン購入_OTO用`
+- `AIコンテンツ完全習得Live / AICAN` 系
+  - `AIコンテンツ完全習得Live_購入時`
+  - `AICAN_月額_購入時`
+- `アクションマップ` 系
+  - `全コース_アクションマップ購入`
+  - `生成AIコース_アクションマップ購入`
+  - `SNSマーケコース_アクションマップ購入`
+  - `広告マーケコース_アクションマップ購入`
+- `フリープラン / プロモーション` 系
+  - `フリープラン入会時_女性訴求プロモーション`
+- `SMS exception` 系
+  - `AI個別_SMS送信`
+  - `X_AI_3days合宿購入時39SMS`
+  - `YT_AI_OTO合宿購入時39SMS`
+
 ## representative pattern
 
 ### pattern 1: オプトイン relay
@@ -279,6 +302,8 @@
 - updated_at が recent
 - Zap 名が current funnel / 商品 / event と一致
 - trigger が webhook、action が Mailchimp tag relay
+- 同じ命名規則で `オプトイン / 購入 / 月額 / OTO` の family が束で存在する
+- 現行 funnel 名や product 名と series で対応している
 
 ### legacy / exception と読むシグナル
 
@@ -345,3 +370,4 @@
   - tag
   - downstream system
   の責務分離を崩さない
+- 一覧を見た時に、`これはどの funnel / product family の relay か` を数秒で説明できる
