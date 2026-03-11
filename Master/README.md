@@ -117,7 +117,7 @@ output を作る
 - 用語定義: [用語定義.md](/Users/koa800/Desktop/cursor/Master/前提/用語定義.md)
 - 本人固定プロフィール: [本人基本プロフィール.md](/Users/koa800/Desktop/cursor/Master/前提/本人基本プロフィール.md)
 - 目的: [目的.md](/Users/koa800/Desktop/cursor/Master/前提/目的.md)
-- 判断軸: [判断軸.md](/Users/koa800/Desktop/cursor/Master/前提/判断軸.md)
+- 判断軸と実務判断テンプレ: [判断軸.md](/Users/koa800/Desktop/cursor/Master/前提/判断軸.md)
 - 優先順位: [優先順位.md](/Users/koa800/Desktop/cursor/Master/前提/優先順位.md)
 - 前提更新ルール: [更新ルール.md](/Users/koa800/Desktop/cursor/Master/前提/更新ルール.md)
 - 面談定性の比較知識: [面談定性比較.md](/Users/koa800/Desktop/cursor/Master/knowledge/面談定性比較.md)
