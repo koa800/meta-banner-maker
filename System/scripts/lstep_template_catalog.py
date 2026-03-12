@@ -6,25 +6,30 @@ import json
 import re
 from typing import Any
 
-import browser_cookie3
 import requests
 from bs4 import BeautifulSoup
+
+from lstep_auth import build_authenticated_session
 
 BASE_URL = "https://manager.linestep.net"
 LIST_URL = f"{BASE_URL}/api/templates"
 
 
 def session() -> requests.Session:
-    s = requests.Session()
-    s.cookies = browser_cookie3.chrome(domain_name="manager.linestep.net")
-    s.headers.update(
-        {
-            "X-Requested-With": "XMLHttpRequest",
-            "Referer": f"{BASE_URL}/line/template",
-            "User-Agent": "Mozilla/5.0",
-        }
+    return build_authenticated_session(
+        referer=f"{BASE_URL}/line/template",
+        probe_url=f"{BASE_URL}/api/templates?page=1",
     )
-    return s
+
+
+def fetch_json(
+    s: requests.Session,
+    url: str,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    resp = s.get(url, params=params, timeout=30)
+    resp.raise_for_status()
+    return resp.json()
 
 
 def infer_template_type(item: dict[str, Any]) -> str:
@@ -137,6 +142,67 @@ def summarize_flex(editor_json: dict[str, Any]) -> dict[str, Any]:
         "panel_count": len(panels),
         "block_counts": counts,
         "blocks": blocks,
+    }
+
+
+def infer_carousel_action_kind(action: dict[str, Any]) -> str | None:
+    if action.get("action_form_id"):
+        return "回答フォームを開く"
+    if action.get("action_id"):
+        return "アクション実行"
+    if action.get("action_tel") or action.get("phone_number"):
+        return "電話をかける"
+    if action.get("action_mail") or action.get("email"):
+        return "メールを送る"
+    if action.get("line_official_account_id") or action.get("friend_add_account_id"):
+        return "LINEアカウントを友だち追加"
+    if action.get("scenario_id") or action.get("step_id"):
+        return "シナリオを移動・停止"
+    if action.get("url") or action.get("uri"):
+        return "URLを開く"
+    return None
+
+
+def summarize_carousel(carousel_json: dict[str, Any]) -> dict[str, Any]:
+    panels = carousel_json.get("panels", []) or []
+    panel_summaries: list[dict[str, Any]] = []
+    for panel in panels:
+        actions: list[dict[str, Any]] = []
+        for action in panel.get("actions", []) or []:
+            info: dict[str, Any] = {
+                "title": action.get("title"),
+                "action_type": action.get("action_type"),
+            }
+            kind = infer_carousel_action_kind(action)
+            if kind:
+                info["kind"] = kind
+            if action.get("action_form_id"):
+                info["action_form_id"] = action.get("action_form_id")
+            if action.get("action_liff_size"):
+                info["action_liff_size"] = action.get("action_liff_size")
+            if action.get("url"):
+                info["url"] = action.get("url")
+            if action.get("uri"):
+                info["uri"] = action.get("uri")
+            actions.append(info)
+        panel_summaries.append(
+            {
+                "title": panel.get("title"),
+                "text_preview": (panel.get("text") or "")[:120],
+                "action_count": len(actions),
+                "actions": actions,
+            }
+        )
+    return {
+        "alt_text": carousel_json.get("altText"),
+        "answer_type": carousel_json.get("answerType"),
+        "panel_count": len(panels),
+        "panels": panel_summaries,
+        "config": {
+            "twice_reply_type": (carousel_json.get("config") or {}).get("twice_reply_type"),
+            "twice_do_reply": (carousel_json.get("config") or {}).get("twice_do_reply"),
+            "twice_action_id": (carousel_json.get("config") or {}).get("twice_action_id"),
+        },
     }
 
 
@@ -263,10 +329,17 @@ def inspect_template(s: requests.Session, item_id: int) -> dict[str, Any]:
 
     if result["type"] == "標準メッセージ":
         result["content_summary"] = summarize_standard_message(item.get("content_text"))
+    elif result["type"] == "カルーセルメッセージ(新方式)":
+        detail = fetch_json(
+            s,
+            f"{BASE_URL}/api/line/template/{item_id}",
+            params={"group": item.get("group")},
+        )
+        messages_data = detail.get("messagesData") or {}
+        result["disable_cv"] = messages_data.get("disable_cv")
+        result["carousel_summary"] = summarize_carousel(messages_data.get("carousel") or {})
     elif result["type"] == "フレックスメッセージ":
-        resp = s.get(f"{BASE_URL}/api/template/lflexes/{item_id}", timeout=30)
-        resp.raise_for_status()
-        detail = resp.json()
+        detail = fetch_json(s, f"{BASE_URL}/api/template/lflexes/{item_id}")
         result["alt_text"] = detail.get("alt_text")
         result["flex_summary"] = summarize_flex(detail.get("editor_json") or {})
     elif result["type"] == "テンプレートパック":
@@ -287,7 +360,10 @@ def main() -> int:
     p_inspect.add_argument("--id", type=int, required=True)
 
     args = parser.parse_args()
-    s = session()
+    try:
+        s = session()
+    except RuntimeError as exc:
+        raise SystemExit(str(exc))
 
     if args.cmd == "list":
         data = list_templates(s, search=args.search, limit=args.limit)

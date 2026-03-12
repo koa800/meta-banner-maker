@@ -87,12 +87,42 @@ def get_report(session: requests.Session, base_url: str, campaign_id: str) -> di
     return fetch_json(session, f"{base_url}/reports/{campaign_id}")
 
 
+def get_click_details(session: requests.Session, base_url: str, campaign_id: str) -> dict[str, Any]:
+    return fetch_json(session, f"{base_url}/reports/{campaign_id}/click-details")
+
+
 def get_content(session: requests.Session, base_url: str, campaign_id: str) -> dict[str, Any]:
     return fetch_json(session, f"{base_url}/campaigns/{campaign_id}/content")
 
 
 def get_campaign(session: requests.Session, base_url: str, campaign_id: str) -> dict[str, Any]:
     return fetch_json(session, f"{base_url}/campaigns/{campaign_id}")
+
+
+def summarize_click_details(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in payload.get("urls_clicked", []) or []:
+        url = row.get("url") or ""
+        if not url:
+            continue
+        current = grouped.setdefault(
+            url,
+            {
+                "url": url,
+                "type": classify_href(url),
+                "entry_count": 0,
+                "total_clicks": 0,
+                "unique_clicks_sum": 0,
+                "last_click": row.get("last_click"),
+            },
+        )
+        current["entry_count"] += 1
+        current["total_clicks"] += row.get("total_clicks") or 0
+        current["unique_clicks_sum"] += row.get("unique_clicks") or 0
+        last_click = row.get("last_click")
+        if last_click and (not current["last_click"] or last_click > current["last_click"]):
+            current["last_click"] = last_click
+    return sorted(grouped.values(), key=lambda item: (-item["total_clicks"], item["url"]))
 
 
 def build_snapshot(limit: int) -> dict[str, Any]:
@@ -112,10 +142,13 @@ def build_snapshot(limit: int) -> dict[str, Any]:
     for campaign in campaigns.get("campaigns", []):
         campaign_id = campaign["id"]
         report = get_report(session, base_url, campaign_id)
+        click_details = get_click_details(session, base_url, campaign_id)
         content = get_content(session, base_url, campaign_id)
         html = content.get("html", "")
         hrefs = extract_links(html)
         main_href = hrefs[0] if hrefs else ""
+        top_clicked_urls = summarize_click_details(click_details)
+        main_click = top_clicked_urls[0] if top_clicked_urls else {}
         rows.append(
             {
                 "id": campaign_id,
@@ -127,6 +160,9 @@ def build_snapshot(limit: int) -> dict[str, Any]:
                 "click_rate": report.get("clicks", {}).get("click_rate"),
                 "main_cta_type": classify_href(main_href) if main_href else "none",
                 "main_cta_href": main_href,
+                "top_clicked_type": main_click.get("type", "none"),
+                "top_clicked_url": main_click.get("url", ""),
+                "top_clicked_total_clicks": main_click.get("total_clicks", 0),
                 "link_count": len(hrefs),
                 "html_sha1": hashlib.sha1(html.encode("utf-8")).hexdigest(),
             }
@@ -141,10 +177,13 @@ def build_campaign_detail(campaign_id: str) -> dict[str, Any]:
     session, base_url = build_session()
     campaign = get_campaign(session, base_url, campaign_id)
     report = get_report(session, base_url, campaign_id)
+    click_details = get_click_details(session, base_url, campaign_id)
     content = get_content(session, base_url, campaign_id)
     html = content.get("html", "")
     hrefs = extract_links(html)
     main_href = hrefs[0] if hrefs else ""
+    top_clicked_urls = summarize_click_details(click_details)
+    main_click = top_clicked_urls[0] if top_clicked_urls else {}
     return {
         "id": campaign_id,
         "title": campaign.get("settings", {}).get("title", ""),
@@ -157,6 +196,10 @@ def build_campaign_detail(campaign_id: str) -> dict[str, Any]:
         "click_rate": report.get("clicks", {}).get("click_rate"),
         "main_cta_type": classify_href(main_href) if main_href else "none",
         "main_cta_href": main_href,
+        "top_clicked_type": main_click.get("type", "none"),
+        "top_clicked_url": main_click.get("url", ""),
+        "top_clicked_total_clicks": main_click.get("total_clicks", 0),
+        "top_clicked_urls": top_clicked_urls[:10],
         "links": hrefs,
         "text_preview": extract_text_preview(html),
         "html_sha1": hashlib.sha1(html.encode("utf-8")).hexdigest(),

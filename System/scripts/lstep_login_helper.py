@@ -91,6 +91,15 @@ def is_logged_in(page) -> bool:
     return "ユーザーID・ログインパスワードをお忘れの方はこちら" not in body and "Lステップ" in page.title()
 
 
+def fill_first(page, selectors: list[str], value: str) -> bool:
+    for selector in selectors:
+        locator = page.locator(selector)
+        if locator.count():
+            locator.first.fill(value)
+            return True
+    return False
+
+
 def ensure_login(target_url: str) -> int:
     creds = load_creds()
     with sync_playwright() as p:
@@ -108,10 +117,18 @@ def ensure_login(target_url: str) -> int:
         page.goto(creds["login_url"], wait_until="domcontentloaded", timeout=60000)
         time.sleep(2)
 
-        if page.locator('input[name="account_name"]').count():
-            page.locator('input[name="account_name"]').fill(creds["user_id"])
-        if page.locator('input[type="password"]').count():
-            page.locator('input[type="password"]').fill(creds["password"])
+        user_filled = fill_first(
+            page,
+            ['input[name="name"]', 'input[name="account_name"]', '#input_name', 'input[type="text"]'],
+            creds["user_id"],
+        )
+        password_filled = fill_first(
+            page,
+            ['input[name="password"]', '#input_password', 'input[type="password"]'],
+            creds["password"],
+        )
+        print(f"USER_FILLED={user_filled}")
+        print(f"PASSWORD_FILLED={password_filled}")
 
         activated = activate_and_place_chrome()
         print(f"CHROME_ACTIVATED={activated}")

@@ -5,24 +5,19 @@ import argparse
 import json
 from typing import Any
 
-import browser_cookie3
 import requests
+
+from lstep_auth import build_authenticated_session
 
 BASE_URL = "https://manager.linestep.net"
 LIST_URL = f"{BASE_URL}/api/actions"
 
 
 def session() -> requests.Session:
-    s = requests.Session()
-    s.cookies = browser_cookie3.chrome(domain_name="manager.linestep.net")
-    s.headers.update(
-        {
-            "X-Requested-With": "XMLHttpRequest",
-            "Referer": f"{BASE_URL}/line/action",
-            "User-Agent": "Mozilla/5.0",
-        }
+    return build_authenticated_session(
+        referer=f"{BASE_URL}/line/action",
+        probe_url=f"{BASE_URL}/api/actions?page=1",
     )
-    return s
 
 
 def fetch_json(s: requests.Session, url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -61,15 +56,17 @@ def list_actions(s: requests.Session, search: str = "", limit: int = 50) -> list
 
 
 def inspect_action(s: requests.Session, action_id: int) -> dict[str, Any]:
-    detail = fetch_json(s, f"{BASE_URL}/api/actions/{action_id}")
+    detail = fetch_json(s, f"{BASE_URL}/api/action/data/{action_id}")
+    texts = fetch_json(s, f"{BASE_URL}/api/actions/{action_id}/texts")
     inputs = detail.get("inputs", []) or []
     return {
         "aid": detail.get("aid"),
         "a_name": detail.get("a_name"),
         "a_twice_type": detail.get("a_twice_type"),
-        "group_id": detail.get("group_id"),
+        "funnel_descriptions": detail.get("funnel_descriptions"),
         "input_count": len(inputs),
         "inputs": inputs,
+        "action_texts": texts,
     }
 
 
@@ -85,7 +82,10 @@ def main() -> None:
     inspect_parser.add_argument("--id", type=int, required=True, help="Action ID")
 
     args = parser.parse_args()
-    s = session()
+    try:
+        s = session()
+    except RuntimeError as exc:
+        raise SystemExit(str(exc))
     if args.cmd == "list":
         data = list_actions(s, search=args.search, limit=args.limit)
     else:
