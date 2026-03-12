@@ -11,6 +11,11 @@
 #   ai claude "Looker Studioを確認して" → 明示的にClaude Code
 #   ai switch                      → ツール間切り替え（自動引き継ぎ）
 #   ai status                      → 現在の状態を表示
+#   ai doctor                      → 移行後の復元前チェック
+#   ai works                       → 保存済み current work を一覧表示
+#   ai work ai基盤                 → キーワード一致の current work を切り替え
+#   ai batches                     → 保存済み batch queue を一覧表示
+#   ai batch start 面談JSON --launch → batch を current work に接続して起動
 #   ai sessions 導線              → 保存済みセッションを検索
 #   ai restore 導線ツール         → キーワードからセッション再開
 #   ai restore --fork 019c...      → セッションを分岐復元
@@ -20,41 +25,223 @@
 
 set -euo pipefail
 
-CODEX_CMD="/Users/koa800/.npm-global/bin/codex"
-CLAUDE_CMD="/Users/koa800/.local/bin/claude"
-PROJECT_DIR="/Users/koa800/Desktop/cursor"
+SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_SOURCE" ]; do
+    SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+    SCRIPT_SOURCE="$(readlink "$SCRIPT_SOURCE")"
+    if [[ "$SCRIPT_SOURCE" != /* ]]; then
+        SCRIPT_SOURCE="$SCRIPT_DIR/$SCRIPT_SOURCE"
+    fi
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+PROJECT_DIR_DEFAULT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+resolve_command_path() {
+    local explicit_path="${1:-}"
+    local command_name="${2:-}"
+    local fallback_path="${3:-}"
+
+    if [ -n "$explicit_path" ] && [ -x "$explicit_path" ]; then
+        printf '%s\n' "$explicit_path"
+        return 0
+    fi
+
+    if [ -n "$command_name" ] && command -v "$command_name" >/dev/null 2>&1; then
+        command -v "$command_name"
+        return 0
+    fi
+
+    if [ -n "$fallback_path" ] && [ -x "$fallback_path" ]; then
+        printf '%s\n' "$fallback_path"
+        return 0
+    fi
+
+    printf '%s\n' ""
+    return 0
+}
+
+PROJECT_DIR="${AI_PROJECT_DIR:-$PROJECT_DIR_DEFAULT}"
+CODEX_CMD="$(resolve_command_path "${AI_CODEX_CMD:-}" "codex" "$HOME/.npm-global/bin/codex")"
+CLAUDE_CMD="$(resolve_command_path "${AI_CLAUDE_CMD:-}" "claude" "$HOME/.local/bin/claude")"
 ROOT_HANDOFF_FILE="$PROJECT_DIR/.ai_handoff.md"
 LEGACY_HANDOFF_FILE="$PROJECT_DIR/Master/output/ai_handoff.md"
-STATE_FILE="$HOME/.ai_state.json"
+STATE_FILE="$PROJECT_DIR/System/data/ai_router/state.json"
+LEGACY_STATE_FILE="$HOME/.ai_state.json"
+WORK_STATE_HELPER="$PROJECT_DIR/System/scripts/ai_work_state.py"
+SESSION_STATE_HELPER="$PROJECT_DIR/System/scripts/ai_session_state.py"
+BATCH_STATE_HELPER="$PROJECT_DIR/System/scripts/ai_batch_state.py"
 CODEX_SESSIONS_DIR="$HOME/.codex/sessions"
 CLAUDE_HISTORY_FILE="$HOME/.claude/history.jsonl"
 SESSION_ALIAS_FILE="$PROJECT_DIR/Master/output/session_aliases.json"
 SESSION_INDEX_FILE="$PROJECT_DIR/Master/output/session_restore_index.json"
 
+tool_cmd_for() {
+    case "${1:-}" in
+        codex)
+            printf '%s\n' "$CODEX_CMD"
+            ;;
+        claude)
+            printf '%s\n' "$CLAUDE_CMD"
+            ;;
+        *)
+            printf '%s\n' ""
+            ;;
+    esac
+}
+
+ensure_tool_available() {
+    local tool="${1:-}"
+    local cmd_path
+    local env_name=""
+    cmd_path="$(tool_cmd_for "$tool")"
+    if [ -n "$cmd_path" ] && [ -x "$cmd_path" ]; then
+        return 0
+    fi
+
+    case "$tool" in
+        codex)
+            env_name="AI_CODEX_CMD"
+            ;;
+        claude)
+            env_name="AI_CLAUDE_CMD"
+            ;;
+    esac
+
+    echo "必要な実行ファイルが見つかりません: $tool" >&2
+    echo "確認候補:" >&2
+    echo "  - PATH に $tool が入っているか" >&2
+    if [ -n "$env_name" ]; then
+        echo "  - $env_name で実行ファイルを指定しているか" >&2
+    fi
+    echo "  - ai doctor で解決結果を確認する" >&2
+    return 1
+}
+
+doctor_runtime() {
+    local failures=0
+    local state_json current_work_id current_tool handoff_file
+
+    echo "=== ai doctor ==="
+    echo "project_dir: $PROJECT_DIR"
+    if [ -d "$PROJECT_DIR" ]; then
+        echo "  status: ok"
+    else
+        echo "  status: missing"
+        failures=$((failures + 1))
+    fi
+
+    for helper in "$WORK_STATE_HELPER" "$SESSION_STATE_HELPER" "$BATCH_STATE_HELPER"; do
+        echo "helper: $helper"
+        if [ -f "$helper" ]; then
+            echo "  status: ok"
+        else
+            echo "  status: missing"
+            failures=$((failures + 1))
+        fi
+    done
+
+    echo "codex_cmd: ${CODEX_CMD:-not found}"
+    if [ -n "$CODEX_CMD" ] && [ -x "$CODEX_CMD" ]; then
+        echo "  status: ok"
+    else
+        echo "  status: missing"
+        failures=$((failures + 1))
+    fi
+
+    echo "claude_cmd: ${CLAUDE_CMD:-not found}"
+    if [ -n "$CLAUDE_CMD" ] && [ -x "$CLAUDE_CMD" ]; then
+        echo "  status: ok"
+    else
+        echo "  status: missing"
+        failures=$((failures + 1))
+    fi
+
+    echo "codex_sessions: $CODEX_SESSIONS_DIR"
+    if [ -d "$CODEX_SESSIONS_DIR" ]; then
+        echo "  status: ok"
+    else
+        echo "  status: missing"
+        failures=$((failures + 1))
+    fi
+
+    echo "claude_history: $CLAUDE_HISTORY_FILE"
+    if [ -f "$CLAUDE_HISTORY_FILE" ]; then
+        echo "  status: ok"
+    else
+        echo "  status: missing"
+    fi
+
+    handoff_file="$(get_handoff_file)"
+    echo "handoff_file: $handoff_file"
+    if [ -f "$handoff_file" ]; then
+        echo "  status: ok"
+    else
+        echo "  status: missing"
+        failures=$((failures + 1))
+    fi
+
+    echo "session_aliases: $SESSION_ALIAS_FILE"
+    if [ -f "$SESSION_ALIAS_FILE" ]; then
+        echo "  status: ok"
+    else
+        echo "  status: missing"
+        failures=$((failures + 1))
+    fi
+
+    echo "session_index: $SESSION_INDEX_FILE"
+    if [ -f "$SESSION_INDEX_FILE" ]; then
+        echo "  status: ok"
+    else
+        echo "  status: missing"
+        failures=$((failures + 1))
+    fi
+
+    if [ -f "$STATE_FILE" ]; then
+        state_json="$(work_state_status_json)"
+        current_work_id="$(json_get "$state_json" "current_work_id")"
+        current_tool="$(json_get "$state_json" "current_tool")"
+        echo "current_tool: ${current_tool:-none}"
+        echo "current_work_id: ${current_work_id:-none}"
+    else
+        echo "state_file: missing ($STATE_FILE)"
+        failures=$((failures + 1))
+    fi
+
+    echo "override_env:"
+    echo "  AI_PROJECT_DIR"
+    echo "  AI_CODEX_CMD"
+    echo "  AI_CLAUDE_CMD"
+
+    if [ "$failures" -gt 0 ]; then
+        echo "doctor_result: fail ($failures)"
+        return 1
+    fi
+
+    echo "doctor_result: ok"
+    return 0
+}
+
 # ============================================================
 # 状態管理
 # ============================================================
 get_current_tool() {
-    if [ -f "$STATE_FILE" ]; then
-        python3 -c "import json; print(json.load(open('$STATE_FILE')).get('current_tool','none'))" 2>/dev/null || echo "none"
-    else
-        echo "none"
-    fi
+    local state_json
+    state_json="$(work_state_status_json)"
+    json_get "$state_json" "current_tool"
 }
 
 set_current_tool() {
     local tool="$1"
-    python3 -c "
-import json
-from datetime import datetime
-state = {}
-try:
-    state = json.load(open('$STATE_FILE'))
-except: pass
-state['current_tool'] = '$tool'
-state['switched_at'] = datetime.now().isoformat()
-json.dump(state, open('$STATE_FILE', 'w'), ensure_ascii=False, indent=2)
-"
+    local work_id="${2:-}"
+    if [ -z "$work_id" ]; then
+        work_id="$(get_current_work_id)"
+    fi
+
+    if [ -n "$work_id" ]; then
+        python3 "$WORK_STATE_HELPER" activate-work --work-id "$work_id" --tool "$tool" >/dev/null 2>&1 || true
+    else
+        python3 "$WORK_STATE_HELPER" prepare --prompt "" --tool "$tool" >/dev/null 2>&1 || true
+    fi
 }
 
 get_handoff_file() {
@@ -65,6 +252,694 @@ get_handoff_file() {
     else
         echo "$ROOT_HANDOFF_FILE"
     fi
+}
+
+work_state_status_json() {
+    python3 "$WORK_STATE_HELPER" status 2>/dev/null || echo "{}"
+}
+
+json_get() {
+    local json_text="${1:-}"
+    local field="$2"
+    if [ -z "$json_text" ]; then
+        json_text="{}"
+    fi
+    python3 - "$json_text" "$field" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1] or "{}")
+field = sys.argv[2]
+value = payload.get(field, "")
+if isinstance(value, (dict, list)):
+    print(json.dumps(value, ensure_ascii=False))
+else:
+    print(value)
+PY
+}
+
+json_current_work_field() {
+    local json_text="${1:-}"
+    local field="$2"
+    if [ -z "$json_text" ]; then
+        json_text="{}"
+    fi
+    python3 - "$json_text" "$field" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1] or "{}")
+current = payload.get("current_work") or {}
+value = current.get(sys.argv[2], "")
+if isinstance(value, (dict, list)):
+    print(json.dumps(value, ensure_ascii=False))
+else:
+    print(value)
+PY
+}
+
+get_current_work_id() {
+    local state_json
+    state_json="$(work_state_status_json)"
+    json_get "$state_json" "current_work_id"
+}
+
+prepare_work_context() {
+    local prompt="${1:-}"
+    local tool="${2:-auto}"
+    python3 "$WORK_STATE_HELPER" prepare --prompt "$prompt" --tool "$tool"
+}
+
+activate_session_work() {
+    local session_id="$1"
+    local tool="$2"
+    local preview="${3:-}"
+    python3 "$WORK_STATE_HELPER" activate-session --session-id "$session_id" --tool "$tool" --preview "$preview"
+}
+
+sync_root_handoff_to_work() {
+    python3 "$WORK_STATE_HELPER" sync-root >/dev/null 2>&1 || true
+}
+
+record_current_session_link() {
+    local session_id="$1"
+    local tool="$2"
+    local preview="${3:-}"
+    local session_json="${4:-{}}"
+    python3 "$WORK_STATE_HELPER" record-session --session-id "$session_id" --tool "$tool" --preview "$preview" --session-json "$session_json" >/dev/null 2>&1 || true
+}
+
+compact_current_handoff_if_needed() {
+    local state_json current_work_id compaction_required
+    state_json="$(work_state_status_json)"
+    current_work_id="$(json_get "$state_json" "current_work_id")"
+    compaction_required="$(json_current_work_field "$state_json" "compaction_required")"
+    if [ -z "$current_work_id" ]; then
+        return 0
+    fi
+    if [ "$compaction_required" = "True" ] || [ "$compaction_required" = "true" ]; then
+        python3 "$WORK_STATE_HELPER" compact-handoff --work-id "$current_work_id" >/dev/null 2>&1 || true
+    fi
+}
+
+session_state_latest_json() {
+    local tool="$1"
+    python3 "$SESSION_STATE_HELPER" latest --tool "$tool"
+}
+
+session_state_resolve_json() {
+    local query="$1"
+    python3 "$SESSION_STATE_HELPER" resolve --query "$query"
+}
+
+list_work_records() {
+    local query="${1:-}"
+    local limit="${2:-20}"
+    python3 "$WORK_STATE_HELPER" list-works --query "$query" --limit "$limit"
+}
+
+resolve_work_record_json() {
+    local query="${1:-}"
+    local limit="${2:-5}"
+    python3 "$WORK_STATE_HELPER" resolve-work --query "$query" --limit "$limit"
+}
+
+list_batch_records_json() {
+    local query="${1:-}"
+    local limit="${2:-20}"
+    python3 "$BATCH_STATE_HELPER" list --query "$query" --limit "$limit"
+}
+
+list_skill_candidate_records_json() {
+    local query="${1:-}"
+    local limit="${2:-20}"
+    python3 "$BATCH_STATE_HELPER" list-skill-candidates --query "$query" --limit "$limit"
+}
+
+resolve_batch_record_json() {
+    local query="${1:-}"
+    local limit="${2:-5}"
+    python3 "$BATCH_STATE_HELPER" resolve --query "$query" --limit "$limit"
+}
+
+show_batch_record_json() {
+    local batch_id="$1"
+    local item_limit="${2:-10}"
+    python3 "$BATCH_STATE_HELPER" show --batch-id "$batch_id" --item-limit "$item_limit"
+}
+
+get_current_batch_id() {
+    local state_json
+    state_json="$(work_state_status_json)"
+    json_current_work_field "$state_json" "current_batch_id"
+}
+
+ensure_current_batch_item() {
+    local state_json current_work_id current_batch_id current_batch_item_id current_tool
+    state_json="$(work_state_status_json)"
+    current_work_id="$(json_get "$state_json" "current_work_id")"
+    current_batch_id="$(json_current_work_field "$state_json" "current_batch_id")"
+    current_batch_item_id="$(json_current_work_field "$state_json" "current_batch_item_id")"
+    current_tool="$(json_get "$state_json" "current_tool")"
+    if [ -z "$current_work_id" ] || [ -z "$current_batch_id" ] || [ -n "$current_batch_item_id" ]; then
+        return 0
+    fi
+    python3 "$BATCH_STATE_HELPER" claim-next --batch-id "$current_batch_id" --work-id "$current_work_id" --tool "$current_tool" >/dev/null 2>&1 || true
+}
+
+read_current_batch_item_json() {
+    local state_json current_batch_id
+    state_json="$(work_state_status_json)"
+    current_batch_id="$(json_current_work_field "$state_json" "current_batch_id")"
+    if [ -z "$current_batch_id" ]; then
+        echo "{}"
+        return 0
+    fi
+    python3 "$BATCH_STATE_HELPER" show --batch-id "$current_batch_id" --item-limit 1 --only-active
+}
+
+show_current_work() {
+    local state_json current_work_id current_tool current_work_title current_handoff_path
+    state_json="$(work_state_status_json)"
+    current_work_id="$(json_get "$state_json" "current_work_id")"
+    if [ -z "$current_work_id" ]; then
+        echo "現在の仕事はありません。"
+        return 1
+    fi
+    current_tool="$(json_get "$state_json" "current_tool")"
+    current_work_title="$(json_current_work_field "$state_json" "title")"
+    current_handoff_path="$(json_current_work_field "$state_json" "handoff_path")"
+    echo "current work: $current_work_id"
+    echo "概要: ${current_work_title:-なし}"
+    echo "担当ツール: ${current_tool:-なし}"
+    echo "正本 handoff: ${current_handoff_path:-なし}"
+}
+
+activate_work_selection() {
+    local query="${1:-}"
+    local resolved_json selected_work_id selected_tool candidate_count activate_json
+    local activated_work_id activated_tool activated_title activated_handoff_path
+
+    if [ -z "$query" ]; then
+        show_current_work
+        return $?
+    fi
+
+    resolved_json="$(resolve_work_record_json "$query" "5")"
+    selected_work_id="$(json_get "$resolved_json" "selected_work_id")"
+    selected_tool="$(json_get "$resolved_json" "selected_tool")"
+    candidate_count="$(json_get "$resolved_json" "candidate_count")"
+
+    if [ -z "$selected_work_id" ]; then
+        if [ "${candidate_count:-0}" = "0" ]; then
+            echo "一致する仕事はありません: $query"
+            return 1
+        else
+            echo "一致候補が複数あります: $query"
+            list_work_records "$query" "10"
+            return 1
+        fi
+    fi
+
+    activate_json="$(python3 "$WORK_STATE_HELPER" activate-work --work-id "$selected_work_id" --tool "$selected_tool")"
+    activated_work_id="$(json_get "$activate_json" "current_work_id")"
+    activated_tool="$(json_get "$activate_json" "selected_tool")"
+    activated_title="$(json_current_work_field "$activate_json" "title")"
+    activated_handoff_path="$(json_current_work_field "$activate_json" "handoff_path")"
+
+    echo "current work を切り替えました。"
+    echo "work_id: ${activated_work_id:-なし}"
+    echo "概要: ${activated_title:-なし}"
+    echo "担当ツール: ${activated_tool:-なし}"
+    echo "正本 handoff: ${activated_handoff_path:-なし}"
+}
+
+list_batch_records() {
+    local query="${1:-}"
+    local limit="${2:-20}"
+    local payload
+    payload="$(list_batch_records_json "$query" "$limit")"
+    python3 - "$payload" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1] or "{}")
+batches = payload.get("batches") or []
+
+if not batches:
+    query = payload.get("query", "")
+    if query:
+        print(f"一致する batch はありません: {query}")
+    else:
+        print("登録された batch はまだありません。")
+    sys.exit(0)
+
+print("updated_at    tool     batch_id                summary")
+print("-" * 120)
+for batch in batches:
+    updated_at = str(batch.get("updated_at") or "-")
+    if len(updated_at) >= 16:
+        updated_at = updated_at[5:16].replace("T", " ")
+    tool = batch.get("preferred_tool") or "-"
+    batch_id = batch.get("batch_id") or "-"
+    summary = batch.get("summary") or batch.get("title") or batch_id
+    print(f"{updated_at:<13} {tool:<8} {batch_id:<23} {summary}")
+PY
+}
+
+list_skill_candidate_records() {
+    local query="${1:-}"
+    local limit="${2:-20}"
+    local payload
+    payload="$(list_skill_candidate_records_json "$query" "$limit")"
+    python3 - "$payload" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1] or "{}")
+rows = payload.get("skill_candidates") or []
+
+if not rows:
+    query = payload.get("query", "")
+    if query:
+        print(f"一致する skill 候補はありません: {query}")
+    else:
+        print("skill 候補はまだありません。")
+    sys.exit(0)
+
+print("updated_at    status   batch_id                summary")
+print("-" * 120)
+for row in rows:
+    updated_at = str(row.get("updated_at") or "-")
+    if len(updated_at) >= 16:
+        updated_at = updated_at[5:16].replace("T", " ")
+    status = row.get("status") or "-"
+    batch_id = row.get("batch_id") or "-"
+    summary = row.get("summary") or row.get("title") or batch_id
+    print(f"{updated_at:<13} {status:<8} {batch_id:<23} {summary}")
+PY
+}
+
+resolve_batch_id() {
+    local query="${1:-}"
+    local resolved_json batch_id
+    resolved_json="$(resolve_batch_record_json "$query" "5")"
+    batch_id="$(json_get "$resolved_json" "selected_batch_id")"
+    if [ -n "$batch_id" ]; then
+        printf '%s\n' "$batch_id"
+        return 0
+    fi
+    local candidate_count
+    candidate_count="$(json_get "$resolved_json" "candidate_count")"
+    if [ "${candidate_count:-0}" = "0" ]; then
+        echo "一致する batch はありません: $query" >&2
+    else
+        echo "一致候補が複数あります: $query" >&2
+        list_batch_records "$query" "10" >&2
+    fi
+    return 1
+}
+
+show_batch_record() {
+    local query="${1:-}"
+    local batch_id payload
+    if [ -z "$query" ]; then
+        batch_id="$(get_current_batch_id)"
+    else
+        batch_id="$(resolve_batch_id "$query")" || return 1
+    fi
+    if [ -z "$batch_id" ]; then
+        echo "current batch はありません。"
+        return 1
+    fi
+    payload="$(show_batch_record_json "$batch_id" "10")"
+    python3 - "$payload" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1] or "{}")
+batch = payload.get("batch") or {}
+items = payload.get("items") or []
+counts = payload.get("counts") or {}
+active = payload.get("active_item") or {}
+candidate = payload.get("skill_candidate") or {}
+
+if not batch:
+    print("batch が見つかりません。")
+    sys.exit(1)
+
+print(f"batch_id: {batch.get('batch_id','')}")
+print(f"概要: {batch.get('title','')}")
+print(f"タイプ: {batch.get('batch_type','-')}")
+print(f"担当ツール: {batch.get('preferred_tool','-')}")
+print(f"進捗: {counts.get('pending',0)} pending / {counts.get('running',0)} running / {counts.get('completed',0)} done / {counts.get('failed',0)} failed")
+print(f"紐づく work: {batch.get('work_id','-') or '-'}")
+if batch.get("schema_hint"):
+    print(f"スキーマ: {batch.get('schema_hint','')}")
+if batch.get("source"):
+    print(f"ソース: {batch.get('source','')}")
+if batch.get("source_last_sync_summary"):
+    print(f"source sync: {batch.get('source_last_sync_summary','')}")
+if active:
+    print(f"実行中 item: {active.get('item_id','')} / {active.get('title','')}")
+    if active.get("source_ref"):
+        print(f"  source_ref: {active.get('source_ref','')}")
+    if active.get("payload_preview"):
+        print(f"  payload: {active.get('payload_preview','')}")
+if candidate:
+    print(f"skill候補: {candidate.get('status','-')} / {candidate.get('summary','')}")
+    missing = candidate.get("missing_requirements") or []
+    if missing:
+        print(f"  不足: {missing[0]}")
+if items:
+    print("")
+    print("items:")
+    for item in items[:10]:
+        status = item.get("status","-")
+        item_id = item.get("item_id","-")
+        title = item.get("title","")
+        print(f"- [{status}] {item_id} {title}")
+PY
+}
+
+start_batch_work() {
+    local query="${1:-}"
+    local launch_flag="${2:-0}"
+    if [ -z "$query" ]; then
+        echo "使い方: ai batch start <batch_id|キーワード> [--launch]"
+        return 1
+    fi
+
+    local batch_id batch_json batch_title batch_tool linked_work_id prepared_json current_work_id state_json batch_source
+    batch_id="$(resolve_batch_id "$query")" || return 1
+    batch_json="$(show_batch_record_json "$batch_id" "1")"
+    batch_title="$(python3 - "$batch_json" <<'PY'
+import json, sys
+payload = json.loads(sys.argv[1] or "{}")
+batch = payload.get("batch") or {}
+print(batch.get("title", ""))
+PY
+)"
+    batch_tool="$(python3 - "$batch_json" <<'PY'
+import json, sys
+payload = json.loads(sys.argv[1] or "{}")
+batch = payload.get("batch") or {}
+print(batch.get("preferred_tool", "codex"))
+PY
+)"
+    linked_work_id="$(python3 - "$batch_json" <<'PY'
+import json, sys
+payload = json.loads(sys.argv[1] or "{}")
+batch = payload.get("batch") or {}
+print(batch.get("work_id", ""))
+PY
+)"
+    batch_source="$(python3 - "$batch_json" <<'PY'
+import json, sys
+payload = json.loads(sys.argv[1] or "{}")
+batch = payload.get("batch") or {}
+print(batch.get("source", ""))
+PY
+)"
+
+    if [ -n "$batch_source" ]; then
+        sync_batch_source_json "$batch_id" >/dev/null
+        batch_json="$(show_batch_record_json "$batch_id" "1")"
+    fi
+
+    if [ -n "$linked_work_id" ]; then
+        python3 "$WORK_STATE_HELPER" activate-work --work-id "$linked_work_id" --tool "$batch_tool" >/dev/null
+        current_work_id="$linked_work_id"
+    else
+        prepared_json="$(prepare_work_context "$batch_title" "$batch_tool")"
+        current_work_id="$(json_get "$prepared_json" "current_work_id")"
+        python3 "$BATCH_STATE_HELPER" attach-work --batch-id "$batch_id" --work-id "$current_work_id" >/dev/null
+    fi
+
+    ensure_current_batch_item
+    state_json="$(work_state_status_json)"
+    echo "batch を current work に接続しました。"
+    echo "work_id: $(json_get "$state_json" "current_work_id")"
+    echo "batch_id: $batch_id"
+    echo "概要: ${batch_title:-なし}"
+    show_batch_record "$batch_id"
+
+    if [ "$launch_flag" = "1" ]; then
+        if [ "$batch_tool" = "claude" ]; then
+            launch_claude ""
+        else
+            launch_codex ""
+        fi
+    fi
+}
+
+show_current_batch_item_packet() {
+    local payload
+    payload="$(read_current_batch_item_json)"
+    python3 - "$payload" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1] or "{}")
+batch = payload.get("batch") or {}
+item = payload.get("active_item") or {}
+
+if not batch:
+    print("current batch はありません。")
+    sys.exit(1)
+
+print(f"batch: {batch.get('batch_id','')} / {batch.get('title','')}")
+if not item:
+    print("実行中 item はありません。`ai batch next` で次件を取得できます。")
+    sys.exit(0)
+
+print(f"item: {item.get('item_id','')} / {item.get('title','')}")
+if item.get("source_ref"):
+    print(f"source_ref: {item.get('source_ref','')}")
+if item.get("payload_preview"):
+    print(f"payload: {item.get('payload_preview','')}")
+print(f"完了記録: ai batch done {item.get('item_id','')} --summary \"...\"")
+print(f"失敗記録: ai batch fail {item.get('item_id','')} --error \"...\"")
+PY
+}
+
+claim_next_batch_item() {
+    local query="${1:-}"
+    local state_json current_work_id current_batch_id current_tool payload batch_id batch_json linked_work_id batch_tool batch_source
+    state_json="$(work_state_status_json)"
+    current_work_id="$(json_get "$state_json" "current_work_id")"
+    current_tool="$(json_get "$state_json" "current_tool")"
+    if [ -n "$query" ]; then
+        batch_id="$(resolve_batch_id "$query")" || return 1
+        batch_json="$(show_batch_record_json "$batch_id" "1")"
+        linked_work_id="$(python3 - "$batch_json" <<'PY'
+import json, sys
+payload = json.loads(sys.argv[1] or "{}")
+batch = payload.get("batch") or {}
+print(batch.get("work_id", ""))
+PY
+)"
+        batch_tool="$(python3 - "$batch_json" <<'PY'
+import json, sys
+payload = json.loads(sys.argv[1] or "{}")
+batch = payload.get("batch") or {}
+print(batch.get("preferred_tool", "codex"))
+PY
+)"
+        batch_source="$(python3 - "$batch_json" <<'PY'
+import json, sys
+payload = json.loads(sys.argv[1] or "{}")
+batch = payload.get("batch") or {}
+print(batch.get("source", ""))
+PY
+)"
+        if [ -n "$linked_work_id" ] && [ "$linked_work_id" != "$current_work_id" ]; then
+            python3 "$WORK_STATE_HELPER" activate-work --work-id "$linked_work_id" --tool "$batch_tool" >/dev/null
+            state_json="$(work_state_status_json)"
+            current_work_id="$(json_get "$state_json" "current_work_id")"
+            current_tool="$(json_get "$state_json" "current_tool")"
+        elif [ -z "$linked_work_id" ] && [ -n "$current_work_id" ]; then
+            python3 "$BATCH_STATE_HELPER" attach-work --batch-id "$batch_id" --work-id "$current_work_id" >/dev/null
+        fi
+    else
+        batch_id="$(json_current_work_field "$state_json" "current_batch_id")"
+        if [ -n "$batch_id" ]; then
+            batch_json="$(show_batch_record_json "$batch_id" "1")"
+            batch_source="$(python3 - "$batch_json" <<'PY'
+import json, sys
+payload = json.loads(sys.argv[1] or "{}")
+batch = payload.get("batch") or {}
+print(batch.get("source", ""))
+PY
+)"
+        fi
+    fi
+    if [ -z "$batch_id" ]; then
+        echo 'current batch がありません。`ai batch start <batch>` を先に実行してください。'
+        return 1
+    fi
+    if [ -n "$batch_source" ]; then
+        sync_batch_source_json "$batch_id" >/dev/null
+    fi
+    payload="$(python3 "$BATCH_STATE_HELPER" claim-next --batch-id "$batch_id" --work-id "$current_work_id" --tool "$current_tool")"
+    python3 - "$payload" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1] or "{}")
+batch = payload.get("batch") or {}
+item = payload.get("item") or {}
+
+if not item:
+    print(f"pending item はありません: {batch.get('batch_id','')}")
+    sys.exit(0)
+
+mode = "新規に取得" if payload.get("claimed_new") else "継続中"
+print(f"{mode}: {batch.get('batch_id','')} / {batch.get('title','')}")
+print(f"item: {item.get('item_id','')} / {item.get('title','')}")
+if item.get("source_ref"):
+    print(f"source_ref: {item.get('source_ref','')}")
+if item.get("payload_preview"):
+    print(f"payload: {item.get('payload_preview','')}")
+print(f"完了記録: ai batch done {item.get('item_id','')} --summary \"...\"")
+print(f"失敗記録: ai batch fail {item.get('item_id','')} --error \"...\"")
+PY
+}
+
+complete_current_batch_item() {
+    local item_id="${1:-}"
+    shift || true
+    local summary=""
+    local result_ref=""
+    while [ $# -gt 0 ]; do
+        case "${1:-}" in
+            --summary)
+                summary="${2:-}"
+                shift 2
+                ;;
+            --result)
+                result_ref="${2:-}"
+                shift 2
+                ;;
+            *)
+                echo "使い方: ai batch done [item_id] --summary <要約> [--result <参照先>]"
+                return 1
+                ;;
+        esac
+    done
+    if [ -z "$summary" ]; then
+        echo "使い方: ai batch done [item_id] --summary <要約> [--result <参照先>]"
+        return 1
+    fi
+    local state_json batch_id payload
+    state_json="$(work_state_status_json)"
+    batch_id="$(json_current_work_field "$state_json" "current_batch_id")"
+    if [ -z "$batch_id" ]; then
+        echo "current batch がありません。"
+        return 1
+    fi
+    payload="$(python3 "$BATCH_STATE_HELPER" complete-item --batch-id "$batch_id" --item-id "$item_id" --summary "$summary" --result-ref "$result_ref")"
+    python3 - "$payload" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1] or "{}")
+if payload.get("error"):
+    print(payload["error"])
+    sys.exit(1)
+batch = payload.get("batch") or {}
+item = payload.get("item") or {}
+counts = batch.get("counts") or {}
+print(f"完了記録: {item.get('item_id','')} / {item.get('title','')}")
+print(f"残件数: {counts.get('pending',0)} pending / {counts.get('running',0)} running / {counts.get('completed',0)} done")
+PY
+}
+
+fail_current_batch_item() {
+    local item_id="${1:-}"
+    shift || true
+    local error_text=""
+    while [ $# -gt 0 ]; do
+        case "${1:-}" in
+            --error)
+                error_text="${2:-}"
+                shift 2
+                ;;
+            *)
+                echo "使い方: ai batch fail [item_id] --error <理由>"
+                return 1
+                ;;
+        esac
+    done
+    if [ -z "$error_text" ]; then
+        echo "使い方: ai batch fail [item_id] --error <理由>"
+        return 1
+    fi
+    local state_json batch_id payload
+    state_json="$(work_state_status_json)"
+    batch_id="$(json_current_work_field "$state_json" "current_batch_id")"
+    if [ -z "$batch_id" ]; then
+        echo "current batch がありません。"
+        return 1
+    fi
+    payload="$(python3 "$BATCH_STATE_HELPER" fail-item --batch-id "$batch_id" --item-id "$item_id" --error "$error_text")"
+    python3 - "$payload" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1] or "{}")
+if payload.get("error"):
+    print(payload["error"])
+    sys.exit(1)
+batch = payload.get("batch") or {}
+item = payload.get("item") or {}
+counts = batch.get("counts") or {}
+print(f"失敗記録: {item.get('item_id','')} / {item.get('title','')}")
+print(f"残件数: {counts.get('pending',0)} pending / {counts.get('running',0)} running / {counts.get('failed',0)} failed")
+PY
+}
+
+release_current_batch_item() {
+    local item_id="${1:-}"
+    local state_json batch_id payload
+    state_json="$(work_state_status_json)"
+    batch_id="$(json_current_work_field "$state_json" "current_batch_id")"
+    if [ -z "$batch_id" ]; then
+        echo "current batch がありません。"
+        return 1
+    fi
+    payload="$(python3 "$BATCH_STATE_HELPER" release-item --batch-id "$batch_id" --item-id "$item_id")"
+    python3 - "$payload" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1] or "{}")
+if payload.get("error"):
+    print(payload["error"])
+    sys.exit(1)
+item = payload.get("item") or {}
+print(f"pending に戻しました: {item.get('item_id','')} / {item.get('title','')}")
+PY
+}
+
+create_batch_record() {
+    local title="$1"
+    local tool="${2:-codex}"
+    local batch_type="${3:-}"
+    local source="${4:-}"
+    local schema_hint="${5:-}"
+    python3 "$BATCH_STATE_HELPER" create --title "$title" --tool "$tool" --type "$batch_type" --source "$source" --schema-hint "$schema_hint"
+}
+
+import_batch_jsonl() {
+    local batch_id="$1"
+    local path="$2"
+    python3 "$BATCH_STATE_HELPER" import-jsonl --batch-id "$batch_id" --path "$path"
+}
+
+sync_batch_source_json() {
+    local batch_id="$1"
+    python3 "$BATCH_STATE_HELPER" sync-source --batch-id "$batch_id"
 }
 
 read_handoff_snapshot_json() {
@@ -195,123 +1070,65 @@ PY
 
 latest_session_record_json() {
     local tool="$1"
-    python3 - "$PROJECT_DIR" "$CODEX_SESSIONS_DIR" "$CLAUDE_HISTORY_FILE" "$tool" <<'PY'
+    session_state_latest_json "$tool"
+}
+
+verify_session_snapshot_json() {
+    local tool="$1"
+    local session_id="${2:-}"
+    if [ -n "$session_id" ]; then
+        python3 "$SESSION_STATE_HELPER" verify --tool "$tool" --session-id "$session_id"
+    else
+        python3 "$SESSION_STATE_HELPER" verify --tool "$tool"
+    fi
+}
+
+snapshot_latest_session() {
+    local tool="${1:-}"
+    local session_id="${2:-}"
+    local preview="${3:-}"
+    local payload latest_json
+
+    if [ -z "$tool" ] || [ "$tool" = "none" ]; then
+        tool="$(get_current_tool)"
+    fi
+    if [ -z "$tool" ] || [ "$tool" = "none" ]; then
+        echo "検証対象のツールがありません。codex か claude を指定してください。"
+        return 1
+    fi
+
+    if [ -z "$session_id" ] || [ -z "$preview" ]; then
+        latest_json="$(latest_session_record_json "$tool")"
+        if [ -z "$session_id" ]; then
+            session_id="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1] or "{}").get("session_id",""))' "$latest_json")"
+        fi
+        if [ -z "$preview" ]; then
+            preview="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1] or "{}").get("preview",""))' "$latest_json")"
+        fi
+    fi
+
+    capture_latest_session_snapshot "$tool" "$session_id" "$preview"
+    payload="$(verify_session_snapshot_json "$tool" "$session_id")"
+    python3 - "$payload" <<'PY'
 import json
 import sys
-from datetime import datetime, timezone
-from pathlib import Path
 
-project_dir = sys.argv[1]
-codex_dir = Path(sys.argv[2]).expanduser()
-claude_history = Path(sys.argv[3]).expanduser()
-tool = sys.argv[4]
-
-def normalize(text):
-    return " ".join(str(text).split())
-
-def is_meaningful(text):
-    text = normalize(text)
-    if len(text) < 10:
-        return False
-    if text.startswith("/"):
-        return False
-    if text in {"続けて", "進めて", "了解です", "了解", "OK", "ありがとう", "あとでよいよ"}:
-        return False
-    return True
-
-latest = {}
-
-if tool == "codex" and codex_dir.exists():
-    for path in codex_dir.rglob("*.jsonl"):
-        try:
-            text = path.read_text(errors="replace")
-        except OSError:
-            continue
-
-        sid = None
-        end = None
-        preview = ""
-        fallback_preview = ""
-
-        for line in text.splitlines():
-            try:
-                obj = json.loads(line)
-            except Exception:
-                continue
-
-            if obj.get("type") == "session_meta":
-                sid = obj.get("payload", {}).get("id") or sid
-
-            ts = obj.get("timestamp")
-            if ts:
-                try:
-                    end = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                except ValueError:
-                    pass
-
-            payload = obj.get("payload", {})
-            if obj.get("type") == "response_item" and payload.get("type") == "message" and payload.get("role") == "user":
-                content = normalize(" ".join((c.get("text") or c.get("output_text") or "") for c in payload.get("content", [])))
-                if content and not content.startswith("# AGENTS.md instructions"):
-                    if is_meaningful(content):
-                        preview = content[:120]
-                    elif not fallback_preview:
-                        fallback_preview = content[:120]
-
-        if not sid or not end:
-            continue
-        if not latest or end >= latest["end"]:
-            latest = {
-                "tool": "codex",
-                "session_id": sid,
-                "preview": preview or fallback_preview or "(no summary)",
-                "end": end.isoformat(),
-            }
-
-elif tool == "claude" and claude_history.exists():
-    grouped = {}
-    for line in claude_history.read_text(errors="replace").splitlines():
-        try:
-            obj = json.loads(line)
-        except Exception:
-            continue
-
-        if obj.get("project") != project_dir:
-            continue
-
-        sid = obj.get("sessionId")
-        raw_ts = obj.get("timestamp")
-        if not sid or raw_ts is None:
-            continue
-
-        try:
-            dt = datetime.fromtimestamp(raw_ts / 1000, tz=timezone.utc)
-        except Exception:
-            continue
-
-        display = normalize(obj.get("display", ""))
-        record = grouped.setdefault(sid, {
-            "end": dt,
-            "preview": "",
-            "fallback_preview": "",
-        })
-        if dt >= record["end"]:
-            record["end"] = dt
-            if display and is_meaningful(display):
-                record["preview"] = display[:120]
-            elif display:
-                record["fallback_preview"] = display[:120]
-
-    for sid, record in grouped.items():
-        if not latest or record["end"] >= datetime.fromisoformat(latest["end"]):
-            latest = {
-                "tool": "claude",
-                "session_id": sid,
-                "preview": record["preview"] or record["fallback_preview"] or "(no summary)",
-                "end": record["end"].isoformat(),
-            }
-
-print(json.dumps(latest, ensure_ascii=False))
+payload = json.loads(sys.argv[1] or "{}")
+session_id = payload.get("session_id", "")
+if payload.get("ok"):
+    print("session snapshot を保存しました。")
+else:
+    print("session snapshot の保存結果を確認してください。")
+print(f"tool: {payload.get('tool','')}")
+print(f"session_id: {session_id or '未検出'}")
+print(f"index 保存: {'OK' if payload.get('snapshot_found') else 'NG'}")
+print(f"metrics 保存: {'OK' if payload.get('checks', {}).get('session_metrics') else 'NG'}")
+print(f"load 保存: {'OK' if payload.get('checks', {}).get('session_load') else 'NG'}")
+print(f"work 紐づけ: {'OK' if payload.get('checks', {}).get('work_link') else 'NG'}")
+if payload.get("snapshot_title"):
+    print(f"snapshot title: {payload.get('snapshot_title','')}")
+if payload.get("work_id"):
+    print(f"work_id: {payload.get('work_id','')}")
 PY
 }
 
@@ -319,12 +1136,14 @@ upsert_session_snapshot_record() {
     local tool="$1"
     local session_id="$2"
     local preview="${3:-}"
-    local handoff_file snapshot_json
+    local handoff_file snapshot_json work_id session_json
 
     handoff_file="$(get_handoff_file)"
     snapshot_json="$(read_handoff_snapshot_json)"
+    work_id="$(get_current_work_id)"
+    session_json="${4:-{}}"
 
-    python3 - "$SESSION_INDEX_FILE" "$SESSION_ALIAS_FILE" "$tool" "$session_id" "$preview" "$snapshot_json" "$handoff_file" <<'PY'
+    python3 - "$SESSION_INDEX_FILE" "$SESSION_ALIAS_FILE" "$tool" "$session_id" "$preview" "$snapshot_json" "$handoff_file" "$work_id" "$session_json" <<'PY'
 import json
 import sys
 from datetime import datetime
@@ -337,6 +1156,30 @@ session_id = sys.argv[4]
 preview = sys.argv[5]
 snapshot = json.loads(sys.argv[6])
 handoff_file = sys.argv[7]
+work_id = sys.argv[8]
+
+def parse_json_text(raw, default):
+    text = str(raw or "").strip()
+    if not text:
+        return default
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    decoder = json.JSONDecoder()
+    try:
+        value, _ = decoder.raw_decode(text)
+        return value
+    except json.JSONDecodeError:
+        for line in reversed([line.strip() for line in text.splitlines() if line.strip()]):
+            try:
+                return json.loads(line)
+            except Exception:
+                continue
+    return default
+
+snapshot = parse_json_text(sys.argv[6], {})
+session_data = parse_json_text(sys.argv[9], {})
 
 FIELDS = (
     ("purpose", ""),
@@ -373,6 +1216,39 @@ def merge_snapshot(target, data):
             target[key] = value or ""
     return target
 
+def merge_session_data(target, data):
+    if not isinstance(data, dict):
+        return target
+    metrics = data.get("metrics")
+    load = data.get("load")
+    start = data.get("start")
+    end = data.get("end")
+    preview = data.get("preview")
+    if isinstance(metrics, dict) and metrics:
+        target["session_metrics"] = metrics
+    if isinstance(load, dict) and load:
+        target["session_load"] = load
+        if load.get("should_fork") is not None:
+            target["auto_fork_recommended"] = bool(load.get("should_fork"))
+    if start:
+        target["session_start"] = start
+    if end:
+        target["session_end"] = end
+    if preview and not target.get("title"):
+        target["title"] = preview
+    return target
+
+def apply_preview_title(target, preview):
+    preview = " ".join(str(preview or "").split())
+    current = " ".join(str(target.get("title", "")).split())
+    if not preview:
+        return
+    if not current:
+        target["title"] = preview
+        return
+    if len(preview) <= len(current) and " / " not in preview:
+        target["title"] = preview
+
 now = datetime.now().isoformat()
 index = load_json(index_path)
 aliases = load_json(alias_path)
@@ -381,11 +1257,13 @@ record = dict(index.get(session_id, {}))
 record["tool"] = tool or record.get("tool", "")
 record["session_id"] = session_id
 record["updated_at"] = now
-if preview:
-    record["title"] = preview
+apply_preview_title(record, preview)
 if handoff_file:
     record["handoff_file"] = handoff_file
+if work_id:
+    record["work_id"] = work_id
 record = merge_snapshot(record, snapshot)
+record = merge_session_data(record, session_data)
 
 index_path.parent.mkdir(parents=True, exist_ok=True)
 index[session_id] = record
@@ -399,11 +1277,13 @@ for alias, alias_record in aliases.items():
     merged["tool"] = tool or merged.get("tool", "")
     merged["session_id"] = session_id
     merged["updated_at"] = now
-    if preview:
-        merged["title"] = preview
+    apply_preview_title(merged, preview)
     if handoff_file:
         merged["handoff_file"] = handoff_file
+    if work_id:
+        merged["work_id"] = work_id
     merged = merge_snapshot(merged, snapshot)
+    merged = merge_session_data(merged, session_data)
     aliases[alias] = merged
     updated_aliases = True
 
@@ -417,7 +1297,7 @@ capture_latest_session_snapshot() {
     local tool="$1"
     local session_id="${2:-}"
     local preview="${3:-}"
-    local latest_json
+    local latest_json session_json
 
     if [ -z "$session_id" ] || [ -z "$preview" ]; then
         latest_json="$(latest_session_record_json "$tool")"
@@ -427,13 +1307,18 @@ capture_latest_session_snapshot() {
         if [ -z "$preview" ]; then
             preview="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1] or "{}").get("preview",""))' "$latest_json")"
         fi
+        session_json="$latest_json"
+    else
+        session_json="$(session_state_resolve_json "$session_id" 2>/dev/null || echo "{}")"
     fi
 
     if [ -z "$session_id" ]; then
         return 0
     fi
 
-    upsert_session_snapshot_record "$tool" "$session_id" "$preview"
+    sync_root_handoff_to_work
+    record_current_session_link "$session_id" "$tool" "$preview" "$session_json"
+    upsert_session_snapshot_record "$tool" "$session_id" "$preview" "$session_json"
 }
 
 build_restore_prompt() {
@@ -499,487 +1384,116 @@ is_session_id() {
 list_sessions() {
     local query="${1:-}"
     local limit="${2:-20}"
-
-    python3 - "$PROJECT_DIR" "$CODEX_SESSIONS_DIR" "$CLAUDE_HISTORY_FILE" "$SESSION_ALIAS_FILE" "$SESSION_INDEX_FILE" "$query" "$limit" <<'PY'
-import json
-import sys
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
-
-project_dir = sys.argv[1]
-codex_dir = Path(sys.argv[2]).expanduser()
-claude_history = Path(sys.argv[3]).expanduser()
-alias_file = Path(sys.argv[4]).expanduser()
-index_file = Path(sys.argv[5]).expanduser()
-query = sys.argv[6].strip().lower()
-limit = int(sys.argv[7])
-jst = timezone(timedelta(hours=9))
-
-
-def fmt_ts(dt):
-    if not dt:
-        return "-"
-    return dt.astimezone(jst).strftime("%m-%d %H:%M")
-
-
-def normalize(text):
-    return " ".join(str(text).split())
-
-
-def is_meaningful(text):
-    text = normalize(text)
-    if len(text) < 10:
-        return False
-    if text.startswith("/"):
-        return False
-    if text in {"続けて", "進めて", "了解です", "了解", "OK", "ありがとう", "あとでよいよ"}:
-        return False
-    return True
-
-
-def load_json(path):
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text())
-    except Exception:
-        return {}
-
-def load_aliases():
-    raw = load_json(alias_file)
-    alias_to_target = {}
-    aliases_by_sid = {}
-    records_by_alias = {}
-    for alias, record in raw.items():
-        sid = record.get("session_id")
-        tool = record.get("tool")
-        if not alias or not sid or not tool:
-            continue
-        alias_to_target[alias.lower()] = (tool, sid, alias)
-        aliases_by_sid.setdefault(sid, []).append(alias)
-        records_by_alias[alias] = record
-    return alias_to_target, aliases_by_sid, records_by_alias
-
-def load_index():
-    raw = load_json(index_file)
-    return {sid: record for sid, record in raw.items() if isinstance(record, dict)}
-
-
-alias_to_target, aliases_by_sid, records_by_alias = load_aliases()
-records_by_sid = load_index()
-exact_alias_target = alias_to_target.get(query) if query else None
-
-
-def merged_record(sid):
-    record = {}
-    if isinstance(records_by_sid.get(sid), dict):
-        record.update(records_by_sid[sid])
-    aliases = aliases_by_sid.get(sid, [])
-    if aliases and isinstance(records_by_alias.get(aliases[0]), dict):
-        record.update(records_by_alias[aliases[0]])
-    return record
-
-def record_search_text(sid):
-    record = merged_record(sid)
-    parts = [record.get("title", ""), record.get("purpose", "")]
-    for key in ("confirmed", "completed", "remaining", "decisions", "references", "changed_files", "next"):
-        parts.extend(record.get(key) or [])
-    return "\n".join(normalize(part).lower() for part in parts if normalize(part))
-
-def session_summary(sid, fallback_preview):
-    record = merged_record(sid)
-    title = normalize(record.get("title", ""))
-    purpose = normalize(record.get("purpose", ""))
-    remaining = record.get("remaining") or []
-    if title and purpose and title != purpose:
-        return f"{title} / {purpose}"[:120]
-    if purpose and remaining:
-        return f"{purpose} / 残: {normalize(remaining[0])}"[:120]
-    if title and remaining:
-        return f"{title} / 残: {normalize(remaining[0])}"[:120]
-    if title:
-        return title[:120]
-    if purpose:
-        return purpose[:120]
-    return fallback_preview
-
-
-def codex_rows():
-    rows = []
-    if not codex_dir.exists():
-        return rows
-
-    for path in codex_dir.rglob("*.jsonl"):
-        try:
-            text = path.read_text(errors="replace")
-        except OSError:
-            continue
-
-        sid = None
-        start = None
-        end = None
-        first_user = ""
-        last_user = ""
-        last_meaningful_user = ""
-
-        for line in text.splitlines():
-            try:
-                obj = json.loads(line)
-            except Exception:
-                continue
-
-            ts = obj.get("timestamp")
-            if ts:
-                try:
-                    end = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                except ValueError:
-                    pass
-
-            if obj.get("type") == "session_meta":
-                payload = obj.get("payload", {})
-                sid = payload.get("id") or sid
-                raw_start = payload.get("timestamp")
-                if raw_start:
-                    try:
-                        start = datetime.fromisoformat(raw_start.replace("Z", "+00:00"))
-                    except ValueError:
-                        pass
-
-            payload = obj.get("payload", {})
-            if obj.get("type") == "response_item" and payload.get("type") == "message" and payload.get("role") == "user":
-                content = normalize(" ".join((c.get("text") or c.get("output_text") or "") for c in payload.get("content", [])))
-                if not content or content.startswith("# AGENTS.md instructions"):
-                    continue
-                if not first_user:
-                    first_user = content
-                last_user = content
-                if is_meaningful(content):
-                    last_meaningful_user = content
-
-        if sid and end:
-            if exact_alias_target and (exact_alias_target[0] != "codex" or exact_alias_target[1] != sid):
-                continue
-            alias_text = " ".join(aliases_by_sid.get(sid, [])).lower()
-            index_text = record_search_text(sid)
-            haystack = text.lower()
-            if query and query not in haystack and query not in sid.lower() and query not in alias_text and query not in index_text:
-                continue
-            preview = last_meaningful_user or last_user or first_user or "(no summary)"
-            preview = session_summary(sid, preview)
-            rows.append({
-                "tool": "codex",
-                "sid": sid,
-                "start": start,
-                "end": end,
-                "preview": preview[:120],
-                "search_text": haystack,
-                "aliases": aliases_by_sid.get(sid, []),
-            })
-    return rows
-
-
-def claude_rows():
-    rows = {}
-    if not claude_history.exists():
-        return []
-
-    for line in claude_history.read_text(errors="replace").splitlines():
-        try:
-            obj = json.loads(line)
-        except Exception:
-            continue
-
-        if obj.get("project") != project_dir:
-            continue
-
-        sid = obj.get("sessionId")
-        raw_ts = obj.get("timestamp")
-        if not sid or raw_ts is None:
-            continue
-
-        try:
-            dt = datetime.fromtimestamp(raw_ts / 1000, tz=timezone.utc)
-        except Exception:
-            continue
-
-        display = normalize(obj.get("display", ""))
-        record = rows.setdefault(sid, {
-            "tool": "claude",
-            "sid": sid,
-            "start": dt,
-            "end": dt,
-            "preview": "",
-            "fallback_preview": "",
-            "search_text_parts": [],
-        })
-        if dt < record["start"]:
-            record["start"] = dt
-        if dt >= record["end"]:
-            record["end"] = dt
-            if display and is_meaningful(display):
-                record["preview"] = display[:120]
-            elif display:
-                record["fallback_preview"] = display[:120]
-        if display:
-            record["search_text_parts"].append(display.lower())
-
-    out = []
-    for record in rows.values():
-        if exact_alias_target and (exact_alias_target[0] != "claude" or exact_alias_target[1] != record["sid"]):
-            continue
-        search_text = "\n".join(record.pop("search_text_parts"))
-        alias_text = " ".join(aliases_by_sid.get(record["sid"], [])).lower()
-        index_text = record_search_text(record["sid"])
-        if query and query not in search_text and query not in record["sid"].lower() and query not in alias_text and query not in index_text:
-            continue
-        record["search_text"] = "\n".join(part for part in (search_text, index_text) if part)
-        if not record["preview"]:
-            record["preview"] = record.get("fallback_preview") or "(no summary)"
-        record["preview"] = session_summary(record["sid"], record["preview"])
-        record["aliases"] = aliases_by_sid.get(record["sid"], [])
-        out.append(record)
-    return out
-
-
-rows = codex_rows() + claude_rows()
-rows.sort(key=lambda row: row["end"], reverse=True)
-
-if not rows:
-    label = query or "recent"
-    print(f"一致するセッションがありません: {label}")
-    sys.exit(1)
-
-print("tool     last_active   started      session_id                             alias                 summary")
-print("-" * 145)
-for row in rows[:limit]:
-    alias = ",".join(row.get("aliases", [])[:2])[:20] or "-"
-    print(
-        f"{row['tool']:<8} {fmt_ts(row['end']):<12} {fmt_ts(row['start']):<12} "
-        f"{row['sid']:<36} {alias:<20} {row['preview']}"
-    )
-PY
+    python3 "$SESSION_STATE_HELPER" list --query "$query" --limit "$limit"
 }
 
 resolve_session() {
     local query="$1"
-
-    python3 - "$PROJECT_DIR" "$CODEX_SESSIONS_DIR" "$CLAUDE_HISTORY_FILE" "$SESSION_ALIAS_FILE" "$SESSION_INDEX_FILE" "$query" <<'PY'
+    local resolved_json
+    resolved_json="$(session_state_resolve_json "$query")" || return $?
+    python3 - "$resolved_json" <<'PY'
 import json
-import re
 import sys
-from datetime import datetime, timezone
-from pathlib import Path
 
-project_dir = sys.argv[1]
-codex_dir = Path(sys.argv[2]).expanduser()
-claude_history = Path(sys.argv[3]).expanduser()
-alias_file = Path(sys.argv[4]).expanduser()
-index_file = Path(sys.argv[5]).expanduser()
-query = sys.argv[6].strip()
-query_lc = query.lower()
-is_sid = bool(re.fullmatch(r"[0-9a-fA-F-]{36}", query))
-
-
-def normalize(text):
-    return " ".join(str(text).split())
-
-def is_meaningful(text):
-    text = normalize(text)
-    if len(text) < 10:
-        return False
-    if text.startswith("/"):
-        return False
-    if text in {"続けて", "進めて", "了解です", "了解", "OK", "ありがとう", "あとでよいよ"}:
-        return False
-    return True
-
-def load_json(path):
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text())
-    except Exception:
-        return {}
-
-aliases = load_json(alias_file)
-index = load_json(index_file)
-aliases_by_sid = {}
-for alias, record in aliases.items():
-    sid = record.get("session_id")
-    if sid:
-        aliases_by_sid.setdefault(sid, []).append(alias)
-
-def merged_record(sid):
-    record = {}
-    if isinstance(index.get(sid), dict):
-        record.update(index[sid])
-    aliases_for_sid = aliases_by_sid.get(sid, [])
-    if aliases_for_sid and isinstance(aliases.get(aliases_for_sid[0]), dict):
-        record.update(aliases[aliases_for_sid[0]])
-    if aliases_for_sid:
-        record["alias"] = aliases_for_sid[0]
-        record["aliases"] = aliases_for_sid
-    return record
-
-def record_preview(sid, fallback):
-    record = merged_record(sid)
-    title = normalize(record.get("title", ""))
-    purpose = normalize(record.get("purpose", ""))
-    remaining = record.get("remaining") or []
-    if title and purpose and title != purpose:
-        return f"{title} / {purpose}"[:120]
-    if purpose and remaining:
-        return f"{purpose} / 残: {normalize(remaining[0])}"[:120]
-    if title and remaining:
-        return f"{title} / 残: {normalize(remaining[0])}"[:120]
-    if title:
-        return title[:120]
-    if purpose:
-        return purpose[:120]
-    return fallback
-
-def record_search_text(sid):
-    record = merged_record(sid)
-    parts = [record.get("title", ""), record.get("purpose", "")]
-    for key in ("confirmed", "completed", "remaining", "decisions", "references", "changed_files", "next"):
-        parts.extend(record.get(key) or [])
-    return "\n".join(normalize(part).lower() for part in parts if normalize(part))
-
-for alias, record in aliases.items():
-    if alias.lower() == query_lc:
-        tool = record.get("tool")
-        sid = record.get("session_id")
-        if tool and sid:
-            print(f"{tool}\t{sid}\t{record_preview(sid, f'alias:{alias}')}")
-            sys.exit(0)
-
-
-rows = []
-
-if codex_dir.exists():
-    for path in codex_dir.rglob("*.jsonl"):
-        try:
-            text = path.read_text(errors="replace")
-        except OSError:
-            continue
-
-        sid = None
-        end = None
-        preview = ""
-        fallback_preview = ""
-        for line in text.splitlines():
-            try:
-                obj = json.loads(line)
-            except Exception:
-                continue
-            if obj.get("type") == "session_meta":
-                sid = obj.get("payload", {}).get("id") or sid
-            ts = obj.get("timestamp")
-            if ts:
-                try:
-                    end = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                except ValueError:
-                    pass
-            payload = obj.get("payload", {})
-            if obj.get("type") == "response_item" and payload.get("type") == "message" and payload.get("role") == "user":
-                content = normalize(" ".join((c.get("text") or c.get("output_text") or "") for c in payload.get("content", [])))
-                if content and not content.startswith("# AGENTS.md instructions"):
-                    if is_meaningful(content):
-                        preview = content[:120]
-                    elif not fallback_preview:
-                        fallback_preview = content[:120]
-        if not sid:
-            continue
-        haystack = text.lower()
-        extra_search = record_search_text(sid)
-        if is_sid:
-            if sid.lower() != query_lc:
-                continue
-        elif query_lc not in haystack and query_lc not in extra_search and query_lc not in " ".join(aliases_by_sid.get(sid, [])).lower():
-            continue
-        preview_text = preview or fallback_preview or "(no summary)"
-        rows.append(("codex", sid, end or datetime.fromtimestamp(0, tz=timezone.utc), record_preview(sid, preview_text)))
-
-if claude_history.exists():
-    grouped = {}
-    for line in claude_history.read_text(errors="replace").splitlines():
-        try:
-            obj = json.loads(line)
-        except Exception:
-            continue
-        if obj.get("project") != project_dir:
-            continue
-        sid = obj.get("sessionId")
-        raw_ts = obj.get("timestamp")
-        if not sid or raw_ts is None:
-            continue
-        dt = datetime.fromtimestamp(raw_ts / 1000, tz=timezone.utc)
-        display = normalize(obj.get("display", ""))
-        rec = grouped.setdefault(sid, {"end": dt, "preview": "", "fallback_preview": "", "search": []})
-        if dt >= rec["end"]:
-            rec["end"] = dt
-            if display and is_meaningful(display):
-                rec["preview"] = display[:120]
-            elif display:
-                rec["fallback_preview"] = display[:120]
-        if display:
-            rec["search"].append(display.lower())
-    for sid, rec in grouped.items():
-        haystack = "\n".join(rec["search"])
-        if is_sid:
-            if sid.lower() != query_lc:
-                continue
-        elif query_lc not in haystack and query_lc not in sid.lower() and query_lc not in record_search_text(sid) and query_lc not in " ".join(aliases_by_sid.get(sid, [])).lower():
-            continue
-        preview_text = rec["preview"] or rec["fallback_preview"] or "(no summary)"
-        rows.append(("claude", sid, rec["end"], record_preview(sid, preview_text)))
-
-rows.sort(key=lambda row: row[2], reverse=True)
-
-if len(rows) == 1:
-    tool, sid, _, preview = rows[0]
-    print(f"{tool}\t{sid}\t{preview}")
-    sys.exit(0)
-
-if not rows:
-    print(f"一致するセッションがありません: {query}", file=sys.stderr)
-    sys.exit(1)
-
-print(f"候補が複数あります: {query}", file=sys.stderr)
-for tool, sid, _, preview in rows[:10]:
-    print(f"- {tool} {sid} {preview}", file=sys.stderr)
-sys.exit(2)
+payload = json.loads(sys.argv[1] or "{}")
+print(f"{payload.get('tool','')}\t{payload.get('session_id','')}\t{payload.get('preview','')}")
 PY
 }
 
 restore_session() {
     local mode="resume"
-    if [ "${1:-}" = "--fork" ]; then
-        mode="fork"
-        shift
-    fi
+    local force_resume="0"
+    while [ $# -gt 0 ]; do
+        case "${1:-}" in
+            --fork)
+                mode="fork"
+                shift
+                ;;
+            --force-resume)
+                force_resume="1"
+                shift
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
 
     if [ $# -lt 1 ]; then
-        echo "使い方: ai restore [--fork] <session_id|キーワード> [追加プロンプト]"
+        echo "使い方: ai restore [--fork] [--force-resume] <session_id|キーワード> [追加プロンプト]"
         return 1
     fi
 
     local query="$1"
     shift
     local extra_prompt="${*:-}"
-    local resolved
+    local resolved_json resolved
 
-    if ! resolved=$(resolve_session "$query" 2> >(cat >&2)); then
+    if ! resolved_json="$(session_state_resolve_json "$query")"; then
         return 1
     fi
+    resolved="$(python3 - "$resolved_json" <<'PY'
+import json
+import sys
 
-    local tool session_id preview record_json overview restore_prompt rc
+payload = json.loads(sys.argv[1] or "{}")
+print(f"{payload.get('tool','')}\t{payload.get('session_id','')}\t{payload.get('preview','')}")
+PY
+)"
+
+    local tool session_id preview record_json overview restore_prompt rc work_json work_context_prompt combined_extra_prompt load_context_prompt auto_fork_note
+    local should_fork load_summary
     tool=$(printf '%s' "$resolved" | cut -f1)
     session_id=$(printf '%s' "$resolved" | cut -f2)
     preview=$(printf '%s' "$resolved" | cut -f3-)
-    record_json="$(read_session_record_json "$session_id")"
+    record_json="$(python3 - "$(read_session_record_json "$session_id")" "$resolved_json" <<'PY'
+import json
+import sys
 
-    overview="$(python3 - "$record_json" "$tool" "$session_id" "$preview" <<'PY'
+base = json.loads(sys.argv[1] or "{}")
+resolved = json.loads(sys.argv[2] or "{}")
+if isinstance(resolved, dict):
+    for key in ("tool", "session_id", "preview", "start", "end", "metrics", "load"):
+        if resolved.get(key):
+            mapped = {
+                "metrics": "session_metrics",
+                "load": "session_load",
+                "start": "session_start",
+                "end": "session_end",
+            }.get(key, key)
+            base[mapped] = resolved[key]
+    record = resolved.get("record")
+    if isinstance(record, dict):
+        for key, value in record.items():
+            if value and key not in base:
+                base[key] = value
+print(json.dumps(base, ensure_ascii=False))
+PY
+)"
+
+    should_fork="$(python3 - "$record_json" <<'PY'
+import json
+import sys
+record = json.loads(sys.argv[1] or "{}")
+load = record.get("session_load") or {}
+print("1" if load.get("should_fork") else "0")
+PY
+)"
+    load_summary="$(python3 - "$record_json" <<'PY'
+import json
+import sys
+record = json.loads(sys.argv[1] or "{}")
+load = record.get("session_load") or {}
+print(load.get("summary", ""))
+PY
+)"
+
+    if [ "$mode" = "resume" ] && [ "$force_resume" != "1" ] && [ "$should_fork" = "1" ]; then
+        mode="fork"
+        auto_fork_note="長セッション判定のため fork で再開します。"
+    fi
+
+    overview="$(python3 - "$record_json" "$tool" "$session_id" "$preview" "$mode" "$auto_fork_note" <<'PY'
 import json
 import sys
 
@@ -987,6 +1501,8 @@ record = json.loads(sys.argv[1] or "{}")
 tool = sys.argv[2]
 session_id = sys.argv[3]
 preview = sys.argv[4]
+mode = sys.argv[5]
+auto_fork_note = sys.argv[6]
 
 def clean(text, limit=220):
     text = " ".join(str(text).split())
@@ -1000,6 +1516,7 @@ title = clean(record.get("title", ""), 120)
 purpose = clean(record.get("purpose", ""), 220)
 completed = [clean(item, 160) for item in (record.get("completed") or []) if clean(item, 160)]
 remaining = [clean(item, 160) for item in (record.get("remaining") or []) if clean(item, 160)]
+load = record.get("session_load") or {}
 
 if alias:
     lines.append(f"別名: {alias}")
@@ -1013,17 +1530,77 @@ if completed:
     lines.append(f"完了: {completed[0]}")
 if remaining:
     lines.append(f"未完了: {remaining[0]}")
+if load.get("summary"):
+    lines.append(f"負荷判定: {clean(load.get('summary', ''), 120)}")
+lines.append(f"復元方式: {mode}")
+if auto_fork_note:
+    lines.append(auto_fork_note)
 
 print("\n".join(lines))
 PY
-)"
+    )"
     printf '%s\n' "$overview"
-    restore_prompt="$(build_restore_prompt "$record_json" "$extra_prompt")"
+    activate_session_work "$session_id" "$tool" "$preview" >/dev/null 2>&1 || true
+    compact_current_handoff_if_needed
+    ensure_current_batch_item
+    work_json="$(work_state_status_json)"
+    work_context_prompt="$(python3 - "$work_json" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1] or "{}")
+work = payload.get("current_work") or {}
+work_id = payload.get("current_work_id") or ""
+purpose = " ".join(str(work.get("purpose", "")).split())
+handoff = work.get("handoff_path", "")
+batch_id = work.get("current_batch_id", "")
+batch_title = " ".join(str(work.get("current_batch_title", "")).split())
+batch_item_id = work.get("current_batch_item_id", "")
+batch_item_title = " ".join(str(work.get("current_batch_item_title", "")).split())
+lines = []
+if work_id:
+    lines.append("現在の仕事正本を優先して続けてください。")
+    lines.append(f"- work_id: {work_id}")
+if purpose:
+    lines.append(f"- 目的: {purpose[:220]}")
+if handoff:
+    lines.append(f"- 最新 handoff: {handoff}")
+if batch_id:
+    lines.append(f"- current batch: {batch_id} {batch_title[:80]}")
+if batch_item_id:
+    lines.append(f"- active item: {batch_item_id} {batch_item_title[:80]}")
+print("\n".join(lines))
+PY
+)"
+    load_context_prompt="$(python3 - "$record_json" "$mode" <<'PY'
+import json
+import sys
+
+record = json.loads(sys.argv[1] or "{}")
+mode = sys.argv[2]
+load = record.get("session_load") or {}
+lines = []
+if load.get("should_compact"):
+    lines.append("この案件は長セッション化しているため、古い会話全文ではなく current work handoff を正本として続けてください。")
+    lines.append("- 区切りごとに `.ai_handoff.md` を更新し、圧縮後の状態だけを残す")
+if mode == "fork":
+    lines.append("今回は fork 復元なので、前セッションの詳細を引きずらず current work の最新状態から再構成してください。")
+print("\n".join(lines))
+PY
+)"
+    combined_extra_prompt="$(python3 - "$work_context_prompt" "$load_context_prompt" "$extra_prompt" <<'PY'
+import sys
+
+parts = ["\n".join(str(arg).splitlines()).strip() for arg in sys.argv[1:]]
+print("\n\n".join(part for part in parts if part))
+PY
+)"
+    restore_prompt="$(build_restore_prompt "$record_json" "$combined_extra_prompt")"
 
     cd "$PROJECT_DIR"
 
     if [ "$tool" = "codex" ]; then
-        set_current_tool "codex"
+        ensure_tool_available "codex" || return 1
         set +e
         if [ "$mode" = "fork" ]; then
             if [ -n "$restore_prompt" ]; then
@@ -1041,7 +1618,7 @@ PY
         rc=$?
         set -e
     else
-        set_current_tool "claude"
+        ensure_tool_available "claude" || return 1
         set +e
         if [ "$mode" = "fork" ]; then
             if [ -n "$restore_prompt" ]; then
@@ -1060,7 +1637,7 @@ PY
         set -e
     fi
 
-    capture_latest_session_snapshot "$tool" "$session_id" "$preview"
+    capture_latest_session_snapshot "$tool"
     return "$rc"
 }
 
@@ -1075,7 +1652,7 @@ pin_session_alias() {
     local query="$*"
     local resolved
 
-    if ! resolved=$(resolve_session "$query" 2> >(cat >&2)); then
+    if ! resolved=$(resolve_session "$query"); then
         return 1
     fi
 
@@ -1163,16 +1740,18 @@ def summary(record):
     title = normalize(record.get("title", ""))
     purpose = normalize(record.get("purpose", ""))
     remaining = record.get("remaining") or []
+    load = record.get("session_load") or {}
+    prefix = f"[{load.get('label')}]" if load.get("label") else ""
     if title and purpose and title != purpose:
-        return f"{title} / {purpose}"[:72]
+        return f"{prefix} {title} / {purpose}".strip()[:72]
     if purpose and remaining:
-        return f"{purpose} / 残: {normalize(remaining[0])}"[:72]
+        return f"{prefix} {purpose} / 残: {normalize(remaining[0])}".strip()[:72]
     if title and remaining:
-        return f"{title} / 残: {normalize(remaining[0])}"[:72]
+        return f"{prefix} {title} / 残: {normalize(remaining[0])}".strip()[:72]
     if title:
-        return title[:72]
+        return f"{prefix} {title}".strip()[:72]
     if purpose:
-        return purpose[:72]
+        return f"{prefix} {purpose}".strip()[:72]
     return "復元メモ未登録"
 
 print("alias                tool     updated_at                  summary")
@@ -1198,7 +1777,39 @@ generate_auto_context() {
 
     local context=""
     local handoff_file
+    local state_json
+    local prev_tool
+    local switched_at
+    local current_work_id
+    local current_work_title
+    local current_handoff_path
+    local current_batch_id
+    local current_batch_title
+    local current_batch_summary
+    local current_batch_item_id
+    local current_batch_item_title
+    local compaction_required
+    local compaction_summary
+    local compaction_requested_at
+    local last_session_load_summary
+    compact_current_handoff_if_needed
+    ensure_current_batch_item
     handoff_file="$(get_handoff_file)"
+    state_json="$(work_state_status_json)"
+    prev_tool="$(json_get "$state_json" "current_tool")"
+    switched_at="$(json_get "$state_json" "switched_at")"
+    current_work_id="$(json_get "$state_json" "current_work_id")"
+    current_work_title="$(json_current_work_field "$state_json" "title")"
+    current_handoff_path="$(json_current_work_field "$state_json" "handoff_path")"
+    current_batch_id="$(json_current_work_field "$state_json" "current_batch_id")"
+    current_batch_title="$(json_current_work_field "$state_json" "current_batch_title")"
+    current_batch_summary="$(json_current_work_field "$state_json" "current_batch_summary")"
+    current_batch_item_id="$(json_current_work_field "$state_json" "current_batch_item_id")"
+    current_batch_item_title="$(json_current_work_field "$state_json" "current_batch_item_title")"
+    compaction_required="$(json_current_work_field "$state_json" "compaction_required")"
+    compaction_summary="$(json_current_work_field "$state_json" "compaction_summary")"
+    compaction_requested_at="$(json_current_work_field "$state_json" "compaction_requested_at")"
+    last_session_load_summary="$(json_current_work_field "$state_json" "last_session_load_summary")"
 
     # 1. git の変更状態（何が変わったか）
     local git_status
@@ -1216,20 +1827,19 @@ generate_auto_context() {
         handoff_content=$(cat "$handoff_file")
     fi
 
-    # 4. 状態ファイルから前回の情報
-    local prev_tool="unknown"
-    local switched_at=""
-    if [ -f "$STATE_FILE" ]; then
-        prev_tool=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('current_tool','unknown'))" 2>/dev/null || echo "unknown")
-        switched_at=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('switched_at',''))" 2>/dev/null || echo "")
-    fi
-
     # コンテキストを構造化して組み立て
     cat <<CONTEXT
 # 引き継ぎコンテキスト
 
 ## 前の担当ツール
 ${prev_tool}（切替時刻: ${switched_at:-不明}）
+
+## 現在の仕事
+ID: ${current_work_id:-未設定}
+概要: ${current_work_title:-未設定}
+正本 handoff: ${current_handoff_path:-未設定}
+直近 session load: ${last_session_load_summary:-未設定}
+current batch: ${current_batch_id:-未設定}
 
 ## 作業ディレクトリの状態
 \`\`\`
@@ -1250,15 +1860,62 @@ CONTEXT
 
     # 前ツールが書き出した引き継ぎメモがあれば追加
     if [ -n "$handoff_content" ]; then
-        cat <<HANDOFF
-
-## 前の担当からの引き継ぎメモ
-${handoff_content}
-
-HANDOFF
+        printf '\n## 前の担当からの引き継ぎメモ\n%s\n\n' "$handoff_content"
     fi
 
-    cat <<INSTRUCTION
+    if [ -n "$current_batch_id" ]; then
+        local batch_item_json
+        batch_item_json="$(read_current_batch_item_json)"
+        python3 - "$batch_item_json" "$current_batch_id" "$current_batch_title" "$current_batch_summary" "$current_batch_item_id" "$current_batch_item_title" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1] or "{}")
+batch = payload.get("batch") or {}
+item = payload.get("active_item") or {}
+batch_id = sys.argv[2]
+batch_title = sys.argv[3]
+batch_summary = sys.argv[4]
+item_id = sys.argv[5]
+item_title = sys.argv[6]
+
+print("")
+print("## current batch")
+print(f"batch_id: {batch_id}")
+if batch_title:
+    print(f"概要: {batch_title}")
+if batch_summary:
+    print(f"進捗: {batch_summary}")
+if batch.get("schema_hint"):
+    print(f"スキーマ: {batch.get('schema_hint','')}")
+if batch.get("source"):
+    print(f"ソース: {batch.get('source','')}")
+if item_id:
+    print("")
+    print("### 実行中 item")
+    print(f"item_id: {item_id}")
+    print(f"タイトル: {item_title}")
+if item.get("source_ref"):
+    print(f"source_ref: {item.get('source_ref','')}")
+if item.get("payload_preview"):
+    print(f"payload: {item.get('payload_preview','')}")
+print("")
+PY
+    fi
+
+    if [ "$compaction_required" = "True" ] || [ "$compaction_required" = "true" ]; then
+        cat <<COMPACTION
+
+## handoff 圧縮要求
+- 状態: pending
+- 理由: ${compaction_summary:-前回セッションが長く、current work handoff を再圧縮する必要があります}
+- 要求時刻: ${compaction_requested_at:-不明}
+- 方針: 古い会話全文ではなく \`.ai_handoff.md\` と current work handoff を最新状態だけに再圧縮してから続ける
+
+COMPACTION
+    fi
+
+    cat <<'INSTRUCTION'
 
 ## あなたへの指示
 1. 上記のコンテキストを踏まえて作業を続けてください
@@ -1269,7 +1926,13 @@ HANDOFF
    - **判断とその理由**: なぜその選択をしたか（これが最重要）
    - **変更したファイル**: パスと変更内容の概要
    - **次の担当へ**: 次にやるべきこと、注意点
-3. この引き継ぎメモなしにセッションを終了しないでください
+3. .ai_handoff.md は current work の mirror として同期される。案件全体の正本は System/data/ai_router/handoffs/<work_id>.md 側に保持される前提で書いてください
+4. この引き継ぎメモなしにセッションを終了しないでください
+5. `handoff 圧縮要求: pending` がある場合は、実装や調査を続ける前に `.ai_handoff.md` を最新状態だけに再圧縮してください
+6. 再圧縮では `目的 / 確定事項 / 完了 / 未完了 / 判断と理由 / 参照先 / 変更したファイル / 次の担当へ` 以外を残さないでください
+7. `current batch` がある場合は、その batch の active item を今回の処理単位として扱ってください
+8. active item を完了したら `ai batch done <item_id> --summary "<結果要約>"` を実行し、失敗したら `ai batch fail <item_id> --error "<理由>"` を実行してください
+9. active item が無い場合は `ai batch next` で次件を取得してから着手してください
 
 INSTRUCTION
 }
@@ -1353,11 +2016,15 @@ PY
 # ============================================================
 launch_codex() {
     local prompt="${1:-}"
+    local prepared_json="${2:-}"
     local context
     local final_prompt
     local rc
+    if [ -z "$prepared_json" ]; then
+        prepared_json="$(prepare_work_context "$prompt" "codex")"
+    fi
+    ensure_tool_available "codex" || return 1
     context=$(generate_auto_context)
-    set_current_tool "codex"
     cd "$PROJECT_DIR"
 
     if [ -n "$prompt" ]; then
@@ -1380,11 +2047,15 @@ launch_codex() {
 
 launch_claude() {
     local prompt="${1:-}"
+    local prepared_json="${2:-}"
     local context
     local final_prompt
     local rc
+    if [ -z "$prepared_json" ]; then
+        prepared_json="$(prepare_work_context "$prompt" "claude")"
+    fi
+    ensure_tool_available "claude" || return 1
     context=$(generate_auto_context)
-    set_current_tool "claude"
     cd "$PROJECT_DIR"
 
     if [ -n "$prompt" ]; then
@@ -1412,6 +2083,7 @@ case "${1:-}" in
     switch)
         current=$(get_current_tool)
         handoff_file="$(get_handoff_file)"
+        sync_root_handoff_to_work
         if [ "$current" = "codex" ]; then
             echo "🔄 Codex → Claude Code に切り替えます"
             echo ""
@@ -1454,11 +2126,38 @@ case "${1:-}" in
 
     status)
         current=$(get_current_tool)
+        current_work_id="$(get_current_work_id)"
+        state_json="$(work_state_status_json)"
+        current_work_title="$(json_current_work_field "$state_json" "title")"
+        current_handoff_path="$(json_current_work_field "$state_json" "handoff_path")"
+        current_batch_id="$(json_current_work_field "$state_json" "current_batch_id")"
+        current_batch_title="$(json_current_work_field "$state_json" "current_batch_title")"
+        current_batch_summary="$(json_current_work_field "$state_json" "current_batch_summary")"
+        current_batch_item_id="$(json_current_work_field "$state_json" "current_batch_item_id")"
+        current_batch_item_title="$(json_current_work_field "$state_json" "current_batch_item_title")"
         handoff_file="$(get_handoff_file)"
         echo "=== AI ツール状態 ==="
         echo "アクティブ: $current"
+        echo "現在の仕事: ${current_work_id:-なし}"
+        echo "仕事の概要: ${current_work_title:-なし}"
+        echo "仕事の正本 handoff: ${current_handoff_path:-なし}"
+        if [ -n "$current_batch_id" ]; then
+            echo "current batch: ${current_batch_id} / ${current_batch_title:-なし}"
+            echo "batch 進捗: ${current_batch_summary:-なし}"
+            if [ -n "$current_batch_item_id" ]; then
+                echo "active item: ${current_batch_item_id} / ${current_batch_item_title:-なし}"
+            fi
+        fi
+        compaction_required="$(json_current_work_field "$state_json" "compaction_required")"
+        compaction_summary="$(json_current_work_field "$state_json" "compaction_summary")"
+        if [ "$compaction_required" = "True" ] || [ "$compaction_required" = "true" ]; then
+            echo "handoff 圧縮要求: pending"
+            echo "圧縮理由: ${compaction_summary:-前回セッションが長いため}"
+        fi
         if [ -f "$STATE_FILE" ]; then
-            echo "最終切替: $(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('switched_at','?'))" 2>/dev/null)"
+            echo "最終切替: $(json_get "$state_json" "switched_at")"
+        elif [ -f "$LEGACY_STATE_FILE" ]; then
+            echo "最終切替: $(python3 -c "import json; print(json.load(open('$LEGACY_STATE_FILE')).get('switched_at','?'))" 2>/dev/null)"
         fi
         echo ""
         if [ -f "$handoff_file" ]; then
@@ -1475,9 +2174,284 @@ case "${1:-}" in
         git status --short 2>/dev/null || echo "git unavailable"
         ;;
 
+    doctor)
+        doctor_runtime
+        ;;
+
+    works)
+        shift
+        list_work_records "${*:-}" "20"
+        ;;
+
+    work)
+        shift
+        activate_work_selection "${*:-}"
+        ;;
+
+    batches)
+        shift
+        list_batch_records "${*:-}" "20"
+        ;;
+
+    batch)
+        shift || true
+        subcommand="${1:-}"
+        if [ $# -gt 0 ]; then
+            shift
+        fi
+        case "$subcommand" in
+            ""|help|--help|-h)
+                cat <<'BATCH_HELP'
+ai batch - batch queue 管理
+
+使い方:
+  ai batches [検索語]                         batch 一覧を表示
+  ai batch create <title> [--tool codex|claude] [--type 種別] [--source 出所] [--schema 要件]
+  ai batch import <batch> <jsonl_path>       JSONL をまとめて投入
+  ai batch sync <batch>                      source から新規 item を自動投入
+  ai batch show [batch]                      batch の詳細と active item を表示
+  ai batch skills [検索語]                   自動生成された skill 候補を一覧表示
+  ai batch start <batch> [--launch]          current work に接続し、必要なら次件を取得
+  ai batch next [batch]                      active item を表示。無ければ次件を取得
+  ai batch done [item_id] --summary <要約>   active item を完了扱いにする
+  ai batch fail [item_id] --error <理由>     active item を失敗扱いにする
+  ai batch release [item_id]                 active item を pending に戻す
+BATCH_HELP
+                ;;
+
+            create)
+                if [ $# -lt 1 ]; then
+                    echo "使い方: ai batch create <title> [--tool codex|claude] [--type 種別] [--source 出所] [--schema 要件]"
+                    exit 1
+                fi
+                batch_title="$1"
+                shift
+                batch_tool="codex"
+                batch_type=""
+                batch_source=""
+                batch_schema=""
+                while [ $# -gt 0 ]; do
+                    case "${1:-}" in
+                        --tool)
+                            batch_tool="${2:-codex}"
+                            shift 2
+                            ;;
+                        --type)
+                            batch_type="${2:-}"
+                            shift 2
+                            ;;
+                        --source)
+                            batch_source="${2:-}"
+                            shift 2
+                            ;;
+                        --schema)
+                            batch_schema="${2:-}"
+                            shift 2
+                            ;;
+                        *)
+                            echo "不明な引数です: $1"
+                            exit 1
+                            ;;
+                    esac
+                done
+                batch_payload="$(create_batch_record "$batch_title" "$batch_tool" "$batch_type" "$batch_source" "$batch_schema")"
+                python3 - "$batch_payload" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1] or "{}")
+batch = payload.get("batch") or {}
+print("batch を作成しました。")
+print(f"batch_id: {batch.get('batch_id','')}")
+print(f"概要: {batch.get('title','')}")
+print(f"担当ツール: {batch.get('preferred_tool','')}")
+print(f"次: ai batch start {batch.get('batch_id','')} --launch")
+PY
+                ;;
+
+            import)
+                if [ $# -lt 2 ]; then
+                    echo "使い方: ai batch import <batch_id|キーワード> <jsonl_path>"
+                    exit 1
+                fi
+                batch_id="$(resolve_batch_id "$1")" || exit 1
+                import_path="$2"
+                import_payload="$(import_batch_jsonl "$batch_id" "$import_path")"
+                python3 - "$import_payload" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1] or "{}")
+batch = payload.get("batch") or {}
+print("batch に投入しました。")
+print(f"batch_id: {batch.get('batch_id','')}")
+print(f"投入件数: {payload.get('imported_count', 0)}")
+print(f"重複skip: {payload.get('skipped_count', 0)}")
+print(f"進捗: {batch.get('summary','')}")
+PY
+                ;;
+
+            sync)
+                if [ $# -lt 1 ]; then
+                    echo "使い方: ai batch sync <batch_id|キーワード>"
+                    exit 1
+                fi
+                batch_id="$(resolve_batch_id "$1")" || exit 1
+                sync_payload="$(sync_batch_source_json "$batch_id")"
+                python3 - "$sync_payload" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1] or "{}")
+batch = payload.get("batch") or {}
+print("source から同期しました。")
+print(f"batch_id: {batch.get('batch_id','')}")
+print(f"投入件数: {payload.get('imported_count', 0)}")
+print(f"重複skip: {payload.get('skipped_count', 0)}")
+print(f"source sync: {batch.get('source_last_sync_summary','')}")
+PY
+                ;;
+
+            show)
+                show_batch_record "${*:-}"
+                ;;
+
+            skills)
+                list_skill_candidate_records "${*:-}" "20"
+                ;;
+
+            start)
+                if [ $# -lt 1 ]; then
+                    echo "使い方: ai batch start <batch_id|キーワード> [--launch]"
+                    exit 1
+                fi
+                launch_flag="0"
+                batch_query="$1"
+                shift
+                while [ $# -gt 0 ]; do
+                    case "${1:-}" in
+                        --launch)
+                            launch_flag="1"
+                            shift
+                            ;;
+                        *)
+                            echo "不明な引数です: $1"
+                            exit 1
+                            ;;
+                    esac
+                done
+                start_batch_work "$batch_query" "$launch_flag"
+                ;;
+
+            next)
+                claim_next_batch_item "${*:-}"
+                ;;
+
+            done)
+                item_id="${1:-}"
+                if [ $# -gt 0 ] && [[ "$item_id" != --* ]]; then
+                    shift
+                else
+                    item_id=""
+                fi
+                complete_current_batch_item "$item_id" "$@"
+                ;;
+
+            fail)
+                item_id="${1:-}"
+                if [ $# -gt 0 ] && [[ "$item_id" != --* ]]; then
+                    shift
+                else
+                    item_id=""
+                fi
+                fail_current_batch_item "$item_id" "$@"
+                ;;
+
+            release)
+                release_current_batch_item "${1:-}"
+                ;;
+
+            *)
+                echo "不明な batch サブコマンドです: $subcommand"
+                exit 1
+                ;;
+        esac
+        ;;
+
     sessions)
         shift
         list_sessions "${*:-}" "20"
+        ;;
+
+    session)
+        shift || true
+        subcommand="${1:-}"
+        if [ $# -gt 0 ]; then
+            shift
+        fi
+        case "$subcommand" in
+            ""|help|--help|-h)
+                cat <<'SESSION_HELP'
+ai session - session snapshot の保存/検証
+
+使い方:
+  ai session snapshot [codex|claude] [session_id] [preview]
+  ai session verify [codex|claude] [session_id]
+SESSION_HELP
+                ;;
+
+            snapshot)
+                session_tool="${1:-$(get_current_tool)}"
+                if [ $# -gt 0 ]; then
+                    shift || true
+                fi
+                session_id="${1:-}"
+                if [ $# -gt 0 ]; then
+                    shift || true
+                fi
+                session_preview="${*:-}"
+                snapshot_latest_session "$session_tool" "$session_id" "$session_preview"
+                ;;
+
+            verify)
+                session_tool="${1:-$(get_current_tool)}"
+                if [ $# -gt 0 ]; then
+                    shift || true
+                fi
+                session_id="${1:-}"
+                if [ -z "$session_tool" ] || [ "$session_tool" = "none" ]; then
+                    echo "使い方: ai session verify [codex|claude] [session_id]"
+                    exit 1
+                fi
+                verify_payload="$(verify_session_snapshot_json "$session_tool" "$session_id")"
+                python3 - "$verify_payload" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1] or "{}")
+print(f"tool: {payload.get('tool','')}")
+print(f"session_id: {payload.get('session_id','') or '未検出'}")
+print(f"session record: {'OK' if payload.get('session_found') else 'NG'}")
+print(f"snapshot record: {'OK' if payload.get('snapshot_found') else 'NG'}")
+for key, label in (
+    ("snapshot_content", "handoff 要約"),
+    ("session_metrics", "metrics"),
+    ("session_load", "load"),
+    ("work_link", "work 紐づけ"),
+):
+    print(f"{label}: {'OK' if payload.get('checks', {}).get(key) else 'NG'}")
+if payload.get("work_id"):
+    print(f"work_id: {payload.get('work_id','')}")
+if payload.get("snapshot_title"):
+    print(f"title: {payload.get('snapshot_title','')}")
+PY
+                ;;
+
+            *)
+                echo "不明な session サブコマンドです: $subcommand"
+                exit 1
+                ;;
+        esac
         ;;
 
     restore)
@@ -1514,9 +2488,16 @@ ai - Claude Code / Codex CLI シームレス切り替え
   ai claude "タスク"      Claude Code を起動
   ai switch              ツール間切り替え（自動引き継ぎ）
   ai status              現在の状態 + 引き継ぎメモを表示
-  ai sessions [検索語]    保存済みセッションを一覧/検索
-  ai restore <ID|語>      セッションをそのまま再開
+  ai doctor              パス解決と復元素材の存在を確認
+  ai works [検索語]       current work を一覧/検索
+  ai work [ID|語]         current work を表示/切り替え
+  ai batches [検索語]     batch queue を一覧/検索
+  ai batch ...            batch queue を作成/投入/進行
+  ai sessions [検索語]    保存済みセッションを一覧/検索（load付き）
+  ai session ...          session snapshot の保存/検証
+  ai restore <ID|語>      セッションを再開。重い場合は自動で fork
   ai restore --fork <...> セッションを分岐復元
+  ai restore --force-resume <...> auto-fork を抑止してそのまま再開
   ai pin <別名> <ID|語>   セッションに人間向けの別名を付ける
   ai pins                保存済み別名を一覧表示
   ai "導線のセッションを復元したい"  日本語の自然文で復元
@@ -1529,11 +2510,21 @@ ai - Claude Code / Codex CLI シームレス切り替え
 
 引き継ぎの仕組み:
   1. git状態（status/diff/最近のcommit）は自動で引き継がれる
-  2. 判断の背景・次にやるべきことは .ai_handoff.md に書き出す
-  3. セッション終了時に、目的/完了/未完了を session_restore_index.json に自動保存する
-  4. ai sessions / ai pins で目的や残タスクの要約まで見える
-  5. ai restore は保存済み要約を表示し、復元メモを自動注入して再開する
-  6. よく使うセッションは ai pin で別名保存しておくと、ai restore <別名> ですぐ戻せる
+  2. current work の正本は System/data/ai_router/ に保持される
+  3. .ai_handoff.md は current work の mirror として同期される
+  4. ai works / ai work で current work の一覧と切り替えができる
+  5. セッション終了時に、目的/完了/未完了を session_restore_index.json に自動保存する
+  6. ai sessions / ai pins で目的や残タスクに加えて session load も見える
+  7. ai restore は保存済み要約を表示し、長セッションなら自動で fork して復元メモを注入する
+ 8. 生 resume が必要な時だけ ai restore --force-resume を使う
+ 9. よく使うセッションは ai pin で別名保存しておくと、ai restore <別名> ですぐ戻せる
+10. 同型タスクは ai batch create / import / start で queue 化し、current work に active item を注入できる
+
+移行時の補足:
+  - PROJECT_DIR は ai スクリプトの位置から自動解決
+  - Codex / Claude は PATH を優先し、無ければ ~/.npm-global/bin/codex と ~/.local/bin/claude を探す
+  - 必要なら AI_PROJECT_DIR / AI_CODEX_CMD / AI_CLAUDE_CMD で上書きできる
+  - 移行後は ai doctor -> ai status -> ai restore <別名> の順で確認する
 HELP
         ;;
 
@@ -1558,14 +2549,14 @@ HELP
                 list_sessions "$query" "20"
             fi
         else
-            # タスク内容から自動判別
-            tool=$(classify_task "$*")
+            prepared_json="$(prepare_work_context "$*" "auto")"
+            tool="$(json_get "$prepared_json" "selected_tool")"
             if [ "$tool" = "codex" ]; then
                 echo "🧠 → Codex (原則: 通常作業)"
-                launch_codex "$*"
+                launch_codex "$*" "$prepared_json"
             else
                 echo "🌐 → Claude Code (例外: ブラウザ操作)"
-                launch_claude "$*"
+                launch_claude "$*" "$prepared_json"
             fi
         fi
         ;;

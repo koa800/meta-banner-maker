@@ -384,6 +384,8 @@ cursor/
 
 **曖昧な依頼を、そのまま実行しない。実行前に `依頼者 / ゴール / 実行主体 / 必須要件 / 完了条件` に変換する。**
 
+**最優先判断は、相手の工数を最も下げる形でタスクを遂行すること。こちらで吸収できる確認、分岐、整理、段取りは先に吸収し、相手には最終判断か不可避な最小アクションだけを残す。**
+
 ### 実行前に必ず確定すること
 
 1. 誰からの依頼か
@@ -391,6 +393,15 @@ cursor/
 3. 誰がやるのが最適か
 4. タスク実行の際に絶対に確認しないといけない要件は何か
 5. 何が確認できたら完了とするか
+
+### 工数最小化の判断軸
+
+- 最初に `相手が実際にやる行動` を 1-2 個まで圧縮できないか考える
+- 選択肢を並べる前に、まず `推奨 1案` を固定する
+- AI やシステムで代行できる調査、整理、入力、予定化は先回りして片付ける
+- 相手に複数の分岐処理を持たせない。失敗時の次の一手までこちらで設計して渡す
+- 代行できない作業でも、相手がそのまま使える文面、押す順番、必要情報の一覧まで落として渡す
+- カレンダー、TODO、メモ、依頼文は `何も考えずにそのまま実行できる粒度` まで書く。`何を開くか / 何を伝えるか / 何を確認するか / NG時にどうするか` が欠けた状態で渡さない
 
 ### 誰がやるべきかの判断軸
 
@@ -481,26 +492,48 @@ ai "このバグ直して"             # → まずCodexで進める
 ai codex "デプロイして"         # → Codexで進める
 ai claude "Looker Studioを確認して" # → ブラウザ操作が必要なときだけ
 ai switch                      # → 必要になった地点で切り替える
+ai works                       # → 保存済み current work を一覧表示
+ai work ai基盤                 # → キーワード一致の current work を切り替え
+ai batches 面談JSON            # → 保存済み batch queue を一覧表示
+ai batch sync 面談JSON         # → source から新規 item を自動投入
+ai batch start 面談JSON --launch # → batch を current work に接続して起動
+ai batch skills                # → 自動生成された skill 候補を一覧表示
 ai sessions 導線              # → 保存済みセッションを検索
+ai session snapshot codex      # → latest session を session_restore_index.json に保存
+ai session verify codex        # → session snapshot の保存状態を検証
 ai restore 導線ツール         # → キーワード一致のセッションを再開
 ai restore --fork 019c...     # → セッションを分岐復元
+ai restore --force-resume 導線ツール # → auto-fork を抑止してそのまま再開
 ai pin 導線ツール 019c...     # → 復元用の別名を保存
 ai pins                       # → 保存済み別名を表示
 ai "導線のセッションを復元したい" # → 日本語の自然文で復元
 ai                             # → デフォルトでCodex起動
 ```
 
-- セッション復元が必要になったら、まず `ai sessions [キーワード]` で候補を見る
+- current work を切り替えたい時は、まず `ai works [キーワード]` で候補を見る
+- current work は `ai work <work_id|キーワード>` で切り替える。引数なしなら現在の仕事を確認できる
+- セッション復元が必要になったら、`ai sessions [キーワード]` で候補を見る
 - 英語コマンドを覚えなくても、`ai "導線のセッションを復元したい"` のような自然文で復元できる
-- `ai sessions` は session_id だけでなく、保存済みなら `目的 / 未完了` の要約も一緒に出す
+- `ai sessions` は session_id だけでなく、保存済みなら `目的 / 未完了` の要約と `load` も一緒に出す
 - 一致が1件なら `ai restore <session_id|キーワード>` でそのまま再開できる
-- `ai restore` は再開前に `何のセッションか / どこまで進んでいたか / 何が残っているか` を表示し、その要約を復元プロンプトにも自動注入する
+- `ai restore` は再開前に `何のセッションか / どこまで進んでいたか / 何が残っているか / session load` を表示し、重い session は自動で fork に倒して復元プロンプトにも反映する
+- 生 resume が必要な時だけ `ai restore --force-resume <session_id|キーワード>` を使う
 - 元の会話を壊したくない時は `ai restore --fork <session_id|キーワード>` を使う
 - よく使うセッションは `ai pin <別名> <session_id|キーワード>` で固定し、以後は `ai restore <別名>` で戻る
 - `ai pins` は保存済み別名ごとに、復元メモの有無と要約を見せる
+- 同型タスクは `ai batch create -> ai batch import -> ai batch start --launch` で queue 化する
+- batch の `source` に JSONL ファイルまたはディレクトリを入れておくと、`ai batch sync <batch>` で差分投入できる
+- `ai batch start` / `ai batch next` は、source 付き batch なら claim 前に自動 sync する
+- batch を current work に接続すると、起動時に active item が自動で context に入り、完了時は `ai batch done <item_id> --summary "..."`、失敗時は `ai batch fail <item_id> --error "..."` で進捗を残せる
+- active item を一旦戻したい時は `ai batch release <item_id>` を使う
+- 完了済み item が溜まると、batch から skill 候補が自動生成される。確認は `ai batch skills` を使う
+- 前回 session の `load.should_compact = true` なら、current work に `handoff 圧縮要求` が残り、次回起動前に handoff compactor が自動実行される。compactor で解消できなかった時だけ圧縮指示が prompt に残る
+- `ai session snapshot <tool>` と `ai session verify <tool>` で、`session_restore_index.json` への保存経路を手動で点検できる
 - 通常の継続単位は `session` ではなく `current work` として扱う
 - `current work` の正本は `System/data/ai_router/work_index.json` と `System/data/ai_router/handoffs/<work_id>.md`
 - `.ai_handoff.md` は `current work` の mirror。案件全体の正本としては扱わない
+- batch queue の正本は `System/data/ai_router/batch_index.json`
+- skill 候補の正本は `System/data/ai_router/skill_candidate_index.json`
 - 別名の正本は `Master/output/session_aliases.json`、セッション要約の正本は `Master/output/session_restore_index.json` に置く
 - 強制終了時も `~/.codex/sessions/` や `~/.claude/history.jsonl` を手で掘る前に、まずこの入口を使う
 
@@ -572,6 +605,7 @@ ai                             # → デフォルトでCodex起動
 - 却下案は、同じ誤判断の再発防止に必要なものだけ、却下理由を 1-2 行で残す
 - パス、URL、ID は再開に必要な最小限だけ残す
 - 正本 handoff は `System/data/ai_router/handoffs/<work_id>.md` 側へ同期される前提で書く
+- session load が `medium` 以上で終了した後は、次回起動前に handoff compactor が自動実行される。そこで `.ai_handoff.md` の digest が変わると pending は自動解除され、compactor で解消できなかった時だけ追加の圧縮指示が prompt に残る
 
 圧縮後の運用:
 
