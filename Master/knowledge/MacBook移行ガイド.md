@@ -1,70 +1,141 @@
 # MacBook移行ガイド
 
-最終更新: 2026-02-21（GitHub同期移行に伴い簡素化）
+最終更新: 2026-03-12
 
 ## 概要
 
-MacBookを新しい機種に交換する際の手順。**Mac Miniは影響なし**（全データ・サービスはMac Miniで独立稼働）。
+MacBook を新しい機種に交換する時の手順。
+Mac Mini と Render は継続稼働するので、停止前提の作業は不要。
+
+今回の前提で重要なのは次の 2 層です。
+
+1. `cursor/` 配下の正本
+2. `~/.codex/` と `~/.claude/` にある実行環境固有データ
+
+`ai` の current work / batch / handoff / session snapshot は、正本をリポジトリ側に寄せた。
+そのため、新 MacBook でも `git clone` 後に `ai doctor` と `ai restore` で復元しやすい。
+
+ただし、元の会話をそのまま `resume` したいなら、`~/.codex/sessions/` または `~/.claude/history.jsonl` も移す必要がある。
+移さなくても、保存済み snapshot と handoff から `rehydrate` で続行はできる。
 
 ---
 
-## 実際に必要なもの（最小セット）
+## 正本とローカル依存の切り分け
 
-| 種別 | 必要なもの | 理由 |
-|------|------------|------|
-| **必須** | `cursor` リポジトリの最新 push | 新MacBookでは `git clone` のみで復元可能 |
-| **必須** | post-commit フック 1ファイル | `.git/hooks/` はリポジトリに含まれないため手動復元（内容は `git push origin main` のみ） |
-| **推奨** | SSH鍵（旧の移行 or 新規生成） | Mac Mini へのデバッグ接続用。同期自体はGitHub経由なので不要 |
-| **推奨** | `~/.claude/` のバックアップ | Claude Code の設定・MEMORY。無くても新規セットアップ可 |
-| **条件付き** | `token_calendar_personal.json` | 朝の予定通知を使う場合のみ。初回は MacBook で OAuth 後に Mac Mini へ scp |
+### リポジトリ側の正本
 
-**不要なもの（移行しなくてよい）**
+これらは `git clone` で復元される。
 
-- Q&Aデータ・LINE秘書学習データ・Addnessゴール・agent.db・token.json → すべて Mac Mini / Render / GitHub 側にある
+| パス | 役割 |
+|------|------|
+| `System/data/ai_router/work_index.json` | current work 一覧 |
+| `System/data/ai_router/batch_index.json` | batch queue 正本 |
+| `System/data/ai_router/skill_candidate_index.json` | skill 候補正本 |
+| `System/data/ai_router/handoffs/` | per-work handoff 正本 |
+| `.ai_handoff.md` | current work の mirror |
+| `Master/output/session_aliases.json` | session 別名 |
+| `Master/output/session_restore_index.json` | session snapshot 要約 |
+
+### ローカル依存
+
+これらは home 配下にあるので、必要なら個別に移す。
+
+| パス | 必須度 | 理由 |
+|------|--------|------|
+| `~/.codex/config.toml` | 必須 | `approval_policy` / `sandbox_mode` など実行設定 |
+| `~/.codex/auth.json` | 推奨 | Codex 再ログインを省ける |
+| `~/.codex/sessions/` | 条件付き | 旧 session を live resume したい時だけ必要 |
+| `~/.codex/skills/` | 推奨 | `Skills/` へのリンク状態の確認用 |
+| `~/.claude/` | 推奨 | Claude Code の設定 |
+| `~/.claude/history.jsonl` | 条件付き | Claude の旧 session を live resume したい時だけ必要 |
+| `.git/hooks/post-commit` | 必須 | commit 後の自動 push |
 
 ---
 
-## 移行前チェックリスト（旧MacBookで作業）
+## 移行前に旧MacBookでやること
 
-### 1. SSHキーのバックアップ
-```bash
-# 旧MacBookのSSH鍵をバックアップ
-cp ~/.ssh/id_rsa ~/Desktop/ssh_backup_id_rsa
-cp ~/.ssh/id_rsa.pub ~/Desktop/ssh_backup_id_rsa.pub
-cp ~/.ssh/config ~/Desktop/ssh_backup_config 2>/dev/null
-```
-※ あるいは新MacBookで新規生成して Mac Mini に公開鍵を追加する（下記参照）
+### 1. GitHub 側へ必ず push する
 
-### 2. Claude Code設定のバックアップ
-```bash
-# MEMORY.md・設定ファイルを含む ~/.claude/ をバックアップ
-cp -r ~/.claude ~/Desktop/claude_backup/
-```
-
-### 3. post-commit フックのバックアップ
-```bash
-# gitに含まれないため個別バックアップが必要
-cp /Users/koa800/Desktop/cursor/.git/hooks/post-commit ~/Desktop/post-commit-backup
-```
-
-### 4. Gitリポジトリのプッシュ確認
 ```bash
 cd /Users/koa800/Desktop/cursor
-git status   # 未コミットの変更がないか確認
+git status
 git push origin main
 ```
 
+未コミット変更がある場合は、移行前に commit するか、最低でも何が未保存か把握してから移る。
+
+### 2. `ai` の復元素材が揃っているか確認する
+
+```bash
+cd /Users/koa800/Desktop/cursor
+System/scripts/ai doctor
+System/scripts/ai status
+```
+
+ここで最低限見たいもの:
+
+- `work_index.json`
+- `batch_index.json`
+- `skill_candidate_index.json`
+- `handoffs/`
+- `session_aliases.json`
+- `session_restore_index.json`
+- `.git/hooks/post-commit`
+- `~/.codex/config.toml`
+- latest session verify
+
+### 3. `~/.codex/` を退避する
+
+live resume を残したいなら `sessions/` まで含めて丸ごと退避してよい。
+
+```bash
+mkdir -p ~/Desktop/migration_backup
+cp ~/.codex/config.toml ~/Desktop/migration_backup/codex-config.toml
+cp ~/.codex/auth.json ~/Desktop/migration_backup/codex-auth.json 2>/dev/null || true
+cp -R ~/.codex/sessions ~/Desktop/migration_backup/codex-sessions 2>/dev/null || true
+cp -R ~/.codex/skills ~/Desktop/migration_backup/codex-skills 2>/dev/null || true
+```
+
+### 4. `~/.claude/` を退避する
+
+```bash
+cp -R ~/.claude ~/Desktop/migration_backup/claude-home 2>/dev/null || true
+cp ~/.claude/history.jsonl ~/Desktop/migration_backup/claude-history.jsonl 2>/dev/null || true
+```
+
+### 5. post-commit フックを退避する
+
+```bash
+cp /Users/koa800/Desktop/cursor/.git/hooks/post-commit ~/Desktop/migration_backup/post-commit
+```
+
+### 6. SSH鍵を退避する
+
+```bash
+mkdir -p ~/Desktop/migration_backup/ssh
+cp ~/.ssh/id_rsa ~/Desktop/migration_backup/ssh/id_rsa 2>/dev/null || true
+cp ~/.ssh/id_rsa.pub ~/Desktop/migration_backup/ssh/id_rsa.pub 2>/dev/null || true
+cp ~/.ssh/id_ed25519 ~/Desktop/migration_backup/ssh/id_ed25519 2>/dev/null || true
+cp ~/.ssh/id_ed25519.pub ~/Desktop/migration_backup/ssh/id_ed25519.pub 2>/dev/null || true
+cp ~/.ssh/config ~/Desktop/migration_backup/ssh/config 2>/dev/null || true
+```
+
 ---
 
-## 移行後セットアップ（新MacBookで作業）
+## 新MacBookでのセットアップ
 
-### ステップ1: Homebrewとgitのインストール
+### 1. 最低限のツールを入れる
+
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 brew install git
 ```
 
-### ステップ2: リポジトリのクローン
+Codex CLI / Claude Code の実行ファイルは、ふだん使っている方法で入れる。
+`ai doctor` は `PATH` を優先し、見つからなければ `~/.npm-global/bin/codex` と `~/.local/bin/claude` も確認する。
+
+### 2. リポジトリを clone する
+
 ```bash
 mkdir -p ~/Desktop
 cd ~/Desktop
@@ -73,148 +144,168 @@ cd cursor
 git submodule update --init
 ```
 
-### ステップ3: post-commit フックの設置
+### 3. post-commit フックを戻す
+
+バックアップがあるならそれを戻す。
+無い場合は最低限 `git push origin main` が走る状態を作る。
+
 ```bash
-# post-commit フックを作成（git push するだけのシンプルなフック）
-cat > ~/Desktop/cursor/.git/hooks/post-commit << 'HOOK'
-#!/bin/bash
-LOG_FILE="$HOME/Desktop/cursor-sync.log"
-(
-  git push origin main 2>> "$LOG_FILE" &
-) &
-HOOK
+cp ~/Desktop/migration_backup/post-commit ~/Desktop/cursor/.git/hooks/post-commit 2>/dev/null || true
 chmod +x ~/Desktop/cursor/.git/hooks/post-commit
 ```
 
-### ステップ4: Claude Code の設定復元
+### 4. `~/.codex/` を戻す
+
 ```bash
-# バックアップから復元
-cp -r ~/Desktop/claude_backup ~/.claude
+mkdir -p ~/.codex
+cp ~/Desktop/migration_backup/codex-config.toml ~/.codex/config.toml 2>/dev/null || true
+cp ~/Desktop/migration_backup/codex-auth.json ~/.codex/auth.json 2>/dev/null || true
+cp -R ~/Desktop/migration_backup/codex-sessions ~/.codex/sessions 2>/dev/null || true
+cp -R ~/Desktop/migration_backup/codex-skills ~/.codex/skills 2>/dev/null || true
 ```
-または新規セットアップ（`~/.claude/settings.json` で bypassPermissions を設定）。
 
-#### Claude Code の認証（Max プランで使う）
+`auth.json` を戻さない場合は、Codex を一度起動して再ログインする。
 
-Claude Code は **Max プラン（月額定額）** で認証して使う。API 従量課金にしないこと。
+### 5. `~/.claude/` を戻す
+
+```bash
+cp -R ~/Desktop/migration_backup/claude-home ~/.claude 2>/dev/null || true
+cp ~/Desktop/migration_backup/claude-history.jsonl ~/.claude/history.jsonl 2>/dev/null || true
+```
+
+### 6. Claude Code を Max で認証する
 
 ```bash
 claude
-# → 「1. Claude account with subscription」を選択してブラウザで Max アカウントにログイン
 ```
 
-**重要: `.zshrc` に `ANTHROPIC_API_KEY` を export しないこと。**
-設定されていると Claude Code が API 従量課金に切り替わる。
-他スクリプト（line_bot_local 等）は Secret Manager から自動取得する仕組みがあるため影響なし。
+`Claude account with subscription` を選び、Max アカウントで認証する。
+`.zshrc` に `ANTHROPIC_API_KEY` を export しないこと。
 
-詳細: `.cursor/rules/claude-code-max-cursor-terminal.mdc`
+### 7. SSH鍵を戻す
 
-### ステップ5: SSH鍵の設定
-
-**オプションA: 旧鍵を新MacBookに移行**
 ```bash
 mkdir -p ~/.ssh
-cp ~/Desktop/ssh_backup_id_rsa ~/.ssh/id_rsa
-cp ~/Desktop/ssh_backup_id_rsa.pub ~/.ssh/id_rsa.pub
-chmod 600 ~/.ssh/id_rsa
+cp ~/Desktop/migration_backup/ssh/* ~/.ssh/ 2>/dev/null || true
+chmod 600 ~/.ssh/id_rsa 2>/dev/null || true
+chmod 600 ~/.ssh/id_ed25519 2>/dev/null || true
 ```
 
-**オプションB: 新規生成して Mac Mini に登録**
-```bash
-# 新規生成
-ssh-keygen -t ed25519 -C "new-macbook"
+必要なら新規生成して Mac Mini に公開鍵を追加する。
 
-# Mac Mini に公開鍵を追加
-ssh-copy-id koa800@mac-mini-agent.local
-# または手動: cat ~/.ssh/id_ed25519.pub | ssh koa800@mac-mini-agent.local "cat >> ~/.ssh/authorized_keys"
-```
+---
 
-### ステップ6: 動作確認
+## `ai` の復元確認
+
+### 最低ライン
+
 ```bash
-# post-commit フックのテスト（空コミット）
 cd ~/Desktop/cursor
-git commit --allow-empty -m "post-commit フックテスト"
-# → git log origin/main で push されていることを確認
+System/scripts/ai doctor
+System/scripts/ai status
+System/scripts/ai works
+System/scripts/ai sessions
+```
 
-# （任意）Mac Mini に接続できるか確認
-ssh koa800@mac-mini-agent.local "echo 接続OK"
+### 旧 session をそのまま再開したい時
+
+`~/.codex/sessions/` または `~/.claude/history.jsonl` を戻しているなら、通常どおり `resume` / `fork` が使える。
+
+```bash
+System/scripts/ai restore <別名 or session_id>
+System/scripts/ai restore --fork <別名 or session_id>
+```
+
+### session 履歴を持ってこなかった時
+
+この場合でも、`session_restore_index.json` と handoff があれば `ai restore` は新規セッションを `rehydrate` で起動する。
+つまり、元 session を live resume はできないが、保存済みの `目的 / 完了 / 未完了 / 判断` を注入して続行できる。
+
+推奨入口:
+
+```bash
+System/scripts/ai pins
+System/scripts/ai restore <別名>
+```
+
+### session snapshot の検証
+
+live session がある環境では、保存経路も確認しておく。
+
+```bash
+System/scripts/ai session verify codex
+System/scripts/ai session verify claude
+```
+
+`codex` / `claude` の latest session が無い場合は `not_found` でよい。
+`review` が出る場合だけ、session snapshot 保存やローカル履歴の有無を確認する。
+
+---
+
+## batch / skill 候補の移行確認
+
+batch と skill 候補の正本はリポジトリ側にある。
+そのため `git clone` 後に index はそのまま見える。
+
+```bash
+System/scripts/ai batches
+System/scripts/ai batch skills
+System/scripts/ai batch skill show <batch>
+```
+
+必要なら `Skills/` への昇格も新 MacBook 側で続行できる。
+
+```bash
+System/scripts/ai batch skill promote <batch> <category> <slug> --title "Skill title"
 ```
 
 ---
 
-## Mac Mini 側の対応（影響なし）
+## Mac Mini 側の対応
 
-Mac Miniのサービスはすべて自律稼働しており、**MacBook交換時の作業不要**。
+原則不要。
 
 | サービス | 状態 |
 |---------|------|
-| Orchestrator (port 8500) | 継続稼働 |
-| local_agent (LINE秘書) | 継続稼働 |
-| git_pull_sync (5分ごと) | GitHubからpull→デプロイ。MacBook無関係で動作 |
-| Google OAuth token.json | ~/agents/token.json で管理済み |
+| Orchestrator | 継続稼働 |
+| local_agent | 継続稼働 |
+| git_pull_sync | GitHub から pull し続ける |
+| token / DB / 学習データ | Mac Mini / Render 側に残る |
 
-同期はGitHub経由のため、**新MacBookのホスト名やSSH設定はMac Mini側に影響しない**。
+MacBook 交換で止まるのは、MacBook 側の commit / push / local CLI 作業だけ。
 
 ---
 
-## Google Calendar OAuth セットアップ（Mac Mini）
+## Google Calendar OAuth
 
-カレンダー機能（朝の予定通知）を使うためには、Mac Miniで一度だけOAuth認証が必要。
+カレンダー機能を使うなら、必要に応じて再度 token を Mac Mini に渡す。
 
 ```bash
-# MacBookで実行（ブラウザが開く）
 cd ~/Desktop/cursor/System
 python3 calendar_manager.py --account personal list
-
-# 認証完了後、token_calendar_personal.json が生成される
-# Mac Mini にコピー
 scp System/token_calendar_personal.json koa800@mac-mini-agent.local:~/agents/System/
 ```
 
-> 注意: `client_secret_personal.json` が `client_secret.json` と別になっている場合は
-> `calendar_manager.py` の `CLIENT_SECRET_PATH` を変更するか、`client_secret_personal.json` を `client_secret.json` にコピー。
+---
+
+## 最終チェックリスト
+
+- [ ] `git push` が通る
+- [ ] `.git/hooks/post-commit` が復元されている
+- [ ] `codex` と `claude` が起動する
+- [ ] `System/scripts/ai doctor` が `doctor_result: ok`
+- [ ] `System/scripts/ai status` で current work と handoff が見える
+- [ ] `System/scripts/ai works` / `System/scripts/ai sessions` が期待どおり表示される
+- [ ] 旧 session をそのまま使いたいなら `~/.codex/sessions/` または `~/.claude/history.jsonl` を戻している
+- [ ] 戻していない場合でも、`ai restore <別名>` が snapshot rehydrate で続行できる
+- [ ] `System/scripts/ai batches` / `ai batch skills` が見える
+- [ ] `.zshrc` に `ANTHROPIC_API_KEY` を入れていない
 
 ---
 
-## 移行後の最終確認
+## 重要メモ
 
-- [ ] `git push` が正常に動作する
-- [ ] post-commit フック実行後、Mac Mini のログに同期完了が記録される
-- [ ] Claude Code が正常に起動する（`claude` コマンド）
-- [ ] Claude Code が「Opus · Claude Max」と表示される（API Usage Billing でないこと）
-- [ ] `.zshrc` に `ANTHROPIC_API_KEY` が **含まれていない**ことを確認
-- [ ] Mac Mini の Orchestrator ログに問題がない
-- [ ] LINE秘書への通知が届く
-- [ ] Google Calendar OAuth セットアップ（`token_calendar_personal.json` を Mac Mini にコピー）
-
----
-
-## 自動化されているもの（移行で止まらない）
-
-いずれも **Mac Mini または Render 上で動いており、MacBook交換時は何もしなくてよい**。新MacBookでSSH・post-commitが復活すれば、5分同期とコミット時同期が再開する。
-
-| 種別 | 実行間隔 | 内容 |
-|------|----------|------|
-| **Orchestrator** | 5分ごと | `git_pull_sync`（GitHubからpull→ローカルデプロイ→サービス再起動） |
-| **Orchestrator** | 5分ごと | `health_check`（API使用量・Q&A・local_agent停止を検知してLINE警告） |
-| **Orchestrator** | 30分ごと | `repair_check`（ログエラー検知・修復提案）, `render_health_check`（Render死活） |
-| **Orchestrator** | 3時間ごと :00 / :05 | `mail_inbox_personal` / `mail_inbox_kohara`（メール取得・分類。返信待ちLINE通知は12時間クールダウン） |
-| **Orchestrator** | 毎朝 8:00 | `ai_news`（AIニュース要約・通知）, `addness_fetch`（3日ごと: ゴールツリー取得） |
-| **Orchestrator** | 毎朝 8:30 / 9:00 | `daily_addness_digest`（期限超過通知）, `addness_goal_check`（actionable再生成）, `oauth_health_check` |
-| **Orchestrator** | 毎週月 9:00 / 9:30 | `weekly_idea_proposal`, `weekly_stats`（週次サマリーLINE） |
-| **Orchestrator** | 毎週水 10:00 | `weekly_content_suggestions`（AIニュース分析・コンテンツ提案） |
-| **Orchestrator** | 毎夜 21:10 | `daily_group_digest`（グループ名ベースの会話要約・秘書メモLINE） |
-| **MacBook側** | コミット時 | post-commit フック → `git push origin main`（Mac Miniは5分以内にpullして反映） |
-| **LINE秘書** | 常駐 | local_agent がRenderをポーリング・返信案生成・Claude API呼び出し |
-| **その他** | — | Q&A自動回答（検知→回答案→承認→L-step送信）, OAuth refresh_token 自動更新 |
-
----
-
-## 重要: 移行が不要なもの
-
-以下はすべて Mac Mini または GitHub に保存されているため、**新MacBookでは何もしなくてよい**:
-
-- スキルプラス Q&Aデータ（Mac Miniの qa_sync/）
-- LINE秘書の学習データ（Renderの永続ディスク）
-- Addnessゴールツリー（Mac Miniの ~/agents/Master/）
-- Google OAuth token.json（Mac Miniの ~/agents/token.json）
-- Orchestratorの実行履歴DB（Mac Miniの agent.db）
+- `session_restore_index.json` は live session そのものではない。要約と復元メモの正本
+- 生の `resume` が必要なら、`~/.codex/sessions/` または `~/.claude/history.jsonl` が必要
+- それが無くても、current work handoff と session snapshot があれば仕事は継続できる
+- 移行後の最初の確認順は `ai doctor -> ai status -> ai pins -> ai restore <別名>` が基本

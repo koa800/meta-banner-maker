@@ -117,95 +117,122 @@ ensure_tool_available() {
     return 1
 }
 
-doctor_runtime() {
-    local failures=0
-    local state_json current_work_id current_tool handoff_file
+doctor_check_path() {
+    local label="$1"
+    local target="$2"
+    local kind="${3:-file}"
+    local required="${4:-1}"
+    local status="missing"
 
-    echo "=== ai doctor ==="
-    echo "project_dir: $PROJECT_DIR"
-    if [ -d "$PROJECT_DIR" ]; then
-        echo "  status: ok"
-    else
-        echo "  status: missing"
+    case "$kind" in
+        dir)
+            if [ -d "$target" ]; then
+                status="ok"
+            fi
+            ;;
+        executable)
+            if [ -n "$target" ] && [ -x "$target" ]; then
+                status="ok"
+            fi
+            ;;
+        *)
+            if [ -f "$target" ]; then
+                status="ok"
+            fi
+            ;;
+    esac
+
+    echo "$label: $target"
+    echo "  status: $status"
+    if [ "$status" != "ok" ] && [ "$required" = "1" ]; then
         failures=$((failures + 1))
     fi
+}
 
-    for helper in "$WORK_STATE_HELPER" "$SESSION_STATE_HELPER" "$BATCH_STATE_HELPER"; do
-        echo "helper: $helper"
-        if [ -f "$helper" ]; then
-            echo "  status: ok"
-        else
-            echo "  status: missing"
+doctor_check_latest_session() {
+    local tool="$1"
+    local required="${2:-0}"
+    local latest_json session_id verify_json ok snapshot_found session_found status_line history_state
+
+    latest_json="$(python3 "$SESSION_STATE_HELPER" latest --tool "$tool" 2>/dev/null || echo "{}")"
+    session_id="$(json_get "$latest_json" "session_id")"
+    echo "latest_session[$tool]: ${session_id:-none}"
+    if [ -z "$session_id" ]; then
+        echo "  status: not_found"
+        return 0
+    fi
+
+    verify_json="$(python3 "$SESSION_STATE_HELPER" verify --tool "$tool" --session-id "$session_id" 2>/dev/null || echo "{}")"
+    ok="$(json_get "$verify_json" "ok")"
+    snapshot_found="$(json_get "$verify_json" "snapshot_found")"
+    session_found="$(json_get "$verify_json" "session_found")"
+    if [ "$ok" = "True" ] || [ "$ok" = "true" ]; then
+        status_line="ok"
+    elif { [ "$snapshot_found" = "True" ] || [ "$snapshot_found" = "true" ]; } && ! { [ "$session_found" = "True" ] || [ "$session_found" = "true" ]; }; then
+        status_line="rehydrate-ready"
+    else
+        status_line="review"
+        if [ "$required" = "1" ]; then
             failures=$((failures + 1))
         fi
-    done
-
-    echo "codex_cmd: ${CODEX_CMD:-not found}"
-    if [ -n "$CODEX_CMD" ] && [ -x "$CODEX_CMD" ]; then
-        echo "  status: ok"
-    else
-        echo "  status: missing"
-        failures=$((failures + 1))
     fi
-
-    echo "claude_cmd: ${CLAUDE_CMD:-not found}"
-    if [ -n "$CLAUDE_CMD" ] && [ -x "$CLAUDE_CMD" ]; then
-        echo "  status: ok"
+    if [ "$session_found" = "True" ] || [ "$session_found" = "true" ]; then
+        history_state="live"
     else
-        echo "  status: missing"
-        failures=$((failures + 1))
+        history_state="snapshot-only"
     fi
+    echo "  status: $status_line"
+    echo "  history: $history_state"
+    echo "  snapshot: ${snapshot_found:-false}"
+}
 
-    echo "codex_sessions: $CODEX_SESSIONS_DIR"
-    if [ -d "$CODEX_SESSIONS_DIR" ]; then
-        echo "  status: ok"
-    else
-        echo "  status: missing"
-        failures=$((failures + 1))
-    fi
+doctor_runtime() {
+    local failures=0
+    local state_json current_work_id current_tool handoff_file current_handoff_path current_batch_id
 
-    echo "claude_history: $CLAUDE_HISTORY_FILE"
-    if [ -f "$CLAUDE_HISTORY_FILE" ]; then
-        echo "  status: ok"
-    else
-        echo "  status: missing"
-    fi
-
-    handoff_file="$(get_handoff_file)"
-    echo "handoff_file: $handoff_file"
-    if [ -f "$handoff_file" ]; then
-        echo "  status: ok"
-    else
-        echo "  status: missing"
-        failures=$((failures + 1))
-    fi
-
-    echo "session_aliases: $SESSION_ALIAS_FILE"
-    if [ -f "$SESSION_ALIAS_FILE" ]; then
-        echo "  status: ok"
-    else
-        echo "  status: missing"
-        failures=$((failures + 1))
-    fi
-
-    echo "session_index: $SESSION_INDEX_FILE"
-    if [ -f "$SESSION_INDEX_FILE" ]; then
-        echo "  status: ok"
-    else
-        echo "  status: missing"
-        failures=$((failures + 1))
-    fi
+    echo "=== ai doctor ==="
+    doctor_check_path "project_dir" "$PROJECT_DIR" dir 1
+    doctor_check_path "helper[work]" "$WORK_STATE_HELPER" file 1
+    doctor_check_path "helper[session]" "$SESSION_STATE_HELPER" file 1
+    doctor_check_path "helper[batch]" "$BATCH_STATE_HELPER" file 1
+    doctor_check_path "codex_cmd" "${CODEX_CMD:-}" executable 1
+    doctor_check_path "claude_cmd" "${CLAUDE_CMD:-}" executable 1
+    doctor_check_path "codex_sessions" "$CODEX_SESSIONS_DIR" dir 1
+    doctor_check_path "claude_history" "$CLAUDE_HISTORY_FILE" file 0
+    doctor_check_path "state_file" "$STATE_FILE" file 1
+    doctor_check_path "work_index" "$PROJECT_DIR/System/data/ai_router/work_index.json" file 1
+    doctor_check_path "batch_index" "$PROJECT_DIR/System/data/ai_router/batch_index.json" file 1
+    doctor_check_path "skill_candidate_index" "$PROJECT_DIR/System/data/ai_router/skill_candidate_index.json" file 1
+    doctor_check_path "handoff_dir" "$PROJECT_DIR/System/data/ai_router/handoffs" dir 1
+    doctor_check_path "root_handoff" "$ROOT_HANDOFF_FILE" file 0
+    doctor_check_path "session_aliases" "$SESSION_ALIAS_FILE" file 1
+    doctor_check_path "session_index" "$SESSION_INDEX_FILE" file 1
+    doctor_check_path "post_commit_hook" "$PROJECT_DIR/.git/hooks/post-commit" file 1
+    doctor_check_path "codex_config" "$HOME/.codex/config.toml" file 1
+    doctor_check_path "codex_auth" "$HOME/.codex/auth.json" file 0
+    doctor_check_path "codex_skills" "$HOME/.codex/skills" dir 0
 
     if [ -f "$STATE_FILE" ]; then
         state_json="$(work_state_status_json)"
         current_work_id="$(json_get "$state_json" "current_work_id")"
         current_tool="$(json_get "$state_json" "current_tool")"
+        current_handoff_path="$(json_current_work_field "$state_json" "handoff_path")"
+        current_batch_id="$(json_current_work_field "$state_json" "current_batch_id")"
         echo "current_tool: ${current_tool:-none}"
         echo "current_work_id: ${current_work_id:-none}"
-    else
-        echo "state_file: missing ($STATE_FILE)"
-        failures=$((failures + 1))
+        if [ -n "$current_handoff_path" ]; then
+            doctor_check_path "current_handoff" "$current_handoff_path" file 1
+        fi
+        if [ -n "$current_batch_id" ]; then
+            echo "current_batch_id: $current_batch_id"
+        fi
     fi
+
+    handoff_file="$(get_handoff_file)"
+    echo "handoff_file: $handoff_file"
+
+    doctor_check_latest_session "codex" "$( [ "${current_tool:-}" = "codex" ] && printf '%s' 1 || printf '%s' 0 )"
+    doctor_check_latest_session "claude" "$( [ "${current_tool:-}" = "claude" ] && printf '%s' 1 || printf '%s' 0 )"
 
     echo "override_env:"
     echo "  AI_PROJECT_DIR"
@@ -608,6 +635,8 @@ if active:
         print(f"  payload: {active.get('payload_preview','')}")
 if candidate:
     print(f"skill候補: {candidate.get('status','-')} / {candidate.get('summary','')}")
+    if candidate.get("promoted_path"):
+        print(f"  昇格先: {candidate.get('promoted_path','')}")
     missing = candidate.get("missing_requirements") or []
     if missing:
         print(f"  不足: {missing[0]}")
@@ -619,6 +648,122 @@ if items:
         item_id = item.get("item_id","-")
         title = item.get("title","")
         print(f"- [{status}] {item_id} {title}")
+PY
+}
+
+show_skill_candidate() {
+    local query="${1:-}"
+    local batch_id payload
+    if [ -z "$query" ]; then
+        echo "使い方: ai batch skill show <batch_id|キーワード>"
+        return 1
+    fi
+    batch_id="$(resolve_batch_id "$query")" || return 1
+    payload="$(show_skill_candidate_json "$batch_id")"
+    python3 - "$payload" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1] or "{}")
+batch = payload.get("batch") or {}
+candidate = payload.get("skill_candidate") or {}
+
+if not batch:
+    print("batch が見つかりません。")
+    sys.exit(1)
+
+if not candidate:
+    print(f"skill 候補はまだありません: {batch.get('batch_id','')}")
+    print("先に item を完了し、`ai batch skills` で候補を確認してください。")
+    sys.exit(0)
+
+print(f"batch_id: {batch.get('batch_id','')}")
+print(f"概要: {candidate.get('title','') or batch.get('title','')}")
+print(f"status: {candidate.get('status','-')}")
+print(f"summary: {candidate.get('summary','')}")
+print(f"completed: {candidate.get('completed_count',0)}")
+if candidate.get("promoted_path"):
+    print(f"昇格先: {candidate.get('promoted_path','')}")
+reasons = candidate.get("reasons") or []
+if reasons:
+    print("判断材料:")
+    for reason in reasons[:4]:
+        print(f"- {reason}")
+missing = candidate.get("missing_requirements") or []
+if missing:
+    print("不足:")
+    for item in missing[:4]:
+        print(f"- {item}")
+examples = candidate.get("examples") or []
+if examples:
+    print("代表例:")
+    for item in examples[:3]:
+        line = f"- {item.get('item_id','')} / {item.get('title','')}"
+        if item.get("result_summary"):
+            line = f"{line} / {item.get('result_summary','')}"
+        print(line)
+if candidate.get("status") == "ready" and not candidate.get("promoted_path"):
+    print(f"昇格: ai batch skill promote {batch.get('batch_id','')} <category> <slug> [--title タイトル]")
+PY
+}
+
+promote_skill_candidate() {
+    local query="${1:-}"
+    shift || true
+    local category=""
+    local slug=""
+    local title=""
+    local force_flag="0"
+
+    if [ -z "$query" ]; then
+        echo "使い方: ai batch skill promote <batch_id|キーワード> <category> <slug> [--title タイトル] [--force]"
+        return 1
+    fi
+    if [ $# -lt 2 ]; then
+        echo "使い方: ai batch skill promote <batch_id|キーワード> <category> <slug> [--title タイトル] [--force]"
+        return 1
+    fi
+    category="$1"
+    slug="$2"
+    shift 2
+    while [ $# -gt 0 ]; do
+        case "${1:-}" in
+            --title)
+                title="${2:-}"
+                shift 2
+                ;;
+            --force)
+                force_flag="1"
+                shift
+                ;;
+            *)
+                echo "不明な引数です: $1"
+                return 1
+                ;;
+        esac
+    done
+
+    local batch_id payload
+    batch_id="$(resolve_batch_id "$query")" || return 1
+    payload="$(promote_skill_candidate_json "$batch_id" "$category" "$slug" "$title" "$force_flag")"
+    python3 - "$payload" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1] or "{}")
+if payload.get("error"):
+    print(payload.get("error", "skill 昇格に失敗しました。"))
+    sys.exit(1)
+
+candidate = payload.get("skill_candidate") or {}
+skill_path = payload.get("skill_path", "")
+batch = payload.get("batch") or {}
+print("skill を昇格しました。")
+print(f"batch_id: {batch.get('batch_id','')}")
+print(f"status: {candidate.get('status','-')}")
+print(f"skill_path: {skill_path}")
+if candidate.get("summary"):
+    print(f"summary: {candidate.get('summary','')}")
 PY
 }
 
@@ -940,6 +1085,24 @@ import_batch_jsonl() {
 sync_batch_source_json() {
     local batch_id="$1"
     python3 "$BATCH_STATE_HELPER" sync-source --batch-id "$batch_id"
+}
+
+show_skill_candidate_json() {
+    local batch_id="$1"
+    python3 "$BATCH_STATE_HELPER" show-skill-candidate --batch-id "$batch_id"
+}
+
+promote_skill_candidate_json() {
+    local batch_id="$1"
+    local category="$2"
+    local slug="$3"
+    local title="${4:-}"
+    local force="${5:-0}"
+    if [ "$force" = "1" ]; then
+        python3 "$BATCH_STATE_HELPER" promote-skill-candidate --batch-id "$batch_id" --category "$category" --slug "$slug" --title "$title" --force
+    else
+        python3 "$BATCH_STATE_HELPER" promote-skill-candidate --batch-id "$batch_id" --category "$category" --slug "$slug" --title "$title"
+    fi
 }
 
 read_handoff_snapshot_json() {
@@ -1442,10 +1605,18 @@ PY
 )"
 
     local tool session_id preview record_json overview restore_prompt rc work_json work_context_prompt combined_extra_prompt load_context_prompt auto_fork_note
-    local should_fork load_summary
+    local should_fork load_summary history_available
     tool=$(printf '%s' "$resolved" | cut -f1)
     session_id=$(printf '%s' "$resolved" | cut -f2)
     preview=$(printf '%s' "$resolved" | cut -f3-)
+    history_available="$(python3 - "$resolved_json" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1] or "{}")
+print("1" if payload.get("history_available", True) else "0")
+PY
+)"
     record_json="$(python3 - "$(read_session_record_json "$session_id")" "$resolved_json" <<'PY'
 import json
 import sys
@@ -1488,7 +1659,10 @@ print(load.get("summary", ""))
 PY
 )"
 
-    if [ "$mode" = "resume" ] && [ "$force_resume" != "1" ] && [ "$should_fork" = "1" ]; then
+    if [ "$history_available" != "1" ]; then
+        mode="rehydrate"
+        auto_fork_note="元 session 履歴がローカルにないため、保存済み snapshot と handoff から新規セッションを起動します。"
+    elif [ "$mode" = "resume" ] && [ "$force_resume" != "1" ] && [ "$should_fork" = "1" ]; then
         mode="fork"
         auto_fork_note="長セッション判定のため fork で再開します。"
     fi
@@ -1585,6 +1759,8 @@ if load.get("should_compact"):
     lines.append("- 区切りごとに `.ai_handoff.md` を更新し、圧縮後の状態だけを残す")
 if mode == "fork":
     lines.append("今回は fork 復元なので、前セッションの詳細を引きずらず current work の最新状態から再構成してください。")
+if mode == "rehydrate":
+    lines.append("元 session のローカル履歴が無いため、保存済み snapshot と current work handoff だけを正本に新規セッションを起動します。")
 print("\n".join(lines))
 PY
 )"
@@ -1598,6 +1774,15 @@ PY
     restore_prompt="$(build_restore_prompt "$record_json" "$combined_extra_prompt")"
 
     cd "$PROJECT_DIR"
+
+    if [ "$mode" = "rehydrate" ]; then
+        if [ "$tool" = "codex" ]; then
+            launch_codex "$restore_prompt"
+        else
+            launch_claude "$restore_prompt"
+        fi
+        return $?
+    fi
 
     if [ "$tool" = "codex" ]; then
         ensure_tool_available "codex" || return 1
@@ -1637,7 +1822,7 @@ PY
         set -e
     fi
 
-    capture_latest_session_snapshot "$tool"
+    capture_latest_session_snapshot "$tool" "" "$(json_current_work_field "$work_json" "title")"
     return "$rc"
 }
 
@@ -2020,10 +2205,15 @@ launch_codex() {
     local context
     local final_prompt
     local rc
+    local snapshot_preview
     if [ -z "$prepared_json" ]; then
         prepared_json="$(prepare_work_context "$prompt" "codex")"
     fi
     ensure_tool_available "codex" || return 1
+    snapshot_preview="$(json_current_work_field "$prepared_json" "title")"
+    if [ -z "$snapshot_preview" ]; then
+        snapshot_preview="$prompt"
+    fi
     context=$(generate_auto_context)
     cd "$PROJECT_DIR"
 
@@ -2041,7 +2231,7 @@ launch_codex() {
     "$CODEX_CMD" "$final_prompt"
     rc=$?
     set -e
-    capture_latest_session_snapshot "codex"
+    capture_latest_session_snapshot "codex" "" "$snapshot_preview"
     return "$rc"
 }
 
@@ -2051,10 +2241,15 @@ launch_claude() {
     local context
     local final_prompt
     local rc
+    local snapshot_preview
     if [ -z "$prepared_json" ]; then
         prepared_json="$(prepare_work_context "$prompt" "claude")"
     fi
     ensure_tool_available "claude" || return 1
+    snapshot_preview="$(json_current_work_field "$prepared_json" "title")"
+    if [ -z "$snapshot_preview" ]; then
+        snapshot_preview="$prompt"
+    fi
     context=$(generate_auto_context)
     cd "$PROJECT_DIR"
 
@@ -2072,7 +2267,7 @@ launch_claude() {
     "$CLAUDE_CMD" -p "$final_prompt"
     rc=$?
     set -e
-    capture_latest_session_snapshot "claude"
+    capture_latest_session_snapshot "claude" "" "$snapshot_preview"
     return "$rc"
 }
 
@@ -2206,11 +2401,13 @@ ai batch - batch queue 管理
 
 使い方:
   ai batches [検索語]                         batch 一覧を表示
-  ai batch create <title> [--tool codex|claude] [--type 種別] [--source 出所] [--schema 要件]
+  ai batch create <title> [--tool codex|claude] [--type 種別] [--source jsonl|dir|cmd:...|url:...] [--schema 要件]
   ai batch import <batch> <jsonl_path>       JSONL をまとめて投入
   ai batch sync <batch>                      source から新規 item を自動投入
   ai batch show [batch]                      batch の詳細と active item を表示
   ai batch skills [検索語]                   自動生成された skill 候補を一覧表示
+  ai batch skill show <batch>                skill 候補の詳細を表示
+  ai batch skill promote <batch> <category> <slug> [--title タイトル] [--force]
   ai batch start <batch> [--launch]          current work に接続し、必要なら次件を取得
   ai batch next [batch]                      active item を表示。無ければ次件を取得
   ai batch done [item_id] --summary <要約>   active item を完了扱いにする
@@ -2221,7 +2418,7 @@ BATCH_HELP
 
             create)
                 if [ $# -lt 1 ]; then
-                    echo "使い方: ai batch create <title> [--tool codex|claude] [--type 種別] [--source 出所] [--schema 要件]"
+                    echo "使い方: ai batch create <title> [--tool codex|claude] [--type 種別] [--source jsonl|dir|cmd:...|url:...] [--schema 要件]"
                     exit 1
                 fi
                 batch_title="$1"
@@ -2318,6 +2515,40 @@ PY
 
             skills)
                 list_skill_candidate_records "${*:-}" "20"
+                ;;
+
+            skill)
+                skill_subcommand="${1:-}"
+                if [ $# -gt 0 ]; then
+                    shift
+                fi
+                case "$skill_subcommand" in
+                    ""|help|--help|-h)
+                        cat <<'BATCH_SKILL_HELP'
+ai batch skill - skill 候補の確認/昇格
+
+使い方:
+  ai batch skill show <batch_id|キーワード>
+  ai batch skill promote <batch_id|キーワード> <category> <slug> [--title タイトル] [--force]
+BATCH_SKILL_HELP
+                        ;;
+                    show)
+                        show_skill_candidate "${1:-}"
+                        ;;
+                    promote)
+                        if [ $# -lt 3 ]; then
+                            echo "使い方: ai batch skill promote <batch_id|キーワード> <category> <slug> [--title タイトル] [--force]"
+                            exit 1
+                        fi
+                        skill_batch_query="$1"
+                        shift
+                        promote_skill_candidate "$skill_batch_query" "$@"
+                        ;;
+                    *)
+                        echo "不明な batch skill サブコマンドです: $skill_subcommand"
+                        exit 1
+                        ;;
+                esac
                 ;;
 
             start)
@@ -2493,6 +2724,7 @@ ai - Claude Code / Codex CLI シームレス切り替え
   ai work [ID|語]         current work を表示/切り替え
   ai batches [検索語]     batch queue を一覧/検索
   ai batch ...            batch queue を作成/投入/進行
+  ai batch skill ...      skill 候補の確認と `Skills/` への昇格
   ai sessions [検索語]    保存済みセッションを一覧/検索（load付き）
   ai session ...          session snapshot の保存/検証
   ai restore <ID|語>      セッションを再開。重い場合は自動で fork
@@ -2515,15 +2747,17 @@ ai - Claude Code / Codex CLI シームレス切り替え
   4. ai works / ai work で current work の一覧と切り替えができる
   5. セッション終了時に、目的/完了/未完了を session_restore_index.json に自動保存する
   6. ai sessions / ai pins で目的や残タスクに加えて session load も見える
-  7. ai restore は保存済み要約を表示し、長セッションなら自動で fork して復元メモを注入する
+ 7. ai restore は保存済み要約を表示し、長セッションなら自動で fork して復元メモを注入する
  8. 生 resume が必要な時だけ ai restore --force-resume を使う
  9. よく使うセッションは ai pin で別名保存しておくと、ai restore <別名> ですぐ戻せる
 10. 同型タスクは ai batch create / import / start で queue 化し、current work に active item を注入できる
+ 11. 元 session 履歴がローカルに無い環境でも、ai restore は保存済み snapshot と handoff から新規セッションを rehydrate できる
 
 移行時の補足:
   - PROJECT_DIR は ai スクリプトの位置から自動解決
   - Codex / Claude は PATH を優先し、無ければ ~/.npm-global/bin/codex と ~/.local/bin/claude を探す
   - 必要なら AI_PROJECT_DIR / AI_CODEX_CMD / AI_CLAUDE_CMD で上書きできる
+  - ai doctor は work/batch/session index、post-commit、~/.codex/config.toml、最新 session verify まで確認する
   - 移行後は ai doctor -> ai status -> ai restore <別名> の順で確認する
 HELP
         ;;

@@ -829,6 +829,20 @@ def normalize_plan(plan_str):
     return PLAN_NAME_MAP.get(s, s)
 
 
+def normalize_route_name(route_name):
+    """流入経路を `媒体_ファネル名` 形式へ正規化する。
+
+    想定外に `_` が2個以上入っている歴史データは、
+    先頭2要素だけを残して補正する。
+    """
+    if not route_name:
+        return ""
+    parts = [part.strip() for part in str(route_name).strip().split("_") if part.strip()]
+    if len(parts) <= 2:
+        return "_".join(parts)
+    return "_".join(parts[:2])
+
+
 def build_furigana_dict(master_data, sei_idx, furigana_sei_idx, furigana_mei_idx):
     """既存データから 漢字姓→フリガナ姓 の辞書を構築する
 
@@ -1000,6 +1014,53 @@ class CDPSync:
         self._master_headers = None
         self._master_data = None
         return self.load_master()
+
+    def normalize_master_route_names(self, dry_run=False):
+        """顧客マスタの流入経路列を `媒体_ファネル名` 形式へ補正する。"""
+        if self._master_data is None:
+            self.load_master()
+
+        target_columns = ["初回流入経路", "最新流入経路"]
+        updates = []
+        fixed = 0
+
+        for col_name in target_columns:
+            col_idx = self.get_col_index(col_name)
+            if col_idx is None:
+                continue
+            col_letter = _col_to_letter(col_idx + 1)
+            for row_idx, row in enumerate(self._master_data):
+                old_val = row[col_idx].strip() if col_idx < len(row) else ""
+                if not old_val:
+                    continue
+                new_val = normalize_route_name(old_val)
+                if old_val == new_val:
+                    continue
+                fixed += 1
+                if not dry_run:
+                    sheet_row = row_idx + 3
+                    updates.append({
+                        "range": f"{col_letter}{sheet_row}",
+                        "values": [[new_val]],
+                    })
+                    self._master_data[row_idx][col_idx] = new_val
+                self.logger.log("normalize", "", col_name, old_val, new_val, "normalize-route-names")
+
+        if dry_run:
+            print(f"[ドライラン] 流入経路の補正対象: {fixed}件")
+            return fixed
+
+        if not updates:
+            print("流入経路の補正対象はありません")
+            return 0
+
+        ws = self.ss.worksheet("顧客マスタ")
+        chunk_size = 2000
+        for i in range(0, len(updates), chunk_size):
+            ws.batch_update(updates[i:i + chunk_size], value_input_option="USER_ENTERED")
+            time.sleep(1)
+        print(f"流入経路を {fixed}件 補正")
+        return fixed
 
     def _ensure_row1_group_merge(self, ws, label, start_col, end_col):
         """行1のグループ見出しを指定範囲で結合する"""
@@ -1913,6 +1974,8 @@ class CDPSync:
                     # プラン名の自動変換
                     if cdp_col == "プラン":
                         new_val = normalize_plan(new_val)
+                    if cdp_col in ("初回流入経路", "最新流入経路"):
+                        new_val = normalize_route_name(new_val)
 
                     # 集計カラムはスキップ（後で自動計算）
                     if cdp_col in self.COMPUTED_COLUMNS:
@@ -2109,6 +2172,8 @@ class CDPSync:
                         # プラン名の自動変換
                         if cdp_col == "プラン":
                             val = normalize_plan(val)
+                        if cdp_col in ("初回流入経路", "最新流入経路"):
+                            val = normalize_route_name(val)
                         cdp_idx = self.get_col_index(cdp_col)
                         if cdp_idx is not None:
                             new_row[cdp_idx] = val
@@ -2578,6 +2643,7 @@ class CDPSync:
         new_rows = []
         seen = set()
         for date_val, email, route_name in all_entries:
+            route_name = normalize_route_name(route_name)
             if email in self._exclusion_emails:
                 skipped_excluded += 1
                 continue
@@ -3932,6 +3998,7 @@ CDP同期スクリプト
   python3 cdp_sync.py sync-leads         経路別タブ→集客データシートの同期
   python3 cdp_sync.py check-phones      電話番号のバリデーションチェック
   python3 cdp_sync.py backfill-computed  集計カラム（合計・LTV）を一括再計算
+  python3 cdp_sync.py normalize-route-names  流入経路を `媒体_ファネル名` に補正
 
 例:
   python3 cdp_sync.py sync --dry-run
@@ -4110,6 +4177,11 @@ CDP同期スクリプト
             print(f"合計 {len(updates)}件 書き込み完了")
         elif dry_run:
             print(f"[ドライラン] 合計 {len(updates)}件が更新対象")
+
+    elif cmd == "normalize-route-names":
+        dry_run = "--dry-run" in sys.argv
+        sync.load_master()
+        sync.normalize_master_route_names(dry_run=dry_run)
 
     elif cmd == "check-phones":
         sync.load_master()

@@ -432,6 +432,7 @@ def enrich_session_records(records: list[dict[str, Any]]) -> list[dict[str, Any]
         item["alias"] = item["aliases"][0] if item["aliases"] else ""
         item["preview"] = preview
         item["record"] = merged
+        item["history_available"] = bool(record.get("history_available", True))
         item["search_text"] = "\n".join(
             part for part in [normalize(record.get("search_text", "")).lower(), session_record_search_text(merged)] if part
         )
@@ -469,11 +470,58 @@ def dedupe_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             merged["aliases"] = combined_aliases
             merged["alias"] = combined_aliases[0]
 
+        merged["history_available"] = bool(primary.get("history_available", False) or secondary.get("history_available", False))
         search_parts = [normalize(primary.get("search_text", "")), normalize(secondary.get("search_text", ""))]
         merged["search_text"] = "\n".join(part for part in search_parts if part)
         deduped[key] = merged
 
     return list(deduped.values())
+
+
+def local_session_records() -> list[dict[str, Any]]:
+    return sort_records(dedupe_records(enrich_session_records(load_all_sessions())))
+
+
+def snapshot_only_records(existing_records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    _, aliases_by_sid, records_by_alias, index_records = load_alias_state()
+    existing_keys = {(record.get("tool", ""), record.get("session_id", "")) for record in existing_records}
+    session_ids = sorted({*index_records.keys(), *aliases_by_sid.keys()})
+    out: list[dict[str, Any]] = []
+
+    for sid in session_ids:
+        merged = merged_record(sid, aliases_by_sid, records_by_alias, index_records)
+        tool = str(merged.get("tool") or "")
+        if tool not in {"codex", "claude"}:
+            continue
+        if (tool, sid) in existing_keys:
+            continue
+        preview = session_preview(merged, merged.get("title", "") or merged.get("purpose", "") or f"snapshot:{sid}")
+        start = str(merged.get("session_start", "") or "")
+        end = str(merged.get("session_end", "") or merged.get("updated_at", "") or start)
+        out.append(
+            {
+                "tool": tool,
+                "session_id": sid,
+                "preview": preview,
+                "start": start,
+                "end": end,
+                "alias": aliases_by_sid.get(sid, [""])[0] if aliases_by_sid.get(sid) else "",
+                "aliases": aliases_by_sid.get(sid, []),
+                "metrics": merged.get("session_metrics", {}),
+                "load": merged.get("session_load", {}),
+                "record": merged,
+                "search_text": session_record_search_text(merged),
+                "history_available": False,
+            }
+        )
+    return out
+
+
+def session_records(include_snapshot_only: bool = False) -> list[dict[str, Any]]:
+    records = local_session_records()
+    if include_snapshot_only:
+        records = sort_records(dedupe_records(records + snapshot_only_records(records)))
+    return records
 
 
 def filter_records(records: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
@@ -526,11 +574,12 @@ def serialize_record(record: dict[str, Any]) -> dict[str, Any]:
         "metrics": record.get("metrics", {}),
         "load": record.get("load", {}),
         "record": record.get("record", {}),
+        "history_available": bool(record.get("history_available", True)),
     }
 
 
 def find_session_record(tool: str, session_id: str = "") -> Optional[dict[str, Any]]:
-    sessions = sort_records(dedupe_records(enrich_session_records(load_all_sessions())))
+    sessions = local_session_records()
     if session_id:
         for record in sessions:
             if record.get("session_id") == session_id and record.get("tool") == tool:
@@ -601,7 +650,7 @@ def fmt_ts(value: str) -> str:
 
 
 def cmd_latest(args: argparse.Namespace) -> int:
-    sessions = sort_records(dedupe_records(enrich_session_records(load_all_sessions())))
+    sessions = local_session_records()
     for record in sessions:
         if record["tool"] == args.tool:
             print(json.dumps(serialize_record(record), ensure_ascii=False))
@@ -611,19 +660,20 @@ def cmd_latest(args: argparse.Namespace) -> int:
 
 
 def cmd_list(args: argparse.Namespace) -> int:
-    sessions = sort_records(filter_records(dedupe_records(enrich_session_records(load_all_sessions())), args.query or ""))
+    sessions = sort_records(filter_records(session_records(include_snapshot_only=True), args.query or ""))
     if not sessions:
         label = normalize(args.query or "recent")
         print(f"一致するセッションがありません: {label}")
         return 1
 
-    print("tool     last_active   started      load      session_id                             alias                 summary")
-    print("-" * 156)
+    print("tool     last_active   started      load      source    session_id                             alias                 summary")
+    print("-" * 166)
     for record in sessions[: args.limit]:
         alias = ",".join(record.get("aliases", [])[:2])[:20] or "-"
+        source = "live" if record.get("history_available", True) else "snapshot"
         print(
             f"{record['tool']:<8} {fmt_ts(record.get('end', '')):<12} {fmt_ts(record.get('start', '')):<12} "
-            f"{load_short_label(record):<9} {record['session_id']:<36} {alias:<20} {record.get('preview', '')}"
+            f"{load_short_label(record):<9} {source:<9} {record['session_id']:<36} {alias:<20} {record.get('preview', '')}"
         )
     return 0
 
@@ -638,7 +688,7 @@ def cmd_resolve(args: argparse.Namespace) -> int:
     query_lc = query.lower()
     exact_alias_target = alias_to_target.get(query_lc)
 
-    sessions = sort_records(filter_records(dedupe_records(enrich_session_records(load_all_sessions())), query))
+    sessions = sort_records(filter_records(session_records(include_snapshot_only=True), query))
 
     if exact_alias_target and not sessions:
         tool, sid, alias = exact_alias_target
@@ -657,6 +707,7 @@ def cmd_resolve(args: argparse.Namespace) -> int:
                     "metrics": merged.get("session_metrics", {}),
                     "load": merged.get("session_load", {}),
                     "record": merged,
+                    "history_available": False,
                 },
                 ensure_ascii=False,
             )

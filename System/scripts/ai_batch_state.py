@@ -152,6 +152,8 @@ def batch_source_files(batch: dict[str, Any]) -> list[Path]:
     source = normalize(batch.get("source", ""))
     if not source:
         return []
+    if source.startswith("cmd:") or source.startswith("url:") or source.startswith("http://") or source.startswith("https://"):
+        return []
     if any(token in source for token in "*?[]"):
         return sorted(path for path in PROJECT_DIR.glob(source) if path.is_file())
     path = resolve_project_path(source)
@@ -160,6 +162,122 @@ def batch_source_files(batch: dict[str, Any]) -> list[Path]:
     if path.is_dir():
         return sorted(path.rglob("*.jsonl"))
     return []
+
+
+def raw_records_from_payload(payload: Any, source_ref: str, source_path: str = "") -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    items = payload
+    if isinstance(payload, dict) and isinstance(payload.get("items"), list):
+        items = payload.get("items") or []
+    elif not isinstance(payload, list):
+        items = [payload]
+
+    for idx, item in enumerate(items, start=1):
+        if isinstance(item, dict):
+            title = (
+                item.get("title")
+                or item.get("name")
+                or item.get("prompt")
+                or item.get("subject")
+                or item.get("id")
+                or payload_preview(item, limit=80)
+            )
+            external_id = item.get("external_id") or item.get("id") or ""
+            inner_source_ref = item.get("source_ref") or item.get("url") or item.get("sheet_row") or source_ref
+        else:
+            title = payload_preview(item, limit=80) or f"item {idx}"
+            external_id = ""
+            inner_source_ref = source_ref
+        records.append(
+            {
+                "title": str(title or f"item {idx}"),
+                "payload": item,
+                "source_ref": str(inner_source_ref or source_ref),
+                "external_id": str(external_id or ""),
+                "source_signature": item_signature(str(title or f"item {idx}"), item, source_ref=str(inner_source_ref or source_ref), external_id=str(external_id or "")),
+                "source_path": source_path,
+            }
+        )
+    return records
+
+
+def parse_records_text(text: str, source_ref: str, source_path: str = "") -> list[dict[str, Any]]:
+    body = str(text or "").strip()
+    if not body:
+        return []
+
+    try:
+        payload = json.loads(body)
+    except Exception:
+        payload = None
+
+    if payload is not None:
+        return raw_records_from_payload(payload, source_ref=source_ref, source_path=source_path)
+
+    records: list[dict[str, Any]] = []
+    for idx, raw_line in enumerate(body.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except Exception:
+            payload = line
+        records.extend(raw_records_from_payload(payload, source_ref=f"{source_ref}#L{idx}", source_path=source_path))
+    return records
+
+
+def load_batch_source_records(batch: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str], str]:
+    source = normalize(batch.get("source", ""))
+    if not source:
+        return [], [], "source not set"
+
+    if source.startswith("cmd:"):
+        command = source[4:].strip()
+        if not command:
+            return [], [source], "empty command source"
+        try:
+            result = subprocess.run(
+                command,
+                cwd=str(PROJECT_DIR),
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return [], [source], "command timeout"
+        if result.returncode != 0:
+            error_text = normalize(result.stderr or result.stdout) or f"exit={result.returncode}"
+            return [], [source], f"command failed / {compact_text(error_text, 160)}"
+        return parse_records_text(result.stdout, source_ref=source, source_path=source), [source], ""
+
+    if source.startswith("url:") or source.startswith("http://") or source.startswith("https://"):
+        url = source[4:].strip() if source.startswith("url:") else source
+        if not url:
+            return [], [source], "empty url source"
+        try:
+            with urlrequest.urlopen(url, timeout=30) as response:
+                body = response.read().decode("utf-8", errors="replace")
+        except urlerror.URLError as exc:
+            return [], [url], f"url fetch failed / {compact_text(str(exc), 160)}"
+        return parse_records_text(body, source_ref=url, source_path=url), [url], ""
+
+    files = batch_source_files(batch)
+    if not files:
+        return [], [], "source not found"
+
+    records: list[dict[str, Any]] = []
+    refs: list[str] = []
+    for path in files:
+        try:
+            ref = str(path.relative_to(PROJECT_DIR))
+        except ValueError:
+            ref = str(path)
+        refs.append(ref)
+        records.extend(parse_jsonl_items(path))
+    return records, refs, ""
 
 
 def item_counts(batch: dict[str, Any]) -> dict[str, int]:
@@ -539,13 +657,16 @@ def append_unique_items(batch: dict[str, Any], raws: list[dict[str, Any]]) -> tu
     return imported, skipped
 
 
-def update_source_sync_state(batch: dict[str, Any], files: list[Path], imported_count: int, skipped_count: int, error: str = "") -> dict[str, Any]:
+def update_source_sync_state(batch: dict[str, Any], refs: list[Any], imported_count: int, skipped_count: int, error: str = "") -> dict[str, Any]:
     file_refs: list[str] = []
-    for path in files:
-        try:
-            file_refs.append(str(path.relative_to(PROJECT_DIR)))
-        except ValueError:
-            file_refs.append(str(path))
+    for ref in refs:
+        if isinstance(ref, Path):
+            try:
+                file_refs.append(str(ref.relative_to(PROJECT_DIR)))
+            except ValueError:
+                file_refs.append(str(ref))
+        else:
+            file_refs.append(str(ref))
     batch["source_last_synced_at"] = now_iso()
     if error:
         batch["source_last_sync_summary"] = f"sync error / {error}"
@@ -555,20 +676,15 @@ def update_source_sync_state(batch: dict[str, Any], files: list[Path], imported_
     return batch
 
 
-def sync_batch_source(batch: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], int, list[Path]]:
-    files = batch_source_files(batch)
-    if not files:
-        return update_source_sync_state(batch, [], 0, 0, error="source not found"), [], 0, []
+def sync_batch_source(batch: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], int, list[str]]:
+    raws, refs, error = load_batch_source_records(batch)
+    if error:
+        return update_source_sync_state(batch, refs, 0, 0, error=error), [], 0, refs
 
-    imported: list[dict[str, Any]] = []
-    skipped = 0
-    for path in files:
-        added, skipped_count = append_unique_items(batch, parse_jsonl_items(path))
-        imported.extend(added)
-        skipped += skipped_count
+    imported, skipped = append_unique_items(batch, raws)
     batch = update_batch_runtime(batch)
-    batch = update_source_sync_state(batch, files, len(imported), skipped)
-    return batch, imported, skipped, files
+    batch = update_source_sync_state(batch, refs, len(imported), skipped)
+    return batch, imported, skipped, refs
 
 
 def build_skill_candidate(batch: dict[str, Any]) -> dict[str, Any]:
@@ -634,9 +750,116 @@ def sync_skill_candidate(batch: dict[str, Any]) -> dict[str, Any]:
         return {}
     candidate = build_skill_candidate(batch)
     candidate["created_at"] = existing.get("created_at") or now_iso()
+    for key in ("promoted_at", "promoted_path", "promoted_category", "promoted_slug", "promoted_title"):
+        if existing.get(key):
+            candidate[key] = existing[key]
+    if candidate.get("promoted_path"):
+        candidate["status"] = "promoted"
     candidates[batch.get("batch_id", "")] = candidate
     save_skill_candidates(candidates)
     return candidate
+
+
+def render_skill_markdown(batch: dict[str, Any], candidate: dict[str, Any], category: str, slug: str, title: str) -> str:
+    skill_id = f"skill_{slug.replace('-', '_')}"
+    batch_type = normalize(batch.get("batch_type", "")) or "随時"
+    source = normalize(batch.get("source", "")) or "-"
+    schema_hint = normalize(batch.get("schema_hint", "")) or "-"
+    reasons = list(candidate.get("reasons") or [])
+    missing = list(candidate.get("missing_requirements") or [])
+    examples = list(candidate.get("examples") or [])
+    today = datetime.now().astimezone().strftime("%Y-%m-%d")
+    lines = [
+        f"# {title}",
+        "",
+        f"> batch `{batch.get('batch_id','')}` から昇格した structured skill",
+        "",
+        "## メタ情報",
+        "",
+        "| 項目 | 値 |",
+        "|------|-----|",
+        f"| ID | {skill_id} |",
+        f"| カテゴリ | {category} |",
+        f"| 頻度 | {batch_type or '随時'} |",
+        "| 現状 | 半自動 |",
+        "| 担当 | Codex / Claude Code |",
+        "| 承認 | 事後確認 |",
+        f"| 参照知識 | System/data/ai_router/skill_candidate_index.json, System/data/ai_router/batch_index.json |",
+        f"| 最終更新 | {today} |",
+        "",
+        "## トリガー（いつ・何が起きたら実行するか）",
+        "",
+        f"- batch `{batch.get('batch_id','')}` と同型の仕事がまとまって発生した時",
+        f"- source: `{source}` から item を同期して処理したい時",
+        "",
+        "## インプット（何が必要か）",
+        "",
+        f"- source: `{source}`",
+        f"- schema_hint: `{schema_hint}`",
+        "- batch item の payload / source_ref / external_id",
+        "",
+        "## 手順（ステップバイステップ）",
+        "",
+        "### Step 1: source から item を同期する",
+        "- `ai batch sync <batch>` で source の差分を batch に投入する",
+        "- `cmd:` / `url:` / JSONL file / directory のどれで同期するかを先に固定する",
+        "",
+        "### Step 2: active item を処理する",
+        "- `ai batch start <batch> --launch` または `ai batch next <batch>` で active item を取得する",
+        "- `payload` と `source_ref` を見て、同型処理として実行する",
+        "",
+        "### Step 3: 結果を記録する",
+        "- 成功時は `ai batch done <item_id> --summary \"...\"`",
+        "- 失敗時は `ai batch fail <item_id> --error \"...\"`",
+        "- release が必要な時は `ai batch release <item_id>`",
+        "",
+        "## 判断基準",
+        "",
+    ]
+    if reasons:
+        lines.extend(f"- {reason}" for reason in reasons)
+    else:
+        lines.append("- 同型性が崩れる場合は skill として扱わず個別対応に戻す")
+    if missing:
+        lines.append("")
+        lines.append("## まだ不足しているもの")
+        lines.append("")
+        lines.extend(f"- {item}" for item in missing)
+    lines.extend(
+        [
+            "",
+            "## 代表例",
+            "",
+        ]
+    )
+    if examples:
+        for example in examples:
+            lines.append(f"- {example.get('item_id','')} / {example.get('title','')}")
+            if normalize(example.get("result_summary", "")):
+                lines.append(f"  - result: {example.get('result_summary','')}")
+            if normalize(example.get("source_ref", "")):
+                lines.append(f"  - source_ref: {example.get('source_ref','')}")
+    else:
+        lines.append("- 代表例はまだありません")
+    lines.extend(
+        [
+            "",
+            "## エラー時の対処",
+            "",
+            "| エラー | 原因 | 対処 |",
+            "|--------|------|------|",
+            "| source sync 失敗 | source が見つからない / command 失敗 / URL取得失敗 | `ai batch show <batch>` で source と sync summary を確認する |",
+            "| item 処理失敗 | payload の形式差分 | `ai batch fail` で理由を残し、schema_hint を見直す |",
+            "",
+            "## 改善ログ",
+            "",
+            "| 日付 | 変更内容 |",
+            "|------|----------|",
+            f"| {today} | batch `{batch.get('batch_id','')}` から初回昇格 |",
+            "",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def get_batch_or_error(batch_id: str, batches: dict[str, Any]) -> dict[str, Any]:
@@ -658,6 +881,9 @@ def candidate_search_text(candidate: dict[str, Any]) -> str:
         candidate.get("work_id", ""),
         candidate.get("title", ""),
         candidate.get("summary", ""),
+        candidate.get("promoted_category", ""),
+        candidate.get("promoted_slug", ""),
+        candidate.get("promoted_path", ""),
     ]
     parts.extend(candidate.get("reasons") or [])
     parts.extend(candidate.get("missing_requirements") or [])
@@ -835,6 +1061,52 @@ def cmd_list_skill_candidates(args: argparse.Namespace) -> int:
     return output_json({"query": normalize(args.query or ""), "count": len(rows), "skill_candidates": rows})
 
 
+def cmd_show_skill_candidate(args: argparse.Namespace) -> int:
+    batches = load_batches()
+    candidates = load_skill_candidates()
+    batch = get_batch_or_error(args.batch_id, batches)
+    candidate = candidates.get(args.batch_id, {}) if isinstance(candidates.get(args.batch_id, {}), dict) else {}
+    if not candidate:
+        candidate = sync_skill_candidate(batch)
+    return output_json({"batch": batch, "skill_candidate": candidate})
+
+
+def cmd_promote_skill_candidate(args: argparse.Namespace) -> int:
+    batches = load_batches()
+    candidates = load_skill_candidates()
+    batch = get_batch_or_error(args.batch_id, batches)
+    candidate = candidates.get(args.batch_id, {}) if isinstance(candidates.get(args.batch_id, {}), dict) else {}
+    if not candidate:
+        candidate = sync_skill_candidate(batch)
+    if not candidate:
+        return output_json({"error": "skill candidate not found"})
+    if candidate.get("status") != "ready" and not args.force:
+        return output_json({"error": "skill candidate is not ready. use --force to override", "skill_candidate": candidate})
+
+    category = normalize(args.category)
+    slug = normalize(args.slug)
+    title = normalize(args.title) or normalize(candidate.get("title", "")) or slug
+    skill_dir = PROJECT_DIR / "Skills" / category / slug
+    skill_path = skill_dir / "SKILL.md"
+    if skill_path.exists() and not args.force:
+        return output_json({"error": f"skill already exists: {skill_path}", "skill_candidate": candidate})
+
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    markdown = render_skill_markdown(batch, candidate, category=category, slug=slug, title=title)
+    skill_path.write_text(markdown + ("\n" if not markdown.endswith("\n") else ""))
+
+    candidate["status"] = "promoted"
+    candidate["promoted_at"] = now_iso()
+    candidate["promoted_path"] = str(skill_path)
+    candidate["promoted_category"] = category
+    candidate["promoted_slug"] = slug
+    candidate["promoted_title"] = title
+    candidates[args.batch_id] = candidate
+    save_skill_candidates(candidates)
+    append_event("skill_candidate_promoted", batch_id=args.batch_id, category=category, slug=slug, path=str(skill_path))
+    return output_json({"batch": batch, "skill_candidate": candidate, "skill_path": str(skill_path)})
+
+
 def cmd_claim_next(args: argparse.Namespace) -> int:
     batches = load_batches()
     works = load_works()
@@ -997,6 +1269,16 @@ def build_parser() -> argparse.ArgumentParser:
     list_skill_candidates.add_argument("--query", default="")
     list_skill_candidates.add_argument("--limit", type=int, default=20)
 
+    show_skill_candidate = subparsers.add_parser("show-skill-candidate")
+    show_skill_candidate.add_argument("--batch-id", required=True)
+
+    promote_skill_candidate = subparsers.add_parser("promote-skill-candidate")
+    promote_skill_candidate.add_argument("--batch-id", required=True)
+    promote_skill_candidate.add_argument("--category", required=True)
+    promote_skill_candidate.add_argument("--slug", required=True)
+    promote_skill_candidate.add_argument("--title", default="")
+    promote_skill_candidate.add_argument("--force", action="store_true")
+
     claim_next = subparsers.add_parser("claim-next")
     claim_next.add_argument("--batch-id", required=True)
     claim_next.add_argument("--work-id", default="")
@@ -1041,6 +1323,10 @@ def main() -> int:
         return cmd_sync_source(args)
     if args.command == "list-skill-candidates":
         return cmd_list_skill_candidates(args)
+    if args.command == "show-skill-candidate":
+        return cmd_show_skill_candidate(args)
+    if args.command == "promote-skill-candidate":
+        return cmd_promote_skill_candidate(args)
     if args.command == "claim-next":
         return cmd_claim_next(args)
     if args.command == "complete-item":

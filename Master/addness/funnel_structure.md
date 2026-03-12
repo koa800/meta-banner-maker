@@ -1,6 +1,6 @@
 # アドネス ファネル全体構造
 
-最終更新: 2026-03-10
+最終更新: 2026-03-12
 
 ## 概要
 
@@ -32,6 +32,44 @@ UTAGE 側のカテゴリ構造、グループ運用、current の作法は `Mast
        CPA        CPO                          CPO(バック)   ROAS
        (集客単価)  (フロント購入単価)                          (売上/広告費)
 ```
+
+## 導線を触る時の最短切り分け
+
+### 先に `何を変えたいか` を切る
+
+- `LP / thanks / 会員サイトの見え方や CTA を変えたい`
+  - まず UTAGE の `ファネル > ページ一覧の行名` を正本にする
+  - 触る中心は `page / デザイン / form / action / product`
+- `同じページのまま流入元や計測だけ分けたい`
+  - まず UTAGE の `登録経路` と short.io を疑う
+  - 広告 ID や設置場所の違いだけでページ複製しない
+- `メールの件名 / 本文 / 配信順 / current 送信内容を変えたい`
+  - まず Mailchimp の current Journey と active step を見る
+  - UTAGE の scenario 名だけで、本線メールの正本と決めない
+- `LINE の着地先を差し替えたい`
+  - まず short.io と URL管理シートを正本にする
+  - UTAGE や Mailchimp 本文に LIFF 直書きが残っていても、それは `修正対象候補` であって正本とは限らない
+- `LINE 登録後のタグ / シナリオ / 個別予約導線を変えたい`
+  - Lステップ の `流入経路 / タグ / シナリオ / テンプレート` を見る
+  - LINE 名だけで判断せず、最終的に何の tag が付き、どの scenario が始まるかまで落とす
+- `商品 / 決済 / 会員サイト解放を変えたい`
+  - UTAGE の `product 本体` だけで判断しない
+  - `detail -> action -> bundle` まで見て初めて正本を確定する
+
+### 実務での判断順
+
+1. 変更したいものが `見た目 / 計測 / メール / LINE着地 / LINE後処理 / 商品解放` のどれかを固定する
+2. `ファネル名 > ページ一覧の行名` で対象を特定する
+3. 公開URL、HTML source、short.io、LIFF、Mailchimp CTA のどれが `表示` で、どれが `正本` かを切り分ける
+4. 変更は正本 1 箇所だけに入れる
+5. 最後に、利用者と同じ順番で実 click して最終挙動を確認する
+
+### 導線修正で誤りやすいこと
+
+- `公開URL` と `ページ一覧の行名` と `source 上のリンク先` を同じものとして話す
+- `visible landing` だけ見て、下流の `Zapier -> Mailchimp` relay を見落とす
+- LINE の差し替えを UTAGE 本文側から始めて、short.io の正本を飛ばす
+- `停止中 LIFF` が source に残っているだけで断定し、実 click の最終着地を見ずに判断する
 
 ---
 
@@ -462,27 +500,33 @@ AI Facebookのサンキューメール系 Zap:
 - `ファン化動画視聴ページ` の現役タイトルは `新ファン化動画`
 - ここからの CTA は short.io `meta-ai5`
 - `meta-ai5` は `【みかみ】アドネス株式会社` にリダイレクト
+- ここで混同しやすいのは `UTAGE のページ一覧の行名` と `公開URL` と `HTML source 上のリンク` が別物な点
+- `AI：メインファネル_Meta広告 > ページ一覧` の `個別3日間シナリオ` 付近では、次の 4 行をひとまとまりとして扱う
+  - `ロードマップ作成会` -> `p/uUfErKGsQYZ2`
+  - `AIロードマップ作成会_1日目` -> `page/QF0eOLXCquZe`
+  - `AIロードマップ作成会_2日目` -> `page/r99dMAjryKBR`
+  - `AIロードマップ作成会_3日目` -> `page/RRD8QHLuz4Fj`
 - `ロードマップ作成会` の現役タイトルは `AIロードマップ作成会_FV変更`
-- ここの CTA は LIFF `follow=@804mrsmd`
+- `follow=@804mrsmd` を確認した根拠は、上記 4 ページの `公開HTML source` に残っている LIFF リンク
 - ただし `@804mrsmd` は `利用停止中アカウント一覧` に載っている停止済みLINE
-- したがって、AI のロードマップ作成会 CTA は現在 `停止中アカウントに誤接続している` 状態
+- したがって、AI の個別3日間シナリオ配下ページは `source 上は停止中アカウントに接続する LIFF が残っている` 状態
 - これは Facebook だけではなく、現役の `AI Facebook / X / TikTok` の個別3日間シナリオ全体で再利用されている
   - Facebook: `10955 / UTAGE_AIカレッジ_Facebook_個別3日間シナリオ 2025-10-15` と `10466 / UTAGE_AIカレッジ_Facebook_個別3日間シナリオ`
-    - `p/uUfErKGsQYZ2`
-    - `page/QF0eOLXCquZe`
-    - `page/r99dMAjryKBR`
-    - `page/RRD8QHLuz4Fj`
+    - `ロードマップ作成会` -> `p/uUfErKGsQYZ2`
+    - `AIロードマップ作成会_1日目` -> `page/QF0eOLXCquZe`
+    - `AIロードマップ作成会_2日目` -> `page/r99dMAjryKBR`
+    - `AIロードマップ作成会_3日目` -> `page/RRD8QHLuz4Fj`
   - X: `10729 / UTAGE_AIカレッジ_X広告_個別3日間シナリオ` と `10978 / UTAGE_AIカレッジ_X広告_個別3日間シナリオ 2025-10-15`
-    - `p/XcFB1Re3138v`
-    - `page/1zIgM0ov1N6l`
-    - `page/EjM7SIA6asfx`
-    - `page/fmMBrwfj79bA`
+    - `ロードマップ作成会` -> `p/XcFB1Re3138v`
+    - `AIロードマップ作成会_1日目` -> `page/1zIgM0ov1N6l`
+    - `AIロードマップ作成会_2日目` -> `page/EjM7SIA6asfx`
+    - `AIロードマップ作成会_3日目` -> `page/fmMBrwfj79bA`
   - TikTok: `10698 / UTAGE_AI_TT_個別3日間シナリオ`
-    - `p/sGZfeKR5gIHj`
-    - `page/942st7ismQPi`
-    - `page/Fmt589wM4zxb`
-    - `page/eJTIBPx0mr8X`
-- 上記ページはすべて `follow=@804mrsmd` を直接持っていた
+    - `ロードマップ作成会` -> `p/sGZfeKR5gIHj`
+    - `AIロードマップ作成会_1日目` -> `page/942st7ismQPi`
+    - `AIロードマップ作成会_2日目` -> `page/Fmt589wM4zxb`
+    - `AIロードマップ作成会_3日目` -> `page/eJTIBPx0mr8X`
+- 上記ページはすべて `公開HTML source` に `follow=@804mrsmd` を持っていた
 - 一方で、同じページ内の short.io `meta-ai3 / xad-ai3 / ttad-ai3` は `【みかみ】アドネス株式会社` に送っている
 - 差し替え先は、アカウント名ではなく Lステップ 側で実際に付くタグ、入るシナリオ、予約導線を見て確定する必要がある
 
@@ -527,24 +571,33 @@ AI Facebookのサンキューメール系 Zap:
 - `センサーズFB_ファン化動画視聴ページ` の現役タイトルは `新ファン化動画`
 - ここからの CTA は short.io `metaad-sns5`
 - `metaad-sns5` は `【みかみ】アドネス株式会社` に送る
+- ここで混同しやすいのは `UTAGE のページ一覧の行名` と `公開URL` と `HTML source 上のリンク` が別物な点
+- `SNS：メインファネル_Meta広告 > ページ一覧` の `個別3日間シナリオ` 付近では、次の行が面談化ページ群
+  - `ロードマップ作成会` -> `p/1hHdsZDzq7hp`
+  - `SNS_Meta広告_個別3日間_1通目_RM作成会LP` -> `page/KAtTy0tucas2`
+  - `個別3日間_1通目_1st副業` -> `page/vQ8ZuYjSpxuh`
+  - `SNS_Meta広告_個別3日間_2通目_RM作成会LP` -> `page/fksI4L8hNu4E`
+  - `個別3日間_2通目_1st副業` -> `page/ICyZyVoDrD6K`
+  - `SNS_Meta広告_個別3日間_3通目_RM作成会LP` -> `page/kjOhv6Z6lU8r`
+  - `個別3日間_3通目_1st副業` -> `page/bbwZzf9MxRUb`
 - `ロードマップ作成会` の現役タイトルは `センサーズ_ロードマップ作成会 （FV変更）`
-- ここの CTA も LIFF `follow=@804mrsmd`
+- `follow=@804mrsmd` を確認した根拠は、上記ページ群の `公開HTML source`
 - ただし `@804mrsmd` は停止済みなので、SNS のロードマップ作成会も同様に誤接続
 - これも Facebook だけではなく、現役の `SNS Facebook / X` の個別3日間シナリオ全体で再利用されている
   - Facebook: `10948 / UTAGE_センサーズ_Facebook_個別３日間シナリオ 2025-10-15` と `10446 / UTAGE_センサーズ_Facebook_個別３日間シナリオ`
-    - `p/1hHdsZDzq7hp`
-    - `page/KAtTy0tucas2`
-    - `page/vQ8ZuYjSpxuh`
-    - `page/fksI4L8hNu4E`
-    - `page/ICyZyVoDrD6K`
-    - `page/kjOhv6Z6lU8r`
-    - `page/bbwZzf9MxRUb`
+    - `ロードマップ作成会` -> `p/1hHdsZDzq7hp`
+    - `SNS_Meta広告_個別3日間_1通目_RM作成会LP` -> `page/KAtTy0tucas2`
+    - `個別3日間_1通目_1st副業` -> `page/vQ8ZuYjSpxuh`
+    - `SNS_Meta広告_個別3日間_2通目_RM作成会LP` -> `page/fksI4L8hNu4E`
+    - `個別3日間_2通目_1st副業` -> `page/ICyZyVoDrD6K`
+    - `SNS_Meta広告_個別3日間_3通目_RM作成会LP` -> `page/kjOhv6Z6lU8r`
+    - `個別3日間_3通目_1st副業` -> `page/bbwZzf9MxRUb`
   - X: `10950 / UTAGE_センサーズ_X_個別３日間シナリオ 2025-10-15`
-    - `p/GuMTqGD4HQvN`
-    - `page/HvfalKEpovcY`
-    - `page/eATwZkzzAhA8`
-    - `page/hWBJQ9Yti0d3`
-- 上記ページはすべて `follow=@804mrsmd` を直接持っていた
+    - `ロードマップ作成会` -> `p/GuMTqGD4HQvN`
+    - `SNS_X_個別3日間_1通目_RM作成会LP` 相当 -> `page/HvfalKEpovcY`
+    - `SNS_X_個別3日間_2通目_RM作成会LP` 相当 -> `page/eATwZkzzAhA8`
+    - `SNS_X_個別3日間_3通目_RM作成会LP` 相当 -> `page/hWBJQ9Yti0d3`
+- 上記ページはすべて `公開HTML source` に `follow=@804mrsmd` を持っていた
 - X系の一部ページは `@804mrsmd` と `【みかみ】アドネス株式会社` の両方を同居させており、停止中と稼働中が混在している
 - 差し替え先は、アカウント名ではなく Lステップ 側で実際に付くタグ、入るシナリオ、予約導線を見て確定する必要がある
 - したがって SNS は現状、`みかみメインLINE` は正常だが `個別相談LINE` 側は停止アカウント誤接続の疑いが強い

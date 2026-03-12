@@ -164,7 +164,8 @@ CDP / Lステップ / Mailchimp / 各種イベント
 2. `Master/knowledge/lstep_structure.md`
 3. `Project/3_業務自動化/メールマーケティング自動化.md`
 4. `System/line_bot_local/coordinator.py`
-5. `.ai_handoff.md` の `DRM bot セッション` メモ
+5. `ai works DRM bot` で current work を探し、`ai work <work_id|キーワード>` で切り替えてから対応する `System/data/ai_router/handoffs/<work_id>.md` を見る
+6. `.ai_handoff.md` は current work mirror としてだけ扱う
 
 ---
 

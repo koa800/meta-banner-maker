@@ -34,11 +34,11 @@ def load_creds() -> dict:
     return json.loads(CREDS_PATH.read_text())
 
 
-def run(cmd: list[str]) -> None:
-    subprocess.run(cmd, check=True)
+def run(cmd: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, check=True)
 
 
-def activate_and_place_chrome() -> None:
+def activate_and_place_chrome() -> bool:
     script = """
 tell application "Google Chrome"
   activate
@@ -47,7 +47,11 @@ tell application "Google Chrome"
   end if
 end tell
 """
-    run(["osascript", "-e", script])
+    try:
+        run(["osascript", "-e", script])
+        return True
+    except Exception:
+        return False
 
 
 def try_click_checkbox(page) -> bool:
@@ -109,7 +113,8 @@ def ensure_login(target_url: str) -> int:
         if page.locator('input[type="password"]').count():
             page.locator('input[type="password"]').fill(creds["password"])
 
-        activate_and_place_chrome()
+        activated = activate_and_place_chrome()
+        print(f"CHROME_ACTIVATED={activated}")
         time.sleep(1)
         clicked = try_click_checkbox(page)
         print(f"CAPTCHA_CLICK_ATTEMPTED={clicked}")

@@ -498,6 +498,8 @@ ai batches 面談JSON            # → 保存済み batch queue を一覧表示
 ai batch sync 面談JSON         # → source から新規 item を自動投入
 ai batch start 面談JSON --launch # → batch を current work に接続して起動
 ai batch skills                # → 自動生成された skill 候補を一覧表示
+ai batch skill show 面談JSON   # → skill 候補の詳細を確認
+ai batch skill promote 面談JSON 共通 skill-slug --title "Skill title" # → Skills/ へ昇格
 ai sessions 導線              # → 保存済みセッションを検索
 ai session snapshot codex      # → latest session を session_restore_index.json に保存
 ai session verify codex        # → session snapshot の保存状態を検証
@@ -517,18 +519,21 @@ ai                             # → デフォルトでCodex起動
 - `ai sessions` は session_id だけでなく、保存済みなら `目的 / 未完了` の要約と `load` も一緒に出す
 - 一致が1件なら `ai restore <session_id|キーワード>` でそのまま再開できる
 - `ai restore` は再開前に `何のセッションか / どこまで進んでいたか / 何が残っているか / session load` を表示し、重い session は自動で fork に倒して復元プロンプトにも反映する
+- 元の `~/.codex/sessions/` / `~/.claude/history.jsonl` が無い環境では、`ai restore` は保存済み snapshot と handoff から新規セッションを rehydrate して続行する
 - 生 resume が必要な時だけ `ai restore --force-resume <session_id|キーワード>` を使う
 - 元の会話を壊したくない時は `ai restore --fork <session_id|キーワード>` を使う
 - よく使うセッションは `ai pin <別名> <session_id|キーワード>` で固定し、以後は `ai restore <別名>` で戻る
 - `ai pins` は保存済み別名ごとに、復元メモの有無と要約を見せる
 - 同型タスクは `ai batch create -> ai batch import -> ai batch start --launch` で queue 化する
-- batch の `source` に JSONL ファイルまたはディレクトリを入れておくと、`ai batch sync <batch>` で差分投入できる
+- batch の `source` には JSONL ファイル / ディレクトリ / `cmd:...` / `url:...` を使える。`ai batch sync <batch>` で差分投入する
 - `ai batch start` / `ai batch next` は、source 付き batch なら claim 前に自動 sync する
 - batch を current work に接続すると、起動時に active item が自動で context に入り、完了時は `ai batch done <item_id> --summary "..."`、失敗時は `ai batch fail <item_id> --error "..."` で進捗を残せる
 - active item を一旦戻したい時は `ai batch release <item_id>` を使う
 - 完了済み item が溜まると、batch から skill 候補が自動生成される。確認は `ai batch skills` を使う
+- `ai batch skill show <batch>` で候補の理由と不足条件を確認し、`ai batch skill promote <batch> <category> <slug>` で `Skills/` に昇格する
 - 前回 session の `load.should_compact = true` なら、current work に `handoff 圧縮要求` が残り、次回起動前に handoff compactor が自動実行される。compactor で解消できなかった時だけ圧縮指示が prompt に残る
 - `ai session snapshot <tool>` と `ai session verify <tool>` で、`session_restore_index.json` への保存経路を手動で点検できる
+- `ai doctor` は work / batch / skill candidate index、post-commit、`~/.codex/config.toml`、latest session verify まで確認する
 - 通常の継続単位は `session` ではなく `current work` として扱う
 - `current work` の正本は `System/data/ai_router/work_index.json` と `System/data/ai_router/handoffs/<work_id>.md`
 - `.ai_handoff.md` は `current work` の mirror。案件全体の正本としては扱わない

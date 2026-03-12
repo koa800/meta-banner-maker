@@ -290,6 +290,72 @@ def compact_text_item(text: str, max_chars: int = 220) -> str:
     return text[: max_chars - 3].rstrip() + "..."
 
 
+def rewrite_snapshot_item(text: str, target: str) -> str:
+    text = normalize(text)
+    if not text:
+        return ""
+    text = re.sub(r"^[\-\*\u30fb]+\s*", "", text)
+    text = re.sub(
+        r"^(?:目的|確定事項|完了したこと|未完了|判断とその理由（最重要）|判断と理由|参照先|変更したファイル|次の担当へ)\s*[:：-]\s*",
+        "",
+        text,
+    )
+    if target in {"remaining", "next"}:
+        text = re.sub(r"^(?:残件|未完了|次にやること|次の担当へ)\s*[:：-]\s*", "", text)
+    elif target == "completed":
+        text = re.sub(r"^(?:完了|完了したこと|対応済み|実施済み)\s*[:：-]\s*", "", text)
+    return compact_text_item(text, max_chars=180 if target in {"remaining", "next"} else 220)
+
+
+def item_priority(text: str, target: str) -> int:
+    lowered = item_key(text)
+    score = 0
+    if target in {"remaining", "next"}:
+        if any(token in lowered for token in ("確認", "実地", "追加", "接続", "同期", "検証", "昇格", "移行", "review", "promote")):
+            score += 4
+        if any(token in lowered for token in ("未", "残", "まだ", "次", "必要", "対応")):
+            score += 3
+    elif target == "completed":
+        if any(token in lowered for token in ("追加", "更新", "実装", "対応", "作成", "検証", "同期", "導入")):
+            score += 3
+    elif target == "decisions":
+        if any(token in lowered for token in ("ため", "ので", "方針", "優先", "避け", "残す", "理由")):
+            score += 4
+    elif target == "references":
+        if "work_id:" in lowered:
+            score += 5
+        if "session_id:" in lowered:
+            score += 4
+        if "system/" in lowered or "project/" in lowered or "master/" in lowered:
+            score += 2
+    elif target == "changed_files":
+        if re.search(r"\.(py|sh|md|json|ya?ml|toml)", lowered):
+            score += 5
+    if "`" in text:
+        score += 1
+    if len(text) <= 140:
+        score += 1
+    return score
+
+
+def prioritize_items(items: list[str], target: str, limit: int, prefer_recent: bool = False) -> list[str]:
+    chosen: dict[str, tuple[int, int, str]] = {}
+    for idx, raw in enumerate(items):
+        text = rewrite_snapshot_item(raw, target)
+        if not text:
+            continue
+        key = item_key(text)
+        if not key:
+            continue
+        recency = -idx if prefer_recent else idx
+        candidate = (item_priority(text, target), recency, text)
+        current = chosen.get(key)
+        if current is None or candidate[0] > current[0] or (candidate[0] == current[0] and candidate[1] < current[1]):
+            chosen[key] = candidate
+    ranked = sorted(chosen.values(), key=lambda item: (-item[0], item[1], item[2]))
+    return [text for _, _, text in ranked[:limit]]
+
+
 def dedupe_items(items: list[str], limit: int, max_chars: int = 220, prefer_recent: bool = False) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -389,13 +455,28 @@ def canonicalize_snapshot(work: dict[str, Any], snapshot: dict[str, Any]) -> dic
             target = classify_snapshot_item(text, section)
             rebuilt[target].append(text)
 
-    rebuilt["completed"] = dedupe_items(rebuilt["completed"], limit=10, prefer_recent=True)
-    rebuilt["remaining"] = remove_resolved_open_items(dedupe_items(rebuilt["remaining"], limit=6), rebuilt["completed"])
-    rebuilt["next"] = remove_resolved_open_items(dedupe_items(rebuilt["next"], limit=5), rebuilt["completed"])
-    rebuilt["confirmed"] = dedupe_items(rebuilt["confirmed"], limit=6)
-    rebuilt["decisions"] = dedupe_items(rebuilt["decisions"], limit=6, prefer_recent=True)
-    rebuilt["references"] = dedupe_items(rebuilt["references"], limit=6)
-    rebuilt["changed_files"] = dedupe_items(rebuilt["changed_files"], limit=6, prefer_recent=True)
+    current_batch_id = normalize(work.get("current_batch_id", ""))
+    current_batch_summary = normalize(work.get("current_batch_summary", ""))
+    current_batch_item_title = normalize(work.get("current_batch_item_title", ""))
+    if current_batch_item_title:
+        batch_next = f"current batch item を進める: {current_batch_item_title}"
+        if current_batch_id:
+            batch_next = f"{batch_next} ({current_batch_id})"
+        rebuilt["remaining"].insert(0, batch_next)
+        rebuilt["next"].insert(0, batch_next)
+    if current_batch_id:
+        batch_ref = f"current batch: {current_batch_id}"
+        if current_batch_summary:
+            batch_ref = f"{batch_ref} / {compact_text_item(current_batch_summary, max_chars=150)}"
+        rebuilt["references"].append(batch_ref)
+
+    rebuilt["completed"] = prioritize_items(rebuilt["completed"], "completed", limit=10, prefer_recent=True)
+    rebuilt["remaining"] = remove_resolved_open_items(prioritize_items(rebuilt["remaining"], "remaining", limit=6), rebuilt["completed"])
+    rebuilt["next"] = remove_resolved_open_items(prioritize_items(rebuilt["next"], "next", limit=5), rebuilt["completed"])
+    rebuilt["confirmed"] = prioritize_items(rebuilt["confirmed"], "confirmed", limit=6)
+    rebuilt["decisions"] = prioritize_items(rebuilt["decisions"], "decisions", limit=6, prefer_recent=True)
+    rebuilt["references"] = prioritize_items(rebuilt["references"], "references", limit=6)
+    rebuilt["changed_files"] = prioritize_items(rebuilt["changed_files"], "changed_files", limit=6, prefer_recent=True)
 
     if not rebuilt["remaining"] and rebuilt["next"]:
         rebuilt["remaining"] = rebuilt["next"][:3]

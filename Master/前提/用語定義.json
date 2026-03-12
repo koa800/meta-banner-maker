@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-03-12T00:25:32.674329",
+  "updated_at": "2026-03-12T03:45:00",
   "source_sheet_id": "1nkmeWcHmzxPJH1d5veXwTpDoZrsPFH4_3txevqj225Y",
-  "defined_count": 127,
+  "defined_count": 131,
   "draft_count": 0,
   "entries": [
     {
@@ -891,6 +891,34 @@
       "term": "結果",
       "definition": "実行や取引のあとに、現実として生じた状態。",
       "note": "",
+      "status": "defined"
+    },
+    {
+      "row": 129,
+      "term": "高LTVの人（全事業共通）",
+      "definition": "買った価値の投下先が、実際にある人。",
+      "note": "2026-03-12 ローカル暫定定義。分析上は `LTV >= 232256` を目安に使う。",
+      "status": "defined"
+    },
+    {
+      "row": 130,
+      "term": "高LTVの人（スキルプラス事業）",
+      "definition": "学んだ内容の差し込み先が、実際にある人。",
+      "note": "2026-03-12 ローカル暫定定義。分析上は 2026-03-12 CDP snapshot の `LTV >= 798000` を目安に使う。",
+      "status": "defined"
+    },
+    {
+      "row": 131,
+      "term": "高LTVになりそうな人（全事業共通）",
+      "definition": "買った価値の投下先の素地があり、広告から販売までの教育で、その投下先が明確になる人。",
+      "note": "2026-03-12 ローカル暫定定義。広告・販売の集客定義として使う。",
+      "status": "defined"
+    },
+    {
+      "row": 132,
+      "term": "高LTVになりそうな人（スキルプラス事業）",
+      "definition": "学んだ内容の差し込み先の素地があり、広告から販売までの教育で、何に使うかが具体化する人。",
+      "note": "2026-03-12 ローカル暫定定義。広告・販売の集客定義として使う。",
       "status": "defined"
     }
   ]

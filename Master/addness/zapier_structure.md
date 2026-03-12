@@ -500,6 +500,10 @@
   - header: `Untitled Zap`
   - status: `Draft`
   - editor 内の `zap.id`: `sandbox`
+- 重要
+  - `Create` を開いただけでも assets 一覧に `Untitled Zap` が残ることがある
+  - つまり、builder を覗いただけでも draft 汚れが発生しうる
+  - テストや確認で開いた draft は、その場で `Delete Zap` まで戻す
 - 右上の `Zap details` を開くと、少なくとも
   - `Folder`
   - current value: `Home`
@@ -573,6 +577,96 @@
     を置くのが主戦場
   - つまり create builder でも、まずこの current 主戦場に寄せて考える
 
+#### current の exact 編集導線
+
+- title / menu
+  - 左上の `Untitled Zap / Draft` ボタンを押す
+  - current menu は
+    - `Rename`
+    - `Duplicate`
+    - `Transfer data`
+    - `Create template`
+    - `Export PNG`
+    - `Delete`
+- rename
+  - `Rename`
+  - title が text input に変わる
+  - 新しい名前を入れて `Enter`
+  - そのまま autosave で assets 一覧に反映される
+- folder move
+  - 右側 `Zap details`
+  - `Folder`
+  - current value 例: `Home`
+  - folder picker で
+    - `Home`
+    - `【みた】`
+    - `てるや`
+    - `ゆうじ`
+    - `AICAN`
+    - `センサーズFB→メールチンプ`
+    - `kishi`
+    - `QC（三上大）`
+    - `SPS`
+    - `【ライトプラン】_宮代`
+    - `アクションマップ_森本作成`
+    - `甲原`
+    - `\"みかみ\"の秘密の部屋_森本作成`
+    - `サンキューメール移行`
+    - `【マーケ部_数値管理】`
+    - `高見澤`
+    が出る
+  - `甲原` を押すと autosave で assets 一覧の `Location` に即反映される
+- delete
+  - 左上の title menu
+  - `Delete`
+  - confirm dialog
+    - title: `Delete Zap?`
+    - body: `This Zap will move to the trash and be recoverable for 30 days before being permanently deleted.`
+    - buttons:
+      - `Cancel`
+      - `Delete Zap`
+  - `Delete Zap` 後は assets 一覧、または選択していた folder 一覧へ戻る
+
+#### current の exact Add/Update Subscriber 設定面
+
+- `Mailchimp`
+- `Add/Update Subscriber`
+- `Account *`
+  - `Select an account`
+  - 例:
+    - `Mailchimp アドネス株式会社 #4`
+    - `Mailchimp アドネス株式会社 #2`
+    - `Mailchimp アドネス株式会社 #3`
+    - `Mailchimp zent`
+    - `+ Connect a new account`
+  - current で最も使われているのは `Mailchimp アドネス株式会社 #4`
+    - `Used in 181 Zaps`
+- account 選択後の field
+  - `Continue` を押して `Configure` に進む
+  - `Audience*`
+  - `Subscriber Email*`
+  - `New Email`
+  - `Status*`
+  - `Double Opt-In`
+  - `Update Existing`
+  - `Replace Groups`
+  - `Groups`
+  - `Language Code`
+  - `Tag(s)`
+- required field が埋まる前は
+  - `To continue, finish required fields`
+  が出る
+- `Publish`
+  - field 未入力の時点では disabled
+  - 右側 `Status` を開くと
+    - `Please test this step`
+    - `Please set up the required fields`
+    が出る
+  - つまり Addness の current relay 作成では
+    - trigger test
+    - action 必須 field 入力
+    を終える前に publish しない
+
 ### bulk family を一気に見る helper
 
 - `python3 System/scripts/zapier_family_snapshot.py --limit 25`
@@ -641,6 +735,27 @@
    - subscriber が更新されたか
    - row が増えたか
    を確認する
+
+### 新規作成と既存変更の exact チェック
+
+- 新規作成を選ぶ時
+  - event の意味が既存 Zap と重ならない
+  - 置き場所を `甲原` フォルダに寄せられる
+  - relay の責務を 1 event = 1 meaning に保てる
+- 既存変更を選ぶ時
+  - その Zap が current 本線だと分かっている
+  - 変えるのが `tag / audience / payload mapping / downstream action` のどこか説明できる
+  - 変更後に downstream の意味が変わらない
+- 迷ったら
+  - まず既存 Zap の `Name / Apps / Location / Last modified / Status` を見る
+  - 次に editor で step を開いて
+    - trigger app
+    - trigger event
+    - email mapping
+    - tag
+    - audience
+    を確認する
+  - それでも event の意味が 1 つに絞れないなら、新規も既存変更も止めて確認する
 
 ## NG
 
