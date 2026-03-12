@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from typing import Any
 
 import browser_cookie3
 import requests
+from bs4 import BeautifulSoup
 
 BASE_URL = "https://manager.linestep.net"
 LIST_URL = f"{BASE_URL}/api/templates"
@@ -85,24 +87,149 @@ def list_templates(
 
 
 def summarize_flex(editor_json: dict[str, Any]) -> dict[str, Any]:
+    def rich_text_to_plain(doc: dict[str, Any] | None) -> str | None:
+        if not isinstance(doc, dict):
+            return None
+        out: list[str] = []
+
+        def walk(node: Any) -> None:
+            if isinstance(node, dict):
+                node_type = node.get("type")
+                if node_type == "text" and node.get("text"):
+                    out.append(str(node["text"]))
+                for child in node.get("content", []) or []:
+                    walk(child)
+            elif isinstance(node, list):
+                for child in node:
+                    walk(child)
+
+        walk(doc)
+        text = "".join(out).strip()
+        return text or None
+
     panels = editor_json.get("panels", []) or []
     blocks: list[dict[str, Any]] = []
     for panel in panels:
         for block in panel.get("blocks", []) or []:
             info = {"type": block.get("type")}
+            text_preview = rich_text_to_plain(block.get("text"))
+            if text_preview:
+                info["text_preview"] = text_preview[:120]
             action = block.get("action") or {}
             if isinstance(action, dict) and action:
                 info["action_type"] = action.get("type")
-                info["action_url"] = action.get("url") or action.get("uri")
+                info["action_label"] = action.get("label")
+                info["action_description"] = action.get("description")
+                data = action.get("data") or {}
+                url_action = data.get("url_action") or {}
+                info["action_url"] = (
+                    action.get("url")
+                    or action.get("uri")
+                    or url_action.get("url")
+                )
             blocks.append(info)
     counts: dict[str, int] = {}
     for block in blocks:
         key = block.get("type") or "unknown"
         counts[key] = counts.get(key, 0) + 1
     return {
+        "theme_colors": editor_json.get("themeColors"),
         "panel_count": len(panels),
         "block_counts": counts,
         "blocks": blocks,
+    }
+
+
+def summarize_standard_message(content_text: str | None) -> dict[str, Any]:
+    if not content_text:
+        return {
+            "char_count": 0,
+            "line_count": 0,
+            "url_candidates": [],
+            "leading_lines": [],
+        }
+    normalized = content_text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = [line.strip() for line in normalized.split("\n") if line.strip()]
+    urls = re.findall(r"https?://[^\s]+", normalized)
+    return {
+        "char_count": len(normalized),
+        "line_count": len(lines),
+        "url_candidates": urls,
+        "leading_lines": lines[:6],
+    }
+
+
+def decode_js_string(value: str | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        return bytes(value, "utf-8").decode("unicode_escape")
+    except Exception:
+        return value
+
+
+def summarize_pack(s: requests.Session, item_id: int) -> dict[str, Any]:
+    url = f"{BASE_URL}/line/eggpack/show/{item_id}"
+    resp = s.get(url, timeout=30)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    page_title = ""
+    title_el = soup.select_one("h1.page-title")
+    if title_el:
+        page_title = " ".join(title_el.get_text(" ", strip=True).split())
+
+    step_rows: list[dict[str, Any]] = []
+    for tr in soup.find_all("tr"):
+        no_cell = tr.find("th")
+        cells = tr.find_all("td")
+        if not no_cell or len(cells) < 1:
+            continue
+        no_value = " ".join(no_cell.get_text(" ", strip=True).split())
+        if not no_value.isdigit():
+            continue
+        values = [" ".join(td.get_text(" ", strip=True).split()) for td in cells]
+        body_cell = cells[0]
+        template_badge = body_cell.find("span", class_="label")
+        rich_viewer = body_cell.find("rich-viewer")
+        preview = None
+        if rich_viewer and rich_viewer.has_attr(":content"):
+            preview = decode_js_string(rich_viewer.get(":content", "").strip('"'))[:120]
+        edit_links: list[str] = []
+        for a in tr.find_all("a", href=True):
+            href = a["href"]
+            if href:
+                edit_links.append(href)
+        actions: list[str] = []
+        for a in tr.find_all("a", href=True):
+            text = " ".join(a.get_text(" ", strip=True).split())
+            if text:
+                actions.append(text)
+        for button in tr.find_all("button"):
+            text = " ".join(button.get_text(" ", strip=True).split())
+            if text:
+                actions.append(text)
+        step_rows.append(
+            {
+                "no": no_value,
+                "body": values[0] if values else "",
+                "step_type": "テンプレート" if template_badge else "本文",
+                "preview": preview,
+                "actions": actions,
+                "links": edit_links,
+            }
+        )
+
+    tester = soup.find("v-tester-selector")
+    test_url = tester.get("url") if tester else None
+    test_item_id = tester.get("item_id") if tester else None
+
+    return {
+        "page_title": page_title,
+        "step_count": len(step_rows),
+        "steps": step_rows,
+        "test_url": test_url,
+        "test_item_id": test_item_id,
     }
 
 
@@ -134,12 +261,16 @@ def inspect_template(s: requests.Session, item_id: int) -> dict[str, Any]:
         "resolved_edit_url": resolve_edit_url(s, item.get("id"), item.get("group")),
     }
 
-    if result["type"] == "フレックスメッセージ":
+    if result["type"] == "標準メッセージ":
+        result["content_summary"] = summarize_standard_message(item.get("content_text"))
+    elif result["type"] == "フレックスメッセージ":
         resp = s.get(f"{BASE_URL}/api/template/lflexes/{item_id}", timeout=30)
         resp.raise_for_status()
         detail = resp.json()
         result["alt_text"] = detail.get("alt_text")
         result["flex_summary"] = summarize_flex(detail.get("editor_json") or {})
+    elif result["type"] == "テンプレートパック":
+        result["pack_summary"] = summarize_pack(s, item_id)
 
     return result
 
