@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import re
+from bs4 import BeautifulSoup
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +70,13 @@ def extract_links(html: str) -> list[str]:
     return cleaned
 
 
+def extract_text_preview(html: str, limit: int = 1200) -> list[str]:
+    soup = BeautifulSoup(html, "html.parser")
+    text = soup.get_text("\n", strip=True)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return lines[: max(1, limit // 40)]
+
+
 def fetch_json(session: requests.Session, url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     response = session.get(url, params=params, timeout=60)
     response.raise_for_status()
@@ -81,6 +89,10 @@ def get_report(session: requests.Session, base_url: str, campaign_id: str) -> di
 
 def get_content(session: requests.Session, base_url: str, campaign_id: str) -> dict[str, Any]:
     return fetch_json(session, f"{base_url}/campaigns/{campaign_id}/content")
+
+
+def get_campaign(session: requests.Session, base_url: str, campaign_id: str) -> dict[str, Any]:
+    return fetch_json(session, f"{base_url}/campaigns/{campaign_id}")
 
 
 def build_snapshot(limit: int) -> dict[str, Any]:
@@ -125,11 +137,42 @@ def build_snapshot(limit: int) -> dict[str, Any]:
     }
 
 
+def build_campaign_detail(campaign_id: str) -> dict[str, Any]:
+    session, base_url = build_session()
+    campaign = get_campaign(session, base_url, campaign_id)
+    report = get_report(session, base_url, campaign_id)
+    content = get_content(session, base_url, campaign_id)
+    html = content.get("html", "")
+    hrefs = extract_links(html)
+    main_href = hrefs[0] if hrefs else ""
+    return {
+        "id": campaign_id,
+        "title": campaign.get("settings", {}).get("title", ""),
+        "subject_line": campaign.get("settings", {}).get("subject_line", ""),
+        "from_name": campaign.get("settings", {}).get("from_name", ""),
+        "reply_to": campaign.get("settings", {}).get("reply_to", ""),
+        "send_time": campaign.get("send_time"),
+        "emails_sent": report.get("emails_sent"),
+        "open_rate": report.get("opens", {}).get("open_rate"),
+        "click_rate": report.get("clicks", {}).get("click_rate"),
+        "main_cta_type": classify_href(main_href) if main_href else "none",
+        "main_cta_href": main_href,
+        "links": hrefs,
+        "text_preview": extract_text_preview(html),
+        "html_sha1": hashlib.sha1(html.encode("utf-8")).hexdigest(),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Mailchimp recent regular campaign snapshot")
-    parser.add_argument("--limit", type=int, default=10, help="取得件数")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--limit", type=int, help="直近の regular campaign 取得件数")
+    group.add_argument("--campaign-id", help="特定 campaign ID の詳細を取得")
     args = parser.parse_args()
-    snapshot = build_snapshot(args.limit)
+    if args.campaign_id:
+        snapshot = build_campaign_detail(args.campaign_id)
+    else:
+        snapshot = build_snapshot(args.limit or 10)
     print(json.dumps(snapshot, ensure_ascii=False, indent=2))
 
 
