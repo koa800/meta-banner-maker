@@ -7,6 +7,18 @@
 MacBook を新しい機種に交換する時の手順。
 Mac Mini と Render は継続稼働するので、停止前提の作業は不要。
 
+今回の推奨方針は次です。
+
+1. 基本の移行手段は macOS の `移行アシスタント`
+2. 旧MacBookの home 配下も移る前提で進める
+3. ただし、`cursor/` 側に別バックアップを残して保険を持つ
+4. 移行後の最初の入口は Cursor のターミナルで `System/scripts/macbook_post_migration_check.sh`
+
+重要なのは、`旧MacBookを最新OSにすること` 自体を主目的にしないこと。
+移行を安定させる優先順位は、`新MacBookが旧MacBook以上のmacOSで受け入れられること` と、`移行後に Cursor から復元確認できること`。
+時間に余裕がない状態で、旧MacBookに大きい OS 更新を先に当てるのは、時間と失敗面を増やしやすい。
+旧MacBookの OS 更新は `必要ならやる` でよく、`移行の必須条件` ではない。
+
 今回の前提で重要なのは次の 2 層です。
 
 1. `cursor/` 配下の正本
@@ -53,6 +65,17 @@ Mac Mini と Render は継続稼働するので、停止前提の作業は不要
 ---
 
 ## 移行前に旧MacBookでやること
+
+### 0. OS 更新の判断
+
+推奨は次です。
+
+- 最優先は `新MacBook` 側が `旧MacBook以上の macOS` であること
+- `旧MacBook` の大きい OS 更新は、時間に余裕がある時だけ行う
+- 旧MacBookが今の状態で安定していて、移行アシスタントが使えるなら、そのまま移行してよい
+
+つまり、`旧MacBookを最新OSにしないと移行できない` とは考えない。
+先にやるべきなのは OS 更新より、push と復元素材の保全。
 
 ### 1. GitHub 側へ必ず push する
 
@@ -123,6 +146,31 @@ cp ~/.ssh/config ~/Desktop/migration_backup/ssh/config 2>/dev/null || true
 ---
 
 ## 新MacBookでのセットアップ
+
+### 移行アシスタントを使う場合の推奨順
+
+今回の標準ルートはこれです。
+
+1. 新MacBookを起動し、必要なら `新MacBook` 側だけ先に OS を更新する
+2. `移行アシスタント` で旧MacBookから `アプリ / ユーザー / その他のファイルとフォルダ / コンピュータとネットワーク設定` を移す
+3. 移行完了後、新MacBookで Cursor を起動する
+4. Cursor のターミナルで次を実行する
+
+```bash
+cd ~/Desktop/cursor
+System/scripts/macbook_post_migration_check.sh
+```
+
+5. スクリプトの確認が通ったら、続けたい仕事を復元する
+
+```bash
+System/scripts/ai restore <別名>
+```
+
+6. もし home 配下や repo 状態の移行漏れがあれば、`System/data/migration_backup_*` の退避物で補う
+
+`移行アシスタント` で十分に移った場合は、以下の手動復元は不要。
+以降の節は、`移行アシスタントで不足した時の保険` として使う。
 
 ### 1. 最低限のツールを入れる
 
@@ -201,6 +249,7 @@ chmod 600 ~/.ssh/id_ed25519 2>/dev/null || true
 
 ```bash
 cd ~/Desktop/cursor
+System/scripts/macbook_post_migration_check.sh
 System/scripts/ai doctor
 System/scripts/ai status
 System/scripts/ai works
@@ -293,6 +342,7 @@ scp System/token_calendar_personal.json koa800@mac-mini-agent.local:~/agents/Sys
 - [ ] `git push` が通る
 - [ ] `.git/hooks/post-commit` が復元されている
 - [ ] `codex` と `claude` が起動する
+- [ ] `System/scripts/macbook_post_migration_check.sh` が通る
 - [ ] `System/scripts/ai doctor` が `doctor_result: ok`
 - [ ] `System/scripts/ai status` で current work と handoff が見える
 - [ ] `System/scripts/ai works` / `System/scripts/ai sessions` が期待どおり表示される
