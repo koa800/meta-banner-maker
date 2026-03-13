@@ -1,0 +1,4 @@
+interface:
+  display_name: "LSTEP アクション管理運用"
+  short_description: "Lステップのアクション管理で reusable な action を作成、確認、削除まで安全に進める"
+  default_prompt: "Lステップのアクション管理を正しいUI手順で作成・検証したい"
