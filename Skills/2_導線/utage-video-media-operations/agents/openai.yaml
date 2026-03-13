@@ -1,0 +1,4 @@
+interface:
+  display_name: "UTAGE動画・メディア管理"
+  short_description: "UTAGEの動画管理とメディア管理を exact 手順で扱う"
+  default_prompt: "Use $utage-video-media-operations to inspect or update UTAGE media or video assets safely, including upload, thumbnail, chapter, and analytics flows."
