@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lステップイベント予約"
+  short_description: "Lステップのイベント予約を exact 手順で確認・運用する"
+  default_prompt: "Use $lstep-event-reservation-operations to create, verify, and clean up event reservations in Lステップ."

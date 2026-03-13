@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lステップクロス分析"
+  short_description: "Lステップのクロス分析を exact 手順で作成・削除する"
+  default_prompt: "Use $lstep-cross-analysis-operations to create, verify, and clean up cross analysis in Lステップ."
