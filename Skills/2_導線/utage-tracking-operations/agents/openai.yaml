@@ -1,0 +1,4 @@
+interface:
+  display_name: "UTAGE登録経路"
+  short_description: "UTAGEの登録経路を作成し、データ画面で確認する exact 手順"
+  default_prompt: "UTAGEの登録経路を current 手順で作成して確認したい"
