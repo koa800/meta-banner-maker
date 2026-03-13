@@ -1,0 +1,4 @@
+interface:
+  display_name: "Zapier Mailchimp relay"
+  short_description: "Webhook から Mailchimp Add/Update Subscriber へ relay する exact 手順"
+  default_prompt: "ZapierでWebhookからMailchimpへ relay する current 手順を確認したい"
