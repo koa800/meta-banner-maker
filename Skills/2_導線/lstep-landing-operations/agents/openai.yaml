@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lステップ流入経路"
+  short_description: "Lステップの流入経路分析を exact 手順で作成・削除する"
+  default_prompt: "Use $lstep-landing-operations to create, verify, and clean up a LINE landing route in Lステップ."

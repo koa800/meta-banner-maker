@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lステップタグ管理"
+  short_description: "Lステップのタグ管理を exact 手順で作成・削除する"
+  default_prompt: "Use $lstep-tag-management-operations to create, verify, and clean up tags in Lステップ."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lステップ一斉配信"
+  short_description: "Lステップの一斉配信を exact 手順で作成・削除する"
+  default_prompt: "Use $lstep-broadcast-operations to create, verify, and clean up a LINE broadcast in Lステップ."
