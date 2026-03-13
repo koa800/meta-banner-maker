@@ -43,6 +43,7 @@ System/hinata/com.hinata.agent.plist
 System/hinata/state.json
 System/hinata/hinata_tasks.json
 System/hinata/logs/
+System/hinata/cursor_task_terminal/.zsh_history
 
 # 再生成可能なキャッシュデータ
 Master/sheets/
