@@ -1,0 +1,4 @@
+interface:
+  display_name: "LSTEP リッチメニュー運用"
+  short_description: "Lステップのリッチメニューを作成、編集、保存まで安全に進める"
+  default_prompt: "Lステップのリッチメニューを正しいUI手順で作成・検証したい"
