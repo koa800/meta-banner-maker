@@ -466,6 +466,12 @@
 - `python3 System/scripts/zapier_editor_snapshot.py <zap_id>`
 - current Chrome CDP セッションから editor を開き、`__NEXT_DATA__` の Zap 定義を安全に抜く
 - secret っぽい key は `[REDACTED]` に置き換える
+- ただし 2026-03-13 の current では、editor URL に直接入っても `access_issue=true` になることがあった
+- その場合は
+  - `python3 System/scripts/zapier_login_helper.py`
+  - `python3 System/scripts/zapier_assets_snapshot.py --limit 12`
+  を先に使い、visible row と `edit_path` を正本にする
+- editor が閉じている時は、`access issue` 自体を current 制約として扱い、一覧と family から relay を読む
 - `python3 System/scripts/zapier_login_helper.py`
 - current Chrome CDP セッションを再利用し、`System/credentials/zapier.json` の認証情報で
   - assets 一覧へ直接入れるか
@@ -501,7 +507,7 @@
   - status: `Draft`
   - editor 内の `zap.id`: `sandbox`
 - 重要
-  - `Create` を開いただけでも assets 一覧に `Untitled Zap` が残ることがある
+- `Create` を開いただけでも assets 一覧に `Untitled Zap` が残ることがある
   - つまり、builder を覗いただけでも draft 汚れが発生しうる
   - テストや確認で開いた draft は、その場で `Delete Zap` まで戻す
 - 右上の `Zap details` を開くと、少なくとも
@@ -516,6 +522,12 @@
   - 先に event を決める
   - 次に relay 先 action を決める
   の順で組む
+- 一方で `published editor` が account 権限や session 文脈で閉じる時は、無理に editor に固執しない
+- current の exact 作業は
+  1. `assets 一覧で row が visible`
+  2. `edit_path` が取れる
+  3. editor が `access_issue=false`
+  の 3 条件がそろった時だけ editor 直読みに進む
 
 #### current の exact create 導線
 
