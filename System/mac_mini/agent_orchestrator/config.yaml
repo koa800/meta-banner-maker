@@ -14,6 +14,10 @@ paths:
   db_path: "~/Desktop/cursor/System/mac_mini/agent_orchestrator/agent.db"
   log_dir: "~/Desktop/cursor/System/mac_mini/agent_orchestrator/logs"
 
+hinata:
+  enabled: false
+  pause_reason: "2026-03-13 優先順位を Codex → 秘書 → 日向 に切り替えるため一時停止"
+
 # スケジュール設計方針:
 #   - 同じ時刻に複数タスクを並べない（1つずつ順番に実行する）
 #   - 重いタスク（API呼び出しあり）は最低5分空ける
@@ -145,7 +149,7 @@ schedule:
     enabled: true
   weekly_hinata_memory:
     cron: "30 10 * * sun"        # 日曜 10:30  日向の記憶統合（profile_learningの後）
-    enabled: false               # 2026-03-06 日向一時停止
+    enabled: false               # 2026-03-13 日向一時停止（優先順位: Codex → 秘書 → 日向）
   video_knowledge_review:
     cron: "0 11 * * sun"         # 日曜 11:00  動画知識ライフサイクルレビュー（hinata_memoryの後）
     enabled: true
@@ -174,7 +178,7 @@ schedule:
     enabled: true
   hinata_addness_feedback_check:
     interval_minutes: 10         # 日向のAddness未解決コメントを検知 → LINE承認フローへ登録
-    enabled: true
+    enabled: false               # 2026-03-13 日向一時停止（優先順位: Codex → 秘書 → 日向）
   repair_check:
     interval_minutes: 30         # エラー検知・修復提案
     enabled: false               # 2026-03-02 クレジット消費過多のため一時停止
@@ -187,10 +191,10 @@ schedule:
   # === Slack連携（秘書が監視・日向に指示を渡す） ===
   slack_dispatch:
     interval_seconds: 15         # Slack #ai-team 監視 → 日向タスクキューへ
-    enabled: false               # 2026-03-06 日向一時停止（スキル整備後に再開）
+    enabled: false               # 2026-03-13 日向一時停止（優先順位: Codex → 秘書 → 日向）
   slack_hinata_auto_reply:
     interval_seconds: 15         # 日向のSlack報告に秘書が返答
-    enabled: false               # 2026-03-06 日向一時停止
+    enabled: false               # 2026-03-13 日向一時停止（優先順位: Codex → 秘書 → 日向）
 
   # === 無効化済み ===
   slack_ai_team_check:

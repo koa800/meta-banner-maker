@@ -1,5 +1,7 @@
 # Orchestrator スケジュール・設定
 
+最終更新: 2026-03-13（日向一時停止の完全化。Addnessコメント検知と自動修復の引き渡しを停止）
+
 ## スケジュール一覧（定常通知はすべてLINEのみ）
 
 ### 朝の流れ
@@ -46,8 +48,10 @@
 
 ### 常時
 - 5分ごと: health_check + git_pull_sync（学習データ自動push付き）
+- ~~10分ごと: hinata_addness_feedback_check~~（2026-03-13 日向一時停止。Addnessコメント検知も停止）
 - ~~15秒ごと: slack_dispatch + slack_hinata_auto_reply~~（2026-03-06 日向一時停止。スキル整備後に再開）
 - 30分ごと: ~~repair_check~~（2026-03-02無効化） + render_health_check + video_learning_reminder（承認待ち動画知識リマインド）
+- 日向停止中は、定常業務の異常を検知しても Hinata への repair タスク投入は行わない。各タスクの通常通知とログで扱う
 
 ## Looker Studio / 日報
 

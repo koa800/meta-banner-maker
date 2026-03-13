@@ -83,6 +83,16 @@ def get_interval(config: dict) -> int:
     return config.get("cycle_interval_minutes", 60) * 60
 
 
+def is_effectively_paused(config: dict, state: dict) -> bool:
+    """state.json と config.json の両方を見て停止状態を判定する。"""
+    return bool(state.get("paused") or config.get("paused"))
+
+
+def get_pause_reason(config: dict) -> str:
+    reason = str(config.get("pause_reason", "")).strip()
+    return reason or "設定で一時停止中"
+
+
 # ====================================================================
 # Chrome 死活監視
 # ====================================================================
@@ -400,6 +410,14 @@ def handle_task(task: dict, config: dict, state: dict) -> dict:
 
     elif command_type == "resume":
         logger.info("秘書からの再開指示")
+        if config.get("paused"):
+            reason = get_pause_reason(config)
+            state["paused"] = True
+            save_state(state)
+            send_message(f"再開指示を受けましたが、現在は停止方針のため再開しません。{reason}")
+            complete_task(task_id, False, f"停止方針のため未再開: {reason}")
+            return state
+
         state["paused"] = False
         save_state(state)
         send_message("再開します！")
@@ -478,8 +496,11 @@ def main():
     send_message("🌅 日向エージェント起動しました！（Claude in Chrome MCP モード）")
 
     # paused 状態を維持（停止指示後の再起動で勝手に動き出さない）
-    if state.get("paused"):
-        logger.info("paused=True のため、タスクキュー監視のみ（定期サイクルは停止中）")
+    if is_effectively_paused(config, state):
+        logger.info(
+            "pause 中のため、タスクキュー監視のみ（定期サイクルは停止中）: "
+            f"{get_pause_reason(config)}"
+        )
 
     next_cycle_time = time.time() + get_interval(config)
     consecutive_errors = 0
@@ -489,8 +510,10 @@ def main():
         while True:
             # ---- タスクキュー確認 ----
             try:
+                config = load_config()
                 # state.json を再読み込み（秘書が paused を変更する可能性）
                 state = load_state()
+                paused = is_effectively_paused(config, state)
 
                 task = check_task_queue()
                 if task:
@@ -501,6 +524,13 @@ def main():
                     elif command_type == "resume":
                         handle_task(task, config, state)
                         next_cycle_time = time.time() + get_interval(config)
+                    elif paused:
+                        reason = get_pause_reason(config)
+                        logger.info(
+                            f"pause 中のため {command_type} タスクを実行しません: "
+                            f"{task.get('id')} ({reason})"
+                        )
+                        complete_task(task["id"], False, f"停止中のため未実行: {reason}")
                     else:
                         state = handle_task(task, config, state)
                         next_cycle_time = time.time() + get_interval(config)
@@ -509,8 +539,9 @@ def main():
                 logger.error(f"タスク処理エラー: {e}")
 
             # ---- 定期サイクル ----
+            config = load_config()
             state = load_state()  # paused 状態を再確認
-            if not state.get("paused") and time.time() >= next_cycle_time:
+            if not is_effectively_paused(config, state) and time.time() >= next_cycle_time:
                 # Chrome が起動しているか確認（落ちていたら再起動）
                 if not ensure_chrome_running():
                     logger.error("Chrome が起動できないためサイクルをスキップ")

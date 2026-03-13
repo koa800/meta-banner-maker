@@ -3,5 +3,7 @@
   "my_goal_url": "https://www.addness.com/goals/2486eec7-95e3-4d5d-8a9f-d1c899c70f40",
   "cycle_interval_minutes": 60,
   "headless": false,
-  "mode": "report"
+  "mode": "report",
+  "paused": true,
+  "pause_reason": "2026-03-13 優先順位を Codex -> 秘書 -> 日向 に切り替えるため一時停止"
 }

@@ -526,6 +526,13 @@ class TaskScheduler:
             "replace_existing": True,
         }
 
+    def _is_hinata_enabled(self) -> bool:
+        return bool(self.config.get("hinata", {}).get("enabled", True))
+
+    def _hinata_pause_reason(self) -> str:
+        reason = str(self.config.get("hinata", {}).get("pause_reason", "")).strip()
+        return reason or "設定で一時停止中"
+
     def _record_schedule_success(self, task_name: str, slot_key: str | None = None):
         """スケジュールタスクの最終成功時刻を統一的に記録する。"""
         now = datetime.now(_SCHEDULER_TIMEZONE).isoformat()
@@ -1410,6 +1417,13 @@ market_trends.md の全文をそのまま出力してください。既存の内
             logger.info("Addness goal context updated for daily review")
 
     async def _run_hinata_addness_feedback_check(self):
+        if not self._is_hinata_enabled():
+            logger.info(
+                "Hinata Addness feedback scan skipped: "
+                f"{self._hinata_pause_reason()}"
+            )
+            return
+
         result = await self._execute_tool(
             "addness_hinata_feedback_scan",
             tools.addness_hinata_feedback_scan,
@@ -2458,6 +2472,13 @@ cat {creds_file}
     def _dispatch_repair_to_hinata(self, task_name: str, diagnosis: dict):
         """日向に修復タスクを投入する。"""
         import json
+
+        if not self._is_hinata_enabled():
+            logger.info(
+                "_dispatch_repair: Hinata paused by policy. "
+                f"skip repair dispatch for {task_name} ({self._hinata_pause_reason()})"
+            )
+            return
 
         HINATA_TASKS = self.hinata_dir / "hinata_tasks.json"
 

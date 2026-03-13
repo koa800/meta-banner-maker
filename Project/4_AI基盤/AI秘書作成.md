@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年3月13日（MacBook local_agent の config fallback、自動 runtime 復元、launchd 正本化を反映） |
+| 最終更新 | 2026年3月13日（日向一時停止に合わせ、日向コメント検知ジョブの現況を反映） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -204,7 +204,7 @@
 66. **LINE承認 → Addness実投稿**: 承認時は即送信せず `post_addness_comment` タスクを Mac Mini に委譲。甲原アカウントの Addness セッションで対象ゴールを開き、最新コメントの `返信` または `コメントする` からフォームを開いて実際に返信し、投稿完了後に LINE へ報告
 67. **確認なしの実投稿を禁止**: Addness 返信案は必ず「この内容で返信しようと思っています。合っていれば 1 / 修正なら 2 [内容]」という確認文面で LINE に止める。引用リプライか `承認 [ID]` / `編集 [ID] [内容]` の明示指定なしでは送信しない
 68. **日向向け返信ガードレール**: Addness返信案は専用プロンプトを使用。Lステップ権限・シート共有は最小権限から提案し、1コメントで1判断 + 1次アクションに絞る。日向向けは敬語を避け、甲原らしい短い判断 + 次の一手に自動補正する
-69. **定期検知ジョブ**: `addness_feedback_manager.py` を追加。`hinata_addness_feedback_check` が10分ごとに Kohara サブツリーの未解決コメントを巡回し、新着のみ秘書承認フローへ登録。ライブのツリー API が使えない場合は `addness_data/latest.json` をフォールバックに使う
+69. **定期検知ジョブ**: `addness_feedback_manager.py` を追加。`hinata_addness_feedback_check` が Kohara サブツリーの未解決コメントを巡回し、新着のみ秘書承認フローへ登録する仕組みを実装済み。2026-03-13 時点では、強化優先順位を `Codex -> 秘書 -> 日向` に切り替えたためジョブ自体は停止中
 70. **投稿失敗時の復帰**: Addness返信失敗時は `pending_messages` を `pending` に戻し、同じ承認で再実行できるようにした
 71. **秘書コマンド直実行API**: `/api/secretary-command` を追加。認証付きで `承認` / `編集` などの秘書コマンドを直接実行できるため、本番の Addness 承認フローを外部から検証できる
 72. **pending詳細debug**: `/debug/pending/<message_id>` を追加。特定の Addness エントリについて `post_error` と関連タスク状態を直接確認できる
@@ -629,7 +629,7 @@ bash System/line_bot_local/sync_data.sh
 |------|--------|------|---------|
 | 1分ごと | `health_check` | 🟢 | 死活監視・自動復旧（停止検知→再起動→起動直後に当日分の重要定常を即確認。平常時も未実行の重要定常は10分クールダウン付きで最大3回まで補走） |
 | 5分ごと | `git_pull_sync` | 🟢 | GitHubからpull→rsyncデプロイ→サービス再起動 |
-| 10分ごと | `hinata_addness_feedback_check` | 🟢 | Addness上の日向コメント検知→LINE承認フローへ登録 |
+| 停止中 | `hinata_addness_feedback_check` | 🟢 | Addness上の日向コメント検知→LINE承認フローへ登録（機能は残すが 2026-03-13 から停止） |
 | 30分ごと | `render_health_check` | 🟢 | Renderサーバー死活監視（ダウン時LINE通知） |
 | 5分ごと | `service_watchdog` | 🟢 | Orchestrator非依存のサービス監視・自動復旧（bash+launchctlのみ） |
 | 30分ごと | `repair_check` | 🟢 | ~~ログからエラー検知→修復提案~~（API消費削減のため無効化。手動`claude -p`で代替） |
