@@ -1,0 +1,4 @@
+interface:
+  display_name: "UTAGE会員サイト"
+  short_description: "UTAGEの会員サイトを bundle -> course -> lesson の順で exact に扱う"
+  default_prompt: "Use $utage-member-site-operations to inspect or update a UTAGE member site safely, starting from bundle and working down to course and lesson."
