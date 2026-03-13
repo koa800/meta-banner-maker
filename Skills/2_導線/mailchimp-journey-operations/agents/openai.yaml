@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mailchimp Journey運用"
+  short_description: "MailchimpのJourneyを evergreen 用に作成、編集、検証する exact 手順"
+  default_prompt: "MailchimpでJourneyを作成または修正したい"

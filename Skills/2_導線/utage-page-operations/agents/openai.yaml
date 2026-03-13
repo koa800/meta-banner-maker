@@ -1,0 +1,4 @@
+interface:
+  display_name: "UTAGEページ運用"
+  short_description: "UTAGEのページを作成、編集、検証する exact 手順"
+  default_prompt: "UTAGEのページ作成や編集を current 手順で進めたい"

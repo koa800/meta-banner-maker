@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mailchimp Campaign運用"
+  short_description: "Mailchimpの単発campaignを作成、編集、検証する exact 手順"
+  default_prompt: "MailchimpでCampaignを作成または修正したい"

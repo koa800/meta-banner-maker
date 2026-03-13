@@ -1,0 +1,4 @@
+interface:
+  display_name: "UTAGE商品運用"
+  short_description: "UTAGEの商品、detail、アクション接続を exact 手順で扱う"
+  default_prompt: "UTAGEの商品作成やdetail、アクション接続を current 手順で進めたい"
