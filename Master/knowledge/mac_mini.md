@@ -95,7 +95,8 @@
 
 - 毎朝08:25の `oauth_health_check` が Gmail トークン（personal/kohara）の存在と有効性を自動検証
 - トークン期限切れ・無効化・ファイル不在時はLINE通知（復旧コマンド付き）
-- 復旧手順: MacBook で `python3 System/mail_manager.py --account {account} run` → 再認証 → `scp` で Mac Mini に転送
+- 復旧手順: MacBook の対話ターミナルで `python3 System/mail_manager.py --account {account} run` → 再認証 → `scp` で Mac Mini に転送
+- 非対話実行の `mail_manager.py run` は browser を開かず、Slack に再認証必要だけ通知して終了する
 
 ## git_pull_sync が反映されない場合
 

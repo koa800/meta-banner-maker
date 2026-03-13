@@ -23,6 +23,26 @@ check_command() {
   fi
 }
 
+check_cursor_access() {
+  if command -v cursor >/dev/null 2>&1; then
+    printf "[OK] command %-8s %s\n" "cursor" "$(command -v cursor)"
+    return 0
+  fi
+
+  if [ -d "/Applications/Cursor.app" ]; then
+    printf "[OK] app     %-8s %s\n" "Cursor" "/Applications/Cursor.app"
+    return 0
+  fi
+
+  if [ -d "$HOME/Applications/Cursor.app" ]; then
+    printf "[OK] app     %-8s %s\n" "Cursor" "$HOME/Applications/Cursor.app"
+    return 0
+  fi
+
+  printf "[WARN] cursor command/app not found\n"
+  warn_count=$((warn_count + 1))
+}
+
 check_required_path() {
   local label="$1"
   local path="$2"
@@ -54,7 +74,7 @@ check_command git
 check_command python3
 check_command codex
 check_command claude
-check_command cursor
+check_cursor_access
 check_command gh
 
 print_section "Critical paths"

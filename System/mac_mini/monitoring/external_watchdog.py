@@ -48,13 +48,17 @@ def _load_line_config() -> tuple:
     """line_bot_local/config.json から agent_token と server_url を取得する。"""
     candidates = [
         Path.home() / ".config" / "addness" / "line_config.json",
-        Path(__file__).resolve().parent.parent.parent / "line_bot_local" / "config.json",
+        Path.home() / "Library" / "LineBot" / "config.json",
+        Path.home() / "Desktop" / "cursor" / "System" / "line_bot_local" / "config.json",
     ]
     for p in candidates:
         if p.exists():
             try:
                 cfg = json.loads(p.read_text())
-                return cfg.get("agent_token", ""), cfg.get("server_url", "")
+                token = str(cfg.get("agent_token", "")).strip()
+                server = str(cfg.get("server_url", "")).strip()
+                if token and server:
+                    return token, server
             except (json.JSONDecodeError, OSError):
                 continue
     return "", ""

@@ -23,11 +23,16 @@ mkdir -p "$DEPLOY_DIR"
 
 cp "$SCRIPT_DIR/external_watchdog.py" "$DEPLOY_DIR/external_watchdog.py"
 
-LINE_CFG="$REPO_ROOT/System/line_bot_local/config.json"
-if [ -f "$LINE_CFG" ]; then
-    cp "$LINE_CFG" "$DEPLOY_DIR/line_config.json"
-    echo "LINE設定をデプロイ: $DEPLOY_DIR/line_config.json"
-fi
+for LINE_CFG in \
+    "$HOME/Library/LineBot/config.json" \
+    "$REPO_ROOT/System/line_bot_local/config.json"
+do
+    if [ -f "$LINE_CFG" ]; then
+        cp "$LINE_CFG" "$DEPLOY_DIR/line_config.json"
+        echo "LINE設定をデプロイ: $DEPLOY_DIR/line_config.json"
+        break
+    fi
+done
 
 LOG_FILE="$DEPLOY_DIR/watchdog.log"
 

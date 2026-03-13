@@ -2,10 +2,51 @@
 # Addnessパイプライン実行スクリプト
 # 成功・失敗どちらもSlack（定常業務）に通知する
 
-WEBHOOK_URL="${SLACK_WEBHOOK_URL:?環境変数 SLACK_WEBHOOK_URL が未設定です}"
 PYTHON=/usr/bin/python3
 SYSTEM_DIR="/Users/koa800/Desktop/cursor/System"
 LOG="$SYSTEM_DIR/addness.log"
+
+resolve_webhook_url() {
+    "$PYTHON" - <<'PY'
+import json
+import os
+from pathlib import Path
+
+env_candidates = [
+    os.environ.get("SLACK_WEBHOOK_URL", "").strip(),
+    os.environ.get("SLACK_AI_TEAM_WEBHOOK_URL", "").strip(),
+]
+for value in env_candidates:
+    if value:
+        print(value)
+        raise SystemExit(0)
+
+config_candidates = [
+    (Path("/Users/koa800/Desktop/cursor/System/config/addness.json"), "slack_webhook_url"),
+    (Path("/Users/koa800/Desktop/cursor/System/mail_inbox_data/config.json"), "slack_webhook_url"),
+]
+
+for path, key in config_candidates:
+    if not path.exists():
+        continue
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        continue
+    value = str(data.get(key, "")).strip()
+    if value.startswith("${") and value.endswith("}"):
+        value = os.environ.get(value[2:-1], "").strip()
+    if value:
+        print(value)
+        raise SystemExit(0)
+PY
+}
+
+WEBHOOK_URL="$(resolve_webhook_url)"
+if [ -z "$WEBHOOK_URL" ]; then
+    echo "環境変数または既存設定から Slack Webhook URL を解決できませんでした" >&2
+    exit 1
+fi
 
 # ステップ別出力を保持する変数
 OUT_FETCHER=""

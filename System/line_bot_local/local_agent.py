@@ -1575,20 +1575,51 @@ DEFAULT_CONFIG = {
 config = {}
 
 
+def _config_candidates():
+    """config.json の探索順。runtime 正本が無ければ deploy 側を使う。"""
+    seen = set()
+    for path in (
+        CONFIG_FILE,
+        _AGENT_DIR / "config.json",
+        _PROJECT_ROOT / "System" / "line_bot_local" / "config.json",
+    ):
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        yield path
+
+
 def load_config():
     """設定を読み込む（環境変数フォールバック付き）"""
     global config
+    config_source = None
+    persist_runtime_config = False
 
-    if CONFIG_FILE.exists():
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            config = json.load(f)
-    else:
+    for candidate in _config_candidates():
+        if not candidate.exists():
+            continue
+        try:
+            with open(candidate, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            config = DEFAULT_CONFIG.copy()
+            config.update(loaded)
+            config_source = candidate
+            if candidate != CONFIG_FILE:
+                persist_runtime_config = True
+            break
+        except Exception as e:
+            print(f"⚠️ config.json 読み込み失敗: {candidate} ({e})")
+
+    if config_source is None:
         config = DEFAULT_CONFIG.copy()
         print(f"⚠️ config.json が見つかりません: {CONFIG_FILE}")
+    else:
+        print(f"✅ config.json 読み込み: {config_source}")
 
     # 環境変数でconfig値を補完（plistフォールバック: config.json消失時の安全網）
     # config.jsonが存在しなかった場合は環境変数を優先、存在する場合は空値のみ補完
-    _from_file = CONFIG_FILE.exists()
+    _from_file = config_source is not None
     env_overrides = {
         "server_url": os.environ.get("LINE_BOT_SERVER_URL"),
         "agent_token": os.environ.get("AGENT_TOKEN") or os.environ.get("LOCAL_AGENT_TOKEN"),
@@ -1605,10 +1636,10 @@ def load_config():
             config[key] = env_val
             patched = True
 
-    # config.jsonが存在しない場合、環境変数で補完した設定を保存
-    if not CONFIG_FILE.exists() and config.get("server_url") and config.get("agent_token"):
+    # runtime 正本が無ければ、deploy 側 config から復元して以後は runtime を使う
+    if (persist_runtime_config or not CONFIG_FILE.exists()) and config.get("server_url") and config.get("agent_token"):
         save_config()
-        print(f"✅ 環境変数からconfig.jsonを自動生成しました: {CONFIG_FILE}")
+        print(f"✅ runtime config.json を更新しました: {CONFIG_FILE}")
     elif patched:
         print(f"✅ 環境変数でconfig値を補完しました")
 

@@ -1,6 +1,6 @@
 # MacBook移行ガイド
 
-最終更新: 2026-03-12
+最終更新: 2026-03-13
 
 ## 概要
 
@@ -287,6 +287,7 @@ System/scripts/ai session verify claude
 ```
 
 `codex` / `claude` の latest session が無い場合は `not_found` でよい。
+`live-ready` は、その Mac に live session 履歴が来ているので旧MacBook不要の状態を意味する。
 `review` が出る場合だけ、session snapshot 保存やローカル履歴の有無を確認する。
 
 ---

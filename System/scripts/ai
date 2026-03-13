@@ -166,8 +166,15 @@ doctor_check_latest_session() {
     ok="$(json_get "$verify_json" "ok")"
     snapshot_found="$(json_get "$verify_json" "snapshot_found")"
     session_found="$(json_get "$verify_json" "session_found")"
+    if [ "$session_found" = "True" ] || [ "$session_found" = "true" ]; then
+        history_state="live"
+    else
+        history_state="snapshot-only"
+    fi
     if [ "$ok" = "True" ] || [ "$ok" = "true" ]; then
         status_line="ok"
+    elif [ "$history_state" = "live" ]; then
+        status_line="live-ready"
     elif { [ "$snapshot_found" = "True" ] || [ "$snapshot_found" = "true" ]; } && ! { [ "$session_found" = "True" ] || [ "$session_found" = "true" ]; }; then
         status_line="rehydrate-ready"
     else
@@ -175,11 +182,6 @@ doctor_check_latest_session() {
         if [ "$required" = "1" ]; then
             failures=$((failures + 1))
         fi
-    fi
-    if [ "$session_found" = "True" ] || [ "$session_found" = "true" ]; then
-        history_state="live"
-    else
-        history_state="snapshot-only"
     fi
     echo "  status: $status_line"
     echo "  history: $history_state"

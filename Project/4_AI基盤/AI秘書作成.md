@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年3月11日（Codex first ルーティング化、Addness会話文脈付き返信、CDP正常通知の1日1回化、返信通知の簡素化） |
+| 最終更新 | 2026年3月13日（MacBook local_agent の config fallback、自動 runtime 復元、launchd 正本化を反映） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -522,6 +522,7 @@ bash System/line_bot_local/sync_data.sh
 | データ永続化 | Render永続ディスク `/data` を使用。`DATA_DIR=/data` 環境変数で設定済み。デプロイ後も状態が消えない。`line_bot_group_log.json`（グループメッセージ日次ログ）も同ディレクトリに保存・日付ローテーション |
 | macOS TCC（Mac Mini） | launchd から Desktop は直接アクセス不可。`~/agents/` をデプロイ先に使用（Library版は廃止済み） |
 | macOS TCC（MacBook） | LaunchAgentから `~/Desktop/` は直接アクセス不可。`~/Library/LineBot/` にデプロイ。`data/` にMaster/等のキャッシュコピーを配置し、post-commitフックで自動同期 |
+| MacBook local_agent 設定 | ランタイム正本は `~/agents/data/config.json`。無ければ `~/Library/LineBot/config.json` または `System/line_bot_local/config.json` から自動復元する。MacBook は `task_polling: false` を維持し、起動は launchd を正本にする。`crontab` の `@reboot` 併用は禁止 |
 | LINE webhook重複 | 同一 message_id のタスクは1件のみキューイング済み |
 | Mac Mini TCC制限 | LaunchAgent から `~/Desktop/` は直接アクセス不可。`~/agents/` を作業ディレクトリに使用。plistが古いパス（`~/Library/LineBot/`等）を参照していた場合、`git_pull_sync.sh`の`ensure_plist_path`が自動修正。plist再生成時は`config.json`から`AGENT_TOKEN`/`LINE_BOT_SERVER_URL`のみ設定（`ANTHROPIC_API_KEY`はplistに埋め込まない。local_agentがconfig.jsonから直接読む。plist経由で混入するとClaude Code CLIがOAuthではなくAPIキーを使い障害の原因になるため） |
 | MacBook↔Mac Mini同期 | GitHub push/pull方式。post-commitで自動push→Mac Mini Orchestratorが5分ごとにgit pull→ローカルrsyncでデプロイ。外出先からも同期可能。旧rsync over SSH方式（sync_from_macbook.sh）は2026-02-22に無効化済み |
@@ -836,7 +837,7 @@ MacBook (どこからでも)
 - [x] group_insights返信プロンプト注入（週次学習で蓄積された会話スタイル・関心・性格を返信案生成に自動反映。以前は書き込むだけで読み出されていなかった）
 - [x] 承認フィードバック学習（「1」承認時にAI案=正解として成功例を蓄積。以前は「2」修正時のみ学習→承認パターンを一切学習できていなかった）
 - [x] Q&A承認時Pineconeナレッジ蓄積（承認済み回答をベクトルDBに自動upsert。以前は承認→スプレッドシート書き込みのみでナレッジが蓄積されなかった）
-- [x] Slack Webhook URL外部化（addness_config.json/run_addness_pipeline.shから環境変数に移動。GitHub Push Protection対応）
+- [x] Slack Webhook URL外部化（環境変数を優先しつつ、既存 config.json からもフォールバック解決。GitHub Push Protection対応）
 - [x] 管理シート自動同期（`sheets_sync.py`。Master/sheets/README.md登録シートのCSVキャッシュを毎朝6:30に自動更新。Orchestrator統合済み）
 - [x] グループLINE監視+日次ダイジェスト（全グループメッセージを永続ログに蓄積→毎夜21:00にClaude Haiku分析→グループ別要約・活動度・アクション事項を秘書グループに通知。`/api/group-log` APIでログ取得可能）
 - [x] グループログ30日アーカイブ＋週次プロファイル学習（日次ログを`{DATA_DIR}/group_logs/{YYYY-MM-DD}.json`に自動アーカイブ（30日保持）。毎週日曜10:00にClaude Haikuが過去7日間の会話を人物ごとに分析→`profiles.json`の`group_insights`フィールドに書き込み）
@@ -854,7 +855,7 @@ MacBook (どこからでも)
 - [x] 曖昧な指示へのヒヤリング: 「広告どう？」等の抽象質問には選択肢を提示して聞き返す
 - [x] 深掘り質問の制限: データ取得系は即実行、確認は最大1回に制限（質問より行動を優先）
 - [x] 番号選択バグ修正: AI秘書が提示した番号リストに「2」「3」で回答するとメッセージ送信コマンドと誤認されていた問題を修正（メンション/Q&A文脈のみコマンド扱い）
-- [x] ai_news Anthropic API切替: OpenAI→Anthropic→Claude Code CLI（サブスク課金）。Slack送信はSLACK_AI_TEAM_WEBHOOK_URL環境変数にフォールバック
+- [x] ai_news Anthropic API切替: OpenAI→Anthropic→Claude Code CLI（サブスク課金）。Slack送信は環境変数と既存 config にフォールバックし、Claude CLI が失敗した場合はヘッドライン一覧で継続通知
 - [x] Claude Code自律モード統合（Phase 8）: 返信案生成・タスク実行でClaude Code CLI（`--chrome`フラグ付き）を優先使用。プロファイル自動検索・スクリプト実行・Web検索・ブラウザ操作が可能に。失敗時は既存API/Coordinatorにフォールバック
 - [x] Claude Code認証分離: `~/.claude-secretary/`（秘書アカウント koa800.secretary@gmail.com MAX 5x）で日向エージェント（`~/.claude/`）と完全分離
 - [x] Claude Code bypassPermissions設定: Bash/WebSearch/Read等の全ツール解放。破壊的操作（rm/sudo/kill/force-push等）のみask制限

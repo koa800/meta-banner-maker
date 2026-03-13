@@ -7,6 +7,8 @@ import json
 import logging
 import os
 import re
+import signal
+import shutil
 import sys
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -18,6 +20,7 @@ import requests
 logger = logging.getLogger("ai_news_notifier")
 
 CONFIG_PATH = Path(__file__).parent / "config" / "ai_news.json"
+MAIL_CONFIG_PATH = Path(__file__).parent / "mail_inbox_data" / "config.json"
 
 
 def load_config():
@@ -29,6 +32,75 @@ def load_config():
     
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _load_mail_slack_config() -> dict:
+    if not MAIL_CONFIG_PATH.exists():
+        return {}
+    try:
+        with open(MAIL_CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _resolve_claude_cmd() -> str:
+    env_cmd = os.environ.get("CLAUDE_CMD", "").strip()
+    candidates = []
+    if env_cmd:
+        candidates.append(Path(env_cmd).expanduser())
+    resolved = shutil.which("claude")
+    if resolved:
+        candidates.append(Path(resolved))
+    candidates.extend([
+        Path.home() / ".local" / "bin" / "claude",
+        Path("/opt/homebrew/bin/claude"),
+        Path("/usr/local/bin/claude"),
+    ])
+    app_support_root = Path.home() / "Library/Application Support/Claude/claude-code"
+    if app_support_root.exists():
+        candidates.extend(sorted(app_support_root.glob("*/claude"), reverse=True))
+    for candidate in candidates:
+        if candidate and candidate.exists():
+            return str(candidate)
+    raise FileNotFoundError("Claude Code CLI が見つかりません")
+
+
+def _resolve_claude_config_dir() -> Path:
+    env_dir = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    if env_dir:
+        return Path(env_dir).expanduser()
+
+    secretary_dir = Path.home() / ".claude-secretary"
+    default_dir = Path.home() / ".claude"
+    for candidate in (
+        secretary_dir / ".credentials.json",
+        default_dir / ".credentials.json",
+        default_dir / "settings.json",
+        secretary_dir / "settings.json",
+    ):
+        if candidate.exists():
+            return candidate.parent
+    if secretary_dir.exists():
+        return secretary_dir
+    return default_dir
+
+
+def _build_claude_env() -> dict:
+    env = os.environ.copy()
+    env.pop("CLAUDECODE", None)
+    env.pop("ANTHROPIC_API_KEY", None)
+    path = env.get("PATH", "")
+    for prefix in reversed([
+        str(Path.home() / ".local" / "bin"),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+    ]):
+        if prefix and prefix not in path:
+            path = f"{prefix}:{path}" if path else prefix
+    env["PATH"] = path
+    env["CLAUDE_CONFIG_DIR"] = str(_resolve_claude_config_dir())
+    return env
 
 
 def fetch_google_news_rss(keyword: str) -> list[dict]:
@@ -114,19 +186,35 @@ def fetch_all_news(config: dict) -> list[dict]:
 
 
 def _run_claude_cli(prompt: str, model: str = "claude-sonnet-4-6",
-                    max_turns: int = 3, timeout: int = 120) -> str:
+                    max_turns: int = 3, timeout: int = 45) -> str:
     """Claude Code CLI でテキスト生成。サブスク課金でAPI消費なし。"""
     import subprocess as _sp
-    env = os.environ.copy()
-    path = env.get("PATH", "")
-    if "/opt/homebrew/bin" not in path:
-        env["PATH"] = f"/opt/homebrew/bin:{path}"
-    claude_cmd = "/opt/homebrew/bin/claude"
+    env = _build_claude_env()
+    claude_cmd = _resolve_claude_cmd()
     cmd = [claude_cmd, "-p", "--model", model, "--max-turns", str(max_turns), prompt]
-    result = _sp.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
-    if result.returncode != 0:
-        raise RuntimeError(f"Claude CLI failed (code={result.returncode}): {result.stderr[:300]}")
-    return result.stdout.strip()
+    proc = _sp.Popen(
+        cmd,
+        stdout=_sp.PIPE,
+        stderr=_sp.PIPE,
+        text=True,
+        env=env,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except _sp.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except Exception:
+            proc.kill()
+        stdout, stderr = proc.communicate()
+        raise RuntimeError(f"Claude CLI timeout after {timeout}s")
+    if proc.returncode != 0:
+        raise RuntimeError(f"Claude CLI failed (code={proc.returncode}): {stderr[:300]}")
+    output = stdout.strip()
+    if not output:
+        raise RuntimeError("Claude CLI returned empty output")
+    return output
 
 
 def summarize_with_claude_cli(articles: list[dict], config: dict) -> str:
@@ -152,7 +240,27 @@ def summarize_with_claude_cli(articles: list[dict], config: dict) -> str:
 {articles_text}
 ---"""
 
-    return _run_claude_cli(prompt, model="claude-sonnet-4-6", max_turns=3, timeout=120)
+    return _run_claude_cli(prompt, model="claude-sonnet-4-6", max_turns=3, timeout=45)
+
+
+def build_fallback_summary(articles: list[dict], config: dict, reason: str = "") -> str:
+    """Claude が使えない場合の簡易ヘッドライン要約。"""
+    max_items = int(config.get("fallback_max_items", 8) or 8)
+    lines = [f"📅 {datetime.now().strftime('%Y/%m/%d')} のAIニュース見出しまとめ"]
+    lines.append("Claude要約が使えなかったため、主要ヘッドラインをそのまま共有します。")
+    for article in articles[:max_items]:
+        source = article.get("source") or "source unknown"
+        title = re.sub(r"\s+", " ", str(article.get("title", "")).strip())
+        link = str(article.get("link", "")).strip()
+        if not title:
+            continue
+        headline = f"- {title} ({source})"
+        if link:
+            headline = f"{headline}\n  {link}"
+        lines.append(headline)
+    if reason:
+        lines.append(f"\n備考: Claude要約失敗 ({reason[:120]})")
+    return "\n".join(lines)
 
 
 def send_to_slack(message: str, config: dict) -> bool:
@@ -165,6 +273,9 @@ def send_to_slack(message: str, config: dict) -> bool:
     webhook_url = config.get("slack_webhook_url", "").strip()
     if not webhook_url:
         webhook_url = os.environ.get("SLACK_AI_TEAM_WEBHOOK_URL", "").strip()
+    mail_cfg = _load_mail_slack_config()
+    if not webhook_url:
+        webhook_url = str(mail_cfg.get("slack_webhook_url", "")).strip()
     if not webhook_url:
         print("Slack Webhook URL 未設定 → Slack通知スキップ")
         return False
@@ -176,8 +287,9 @@ def send_to_slack(message: str, config: dict) -> bool:
     }
     
     # チャンネル指定がある場合
-    if config.get("slack_channel"):
-        payload["channel"] = config["slack_channel"]
+    slack_channel = config.get("slack_channel") or mail_cfg.get("slack_channel")
+    if slack_channel:
+        payload["channel"] = slack_channel
     
     response = requests.post(
         webhook_url,
@@ -216,8 +328,15 @@ def main():
         
         # 要約
         print("Claude Code CLIで要約中...")
-        summary = summarize_with_claude_cli(articles, config)
-        print("  → 要約完了")
+        try:
+            summary = summarize_with_claude_cli(articles, config)
+            print("  → 要約完了")
+        except Exception as summary_error:
+            logger.warning("Claude要約失敗のためフォールバックに切り替え", extra={
+                "error": {"type": type(summary_error).__name__, "message": str(summary_error)},
+            })
+            print(f"  → Claude要約失敗。ヘッドライン一覧へ切り替え: {summary_error}")
+            summary = build_fallback_summary(articles, config, reason=str(summary_error))
         
         # Slack送信
         print("Slackに送信中...")
@@ -241,7 +360,7 @@ def main():
         # エラー時もSlackに通知（Webhook URLが設定されていれば）
         try:
             config = load_config()
-            if config.get("slack_webhook_url") and config.get("notify_on_error", True):
+            if config.get("notify_on_error", True):
                 send_to_slack(f"⚠️ AI News Notifier エラー\n```{e}```", config)
         except:
             pass

@@ -30,8 +30,10 @@ import sys
 import urllib.request
 from email.mime.text import MIMEText
 from pathlib import Path
+from datetime import datetime
 
 from google.oauth2.credentials import Credentials
+from google.auth.exceptions import RefreshError
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
@@ -67,6 +69,43 @@ SCOPES = [
 ]
 
 NOT_NEEDED_THRESHOLD = 5  # この回数以上削除したら送信者をブロック（受信トレイに届かなくなる）
+
+
+class ReauthRequiredError(RuntimeError):
+    """対話端末での再認証が必要なときに送出する。"""
+
+
+def _interactive_auth_allowed() -> bool:
+    """ブラウザ認証を始めてよい実行文脈か判定する。"""
+    override = os.environ.get("MAIL_MANAGER_ALLOW_BROWSER_AUTH", "").strip().lower()
+    if override in {"1", "true", "yes", "on"}:
+        return True
+    if override in {"0", "false", "no", "off"}:
+        return False
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _quarantine_token(token_path: Path, reason: str) -> None:
+    """壊れた token を退避する。"""
+    if not token_path.exists():
+        return
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = token_path.with_name(f"{token_path.stem}.{reason}.{timestamp}{token_path.suffix}")
+    try:
+        token_path.replace(backup_path)
+    except OSError:
+        pass
+
+
+def _notify_reauth_required(account: str, detail: str) -> None:
+    """Slack に再認証必要を通知する。"""
+    command = f"python3 /Users/koa800/Desktop/cursor/System/mail_manager.py --account {account} run"
+    message = (
+        f"⚠️ Gmail({account}) の再認証が必要です。\n"
+        f"{detail}\n"
+        f"新MacBookの対話ターミナルで次を実行してください。\n`{command}`"
+    )
+    send_to_slack(message)
 
 
 def load_config():
@@ -138,12 +177,36 @@ def get_credentials(account=None):
     token_path = ACCOUNTS[account]
     creds = None
     if token_path.exists():
-        creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
+        try:
+            if token_path.stat().st_size == 0:
+                raise ValueError("token file is empty")
+            creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
+        except Exception as e:
+            _quarantine_token(token_path, "invalid")
+            logger.warning("Gmail token load failed; falling back to browser auth", extra={
+                "account": account,
+                "error": {"type": type(e).__name__, "message": str(e)},
+            })
+            print(f"[{account}] 既存トークンを読み込めませんでした。再認証が必要です。")
+            creds = None
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
+            try:
+                creds.refresh(Request())
+            except RefreshError as e:
+                _quarantine_token(token_path, "invalid")
+                logger.warning("Gmail token refresh failed; falling back to browser auth", extra={
+                    "account": account,
+                    "error": {"type": type(e).__name__, "message": str(e)},
+                })
+                print(f"[{account}] 既存トークンを再利用できませんでした。ブラウザ再認証に切り替えます。")
+                creds = None
+        if not creds or not creds.valid:
+            if not _interactive_auth_allowed():
+                detail = "保存済みトークンが無いか、無効です。"
+                _notify_reauth_required(account, detail)
+                raise ReauthRequiredError(f"Gmail({account}) は対話ターミナルでの再認証が必要です。")
             client_secret_path = CLIENT_SECRETS.get(account, CLIENT_SECRETS["kohara"])
             print(f"[{account}] ブラウザが開きます。対象アカウントでログインしてください。")
             flow = InstalledAppFlow.from_client_secrets_file(str(client_secret_path), SCOPES)
@@ -1010,22 +1073,26 @@ def main():
         sys.exit(1)
 
     cmd = args[0].lower()
-    if cmd == "run":
-        run_once(account=account)
-    elif cmd == "approve":
-        cmd_approve(account=account)
-    elif cmd == "review":
-        cmd_review(account=account)
-    elif cmd == "status":
-        cmd_status()
-    elif cmd == "setup-slack":
-        cmd_setup_slack()
-    elif cmd == "slack-test":
-        cmd_slack_test()
-    else:
-        print(f"不明なコマンド: {cmd}")
-        print("利用可能: run, approve, review, status, setup-slack, slack-test")
-        sys.exit(1)
+    try:
+        if cmd == "run":
+            run_once(account=account)
+        elif cmd == "approve":
+            cmd_approve(account=account)
+        elif cmd == "review":
+            cmd_review(account=account)
+        elif cmd == "status":
+            cmd_status()
+        elif cmd == "setup-slack":
+            cmd_setup_slack()
+        elif cmd == "slack-test":
+            cmd_slack_test()
+        else:
+            print(f"不明なコマンド: {cmd}")
+            print("利用可能: run, approve, review, status, setup-slack, slack-test")
+            sys.exit(1)
+    except ReauthRequiredError as e:
+        print(f"エラー: {e}")
+        sys.exit(2)
 
 
 if __name__ == "__main__":
