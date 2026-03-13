@@ -1,0 +1,4 @@
+interface:
+  display_name: "LSTEP テンプレートパック運用"
+  short_description: "Lステップのテンプレートパックを作成、step追加、テスト送信、削除まで安全に進める"
+  default_prompt: "Lステップのテンプレートパックを正しいUI手順で作成・検証したい"

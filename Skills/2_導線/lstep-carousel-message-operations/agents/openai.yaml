@@ -1,0 +1,4 @@
+interface:
+  display_name: "LSTEP カルーセル運用"
+  short_description: "Lステップのカルーセルメッセージ(新方式)を作成、テスト送信、削除まで安全に進める"
+  default_prompt: "Lステップのカルーセルメッセージ(新方式)を正しいUI手順で作成・検証したい"
