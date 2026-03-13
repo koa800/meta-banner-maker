@@ -1,0 +1,4 @@
+interface:
+  display_name: "LSTEP Flex運用"
+  short_description: "Lステップのフレックスメッセージを作成、テスト送信、削除まで安全に進める"
+  default_prompt: "Lステップのフレックスメッセージを正しいUI手順で作成・検証したい"

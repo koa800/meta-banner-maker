@@ -1,0 +1,4 @@
+interface:
+  display_name: "LSTEP回答フォーム運用"
+  short_description: "Lステップの回答フォームを作成、テスト、削除まで安全に進める"
+  default_prompt: "Lステップの回答フォームを正しいUI手順で作成・検証したい"
