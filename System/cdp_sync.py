@@ -666,6 +666,57 @@ def parse_source_datetime(date_str):
         return None
 
 
+def split_csv_values(raw):
+    """カンマ区切りセルを分割して空要素を除く"""
+    if raw is None:
+        return []
+    values = []
+    for part in str(raw).replace("、", ",").split(","):
+        value = part.strip()
+        if value:
+            values.append(value)
+    return values
+
+
+def unique_preserve_order(values):
+    """順序を保ったまま重複除外"""
+    result = []
+    seen = set()
+    for value in values:
+        key = value.strip() if isinstance(value, str) else value
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(value.strip() if isinstance(value, str) else value)
+    return result
+
+
+def parse_amount_value(amount_str):
+    """金額文字列を整数に変換"""
+    raw = str(amount_str or "").strip()
+    if not raw:
+        return None
+    sign = -1 if raw.startswith("-") else 1
+    digits = re.sub(r"[^\d]", "", raw)
+    if not digits:
+        return None
+    return sign * int(digits)
+
+
+def parse_int_value(raw):
+    """数値らしい文字列を整数化"""
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    digits = re.sub(r"[^\d-]", "", text)
+    if not digits or digits == "-":
+        return None
+    try:
+        return int(digits)
+    except ValueError:
+        return None
+
+
 def ranges_overlap(start_a, end_a, start_b, end_b):
     """2つの半開区間が重なるか"""
     return max(start_a, start_b) < min(end_a, end_b)
@@ -1015,6 +1066,674 @@ class CDPSync:
         self._master_data = None
         return self.load_master()
 
+    def _pad_master_row(self, row):
+        """ヘッダー列数に合わせて行を補完"""
+        if self._master_headers is None:
+            self.load_master()
+        padded = list(row[:len(self._master_headers)])
+        if len(padded) < len(self._master_headers):
+            padded.extend([""] * (len(self._master_headers) - len(padded)))
+        return padded
+
+    def _row_customer_id(self, row_idx):
+        """行から顧客IDを取得"""
+        cid_idx = self.get_col_index("顧客ID")
+        if cid_idx is None:
+            return ""
+        row = self._master_data[row_idx]
+        return row[cid_idx].strip() if cid_idx < len(row) else ""
+
+    def _row_sort_key_by_customer_id(self, row_idx):
+        """顧客ID優先で安定ソート"""
+        customer_id = self._row_customer_id(row_idx)
+        if customer_id.isdigit():
+            return (0, int(customer_id), row_idx)
+        if customer_id:
+            return (1, customer_id, row_idx)
+        return (2, row_idx, row_idx)
+
+    def _collect_row_emails(self, row):
+        """行内のメールアドレス1/2を一意取得"""
+        email_indices = [
+            self.get_col_index("メールアドレス"),
+            self.get_col_index("メールアドレス2"),
+        ]
+        emails = []
+        for idx in email_indices:
+            if idx is None or idx >= len(row):
+                continue
+            for raw_email in split_csv_values(row[idx]):
+                email = raw_email.strip().lower()
+                if email and is_valid_email(email):
+                    emails.append(email)
+        return unique_preserve_order(emails)
+
+    def find_primary_email_duplicate_groups(self):
+        """主メール重複の連結グループを返す"""
+        if self._master_data is None:
+            self.load_master()
+
+        email_idx = self.get_col_index("メールアドレス")
+        if email_idx is None:
+            return []
+
+        email_to_rows = {}
+        for row_idx, row in enumerate(self._master_data):
+            if email_idx >= len(row):
+                continue
+            primary_emails = unique_preserve_order(
+                email.strip().lower()
+                for email in clean_email_all(row[email_idx])
+                if email.strip()
+            )
+            for email in primary_emails:
+                email_to_rows.setdefault(email, set()).add(row_idx)
+
+        duplicate_email_to_rows = {
+            email: sorted(rows)
+            for email, rows in email_to_rows.items()
+            if len(rows) >= 2
+        }
+        if not duplicate_email_to_rows:
+            return []
+
+        parent = {}
+
+        def find(x):
+            parent.setdefault(x, x)
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a, b):
+            ra = find(a)
+            rb = find(b)
+            if ra != rb:
+                parent[rb] = ra
+
+        for rows in duplicate_email_to_rows.values():
+            head = rows[0]
+            for row_idx in rows[1:]:
+                union(head, row_idx)
+
+        grouped_rows = {}
+        for rows in duplicate_email_to_rows.values():
+            for row_idx in rows:
+                root = find(row_idx)
+                grouped_rows.setdefault(root, set()).add(row_idx)
+
+        groups = []
+        for row_indices in grouped_rows.values():
+            sorted_rows = sorted(row_indices, key=self._row_sort_key_by_customer_id)
+            duplicate_emails = sorted(
+                email
+                for email, rows in duplicate_email_to_rows.items()
+                if any(row in row_indices for row in rows)
+            )
+            groups.append({
+                "row_indices": sorted_rows,
+                "duplicate_primary_emails": duplicate_emails,
+            })
+
+        groups.sort(key=lambda item: self._row_sort_key_by_customer_id(item["row_indices"][0]))
+        return groups
+
+    def find_safe_exact_duplicate_groups(self):
+        """電話・メール・LINE名の強一致だけを重複候補として返す"""
+        if self._master_data is None:
+            self.load_master()
+
+        phone_idx = self.get_col_index("電話番号")
+        line_idx = self.get_col_index("LINE名")
+
+        parent = {}
+        edge_reasons = {}
+
+        def find(x):
+            parent.setdefault(x, x)
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a, b, reason):
+            ra = find(a)
+            rb = find(b)
+            if ra != rb:
+                parent[rb] = ra
+            key = tuple(sorted((a, b)))
+            edge_reasons.setdefault(key, set()).add(reason)
+
+        key_maps = {
+            "email+phone": {},
+            "email+line": {},
+        }
+
+        for row_idx, row in enumerate(self._master_data):
+            padded = self._pad_master_row(row)
+            emails = self._collect_row_emails(padded)
+            phone = ""
+            if phone_idx is not None and phone_idx < len(padded):
+                phone = normalize_phone(padded[phone_idx].strip())
+            line_name = ""
+            if line_idx is not None and line_idx < len(padded):
+                line_name = padded[line_idx].strip()
+
+            if emails and phone:
+                for email in emails:
+                    key_maps["email+phone"].setdefault((email, phone), []).append(row_idx)
+            if emails and line_name:
+                for email in emails:
+                    key_maps["email+line"].setdefault((email, line_name), []).append(row_idx)
+        for reason, mapping in key_maps.items():
+            for rows in mapping.values():
+                unique_rows = sorted(set(rows))
+                if len(unique_rows) < 2:
+                    continue
+                head = unique_rows[0]
+                for row_idx in unique_rows[1:]:
+                    union(head, row_idx, reason)
+
+        grouped_rows = {}
+        for a, b in edge_reasons:
+            for row_idx in (a, b):
+                root = find(row_idx)
+                grouped_rows.setdefault(root, set()).add(row_idx)
+
+        groups = []
+        for row_indices in grouped_rows.values():
+            if len(row_indices) < 2:
+                continue
+            sorted_rows = sorted(row_indices, key=self._row_sort_key_by_customer_id)
+            reasons = sorted(
+                reason
+                for edge, edge_reason_set in edge_reasons.items()
+                if edge[0] in row_indices and edge[1] in row_indices
+                for reason in edge_reason_set
+            )
+            groups.append({
+                "row_indices": sorted_rows,
+                "reasons": unique_preserve_order(reasons),
+            })
+
+        groups.sort(key=lambda item: self._row_sort_key_by_customer_id(item["row_indices"][0]))
+        return groups
+
+    def _build_merged_duplicate_group(self, row_indices, duplicate_primary_emails):
+        """主メール重複グループを1行に統合"""
+        rows = {row_idx: self._pad_master_row(self._master_data[row_idx]) for row_idx in row_indices}
+        keeper_idx = min(row_indices, key=self._row_sort_key_by_customer_id)
+        base_idx = max(
+            row_indices,
+            key=lambda idx: (
+                sum(1 for value in rows[idx] if str(value).strip()),
+                -self._row_sort_key_by_customer_id(idx)[0],
+                -self._row_sort_key_by_customer_id(idx)[1] if isinstance(self._row_sort_key_by_customer_id(idx)[1], int) else 0,
+            ),
+        )
+        base_row = list(rows[base_idx])
+        merged_row = list(base_row)
+        ordered_rows = [rows[base_idx]] + [rows[idx] for idx in row_indices if idx != base_idx]
+
+        idx_map = {name: self.get_col_index(name) for name in self._master_headers}
+        email_idx = idx_map.get("メールアドレス")
+        email2_idx = idx_map.get("メールアドレス2")
+
+        all_emails = []
+        for row in ordered_rows:
+            all_emails.extend(self._collect_row_emails(row))
+        all_emails = unique_preserve_order(all_emails)
+
+        primary_email = ""
+        if email_idx is not None and email_idx < len(rows[base_idx]):
+            base_primary = clean_email(rows[base_idx][email_idx])
+            if base_primary:
+                primary_email = base_primary.lower()
+        if not primary_email and duplicate_primary_emails:
+            primary_email = duplicate_primary_emails[0]
+        if not primary_email and all_emails:
+            primary_email = all_emails[0]
+
+        secondary_emails = [email for email in all_emails if email != primary_email]
+        if email_idx is not None:
+            merged_row[email_idx] = primary_email
+        if email2_idx is not None:
+            merged_row[email2_idx] = ", ".join(secondary_emails)
+
+        if idx_map.get("顧客ID") is not None:
+            merged_row[idx_map["顧客ID"]] = rows[keeper_idx][idx_map["顧客ID"]].strip()
+
+        def cell_values(column_name):
+            col_idx = idx_map.get(column_name)
+            if col_idx is None:
+                return []
+            values = []
+            for row in ordered_rows:
+                if col_idx < len(row) and row[col_idx].strip():
+                    values.append(row[col_idx].strip())
+            return values
+
+        def normalized_dates_from_values(values):
+            pairs = []
+            for value in values:
+                dt = parse_source_datetime(value)
+                normalized = extract_date_only(value)
+                if dt and normalized:
+                    pairs.append((dt, normalized))
+            unique = {}
+            for dt, normalized in pairs:
+                unique[normalized] = dt
+            return sorted(((dt, normalized) for normalized, dt in unique.items()), key=lambda item: item[0])
+
+        def set_earliest_date(column_name):
+            col_idx = idx_map.get(column_name)
+            if col_idx is None:
+                return
+            dates = normalized_dates_from_values(cell_values(column_name))
+            merged_row[col_idx] = dates[0][0].strftime("%Y/%m/%d") if dates else ""
+
+        def set_latest_date(column_name):
+            col_idx = idx_map.get(column_name)
+            if col_idx is None:
+                return
+            dates = normalized_dates_from_values(cell_values(column_name))
+            merged_row[col_idx] = dates[-1][0].strftime("%Y/%m/%d") if dates else ""
+
+        def set_joined_dates(column_name):
+            col_idx = idx_map.get(column_name)
+            if col_idx is None:
+                return
+            values = []
+            for raw in cell_values(column_name):
+                values.extend(split_csv_values(raw))
+            normalized = normalized_dates_from_values(values)
+            merged_row[col_idx] = ", ".join(date_str for _, date_str in normalized)
+
+        def set_joined_values(column_name):
+            col_idx = idx_map.get(column_name)
+            if col_idx is None:
+                return
+            values = []
+            for raw in cell_values(column_name):
+                values.extend(split_csv_values(raw))
+            merged_row[col_idx] = ", ".join(unique_preserve_order(values))
+
+        def set_max_numeric(column_name):
+            col_idx = idx_map.get(column_name)
+            if col_idx is None:
+                return
+            candidates = [parse_int_value(value) for value in cell_values(column_name)]
+            candidates = [value for value in candidates if value is not None]
+            merged_row[col_idx] = str(max(candidates)) if candidates else ""
+
+        def set_sum_amount(column_name):
+            col_idx = idx_map.get(column_name)
+            if col_idx is None:
+                return
+            values = [parse_amount_value(value) for value in cell_values(column_name)]
+            values = [value for value in values if value is not None]
+            if not values:
+                merged_row[col_idx] = ""
+                return
+            merged_row[col_idx] = normalize_amount(str(sum(values)))
+
+        for column_name in ("作成日", "初回流入日", "初回購入日", "入会日", "初回イベント参加日"):
+            set_earliest_date(column_name)
+        for column_name in ("最新流入日", "最新購入日", "アクション最終日", "最終イベント参加日"):
+            set_latest_date(column_name)
+        for column_name in ("セミナー予約日", "個別予約日", "個別着座日"):
+            set_joined_dates(column_name)
+        set_joined_values("購入商品")
+
+        set_max_numeric("連続アクション日数")
+        set_max_numeric("累計アクション日数")
+        set_max_numeric("ゴール達成数")
+        set_max_numeric("イベント参加回数")
+
+        set_sum_amount("着金売上")
+        set_sum_amount("返金額")
+
+        flow_pairs = []
+        for row in ordered_rows:
+            first_date = extract_date_only(row[idx_map["初回流入日"]]) if idx_map.get("初回流入日") is not None else ""
+            first_route = row[idx_map["初回流入経路"]].strip() if idx_map.get("初回流入経路") is not None else ""
+            last_date = extract_date_only(row[idx_map["最新流入日"]]) if idx_map.get("最新流入日") is not None else ""
+            last_route = row[idx_map["最新流入経路"]].strip() if idx_map.get("最新流入経路") is not None else ""
+            if first_date or first_route:
+                flow_pairs.append(("first", parse_source_datetime(first_date), first_date, first_route))
+            if last_date or last_route:
+                flow_pairs.append(("last", parse_source_datetime(last_date), last_date, last_route))
+
+        first_candidates = [item for item in flow_pairs if item[0] == "first" and item[1] is not None]
+        last_candidates = [item for item in flow_pairs if item[0] == "last" and item[1] is not None]
+        if first_candidates and idx_map.get("初回流入経路") is not None:
+            first_pick = min(first_candidates, key=lambda item: item[1])
+            merged_row[idx_map["初回流入経路"]] = first_pick[3]
+        if last_candidates and idx_map.get("最新流入経路") is not None:
+            last_pick = max(last_candidates, key=lambda item: item[1])
+            merged_row[idx_map["最新流入経路"]] = last_pick[3]
+        if idx_map.get("総流入経路数") is not None:
+            route_values = unique_preserve_order(
+                route
+                for route in (
+                    [row[idx_map["初回流入経路"]].strip() for row in ordered_rows if idx_map.get("初回流入経路") is not None]
+                    + [row[idx_map["最新流入経路"]].strip() for row in ordered_rows if idx_map.get("最新流入経路") is not None]
+                )
+                if route
+            )
+            merged_row[idx_map["総流入経路数"]] = str(len(route_values)) if route_values else ""
+
+        purchase_openers = []
+        purchase_closers = []
+        for row in ordered_rows:
+            if idx_map.get("初回購入日") is not None:
+                first_date = extract_date_only(row[idx_map["初回購入日"]])
+                first_dt = parse_source_datetime(first_date)
+                if first_dt:
+                    product = row[idx_map["初回購入商品"]].strip() if idx_map.get("初回購入商品") is not None else ""
+                    purchase_openers.append((first_dt, first_date, product))
+            if idx_map.get("最新購入日") is not None:
+                last_date = extract_date_only(row[idx_map["最新購入日"]])
+                last_dt = parse_source_datetime(last_date)
+                if last_dt:
+                    product = row[idx_map["最新購入商品"]].strip() if idx_map.get("最新購入商品") is not None else ""
+                    purchase_closers.append((last_dt, last_date, product))
+
+        if purchase_openers and idx_map.get("初回購入商品") is not None:
+            opener = min(purchase_openers, key=lambda item: item[0])
+            merged_row[idx_map["初回購入商品"]] = opener[2]
+        if purchase_closers and idx_map.get("最新購入商品") is not None:
+            closer = max(purchase_closers, key=lambda item: item[0])
+            merged_row[idx_map["最新購入商品"]] = closer[2]
+
+        for src_col, count_col in self.COUNT_COLUMN_MAP.items():
+            src_idx = idx_map.get(src_col)
+            count_idx = idx_map.get(count_col)
+            if src_idx is None or count_idx is None:
+                continue
+            src_val = merged_row[src_idx].strip()
+            merged_row[count_idx] = str(len(split_csv_values(src_val))) if src_val else ""
+
+        sales_idx = idx_map.get("着金売上")
+        refund_idx = idx_map.get("返金額")
+        ltv_idx = idx_map.get("LTV")
+        if ltv_idx is not None:
+            sales_val = parse_amount_value(merged_row[sales_idx]) if sales_idx is not None else None
+            refund_val = parse_amount_value(merged_row[refund_idx]) if refund_idx is not None else None
+            if sales_val is None and refund_val is None:
+                merged_row[ltv_idx] = ""
+            else:
+                merged_row[ltv_idx] = normalize_amount(str((sales_val or 0) - (refund_val or 0)))
+
+        update_idx = idx_map.get("最終更新日")
+        if update_idx is not None:
+            merged_row[update_idx] = datetime.now().strftime("%Y/%m/%d")
+
+        handled_columns = {
+            "顧客ID",
+            "メールアドレス",
+            "メールアドレス2",
+            "作成日",
+            "最終更新日",
+            "初回流入日",
+            "初回流入経路",
+            "最新流入日",
+            "最新流入経路",
+            "総流入経路数",
+            "セミナー予約日",
+            "セミナー予約合計",
+            "個別予約日",
+            "個別予約合計",
+            "個別着座日",
+            "初回購入日",
+            "初回購入商品",
+            "最新購入日",
+            "最新購入商品",
+            "累計購入回数",
+            "購入商品",
+            "着金売上",
+            "返金額",
+            "LTV",
+            "連続アクション日数",
+            "累計アクション日数",
+            "ゴール達成数",
+            "初回イベント参加日",
+            "最終イベント参加日",
+            "イベント参加回数",
+            "入会日",
+        }
+
+        for col_idx, col_name in enumerate(self._master_headers):
+            if col_name in handled_columns:
+                continue
+            current = merged_row[col_idx].strip() if col_idx < len(merged_row) else ""
+            if current:
+                continue
+            for row in ordered_rows:
+                if col_idx < len(row) and row[col_idx].strip():
+                    merged_row[col_idx] = row[col_idx].strip()
+                    break
+
+        deleted_indices = sorted([row_idx for row_idx in row_indices if row_idx != keeper_idx], reverse=True)
+        return {
+            "keeper_idx": keeper_idx,
+            "base_idx": base_idx,
+            "merged_row": merged_row,
+            "deleted_indices": deleted_indices,
+            "all_emails": all_emails,
+        }
+
+    def merge_primary_email_duplicates(self, dry_run=False):
+        """主メール重複を同一人物として統合する"""
+        if self._master_data is None:
+            self.load_master()
+
+        duplicate_groups = self.find_primary_email_duplicate_groups()
+        if not duplicate_groups:
+            print("主メール重複はありません")
+            return {"groups": 0, "deleted_rows": 0, "backup_path": ""}
+
+        merge_plan = []
+        backup_payload = {
+            "created_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
+            "group_count": len(duplicate_groups),
+            "groups": [],
+        }
+
+        for group in duplicate_groups:
+            row_indices = group["row_indices"]
+            merge_result = self._build_merged_duplicate_group(
+                row_indices=row_indices,
+                duplicate_primary_emails=group["duplicate_primary_emails"],
+            )
+            keeper_sheet_row = merge_result["keeper_idx"] + 3
+            merge_plan.append({
+                "keeper_idx": merge_result["keeper_idx"],
+                "keeper_sheet_row": keeper_sheet_row,
+                "merged_row": merge_result["merged_row"],
+                "deleted_indices": merge_result["deleted_indices"],
+            })
+            backup_payload["groups"].append({
+                "duplicate_primary_emails": group["duplicate_primary_emails"],
+                "keeper_customer_id": self._row_customer_id(merge_result["keeper_idx"]),
+                "all_emails": merge_result["all_emails"],
+                "before_rows": [
+                    {
+                        "sheet_row": row_idx + 3,
+                        "customer_id": self._row_customer_id(row_idx),
+                        "values": self._pad_master_row(self._master_data[row_idx]),
+                    }
+                    for row_idx in row_indices
+                ],
+                "after_row": {
+                    "sheet_row": keeper_sheet_row,
+                    "values": merge_result["merged_row"],
+                },
+            })
+
+        deleted_rows = sum(len(item["deleted_indices"]) for item in merge_plan)
+        print(f"主メール重複グループ: {len(merge_plan)}件 / 削除予定行: {deleted_rows}件")
+
+        if dry_run:
+            return {"groups": len(merge_plan), "deleted_rows": deleted_rows, "backup_path": ""}
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = DATA_DIR / f"cdp_primary_email_duplicate_backup_{timestamp}.json"
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        backup_path.write_text(json.dumps(backup_payload, ensure_ascii=False, indent=2))
+
+        ws = self.ss.worksheet("顧客マスタ")
+        last_col_letter = _col_to_letter(len(self._master_headers))
+        updates = []
+        for item in merge_plan:
+            updates.append({
+                "range": f"A{item['keeper_sheet_row']}:{last_col_letter}{item['keeper_sheet_row']}",
+                "values": [item["merged_row"]],
+            })
+
+        if updates:
+            chunk_size = 200
+            for start in range(0, len(updates), chunk_size):
+                ws.batch_update(updates[start:start + chunk_size], value_input_option="USER_ENTERED")
+                time.sleep(1)
+
+        delete_requests = []
+        for item in merge_plan:
+            for row_idx in item["deleted_indices"]:
+                delete_requests.append({
+                    "deleteDimension": {
+                        "range": {
+                            "sheetId": ws.id,
+                            "dimension": "ROWS",
+                            "startIndex": row_idx + 2,
+                            "endIndex": row_idx + 3,
+                        }
+                    }
+                })
+
+        delete_requests.sort(key=lambda req: req["deleteDimension"]["range"]["startIndex"], reverse=True)
+        chunk_size = 100
+        for start in range(0, len(delete_requests), chunk_size):
+            self.ss.batch_update({"requests": delete_requests[start:start + chunk_size]})
+            time.sleep(1)
+
+        self.refresh_master_cache()
+        self.ensure_borders()
+        print(f"主メール重複を統合: {len(merge_plan)}グループ / {deleted_rows}行削除")
+        print(f"バックアップ: {backup_path}")
+        return {
+            "groups": len(merge_plan),
+            "deleted_rows": deleted_rows,
+            "backup_path": str(backup_path),
+        }
+
+    def merge_safe_exact_duplicates(self, dry_run=False):
+        """電話・メール・LINE名の強一致だけを安全側で統合する"""
+        if self._master_data is None:
+            self.load_master()
+
+        duplicate_groups = self.find_safe_exact_duplicate_groups()
+        if not duplicate_groups:
+            print("強一致の重複候補はありません")
+            return {"groups": 0, "deleted_rows": 0, "backup_path": ""}
+
+        merge_plan = []
+        backup_payload = {
+            "created_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
+            "group_count": len(duplicate_groups),
+            "groups": [],
+        }
+
+        for group in duplicate_groups:
+            row_indices = group["row_indices"]
+            merge_result = self._build_merged_duplicate_group(
+                row_indices=row_indices,
+                duplicate_primary_emails=[],
+            )
+            keeper_sheet_row = merge_result["keeper_idx"] + 3
+            merge_plan.append({
+                "keeper_idx": merge_result["keeper_idx"],
+                "keeper_sheet_row": keeper_sheet_row,
+                "merged_row": merge_result["merged_row"],
+                "deleted_indices": merge_result["deleted_indices"],
+            })
+            backup_payload["groups"].append({
+                "reasons": group["reasons"],
+                "keeper_customer_id": self._row_customer_id(merge_result["keeper_idx"]),
+                "all_emails": merge_result["all_emails"],
+                "before_rows": [
+                    {
+                        "sheet_row": row_idx + 3,
+                        "customer_id": self._row_customer_id(row_idx),
+                        "values": self._pad_master_row(self._master_data[row_idx]),
+                    }
+                    for row_idx in row_indices
+                ],
+                "after_row": {
+                    "sheet_row": keeper_sheet_row,
+                    "values": merge_result["merged_row"],
+                },
+            })
+
+        deleted_rows = sum(len(item["deleted_indices"]) for item in merge_plan)
+        print(f"強一致の重複グループ: {len(merge_plan)}件 / 削除予定行: {deleted_rows}件")
+
+        if dry_run:
+            for group in backup_payload["groups"][:20]:
+                print(f"  keeper={group['keeper_customer_id']} / reasons={','.join(group['reasons'])}")
+            return {"groups": len(merge_plan), "deleted_rows": deleted_rows, "backup_path": ""}
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = DATA_DIR / f"cdp_safe_exact_duplicate_backup_{timestamp}.json"
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        backup_path.write_text(json.dumps(backup_payload, ensure_ascii=False, indent=2))
+
+        ws = self.ss.worksheet("顧客マスタ")
+        last_col_letter = _col_to_letter(len(self._master_headers))
+        updates = []
+        for item in merge_plan:
+            updates.append({
+                "range": f"A{item['keeper_sheet_row']}:{last_col_letter}{item['keeper_sheet_row']}",
+                "values": [item["merged_row"]],
+            })
+
+        if updates:
+            chunk_size = 200
+            for start in range(0, len(updates), chunk_size):
+                ws.batch_update(updates[start:start + chunk_size], value_input_option="USER_ENTERED")
+                time.sleep(1)
+
+        delete_requests = []
+        for item in merge_plan:
+            for row_idx in item["deleted_indices"]:
+                delete_requests.append({
+                    "deleteDimension": {
+                        "range": {
+                            "sheetId": ws.id,
+                            "dimension": "ROWS",
+                            "startIndex": row_idx + 2,
+                            "endIndex": row_idx + 3,
+                        }
+                    }
+                })
+
+        delete_requests.sort(key=lambda req: req["deleteDimension"]["range"]["startIndex"], reverse=True)
+        chunk_size = 100
+        for start in range(0, len(delete_requests), chunk_size):
+            self.ss.batch_update({"requests": delete_requests[start:start + chunk_size]})
+            time.sleep(1)
+
+        self.refresh_master_cache()
+        self.ensure_borders()
+        print(f"強一致の重複を統合: {len(merge_plan)}グループ / {deleted_rows}行削除")
+        print(f"バックアップ: {backup_path}")
+        return {
+            "groups": len(merge_plan),
+            "deleted_rows": deleted_rows,
+            "backup_path": str(backup_path),
+        }
+
     def normalize_master_route_names(self, dry_run=False):
         """顧客マスタの流入経路列を `媒体_ファネル名` 形式へ補正する。"""
         if self._master_data is None:
@@ -1200,6 +1919,216 @@ class CDPSync:
                 if phone:
                     index[phone] = i
         return index
+
+    def backfill_missing_customer_ids(self, dry_run=False):
+        """顧客IDが空欄の実データ行へ、新規の顧客IDを採番して補完する"""
+        if self._master_data is None:
+            self.load_master()
+
+        ws = self.ss.worksheet("顧客マスタ")
+        cid_idx = self.get_col_index("顧客ID")
+        email_idx = self.get_col_index("メールアドレス")
+        email2_idx = self.get_col_index("メールアドレス2")
+        phone_idx = self.get_col_index("電話番号")
+        update_date_idx = self.get_col_index("最終更新日")
+
+        if cid_idx is None:
+            raise RuntimeError("顧客ID カラムが見つかりません")
+
+        cid_letter = _col_to_letter(cid_idx + 1)
+        update_letter = _col_to_letter(update_date_idx + 1) if update_date_idx is not None else None
+
+        existing_email_to_id = {}
+        existing_phone_to_id = {}
+        max_customer_id = 0
+        for row in self._master_data:
+            padded = self._pad_master_row(row)
+            customer_id = padded[cid_idx].strip()
+            if customer_id.isdigit():
+                max_customer_id = max(max_customer_id, int(customer_id))
+            if not customer_id:
+                continue
+            if email_idx is not None and email_idx < len(padded) and padded[email_idx].strip():
+                for email in padded[email_idx].split(","):
+                    email = email.strip().lower()
+                    if email and is_valid_email(email):
+                        existing_email_to_id.setdefault(email, set()).add(customer_id)
+            if email2_idx is not None and email2_idx < len(padded) and padded[email2_idx].strip():
+                for email in padded[email2_idx].split(","):
+                    email = email.strip().lower()
+                    if email and is_valid_email(email):
+                        existing_email_to_id.setdefault(email, set()).add(customer_id)
+            if phone_idx is not None and phone_idx < len(padded) and padded[phone_idx].strip():
+                phone = normalize_phone(padded[phone_idx].strip())
+                if phone:
+                    existing_phone_to_id.setdefault(phone, set()).add(customer_id)
+
+        updates = []
+        stats = {
+            "fully_empty_rows": 0,
+            "nonempty_rows": 0,
+            "assigned": 0,
+            "duplicate_candidates": 0,
+        }
+        duplicate_candidates = []
+        next_customer_id = max_customer_id + 1
+
+        for row_idx, row in enumerate(self._master_data):
+            padded = self._pad_master_row(row)
+            current_customer_id = padded[cid_idx].strip()
+            if current_customer_id:
+                continue
+
+            if not any(cell.strip() for cell in padded):
+                stats["fully_empty_rows"] += 1
+                continue
+
+            stats["nonempty_rows"] += 1
+            sheet_row = row_idx + 3
+
+            matched_ids = set()
+            if email_idx is not None and email_idx < len(padded) and padded[email_idx].strip():
+                for email in padded[email_idx].split(","):
+                    email = email.strip().lower()
+                    if email:
+                        matched_ids.update(existing_email_to_id.get(email, set()))
+            if email2_idx is not None and email2_idx < len(padded) and padded[email2_idx].strip():
+                for email in padded[email2_idx].split(","):
+                    email = email.strip().lower()
+                    if email:
+                        matched_ids.update(existing_email_to_id.get(email, set()))
+            if phone_idx is not None and phone_idx < len(padded) and padded[phone_idx].strip():
+                phone = normalize_phone(padded[phone_idx].strip())
+                if phone:
+                    matched_ids.update(existing_phone_to_id.get(phone, set()))
+
+            if matched_ids:
+                stats["duplicate_candidates"] += 1
+                duplicate_candidates.append(
+                    {
+                        "sheet_row": sheet_row,
+                        "email": padded[email_idx].strip() if email_idx is not None and email_idx < len(padded) else "",
+                        "phone": padded[phone_idx].strip() if phone_idx is not None and phone_idx < len(padded) else "",
+                        "matched_customer_ids": sorted(matched_ids),
+                    }
+                )
+
+            assigned_customer_id = str(next_customer_id)
+            next_customer_id += 1
+            stats["assigned"] += 1
+            updates.append({
+                "range": f"{cid_letter}{sheet_row}",
+                "values": [[assigned_customer_id]],
+            })
+            if update_letter:
+                updates.append({
+                    "range": f"{update_letter}{sheet_row}",
+                    "values": [[datetime.now().strftime("%Y/%m/%d")]],
+                })
+
+        print(f"顧客ID空欄_完全空行: {stats['fully_empty_rows']}件")
+        print(f"顧客ID空欄_実データ行: {stats['nonempty_rows']}件")
+        print(f"新規採番予定: {stats['assigned']}件")
+        print(f"重複候補（メール/電話一致）: {stats['duplicate_candidates']}件")
+        for candidate in duplicate_candidates[:20]:
+            print(
+                "  "
+                f"行{candidate['sheet_row']}: "
+                f"email={candidate['email'] or '-'} / "
+                f"phone={candidate['phone'] or '-'} / "
+                f"既存ID={','.join(candidate['matched_customer_ids'])}"
+            )
+
+        if dry_run or not updates:
+            if dry_run:
+                print(f"[ドライラン] 合計 {len(updates)//(2 if update_letter else 1)}件に顧客IDを補完します")
+            return {
+                "stats": stats,
+                "duplicate_candidates": duplicate_candidates,
+            }
+
+        CHUNK = 500
+        for start in range(0, len(updates), CHUNK):
+            ws.batch_update(updates[start:start + CHUNK], value_input_option="USER_ENTERED")
+
+        self.refresh_master_cache()
+        print(f"顧客ID補完完了: {stats['assigned']}件")
+        return {
+            "stats": stats,
+            "duplicate_candidates": duplicate_candidates,
+        }
+
+    def delete_empty_master_rows(self, dry_run=False):
+        """顧客マスタ内の完全空行を削除する"""
+        if self._master_data is None:
+            self.load_master()
+
+        empty_row_indices = []
+        for row_idx, row in enumerate(self._master_data):
+            padded = self._pad_master_row(row)
+            if not any(cell.strip() for cell in padded):
+                empty_row_indices.append(row_idx)
+
+        if not empty_row_indices:
+            print("完全空行はありません")
+            return {"deleted_rows": 0, "backup_path": ""}
+
+        groups = []
+        start = prev = empty_row_indices[0]
+        for row_idx in empty_row_indices[1:]:
+            if row_idx == prev + 1:
+                prev = row_idx
+                continue
+            groups.append((start, prev))
+            start = prev = row_idx
+        groups.append((start, prev))
+
+        print(f"完全空行: {len(empty_row_indices)}件 / グループ: {len(groups)}件")
+        for start, end in groups[:20]:
+            print(f"  行{start + 3}" if start == end else f"  行{start + 3}-{end + 3}")
+
+        if dry_run:
+            print(f"[ドライラン] 完全空行 {len(empty_row_indices)}件を削除します")
+            return {"deleted_rows": len(empty_row_indices), "backup_path": ""}
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = DATA_DIR / f"cdp_empty_rows_backup_{timestamp}.json"
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        backup_payload = {
+            "created_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
+            "deleted_row_count": len(empty_row_indices),
+            "groups": [
+                {"start_sheet_row": start + 3, "end_sheet_row": end + 3}
+                for start, end in groups
+            ],
+        }
+        backup_path.write_text(json.dumps(backup_payload, ensure_ascii=False, indent=2))
+
+        ws = self.ss.worksheet("顧客マスタ")
+        delete_requests = []
+        for row_idx in empty_row_indices:
+            delete_requests.append({
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": ws.id,
+                        "dimension": "ROWS",
+                        "startIndex": row_idx + 2,
+                        "endIndex": row_idx + 3,
+                    }
+                }
+            })
+
+        delete_requests.sort(key=lambda req: req["deleteDimension"]["range"]["startIndex"], reverse=True)
+        chunk_size = 100
+        for start_idx in range(0, len(delete_requests), chunk_size):
+            self.ss.batch_update({"requests": delete_requests[start_idx:start_idx + chunk_size]})
+            time.sleep(1)
+
+        self.refresh_master_cache()
+        self.ensure_borders()
+        print(f"完全空行を削除: {len(empty_row_indices)}件")
+        print(f"バックアップ: {backup_path}")
+        return {"deleted_rows": len(empty_row_indices), "backup_path": str(backup_path)}
 
     # ─── 罫線の自動適用 ──────────────────────────────────
 
@@ -2329,7 +3258,8 @@ class CDPSync:
         if email_warnings:
             _save_email_warnings(email_warnings)
 
-        # 集客データシートの掃除（マスタに追加したメールを削除）
+        # 集客データシートの掃除（新規追加が発生したタイミングで、
+        # マスタと重なるメールを主メール/補助メール込みでまとめて削除）
         lead_cleaned = 0
         if not dry_run and new_emails:
             lead_cleaned = self._clean_lead_sheet(new_emails)
@@ -2568,7 +3498,7 @@ class CDPSync:
         集客データシート（メール集客データタブ: 登録日/メールアドレス/初回流入経路）に
         新規メールアドレスを追加する。
 
-        - CDPマスタに既にいるメールは除外（マスタ昇格済み）
+        - CDPマスタに既にいるメールは除外（主メール/補助メールともに対象）
         - 集客データシートに既にあるメールは重複追加しない
 
         Returns:
@@ -2606,14 +3536,8 @@ class CDPSync:
             return {"added": 0, "skipped_master": 0, "skipped_dup": 0}
 
         # 2. CDPマスタのメールアドレス一覧を取得
-        if not self._master_data:
-            self.load_master()
-        master_emails = set()
-        email_col_idx = self.get_col_index("メールアドレス")
-        if email_col_idx is not None:
-            for row in self._master_data:
-                if email_col_idx < len(row) and row[email_col_idx].strip():
-                    master_emails.add(row[email_col_idx].strip().lower())
+        # 主メールと補助メールの両方を除外対象にする
+        master_emails = set(self.build_email_index().keys())
 
         # 3. 集客データシート（メール一覧）の既存メールを取得
         lead_ss = self.client.open_by_key(LEAD_SHEET_ID)
@@ -2699,10 +3623,10 @@ class CDPSync:
     # ─── 集客データシートの掃除 ─────────────────────────
 
     def _clean_lead_sheet(self, new_emails):
-        """マスタに追加されたメールアドレスを集客データシートから削除する
+        """CDPマスタに存在するメールアドレスを集客データシートから削除する
 
         Args:
-            new_emails: マスタに新規追加されたメールアドレスのリスト（小文字）
+            new_emails: 互換性のため残している未使用引数
 
         Returns:
             削除した行数
@@ -2726,12 +3650,15 @@ class CDPSync:
             print("  集客データシートにメールアドレス列が見つかりません")
             return 0
 
-        new_emails_set = set(new_emails)
+        master_emails = set(self.build_email_index().keys())
+        if not master_emails:
+            return 0
+
         # 削除対象の行インデックスを後ろから収集（後ろから削除しないとインデックスがずれる）
         rows_to_delete = []
         for i in range(1, len(lead_data)):
             cell_email = lead_data[i][email_col].strip().lower() if email_col < len(lead_data[i]) else ""
-            if cell_email and cell_email in new_emails_set:
+            if cell_email and cell_email in master_emails:
                 rows_to_delete.append(i + 1)  # シート上の行番号（1-indexed）
 
         if not rows_to_delete:
@@ -3998,7 +4925,11 @@ CDP同期スクリプト
   python3 cdp_sync.py sync-leads         経路別タブ→集客データシートの同期
   python3 cdp_sync.py check-phones      電話番号のバリデーションチェック
   python3 cdp_sync.py backfill-computed  集計カラム（合計・LTV）を一括再計算
+  python3 cdp_sync.py backfill-missing-customer-ids  顧客ID空欄の実データ行へ新規採番
+  python3 cdp_sync.py delete-empty-rows  顧客マスタの完全空行を削除
   python3 cdp_sync.py normalize-route-names  流入経路を `媒体_ファネル名` に補正
+  python3 cdp_sync.py merge-primary-email-duplicates  主メール重複を統合
+  python3 cdp_sync.py merge-safe-exact-duplicates  強一致の重複を安全側で統合
 
 例:
   python3 cdp_sync.py sync --dry-run
@@ -4178,10 +5109,30 @@ CDP同期スクリプト
         elif dry_run:
             print(f"[ドライラン] 合計 {len(updates)}件が更新対象")
 
+    elif cmd == "backfill-missing-customer-ids":
+        dry_run = "--dry-run" in sys.argv
+        sync.load_master()
+        sync.backfill_missing_customer_ids(dry_run=dry_run)
+
+    elif cmd == "delete-empty-rows":
+        dry_run = "--dry-run" in sys.argv
+        sync.load_master()
+        sync.delete_empty_master_rows(dry_run=dry_run)
+
     elif cmd == "normalize-route-names":
         dry_run = "--dry-run" in sys.argv
         sync.load_master()
         sync.normalize_master_route_names(dry_run=dry_run)
+
+    elif cmd == "merge-primary-email-duplicates":
+        dry_run = "--dry-run" in sys.argv
+        sync.load_master()
+        sync.merge_primary_email_duplicates(dry_run=dry_run)
+
+    elif cmd == "merge-safe-exact-duplicates":
+        dry_run = "--dry-run" in sys.argv
+        sync.load_master()
+        sync.merge_safe_exact_duplicates(dry_run=dry_run)
 
     elif cmd == "check-phones":
         sync.load_master()

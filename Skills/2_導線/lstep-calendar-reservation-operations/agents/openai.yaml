@@ -1,0 +1,4 @@
+interface:
+  display_name: "LSTEP カレンダー予約運用"
+  short_description: "Lステップのカレンダー予約を exact 手順で設定・分岐・連携確認する"
+  default_prompt: "Lステップのカレンダー予約でコース分岐、リマインド、Googleカレンダー連携を正しく設定・検証したい"

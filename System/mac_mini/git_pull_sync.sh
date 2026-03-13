@@ -185,6 +185,42 @@ EOPLIST
 
 ensure_plist_path
 
+ensure_orchestrator_service() {
+  local ORCH_PLIST="$HOME/Library/LaunchAgents/com.addness.agent-orchestrator.plist"
+  local INSTALL_SCRIPT="$DEPLOY_DIR/System/mac_mini/install_orchestrator.sh"
+  local ORCH_WORKDIR="$DEPLOY_DIR/System/mac_mini"
+  local ORCH_CONFIG="$DEPLOY_DIR/System/mac_mini/agent_orchestrator/config.yaml"
+  local needs_repair=0
+
+  [ -f "$ORCH_PLIST" ] || needs_repair=1
+  if [ "$needs_repair" -eq 0 ] && ! grep -q "$ORCH_WORKDIR" "$ORCH_PLIST" 2>/dev/null; then
+    needs_repair=1
+  fi
+  if [ "$needs_repair" -eq 0 ] && ! grep -q "$ORCH_CONFIG" "$ORCH_PLIST" 2>/dev/null; then
+    needs_repair=1
+  fi
+
+  if [ "$needs_repair" -eq 0 ]; then
+    return 0
+  fi
+
+  if [ ! -f "$INSTALL_SCRIPT" ]; then
+    log "WARNING: install_orchestrator.sh が見つからないため Orchestrator plist を修復できません"
+    return 1
+  fi
+
+  log "Orchestrator plist 不整合を検出 → install_orchestrator.sh を再実行"
+  if bash "$INSTALL_SCRIPT" >> "$LOG_FILE" 2>&1; then
+    log "Orchestrator plist 修復完了"
+    return 0
+  fi
+
+  log "ERROR: install_orchestrator.sh 実行失敗"
+  return 1
+}
+
+ensure_orchestrator_service || true
+
 # --- 学習データ push（fetch/reset の前に実行して上書き防止） ---
 push_learning_data() {
   local learning_dir="$REPO_DIR/Master/learning"
@@ -344,13 +380,18 @@ fi
 
 ORCH_PLIST=~/Library/LaunchAgents/com.addness.agent-orchestrator.plist
 if echo "$CHANGED" | grep -q "mac_mini/agent_orchestrator/"; then
-  log "Orchestrator 再起動（unload/load 方式）"
+  INSTALL_ORCH_SCRIPT="$DEPLOY_DIR/System/mac_mini/install_orchestrator.sh"
+  log "Orchestrator 変更検知 → install_orchestrator.sh で再設定"
   (
     sleep 3
-    launchctl unload "$ORCH_PLIST" 2>/dev/null || true
-    sleep 2
-    launchctl load "$ORCH_PLIST" 2>/dev/null || true
-    log "Orchestrator 再起動完了"
+    if [ -f "$INSTALL_ORCH_SCRIPT" ]; then
+      bash "$INSTALL_ORCH_SCRIPT" >> "$LOG_FILE" 2>&1 && log "Orchestrator 再設定完了" || log "ERROR: Orchestrator 再設定失敗"
+    else
+      launchctl unload "$ORCH_PLIST" 2>/dev/null || true
+      sleep 2
+      launchctl load "$ORCH_PLIST" 2>/dev/null || true
+      log "Orchestrator 再起動完了（fallback）"
+    fi
   ) &
 fi
 

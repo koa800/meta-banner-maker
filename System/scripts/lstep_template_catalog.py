@@ -4,15 +4,18 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from typing import Any
 
 import requests
 from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 
 from lstep_auth import build_authenticated_session
 
 BASE_URL = "https://manager.linestep.net"
 LIST_URL = f"{BASE_URL}/api/templates"
+CDP_URL = "http://127.0.0.1:9224"
 
 
 def session() -> requests.Session:
@@ -30,6 +33,43 @@ def fetch_json(
     resp = s.get(url, params=params, timeout=30)
     resp.raise_for_status()
     return resp.json()
+
+
+def browser_fetch(
+    url: str,
+    expect_json: bool = True,
+) -> dict[str, Any]:
+    with sync_playwright() as p:
+        browser = p.chromium.connect_over_cdp(CDP_URL)
+        context = browser.contexts[0]
+        page = context.new_page()
+        page.goto(f"{BASE_URL}/line/template", wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(1500)
+        payload = page.evaluate(
+            """async ({ url, expectJson }) => {
+              const res = await fetch(url, { credentials: 'include' });
+              const contentType = res.headers.get('content-type') || '';
+              const text = await res.text();
+              let data = null;
+              if (expectJson) {
+                try {
+                  data = JSON.parse(text);
+                } catch (err) {
+                  data = null;
+                }
+              }
+              return {
+                status: res.status,
+                contentType,
+                text,
+                data,
+                finalUrl: res.url
+              };
+            }""",
+            {"url": url, "expectJson": expect_json},
+        )
+        page.close()
+        return payload
 
 
 def infer_template_type(item: dict[str, Any]) -> str:
@@ -68,7 +108,13 @@ def list_templates(
         resp = s.get(LIST_URL, params={"page": page}, timeout=30)
         resp.raise_for_status()
         payload = resp.json()
-        for item in payload.get("data", []):
+        rows = payload.get("data", [])
+        if page == 1 and not rows:
+            browser_payload = browser_fetch(f"{LIST_URL}?page={page}")
+            if browser_payload.get("status") == 200 and browser_payload.get("data"):
+                payload = browser_payload["data"]
+                rows = payload.get("data", [])
+        for item in rows:
             name = item.get("name", "")
             if search and search not in name:
                 continue
@@ -236,9 +282,20 @@ def decode_js_string(value: str | None) -> str | None:
 
 def summarize_pack(s: requests.Session, item_id: int) -> dict[str, Any]:
     url = f"{BASE_URL}/line/eggpack/show/{item_id}"
-    resp = s.get(url, timeout=30)
-    resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
+    html = ""
+    try:
+        resp = s.get(url, timeout=30)
+        resp.raise_for_status()
+        html = resp.text
+    except Exception:
+        html = ""
+    if (not html) or "Unauthorized." in html or "account/login" in html:
+        browser_payload = browser_fetch(url, expect_json=False)
+        if browser_payload.get("status") == 200:
+            html = browser_payload.get("text", "")
+    if not html:
+        raise RuntimeError(f"pack html not available: {item_id}")
+    soup = BeautifulSoup(html, "html.parser")
 
     page_title = ""
     title_el = soup.select_one("h1.page-title")
@@ -314,6 +371,19 @@ def inspect_template(s: requests.Session, item_id: int) -> dict[str, Any]:
             break
         page += 1
     if not item:
+        browser_page = 1
+        while True:
+            browser_payload = browser_fetch(f"{LIST_URL}?page={browser_page}")
+            data = browser_payload.get("data") or {}
+            rows = data.get("data", [])
+            for row in rows:
+                if row.get("id") == item_id:
+                    item = row
+                    break
+            if item or browser_page >= data.get("last_page", browser_page):
+                break
+            browser_page += 1
+    if not item:
         raise SystemExit(f"template not found: {item_id}")
 
     result: dict[str, Any] = {
@@ -330,16 +400,24 @@ def inspect_template(s: requests.Session, item_id: int) -> dict[str, Any]:
     if result["type"] == "標準メッセージ":
         result["content_summary"] = summarize_standard_message(item.get("content_text"))
     elif result["type"] == "カルーセルメッセージ(新方式)":
-        detail = fetch_json(
-            s,
-            f"{BASE_URL}/api/line/template/{item_id}",
-            params={"group": item.get("group")},
-        )
+        try:
+            detail = fetch_json(
+                s,
+                f"{BASE_URL}/api/line/template/{item_id}",
+                params={"group": item.get("group")},
+            )
+        except Exception:
+            browser_payload = browser_fetch(f"{BASE_URL}/api/line/template/{item_id}?group={item.get('group')}")
+            detail = browser_payload.get("data") or {}
         messages_data = detail.get("messagesData") or {}
         result["disable_cv"] = messages_data.get("disable_cv")
         result["carousel_summary"] = summarize_carousel(messages_data.get("carousel") or {})
     elif result["type"] == "フレックスメッセージ":
-        detail = fetch_json(s, f"{BASE_URL}/api/template/lflexes/{item_id}")
+        try:
+            detail = fetch_json(s, f"{BASE_URL}/api/template/lflexes/{item_id}")
+        except Exception:
+            browser_payload = browser_fetch(f"{BASE_URL}/api/template/lflexes/{item_id}")
+            detail = browser_payload.get("data") or {}
         result["alt_text"] = detail.get("alt_text")
         result["flex_summary"] = summarize_flex(detail.get("editor_json") or {})
     elif result["type"] == "テンプレートパック":
@@ -370,7 +448,9 @@ def main() -> int:
     else:
         data = inspect_template(s, args.id)
 
-    print(json.dumps(data, ensure_ascii=False, indent=2))
+    text = json.dumps(data, ensure_ascii=False, indent=2)
+    sys.stdout.buffer.write(text.encode("utf-8", "surrogatepass"))
+    sys.stdout.buffer.write(b"\n")
     return 0
 
 

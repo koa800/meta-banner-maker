@@ -33,6 +33,38 @@ def is_logged_in(page) -> bool:
     )
 
 
+def dismiss_cookie_overlay(page) -> None:
+    selectors = [
+        "#onetrust-accept-btn-handler",
+        "button[aria-label='Accept']",
+        "button[aria-label='Allow all']",
+        "button:has-text('Accept')",
+        "button:has-text('Allow all')",
+        "button:has-text('I agree')",
+    ]
+    for selector in selectors:
+        locator = page.locator(selector)
+        if locator.count():
+            try:
+                locator.first.click(timeout=2000)
+                page.wait_for_timeout(500)
+                return
+            except Exception:
+                continue
+    try:
+        page.evaluate(
+            """
+            () => {
+              const sdk = document.querySelector('#onetrust-consent-sdk');
+              if (sdk) sdk.remove();
+              document.querySelectorAll('.onetrust-pc-dark-filter,.ot-fade-in').forEach((el) => el.remove());
+            }
+            """
+        )
+    except Exception:
+        pass
+
+
 def ensure_login(target_url: str) -> int:
     creds = load_creds()
     with sync_playwright() as p:
@@ -49,11 +81,13 @@ def ensure_login(target_url: str) -> int:
 
         page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(1500)
+        dismiss_cookie_overlay(page)
         page.locator('input[name="username"]').fill(creds["email"])
         page.get_by_role("button", name="Log in").click()
         page.wait_for_timeout(1500)
 
         if page.locator('input[name="password"]').count():
+            dismiss_cookie_overlay(page)
             page.locator('input[name="password"]').fill(creds["password"])
             page.get_by_role("button", name="Log in").click()
             page.wait_for_timeout(2500)

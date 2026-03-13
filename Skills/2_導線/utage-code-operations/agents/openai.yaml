@@ -1,0 +1,4 @@
+interface:
+  display_name: "UTAGEコード領域"
+  short_description: "UTAGEのカスタムJS・CSS・高速表示モードを exact に扱う"
+  default_prompt: "Use $utage-code-operations to decide and edit the correct UTAGE code area safely, including custom JS, custom CSS, high-speed mode, and first_view_css related behavior."

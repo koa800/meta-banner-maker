@@ -30,6 +30,12 @@ schedule:
   cdp_sync:
     cron: "0 */2 * * *"          # 2時間ごと  CDP同期（データソース→マスタ + 経路別タブ→集客データ）
     enabled: true
+  unique_email_sheet_sync:
+    cron: "18 */2 * * *"         # 2時間ごと  UUメールアドレス管理シートを再生成
+    enabled: true
+  teleapo_sync:
+    cron: "15 6 * * *"           # 06:15  AIテレアポ対象を顧客マスタから再生成
+    enabled: true
   interview_insights_sync:
     cron: "50 * * * *"           # 毎時50分  新規/直近の定性欄を補完（最大20件）
     enabled: true
@@ -129,7 +135,7 @@ schedule:
 
   # === 週次 ===
   meeting_report:
-    cron: "0 15 * * fri"          # 金曜 15:00  経営会議資料自動作成（Chrome MCP, max_turns=40, timeout=15分）
+    cron: "0 15 * * fri"          # 金曜 15:00  経営会議資料自動作成（Sheets正本, Python生成）
     enabled: true
 
   weekly_idea_proposal:

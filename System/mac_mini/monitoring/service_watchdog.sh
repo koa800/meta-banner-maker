@@ -11,6 +11,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DEPLOY_DIR="${ADDNESS_DEPLOY_ROOT:-$PROJECT_ROOT}"
 LOG_FILE="$SCRIPT_DIR/service_watchdog.log"
 ORCH_FINGERPRINT_FILE="$SCRIPT_DIR/.orchestrator_fingerprint"
+ORCH_INSTALL_SCRIPT="$DEPLOY_DIR/System/mac_mini/install_orchestrator.sh"
 
 # --- ログ ---
 log() {
@@ -46,6 +47,22 @@ restart_service() {
   launchctl load "$plist" 2>/dev/null || true
 }
 
+repair_orchestrator_service() {
+  if [ ! -f "$ORCH_INSTALL_SCRIPT" ]; then
+    log "ERROR: install_orchestrator.sh が見つからないため Orchestrator を修復できません"
+    return 1
+  fi
+
+  log "REPAIR: install_orchestrator.sh を実行"
+  if bash "$ORCH_INSTALL_SCRIPT" >> "$LOG_FILE" 2>&1; then
+    log "REPAIR: Orchestrator 修復完了"
+    return 0
+  fi
+
+  log "ERROR: install_orchestrator.sh 実行失敗"
+  return 1
+}
+
 orchestrator_fingerprint() {
   local files=(
     "$DEPLOY_DIR/System/mac_mini/agent_orchestrator/config.yaml"
@@ -71,8 +88,10 @@ ensure_orchestrator_reloaded() {
   if [ "$current" = "$previous" ]; then
     return 0
   fi
-  log "CHANGE: orchestrator config/code changed → reload"
-  restart_service "$label"
+  log "CHANGE: orchestrator config/code changed → reinstall"
+  if ! repair_orchestrator_service; then
+    restart_service "$label"
+  fi
   printf '%s' "$current" > "$ORCH_FINGERPRINT_FILE"
   return 1
 }
@@ -93,8 +112,12 @@ check_and_recover() {
 
   if [ -z "$pid" ]; then
     # launchctl list にすら出ない → load されていない
-    log "DOWN: $label（未登録）→ load で復旧"
-    launchctl load "$plist" 2>/dev/null || true
+    log "DOWN: $label（未登録）→ 復旧"
+    if [ "$label" = "com.addness.agent-orchestrator" ]; then
+      repair_orchestrator_service || launchctl load "$plist" 2>/dev/null || true
+    else
+      launchctl load "$plist" 2>/dev/null || true
+    fi
     notify_line "🚨 サービス自動復旧
 ━━━━━━━━━━━━
 サービス: $label
@@ -106,7 +129,11 @@ check_and_recover() {
   if [ "$pid" = "-" ] || [ "$pid" = "0" ]; then
     # 登録はされているが停止中 → unload/load で再起動
     log "DOWN: $label（停止中, PID=$pid）→ 再起動"
-    restart_service "$label"
+    if [ "$label" = "com.addness.agent-orchestrator" ]; then
+      repair_orchestrator_service || restart_service "$label"
+    else
+      restart_service "$label"
+    fi
     notify_line "🚨 サービス自動復旧
 ━━━━━━━━━━━━
 サービス: $label

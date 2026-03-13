@@ -1,0 +1,4 @@
+interface:
+  display_name: "スプシ正本設計"
+  short_description: "GoogleスプレッドシートでKPI正本を設計し、表示と運用を分離する"
+  default_prompt: "Use $spreadsheet-kpi-foundation to design or refactor this Google Sheets-based KPI foundation."

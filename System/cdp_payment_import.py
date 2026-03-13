@@ -7,6 +7,7 @@
 - 空欄の姓名・フリガナ・LINE名を補完
 """
 
+import argparse
 import csv
 import os
 import re
@@ -23,7 +24,7 @@ from cdp_sync import (
     build_surname_dict, split_japanese_name,
 )
 
-CSV_PATH = os.path.expanduser(
+DEFAULT_CSV_PATH = os.path.expanduser(
     "~/Desktop/LステップCVS/決済履歴シート/全決済履歴シート_決済履歴_表.csv"
 )
 
@@ -50,7 +51,7 @@ def split_katakana_name(kana):
     return kana, ""
 
 
-def read_payment_csv():
+def read_payment_csv(csv_path):
     """決済履歴CSVを読み込み、顧客ごとに集約する
 
     Returns:
@@ -65,7 +66,7 @@ def read_payment_csv():
     customers = {}
     stats = {"total": 0, "no_email": 0, "with_email": 0}
 
-    with open(CSV_PATH, encoding="utf-8-sig") as fh:
+    with open(csv_path, encoding="utf-8-sig") as fh:
         reader = csv.reader(fh)
         headers = next(reader)
 
@@ -154,8 +155,8 @@ def aggregate_purchases(customers):
         if not purchases:
             c["初回購入日"] = ""
             c["初回購入商品"] = ""
-            c["最終購入日"] = ""
-            c["最終購入商品"] = ""
+            c["最新購入日"] = ""
+            c["最新購入商品"] = ""
             c["購入商品"] = ""
             c["着金売上"] = 0
             continue
@@ -166,8 +167,8 @@ def aggregate_purchases(customers):
         # 初回・最終
         c["初回購入日"] = normalize_date(purchases[0][0])
         c["初回購入商品"] = purchases[0][1] if purchases[0][1] != "-" else ""
-        c["最終購入日"] = normalize_date(purchases[-1][0])
-        c["最終購入商品"] = purchases[-1][1] if purchases[-1][1] != "-" else ""
+        c["最新購入日"] = normalize_date(purchases[-1][0])
+        c["最新購入商品"] = purchases[-1][1] if purchases[-1][1] != "-" else ""
 
         # 購入商品一覧（ユニーク、"-"除外、順序保持）
         seen = set()
@@ -192,11 +193,28 @@ def import_to_cdp(customers, dry_run=False):
     email_index = cdp.build_email_index()
 
     # カラムインデックス取得
+    column_aliases = {
+        "姓": ("姓",),
+        "名": ("名",),
+        "フリガナ（姓）": ("フリガナ（姓）",),
+        "フリガナ（名）": ("フリガナ（名）",),
+        "LINE名": ("LINE名",),
+        "初回購入日": ("初回購入日",),
+        "初回購入商品": ("初回購入商品",),
+        "最新購入日": ("最新購入日", "最終購入日"),
+        "最新購入商品": ("最新購入商品", "最終購入商品"),
+        "購入商品": ("購入商品",),
+        "着金売上": ("着金売上",),
+        "返金額": ("返金額",),
+        "LTV": ("LTV",),
+        "最終更新日": ("最終更新日",),
+    }
     col_indices = {}
-    for col in ["姓", "名", "フリガナ（姓）", "フリガナ（名）", "LINE名",
-                "初回購入日", "初回購入商品", "最終購入日", "最終購入商品",
-                "購入商品", "着金売上", "返金額", "LTV", "最終更新日"]:
-        col_indices[col] = cdp.get_col_index(col)
+    for logical_name, aliases in column_aliases.items():
+        col_indices[logical_name] = next(
+            (idx for name in aliases if (idx := cdp.get_col_index(name)) is not None),
+            None,
+        )
 
     # フリガナ辞書・姓辞書を構築
     sei_idx = cdp.get_col_index("姓")
@@ -275,12 +293,12 @@ def import_to_cdp(customers, dry_run=False):
             set_cell("初回購入商品", data["初回購入商品"])
             stats["cells"] += 1
 
-        if data["最終購入日"]:
-            set_cell("最終購入日", data["最終購入日"])
+        if data["最新購入日"]:
+            set_cell("最新購入日", data["最新購入日"])
             stats["cells"] += 1
 
-        if data["最終購入商品"]:
-            set_cell("最終購入商品", data["最終購入商品"])
+        if data["最新購入商品"]:
+            set_cell("最新購入商品", data["最新購入商品"])
             stats["cells"] += 1
 
         if data["購入商品"]:
@@ -412,8 +430,8 @@ def import_to_cdp(customers, dry_run=False):
         _set("フリガナ（名）", kana_mei)
         _set("初回購入日", data["初回購入日"])
         _set("初回購入商品", data["初回購入商品"])
-        _set("最終購入日", data["最終購入日"])
-        _set("最終購入商品", data["最終購入商品"])
+        _set("最新購入日", data["最新購入日"])
+        _set("最新購入商品", data["最新購入商品"])
         _set("購入商品", data["購入商品"])
         amount = normalize_amount(str(data["着金売上"])) if data["着金売上"] > 0 else ""
         _set("着金売上", amount)
@@ -483,15 +501,25 @@ def setup_formulas(dry_run=False):
 # ─── CLI ─────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    dry_run = "--dry-run" in sys.argv
+    parser = argparse.ArgumentParser(description="決済履歴CSVをCDP顧客マスタに取り込む")
+    parser.add_argument("--dry-run", action="store_true", help="書き込みを行わず件数だけ確認する")
+    parser.add_argument(
+        "--csv",
+        default=DEFAULT_CSV_PATH,
+        help="取り込む決済履歴CSVのパス",
+    )
+    args = parser.parse_args()
+    dry_run = args.dry_run
+    csv_path = os.path.expanduser(args.csv)
 
     print("=== 決済履歴CSV → CDPインポート ===\n")
 
-    if not os.path.exists(CSV_PATH):
-        print(f"CSVファイルが見つかりません: {CSV_PATH}")
+    if not os.path.exists(csv_path):
+        print(f"CSVファイルが見つかりません: {csv_path}")
         sys.exit(1)
 
-    customers = read_payment_csv()
+    print(f"CSV: {csv_path}")
+    customers = read_payment_csv(csv_path)
 
     if not customers:
         print("インポート対象なし")
@@ -514,5 +542,11 @@ if __name__ == "__main__":
     print(f"  LINE名あり: {has_line}")
     print(f"  着金売上合計: ¥{total_amount:,}")
 
-    import_to_cdp(customers, dry_run=dry_run)
-    setup_formulas(dry_run=dry_run)
+    lock = SyncLock()
+    try:
+        with lock:
+            import_to_cdp(customers, dry_run=dry_run)
+            setup_formulas(dry_run=dry_run)
+    except RuntimeError as e:
+        print(f"エラー: {e}")
+        sys.exit(1)

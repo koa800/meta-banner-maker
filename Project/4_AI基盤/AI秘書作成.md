@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年3月13日（日向一時停止に合わせ、日向コメント検知ジョブの現況を反映） |
+| 最終更新 | 2026年3月13日（返信学習ログの構造化と、OSすり合わせ配信の自己修復を追加） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -126,9 +126,11 @@
     - **出力ルール**: 「【最重要】敬語レベルを厳守」指示により、タメ口の相手に敬語が混入する問題を解消
 11. **フィードバックループ**:
     - `fb [内容]` → スタイルノート（全返信に適用）
+    - `fb [人名]: [内容]` → その人向けの補正メモとして学習
     - `2 [修正]` → 修正例として自動学習（AI案と異なる場合のみ）
     - `1`（承認） → 成功例として自動学習（AI案が正解だったパターンを蓄積）
     - 学習データは `reply_feedback.json` に蓄積、次回返信案のプロンプトに注入（修正例 + 成功例の両面から学習）
+    - `reply_feedback.json` には `platform / group_name / context_preview / change_labels / length_delta` も保持し、「どの場面でどう補正したか」まで次回に引き継ぐ
     - 送信者一致は `sender_name` の完全一致だけでなく canonical 名 / LINE表示名 / 呼び名 / 空白揺れを吸収して照合。通常返信と引用返信で同じ学習データを参照する
 12. **group_insights → 返信プロンプト注入**: 週次プロファイル学習（`weekly_profile_learning`）が書き込んだ `group_insights`（会話スタイル・最近の関心・協業パターン・性格特性）を返信案生成のプロンプトに自動注入。相手の最新の行動パターンを踏まえた返信を生成
 13. **メモコマンド**: `メモ [人名]: [内容]` → その人のプロファイルに文脈メモを追記
@@ -212,6 +214,11 @@
 74. **返信前の内部整理を明示**: `local_agent.py` と `conversation.py` の返信生成プロンプトに `今何が起きているか -> 相手が今ほしいもの -> この返信で何を前に進めるか -> 次アクション` の内部手順を追加。相手の意図を汲み取って、次の行動が明確な返答に寄せた
 75. **返信通知の情報量を整理**: 秘書グループ向けの初回通知・返信案通知は、送信者メタ情報を絞って `誰から来たか` がすぐ分かる形に変更。元メッセージのプレビューも 80 文字固定から可変の長めプレビューへ変更し、途中で意味が切れる問題を減らした
 
+### Phase 15: Orchestrator 自己修復（実装完了）
+76. **LINE通知設定のフォールバック**: `agent_orchestrator/notifier.py` と `tools.py` が `AGENT_TOKEN` / `LINE_BOT_SERVER_URL` を環境変数だけに依存せず、`line_bot_local/config.json` や legacy 配置からも自動解決するようにした。これで launchd の環境変数が欠けていても、LINE 通知とグループログ取得が継続する
+77. **Orchestrator plist 再生成**: `install_orchestrator.sh` が `line_bot_local/config.json` から `agent_token` と `server_url` を読み取り、`com.addness.agent-orchestrator.plist` に埋め込むようにした。起動時の設定不足で通知が落ちる経路を潰した
+78. **停止時の自己修復**: `git_pull_sync.sh` と `monitoring/service_watchdog.sh` が Orchestrator の plist 不整合やコード更新を検知したら、単純な reload ではなく `install_orchestrator.sh` を再実行して復旧するようにした。古い config パスや古い plist を掴んだまま OSすり合わせが無効化される状態を戻しやすくした
+
 ### Phase 10: OS共有基盤・自己認識（実装完了）
 46. **行動ルール（OS）の動的同期**: `execution_rules.json` をSingle Source of Truthとし、app.py（Render）へは `/api/sync_execution_rules` APIで自動同期。local_agent起動時+ルール更新時に自動実行。永続ディスクに保存しフォールバックにハードコード版を併用
 47. **日向への行動ルール注入**: `claude_executor.py` に `_build_execution_rules_section()` を追加。日向のプロンプトにも秘書と同じ行動ルールを注入
@@ -244,6 +251,7 @@
 | コマンド | 動作 | 適用範囲 |
 |----------|------|---------|
 | `fb [内容]` | スタイルノートとして保存 | **全員への返信**に適用 |
+| `fb [人名]: [内容]` | その人向けの補正メモとして保存 | **その人への返信**を優先補正 |
 | `ルール [内容]` | タスク実行の行動ルールとして保存 | **全タスク実行+返信案生成**に適用 |
 | `2 [修正]` で承認 | 修正例として保存（AI案と異なる場合） | その人優先・他も参照（最大5件） |
 | `1` で承認 | 成功例として保存（AI案が正解だったパターン） | その人優先・他も参照（最大3件） |
@@ -346,7 +354,7 @@
 |------|------|
 | `Master/people/profiles.json` | 58名のプロファイル（comm_profile + group_insights含む） |
 | `Master/people/identities.json` | 人物識別データ |
-| `Master/learning/reply_feedback.json` | フィードバック学習データ（修正例・スタイルノート） |
+| `Master/learning/reply_feedback.json` | フィードバック学習データ（修正例・成功例・人別ノート・文脈プレビュー・補正ラベル） |
 | `Master/self_clone/kohara/IDENTITY.md` | 甲原海人の言語スタイル定義 |
 | `Master/self_clone/kohara/SELF_PROFILE.md` | 甲原海人のコアプロファイル |
 

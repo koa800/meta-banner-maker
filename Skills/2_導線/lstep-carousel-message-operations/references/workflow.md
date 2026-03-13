@@ -25,6 +25,10 @@
 重要
 - 本文は `ProseMirror`
 - save payload の主値は `eggjson`
+- current の visible input は
+  - `input[name="template.name"]`
+  - `input[name="message.0.body.panels.0.actions.0.title"]`
+- `タイトル` は current UI では省略できる representative がある
 
 ## representative の読み方
 
@@ -49,8 +53,10 @@
 ## exact smoke 手順
 
 1. `テンプレート名`
+   - current input name は `template.name`
 2. `本文`
 3. `選択肢名`
+   - current input name は `message.0.body.panels.0.actions.0.title`
 4. 必要なら `アクション設定`
 5. `テンプレート登録`
 6. 一覧へ戻る

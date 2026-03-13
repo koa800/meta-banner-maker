@@ -7,6 +7,7 @@ Q&A質問監視機能も統合
 """
 from __future__ import annotations
 
+from collections import Counter
 import os
 import sys
 import json
@@ -1009,15 +1010,163 @@ def load_feedback_examples() -> list:
     """保存済みフィードバック例を読み込む"""
     try:
         if FEEDBACK_FILE.exists():
-            return json.loads(FEEDBACK_FILE.read_text(encoding="utf-8"))
+            raw_examples = json.loads(FEEDBACK_FILE.read_text(encoding="utf-8"))
+            if isinstance(raw_examples, list):
+                normalized = []
+                for item in raw_examples:
+                    if isinstance(item, dict):
+                        normalized.append(_normalize_feedback_example(item))
+                return normalized
     except Exception as e:
         print(f"⚠️ フィードバック読み込みエラー: {e}")
     return []
 
 
+def _compact_feedback_text(text: str, limit: int = 100) -> str:
+    value = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(value) > limit:
+        value = value[:limit].rstrip() + "..."
+    return value
+
+
+def _feedback_entry_preview(entry: object, limit: int = 70) -> str:
+    if isinstance(entry, str):
+        return _compact_feedback_text(entry, limit)
+    if not isinstance(entry, dict):
+        return ""
+
+    speaker = (
+        entry.get("sender_name")
+        or entry.get("author")
+        or entry.get("speaker")
+        or entry.get("role")
+        or entry.get("name")
+        or ""
+    )
+    text = (
+        entry.get("text")
+        or entry.get("message")
+        or entry.get("content")
+        or entry.get("comment")
+        or entry.get("body")
+        or ""
+    )
+    preview = _compact_feedback_text(text, limit)
+    if speaker and preview:
+        return f"{speaker}: {preview}"
+    return preview
+
+
+def _build_feedback_context_preview(fb: dict) -> str:
+    parts = []
+
+    quoted_text = _compact_feedback_text(fb.get("quoted_text", ""), 70)
+    if quoted_text:
+        parts.append(f"引用: {quoted_text}")
+
+    for key, label in (("context_messages", "直前文脈"), ("thread_context", "直近やり取り")):
+        entries = fb.get(key, [])
+        if not isinstance(entries, list):
+            continue
+        previews = []
+        for entry in entries[-3:]:
+            preview = _feedback_entry_preview(entry)
+            if preview:
+                previews.append(preview)
+        if previews:
+            parts.append(f"{label}: {' / '.join(previews)}")
+
+    goal_title = _compact_feedback_text(fb.get("goal_title", ""), 40)
+    if goal_title:
+        parts.append(f"ゴール: {goal_title}")
+
+    return " | ".join(parts)[:240]
+
+
+def _infer_feedback_change_labels(fb: dict) -> list[str]:
+    fb_type = fb.get("type", "")
+    if fb_type == "approval":
+        return ["そのまま採用"]
+    if fb_type != "correction":
+        return []
+
+    ai_text = str(fb.get("ai_suggested", "") or "")
+    actual_text = str(fb.get("actual_sent", "") or "")
+    if not ai_text or not actual_text:
+        return []
+    if ai_text == actual_text:
+        return ["そのまま採用"]
+
+    labels: list[str] = []
+
+    length_delta = len(actual_text) - len(ai_text)
+    if length_delta <= -12:
+        labels.append("短くした")
+    elif length_delta >= 12:
+        labels.append("長くした")
+
+    ai_exclaim = ai_text.count("!") + ai_text.count("！")
+    actual_exclaim = actual_text.count("!") + actual_text.count("！")
+    if actual_exclaim > ai_exclaim:
+        labels.append("熱量を上げた")
+    elif actual_exclaim < ai_exclaim:
+        labels.append("熱量を下げた")
+
+    ai_questions = ai_text.count("?") + ai_text.count("？")
+    actual_questions = actual_text.count("?") + actual_text.count("？")
+    if actual_questions > ai_questions:
+        labels.append("問いを増やした")
+    elif actual_questions < ai_questions:
+        labels.append("問いを減らした")
+
+    ai_emotions = sum(ai_text.count(token) for token in ("😭", "🙇‍♂️"))
+    actual_emotions = sum(actual_text.count(token) for token in ("😭", "🙇‍♂️"))
+    if actual_emotions > ai_emotions:
+        labels.append("感情表現を増やした")
+    elif actual_emotions < ai_emotions:
+        labels.append("感情表現を減らした")
+
+    if not labels:
+        labels.append("言い回しを調整")
+    return labels[:4]
+
+
+def _normalize_feedback_example(raw_fb: dict) -> dict:
+    fb = dict(raw_fb)
+
+    if isinstance(fb.get("sender_aliases"), set):
+        fb["sender_aliases"] = sorted(fb.get("sender_aliases", []))
+
+    if fb.get("group_name"):
+        fb["group_name"] = _compact_feedback_text(fb.get("group_name", ""), 50)
+    if fb.get("goal_title"):
+        fb["goal_title"] = _compact_feedback_text(fb.get("goal_title", ""), 50)
+
+    context_preview = _build_feedback_context_preview(fb)
+    if context_preview and not fb.get("context_preview"):
+        fb["context_preview"] = context_preview
+
+    ai_text = str(fb.get("ai_suggested", "") or "")
+    actual_text = str(fb.get("actual_sent", "") or "")
+    if ai_text and actual_text:
+        fb["length_delta"] = len(actual_text) - len(ai_text)
+
+    change_labels = fb.get("change_labels")
+    if not isinstance(change_labels, list) or not change_labels:
+        inferred_labels = _infer_feedback_change_labels(fb)
+        if inferred_labels:
+            fb["change_labels"] = inferred_labels
+
+    for transient_key in ("context_messages", "thread_context"):
+        fb.pop(transient_key, None)
+
+    return fb
+
+
 def save_feedback_example(fb: dict):
     """フィードバックを保存（最大50件、古いものを削除）"""
     try:
+        fb = _normalize_feedback_example(fb)
         sender_name = fb.get("sender_name", "")
         chatwork_account_id = str(fb.get("chatwork_account_id", "") or "")
         matched_key, profile, aliases = _resolve_person_identity(sender_name, chatwork_account_id)
@@ -1473,16 +1622,37 @@ def build_feedback_prompt_section(sender_name: str = "", sender_category: str = 
         ]
         ranked.sort(key=lambda item: (item[0], item[1].get("timestamp", "")), reverse=True)
         positive = [fb for score, fb in ranked if score > 0]
-        selected = positive if positive else [fb for _, fb in ranked]
-        return selected[:limit]
+        if positive:
+            return positive[:limit]
+        if normalized_lookup_keys or sender_category:
+            return []
+        return [fb for _, fb in ranked][:limit]
 
+    def _top_change_patterns(items: list[dict], limit: int = 3) -> list[str]:
+        counter: Counter[str] = Counter()
+        for fb in items:
+            labels = fb.get("change_labels", [])
+            if not isinstance(labels, list):
+                continue
+            for label in labels:
+                if label and label != "そのまま採用":
+                    counter[label] += 1
+        return [f"・{label}" for label, _ in counter.most_common(limit)]
+
+    notes = [f for f in examples if f.get("type") == "note"]
+    sorted_notes = _select_ranked_feedback(notes, 5)
     note_parts = []
-    for fb in examples:
-        if fb.get("type") == "note":
-            note_parts.append(f"・{fb.get('note', '')}")
+    for fb in sorted_notes:
+        note = fb.get("note", "")
+        if not note:
+            continue
+        target_name = fb.get("sender_name", "").strip()
+        target_label = f"個別:{target_name}" if target_name else "全体"
+        note_parts.append(f"・[{target_label}] {note}")
 
     corrections = [f for f in examples if f.get("type") == "correction"]
     sorted_corrections = _select_ranked_feedback(corrections, 5)
+    change_pattern_parts = _top_change_patterns(sorted_corrections)
 
     correction_parts = []
     for i, fb in enumerate(sorted_corrections, 1):
@@ -1490,12 +1660,24 @@ def build_feedback_prompt_section(sender_name: str = "", sender_category: str = 
         ai_s = fb.get("ai_suggested", "")[:60]
         actual = fb.get("actual_sent", "")[:60]
         sname = fb.get("sender_name", "不明")
-        correction_parts.append(
-            f"[修正例{i}] 送信者: {sname}\n"
-            f"  受信: 「{orig}」\n"
-            f"  AI案（不採用）: 「{ai_s}」\n"
-            f"  実際に送った返信: 「{actual}」"
-        )
+        meta_bits = []
+        if fb.get("platform"):
+            meta_bits.append(fb.get("platform", ""))
+        if fb.get("group_name"):
+            meta_bits.append(fb.get("group_name", ""))
+        if fb.get("change_labels"):
+            meta_bits.append("変化: " + " / ".join(fb.get("change_labels", [])))
+        meta_text = f" / {' / '.join(meta_bits)}" if meta_bits else ""
+        context_preview = fb.get("context_preview", "")
+        lines = [f"[修正例{i}] 送信者: {sname}{meta_text}"]
+        if context_preview:
+            lines.append(f"  文脈: {context_preview}")
+        lines.extend([
+            f"  受信: 「{orig}」",
+            f"  AI案（不採用）: 「{ai_s}」",
+            f"  実際に送った返信: 「{actual}」",
+        ])
+        correction_parts.append("\n".join(lines))
 
     # 承認例（AI案がそのまま採用された成功パターン）
     approvals = [f for f in examples if f.get("type") == "approval"]
@@ -1506,11 +1688,21 @@ def build_feedback_prompt_section(sender_name: str = "", sender_category: str = 
         orig = fb.get("original_message", "")[:50]
         actual = fb.get("actual_sent", "")[:60]
         sname = fb.get("sender_name", "不明")
-        approval_parts.append(
-            f"[成功例{i}] 送信者: {sname}\n"
-            f"  受信: 「{orig}」\n"
-            f"  採用された返信: 「{actual}」"
-        )
+        meta_bits = []
+        if fb.get("platform"):
+            meta_bits.append(fb.get("platform", ""))
+        if fb.get("group_name"):
+            meta_bits.append(fb.get("group_name", ""))
+        meta_text = f" / {' / '.join(meta_bits)}" if meta_bits else ""
+        context_preview = fb.get("context_preview", "")
+        lines = [f"[成功例{i}] 送信者: {sname}{meta_text}"]
+        if context_preview:
+            lines.append(f"  文脈: {context_preview}")
+        lines.extend([
+            f"  受信: 「{orig}」",
+            f"  採用された返信: 「{actual}」",
+        ])
+        approval_parts.append("\n".join(lines))
 
     # style_rules.json からhighconfidenceルールを注入
     style_rule_parts = []
@@ -1525,10 +1717,12 @@ def build_feedback_prompt_section(sender_name: str = "", sender_category: str = 
         print(f"⚠️ style_rules読み込みエラー: {e}")
 
     section = ""
-    if note_parts or correction_parts or approval_parts or style_rule_parts:
+    if note_parts or correction_parts or approval_parts or style_rule_parts or change_pattern_parts:
         section = "\n【過去の学習データ（優先して参考にすること）】\n"
         if style_rule_parts:
             section += "自動抽出スタイルルール:\n" + "\n".join(style_rule_parts) + "\n"
+        if change_pattern_parts:
+            section += "よくある補正傾向:\n" + "\n".join(change_pattern_parts) + "\n"
         if note_parts:
             section += "スタイルノート:\n" + "\n".join(note_parts) + "\n"
         if correction_parts:

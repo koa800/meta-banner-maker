@@ -18,6 +18,20 @@ if [ ! -f "$VENV_PYTHON" ]; then
     exit 1
 fi
 
+LINE_CONFIG=""
+if [ -f "$PROJECT_ROOT/line_bot_local/config.json" ]; then
+    LINE_CONFIG="$PROJECT_ROOT/line_bot_local/config.json"
+elif [ -f "$PROJECT_ROOT/System/line_bot_local/config.json" ]; then
+    LINE_CONFIG="$PROJECT_ROOT/System/line_bot_local/config.json"
+fi
+
+AGENT_TOKEN_VAL=""
+LINE_BOT_URL=""
+if [ -n "$LINE_CONFIG" ]; then
+    AGENT_TOKEN_VAL=$(python3 -c "import json; print(json.load(open('$LINE_CONFIG')).get('agent_token',''))" 2>/dev/null || echo "")
+    LINE_BOT_URL=$(python3 -c "import json; print(json.load(open('$LINE_CONFIG')).get('server_url',''))" 2>/dev/null || echo "")
+fi
+
 cat > "$PLIST_DST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -56,6 +70,23 @@ cat > "$PLIST_DST" <<PLIST
         <string>${PROJECT_ROOT}</string>
         <key>ADDNESS_CONFIG_PATH</key>
         <string>${ORCH_DIR}/config.yaml</string>
+PLIST
+
+if [ -n "$AGENT_TOKEN_VAL" ]; then
+    cat >> "$PLIST_DST" <<PLIST
+        <key>AGENT_TOKEN</key>
+        <string>${AGENT_TOKEN_VAL}</string>
+PLIST
+fi
+
+if [ -n "$LINE_BOT_URL" ]; then
+    cat >> "$PLIST_DST" <<PLIST
+        <key>LINE_BOT_SERVER_URL</key>
+        <string>${LINE_BOT_URL}</string>
+PLIST
+fi
+
+cat >> "$PLIST_DST" <<PLIST
     </dict>
     <key>ThrottleInterval</key>
     <integer>10</integer>

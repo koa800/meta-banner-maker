@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from .notifier import get_line_notify_config
 from .shared_logger import get_logger
 
 logger = get_logger("tools")
@@ -255,6 +256,18 @@ def sheets_sync(sheet_id: str = None) -> ToolResult:
     if sheet_id:
         args.extend(["--id", sheet_id])
     return _run_script(os.path.join(SYSTEM_DIR, "sheets_sync.py"), args, timeout=600)
+
+
+def unique_email_sheet_sync(dry_run: bool = False) -> ToolResult:
+    """UUメールアドレス管理シートを再生成する"""
+    args = []
+    if dry_run:
+        args.append("--dry-run")
+    return _run_script(
+        os.path.join(SYSTEM_DIR, "unique_email_sheet_sync.py"),
+        args,
+        timeout=1800,
+    )
 
 
 # --------------- CDP Interviews ---------------
@@ -513,8 +526,7 @@ def fetch_group_log(date: str = None) -> ToolResult:
     import json as _json
     import requests as _requests
 
-    server_url = os.environ.get("LINE_BOT_SERVER_URL", "https://line-mention-bot-mmzu.onrender.com")
-    agent_token = os.environ.get("AGENT_TOKEN", "")
+    server_url, agent_token, _ = get_line_notify_config()
     if not agent_token:
         return ToolResult(success=False, output="", error="AGENT_TOKEN not set")
 
@@ -542,8 +554,7 @@ def fetch_group_names(group_ids: list[str]) -> ToolResult:
     import json as _json
     import requests as _requests
 
-    server_url = os.environ.get("LINE_BOT_SERVER_URL", "https://line-mention-bot-mmzu.onrender.com")
-    agent_token = os.environ.get("AGENT_TOKEN", "")
+    server_url, agent_token, _ = get_line_notify_config()
     if not agent_token:
         return ToolResult(success=False, output="", error="AGENT_TOKEN not set")
 
@@ -701,6 +712,42 @@ def os_sync_session() -> ToolResult:
     except Exception as e:
         logger.warning(f"os_sync_session: feedback_log read error: {e}")
 
+    # reply_feedback.json（返信補正ログ）
+    reply_feedback_text = ""
+    reply_feedback_path = os.path.join(master_dir, "learning", "reply_feedback.json")
+    try:
+        if os.path.exists(reply_feedback_path):
+            with open(reply_feedback_path, encoding="utf-8") as f:
+                reply_feedback = _json.load(f)
+            if reply_feedback:
+                recent_reply_feedback = [
+                    fb for fb in reply_feedback[-12:]
+                    if fb.get("type") in {"correction", "approval", "note"}
+                ]
+                feedback_lines = []
+                for fb in recent_reply_feedback:
+                    fb_type = fb.get("type", "")
+                    if fb_type == "note":
+                        target = fb.get("sender_name", "全体")
+                        feedback_lines.append(f"- [note] {target}: {fb.get('note', '')[:80]}")
+                        continue
+
+                    sender = fb.get("sender_name", "不明")
+                    line = (
+                        f"- [{fb_type}] {sender} / AI:「{fb.get('ai_suggested', '')[:40]}」"
+                        f" / 実際:「{fb.get('actual_sent', '')[:40]}」"
+                    )
+                    change_labels = fb.get("change_labels", [])
+                    if change_labels:
+                        line += f" / 変化:{'/'.join(change_labels[:3])}"
+                    context_preview = fb.get("context_preview", "")
+                    if context_preview:
+                        line += f" / 文脈:{context_preview[:60]}"
+                    feedback_lines.append(line)
+                reply_feedback_text = "\n".join(feedback_lines)
+    except Exception as e:
+        logger.warning(f"os_sync_session: reply_feedback read error: {e}")
+
     if not os_sections:
         return ToolResult(success=False, output="", error="No OS files found")
 
@@ -723,11 +770,17 @@ def os_sync_session() -> ToolResult:
 ### 甲原さんからのフィードバック
 {feedback_log_text}
 """
+        if reply_feedback_text:
+            gap_section += f"""
+### 最近の返信補正ログ
+{reply_feedback_text}
+"""
         gap_section += """
 ★ 上記のアクション履歴をOSのルール・判断軸と照合し、以下を特定してください:
 - OSに書かれたルールに反する判断をしていないか
 - OSに記載がない判断パターン（=OSの抜け漏れ）がないか
 - フィードバックで指摘された内容がOSに反映されていない箇所はないか
+- 返信補正ログの `変化` と `文脈` から、解釈ズレの可能性が高い箇所はどこか
 """
 
     prompt = f"""あなたは甲原海人のAI秘書です。「OSすり合わせ」の時間です。
@@ -756,6 +809,7 @@ def os_sync_session() -> ToolResult:
 （4）「ここ確認したい、、！」として1-2個の具体的な質問
   → 情報が薄い・古い・曖昧な部分を特定して質問にする
   → 答えてもらえたら即学習に使える質問にする
+  → 返信補正ログがある場合は、「〇〇の文脈では短くする補正が続いているので、これは関係維持より速度優先の理解で合ってますか？」のように仮説付きで聞く
 
 （5）「ずれてるとこあったら教えてください！修正・追加があれば即反映します！」で締める
 
@@ -799,6 +853,7 @@ TOOL_REGISTRY = {
     "calendar_list": {"fn": calendar_list, "description": "今後の予定一覧を取得"},
     "sheets_read": {"fn": sheets_read, "description": "Googleスプレッドシートのデータを読み取り"},
     "sheets_sync": {"fn": sheets_sync, "description": "管理シートのCSVキャッシュを同期"},
+    "unique_email_sheet_sync": {"fn": unique_email_sheet_sync, "description": "UUメールアドレス管理シートを再生成"},
     "interview_insights_sync": {"fn": interview_insights_sync, "description": "収録URL から CDP の定性欄を補完"},
     "interview_insights_backfill": {"fn": interview_insights_backfill, "description": "面談定性の backlog をまとめて補完"},
     "interview_insights_analyze": {"fn": interview_insights_analyze, "description": "LTV別の面談定性比較を更新"},

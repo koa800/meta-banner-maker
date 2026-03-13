@@ -431,4 +431,10 @@ if __name__ == "__main__":
     print(f"  職業: {has_job}")
     print(f"  悩み: {has_concern}")
 
-    import_to_cdp(persons, dry_run=dry_run)
+    lock = SyncLock()
+    try:
+        with lock:
+            import_to_cdp(persons, dry_run=dry_run)
+    except RuntimeError as e:
+        print(f"エラー: {e}")
+        sys.exit(1)

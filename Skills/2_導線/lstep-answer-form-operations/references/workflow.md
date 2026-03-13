@@ -12,7 +12,9 @@
 ## current で確認できた主要ラベル
 
 - `フォーム名`
+- visible field は `フォーム名(管理用)`
 - `フォームタイトル`
+- visible field は `タイトル`
 - `記述式(テキストボックス)`
 - `保存`
 - 一覧の列
@@ -25,8 +27,10 @@
 
 1. `回答フォーム`
 2. `新しい回答フォーム`
-3. `フォーム名`
-4. `フォームタイトル`
+3. `フォーム名(管理用)`
+   - current input name は `formname`
+4. `タイトル`
+   - current input name は `pagetitle`
 5. `記述式(テキストボックス)`
 6. 質問名を入れる
 7. `保存`
@@ -67,7 +71,10 @@
 ## current live で固定したこと
 
 - create route は `/lvf/edit/new`
-- 主入力は `formNameInput` と `formTitleInput`
+- visible 主入力は
+  - `input[name="formname"]`
+  - `input[name="pagetitle"]`
+- `formNameInput` / `formTitleInput` のような抽象呼び方ではなく、現在は visible field 名で読む方がズレにくい
 - 最初の質問 block は `記述式(テキストボックス)`
 - save 後は `/lvf/edit/{form_id}` に残る
 - 一覧 row menu は
@@ -92,8 +99,29 @@
 
 1. 一覧に戻る
 2. 該当行の `... -> テスト送信`
-3. 実機で開く
-4. 必要なら `... -> 削除`
+3. modal `テスト送信先選択`
+4. visible text の `甲原 海人` を押す
+5. `テスト` を押す
+   - folder 名 `テスト` と衝突するので confirm button を exact に押す
+6. 実機で開く
+7. 必要なら `... -> 削除`
+
+## 2026-03-14 live smoke
+
+- temp 名
+  - `ZZ_TMP_20260314_AnswerFormSmoke_05`
+- 通したこと
+  - `新しい回答フォーム`
+  - `フォーム名(管理用)`
+  - `タイトル`
+  - `記述式(テキストボックス)`
+  - `保存`
+  - 一覧 row 右端 `... -> テスト送信`
+  - `テスト送信先選択 -> 甲原 海人 -> テスト`
+  - `... -> 削除 -> 削除する`
+- 結果
+  - `TEST_SENT`
+  - `EXISTS_AFTER_DELETE = 0`
 
 ## Addness 側で見るべき補足
 

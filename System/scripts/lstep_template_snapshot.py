@@ -82,6 +82,31 @@ def collect_headings(page) -> list[str]:
     )
 
 
+def collect_links(page) -> list[dict[str, str]]:
+    return page.evaluate(
+        """() => Array.from(document.querySelectorAll('a[href]'))
+        .map((el) => ({
+          text: (el.textContent || '').trim(),
+          href: el.getAttribute('href') || ''
+        }))
+        .filter((item) => item.text)
+        .slice(0, 200)
+        """
+    )
+
+
+def collect_table_rows(page) -> list[list[str]]:
+    return page.evaluate(
+        """() => Array.from(document.querySelectorAll('table tr'))
+        .map((tr) => Array.from(tr.querySelectorAll('th, td'))
+          .map((cell) => (cell.textContent || '').trim())
+          .filter(Boolean))
+        .filter((row) => row.length)
+        .slice(0, 120)
+        """
+    )
+
+
 def snapshot(url: str) -> dict:
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp(CDP_URL)
@@ -94,6 +119,8 @@ def snapshot(url: str) -> dict:
             "title": page.title(),
             "headings": collect_headings(page),
             "buttons": collect_buttons(page),
+            "links": collect_links(page),
+            "table_rows": collect_table_rows(page),
             "prosemirror": collect_prosemirror(page),
             "inputs": collect_inputs(page),
         }

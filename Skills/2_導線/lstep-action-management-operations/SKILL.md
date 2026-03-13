@@ -52,9 +52,9 @@ Addness 固有の current representative、account 選定、命名規則は `Mas
 4. `保存するアクション名`
 5. 動作の中身を入れる
 6. `この条件で決定する`
-7. 一覧に戻る
-8. 検索で存在確認
-9. テスト用なら `削除`
+7. 一覧で `検索` に action 名を入れる
+8. `search` を押して存在確認
+9. テスト用なら row 右端 `more_vert -> delete 削除 -> 削除する`
 
 ## exact 手順
 
@@ -84,20 +84,24 @@ Addness 固有の current representative、account 選定、命名規則は `Mas
 
 重要
 - `メッセージ` は visible `textarea` ではなく `[contenteditable="true"]` を主入口にする
+- `検索` は入力だけでは反映されない。`search` ボタンまで押す
 
 ### 一覧で確認
 
 1. 一覧へ戻る
-2. 検索に action 名を入れる
-3. row が 1 件に絞れることを確認する
+2. `検索` に action 名を入れる
+3. `search` を押す
+4. row が 1 件に絞れることを確認する
 
 ### 削除
 
-1. row 右端 `more_vert`
-2. `削除`
-3. confirm dialog `削除する`
-4. 再読込
-5. 検索結果でも消えていることを確認
+1. `検索` に action 名を入れる
+2. `search` を押す
+3. row 右端 `more_vert`
+4. `delete 削除`
+5. confirm dialog `削除する`
+6. 再度 `検索 -> search`
+7. row が消えていることを確認
 
 ## current で見えている動作種別
 

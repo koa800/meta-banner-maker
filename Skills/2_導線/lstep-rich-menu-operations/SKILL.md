@@ -13,16 +13,17 @@ Addness 固有の current representative、account 選定、current / legacy の
 
 ## 役割
 
-`リッチメニュー` は、LINE トーク画面下部の固定ナビとして、ユーザーを次のテンプレート、フォーム、URL、action へ分岐させる機能です。
+`リッチメニュー` は、LINE トーク画面下部の固定ナビとして、ユーザーを次のテンプレート、回答フォーム、URL、action へ分岐させる機能です。
 
 ## ゴール
 
 次を迷わずできる状態を作る。
 - `リッチメニュー` の正しい入口を選ぶ
 - 作成方法の分岐を選ぶ
-- 画像、タイトル、フォルダ、表示設定を入れる
+- 画像を確定し、タイトル、フォルダ、表示設定を入れる
 - ボタンごとに action を割り当てる
-- `保存`
+- final `登録`
+- テスト用 menu を削除できる
 
 ## 必要変数
 
@@ -49,10 +50,11 @@ Addness 固有の current representative、account 選定、current / legacy の
 1. `リッチメニュー`
 2. `新しいリッチメニュー`
 3. 作成方法を選ぶ
-4. 画像と基本情報を入れる
-5. 各ボタンの action を設定する
-6. `保存`
-7. 必要なら current representative と役割を比較する
+4. 画像を確定する
+5. 1回目の `登録` で editor 状態へ入る
+6. 基本情報と各ボタンの action を設定する
+7. final `登録`
+8. テスト用 menu を削除する
 
 ## exact 手順
 
@@ -66,6 +68,26 @@ Addness 固有の current representative、account 選定、current / legacy の
 - `画像をアップロードして作成`
 - `テンプレートをベースに作成`
 
+`画像をアップロードして作成` の exact
+- route は `/line/richmenu/new?group=0`
+- 最初の画面で見えるのは
+  - `画像`
+  - `メニュー画像選択`
+  - footer の `登録`
+  だけ
+- `メニュー画像選択` の modal は
+  - `登録メディア一覧`
+  - `新規アップロード`
+  - `アップロード済み`
+  - `ファイルを選択する`
+  - `決定`
+- file 条件
+  - `1MBまで`
+  - `jpg,png`
+  - `2500×1686` または `2500×843`
+- upload 後に row を選び `決定` を押すと、最初の `登録` が enabled になる
+- 最初の `登録` は final save ではなく editor 状態への遷移
+
 ### editor で見える主要ラベル
 
 - `画像`
@@ -77,7 +99,7 @@ Addness 固有の current representative、account 選定、current / legacy の
 - `テンプレート`
 - `コンテンツ設定`
 - `一覧へ戻る`
-- `保存`
+- `登録`
 
 ### ボタン action
 
@@ -91,13 +113,31 @@ Addness 固有の current representative、account 選定、current / legacy の
 
 必要に応じて `アクション設定` を開き、テンプレート送信や action を割り当てる。
 
+### テンプレート選択時の注意
+
+- current の先頭テンプレートを選ぶと
+  - `ボタン1URL`
+  - `ボタン2URL`
+  - `ボタン3URL`
+  がすべて必須
+- URL が不足すると 422 になる
+
+### 削除
+
+1. 一覧 row 右端 `more_vert`
+2. `削除`
+3. `この操作は取り消せません。本当に削除しますか？`
+4. `削除する`
+
 ## 検証
 
 最低でも次を確認する。
 - 画像が正しい
 - ボタンの役割が重複していない
 - どのボタンを押すべきか一読で分かる
+- final `登録` が通る
 - 保存前に current representative と比べて責務過多になっていない
+- テスト用 menu を削除できる
 
 ## NG
 
@@ -105,6 +145,8 @@ Addness 固有の current representative、account 選定、current / legacy の
 - current / old / 作成中 を名前だけで判定する
 - 画像だけ入れて action を確認しない
 - すべてのボタンを同じ役割にする
+- 1回目の `登録` を final save だと誤認する
+- テンプレートごとの required URL 数を確認せずに進める
 
 ## 正誤判断
 
@@ -113,6 +155,7 @@ Addness 固有の current representative、account 選定、current / legacy の
 - ボタンごとの役割が分かれている
 - `テンプレート送信 / 回答フォーム / URL / action` の分業ができている
 - current representative と比べても責務が自然
+- 不要なテスト menu が残っていない
 
 間違った状態
 - 説明も行動も全部リッチメニュー自体に押し込む

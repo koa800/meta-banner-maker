@@ -1,0 +1,4 @@
+interface:
+  display_name: "バリューが出る任せ方"
+  short_description: "誰にどのボールを渡すべきかを3条件と優先順位で設計する"
+  default_prompt: "Use $value-maximizing-assignment to decide who should own this work and how to shape the ball."

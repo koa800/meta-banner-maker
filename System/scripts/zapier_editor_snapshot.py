@@ -54,27 +54,37 @@ async def fetch_snapshot(zap_id: str) -> dict[str, Any]:
                 """
 () => {
   const next = JSON.parse(document.getElementById('__NEXT_DATA__').textContent);
-  const props = next.props.pageProps;
-  const zap = props.zap;
+  const props = next?.props?.pageProps || {};
+  const zap = props.zap || null;
   return {
-    account_id: props.currentAccountId,
-    user_email: props.userEmail,
-    zap: {
+    url: location.href,
+    title: document.title,
+    page: next?.page || null,
+    page_props_keys: Object.keys(props),
+    account_id: props.currentAccountId || null,
+    user_email: props.userEmail || null,
+    access_issue: !zap,
+    zap: zap ? {
       id: zap.id,
       title: zap.title,
       is_enabled: zap.is_enabled,
       updated_at: zap.updated_at,
       last_user_change_at: zap.last_user_change_at,
       zdl: zap.current_version?.zdl || null
-    }
+    } : null
   };
 }
 """
             )
             snapshot = {
+                "url": raw["url"],
+                "title": raw["title"],
+                "page": raw["page"],
+                "page_props_keys": raw["page_props_keys"],
                 "account_id": raw["account_id"],
-                "user_email": "[REDACTED]",
-                "zap": redact(raw["zap"]),
+                "user_email": "[REDACTED]" if raw["user_email"] else None,
+                "access_issue": raw["access_issue"],
+                "zap": redact(raw["zap"]) if raw["zap"] else None,
             }
             return snapshot
         finally:
