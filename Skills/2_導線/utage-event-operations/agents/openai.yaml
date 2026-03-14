@@ -1,0 +1,4 @@
+interface:
+  display_name: "UTAGE イベント運用"
+  short_description: "UTAGE のイベントを一覧、申込者、設定まで安全に確認・運用する"
+  default_prompt: "UTAGE のイベントを正しい route と設定項目で確認したい"
