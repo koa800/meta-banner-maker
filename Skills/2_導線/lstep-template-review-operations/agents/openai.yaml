@@ -1,0 +1,4 @@
+interface:
+  display_name: "LSTEPテンプレートレビュー"
+  short_description: "Lステップのテンプレートを、良い例の分解と再現判断まで含めてレビューする"
+  default_prompt: "Lステップの既存テンプレートを分解して、何を再現し何を変えるべきか判断したい"
