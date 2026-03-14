@@ -324,6 +324,11 @@
 
 #### スキルプラス関連: `【スキルプラス】ユーザー登録ページ`
 
+- funnel id: `mYSG4RqRbFiH`
+- page list: `https://school.addness.co.jp/funnel/mYSG4RqRbFiH/page`
+- representative row: `【クレカ】ユーザー登録`
+- edit: `https://school.addness.co.jp/funnel/mYSG4RqRbFiH/page/ScGYTZjaPHHX/edit`
+- preview: `https://school.addness.co.jp/page/ScGYTZjaPHHX?preview=true`
 - step: `【フルサポ/オールイン】ユーザー登録`
 - page: `スキルプラス -ユーザー登録ページ-`
 - 更新: `2025-12-05`
@@ -427,7 +432,12 @@
   - `管理名称`
   - `ファネルステップ`
   - `ページ`
+  - `保存`
   を設定する
+- representative create route:
+  - `https://school.addness.co.jp/funnel/d0imwFvGWVbA/tracking/create`
+  - heading は `登録経路`
+  - current create 画面は `グループ / 管理名称 / ファネルステップ / ページ / 保存` を先に見る
 - つまり `登録経路` は、単なるラベルではなく
   - どの step に属するか
   - どの page を指すか
