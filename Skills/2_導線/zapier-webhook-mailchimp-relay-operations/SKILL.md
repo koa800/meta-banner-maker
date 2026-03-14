@@ -46,6 +46,17 @@ Addness 固有の Zap 名、tag 名、folder 運用、current representative は
 7. 必要なら新規 relay を同じ family で作る
 8. downstream の Mailchimp 条件まで確認する
 
+## current の exact route
+
+- 一覧
+  - `https://zapier.com/app/assets/zaps`
+- editor
+  - `https://zapier.com/editor/{zap_id}/published`
+- create 入口
+  - `https://zapier.com/webintent/create-zap?useCase=from-scratch`
+
+current では `Create` を開いた時点で `Untitled Zap / Draft` が残ることがある。探索だけなら、その場で削除まで戻す前提にする。
+
 ## exact 手順
 
 ### current の主入口
@@ -72,6 +83,15 @@ Addness の current 主戦場は次。
 - `Mailchimp`
   - `Add/Update Subscriber`
 
+representative family
+- オプトイン relay
+- 購入 relay
+- `秘密の部屋` relay
+- `AIコンテンツ完全習得Live / AICAN` relay
+- `アクションマップ` relay
+- `フリープラン / プロモーション` relay
+- `SMS` 例外 relay
+
 ### relay を読む時の確認項目
 
 1. step 1 が `Webhooks by Zapier / Catch Hook`
@@ -81,6 +101,26 @@ Addness の current 主戦場は次。
 5. update existing
 6. tag
 7. email mapping
+8. Zap 名と tag の意味が一致しているか
+9. downstream の Mailchimp 側で、その tag が何を起動するか
+
+### create builder の見方
+
+新規 builder を開いたら、最初に次を見る。
+- `Untitled Zap`
+- `Draft`
+- `Trigger`
+- `Action`
+
+その後、Addness の current ではまず次を選ぶ。
+- `Webhooks by Zapier`
+- `Catch Hook`
+- `Mailchimp`
+- `Add/Update Subscriber`
+
+folder は step ではなく `Zap details` 側で管理する。
+- `Folder`
+- current の新規は原則 `甲原`
 
 ## 最小 relay 構成
 
@@ -95,6 +135,20 @@ Addness の current 主戦場は次。
 - email
 - tag
 
+current の Addness では、ここに加えて次が揃うとかなり安全。
+- Zap 名だけで event の意味が読める
+- `Folder = 甲原`
+- `update existing = true`
+- email mapping が webhook payload の `メールアドレス` 系 key と一致
+
+## exception family
+
+Addness の current では、次は main family と分けて読む。
+- `Google Sheets -> Webhooks by Zapier POST`
+- external SMS API 宛て
+
+これは `Mailchimp tag relay` ではなく、業務例外 relay として扱う。
+
 ## 検証
 
 最低でも次を確認する。
@@ -103,6 +157,16 @@ Addness の current 主戦場は次。
 - audience が意図どおり
 - email mapping が webhook payload の正しい key
 - tag が downstream の Journey / Campaign 条件と一致している
+- 同じ event を別名 relay として重複作成していない
+- `SMS` 例外 relay を `Mailchimp tag relay` と混同していない
+
+## cleanup
+
+exploratory な draft を開いただけなら、その場で削除する。
+- builder 右上または title menu
+- `Delete Zap`
+
+`Untitled Zap` を残さない。
 
 ## NG
 
@@ -111,6 +175,8 @@ Addness の current 主戦場は次。
 - audience を確認せずに進める
 - current relay を読まずに別 family を増やす
 - Addness 固有 tag 名を skill 内に焼き込む
+- folder を決めずに新規 Zap を作る
+- `Untitled Zap` の draft を残す
 
 ## 正誤判断
 
@@ -118,6 +184,12 @@ Addness の current 主戦場は次。
 - `1 event = 1 meaning` で relay を説明できる
 - webhook payload からどの key を使っているか分かる
 - audience と tag の関係を downstream まで言える
+- 一覧を見て、その Zap が
+  - オプトイン
+  - 購入
+  - promotion
+  - SMS 例外
+  のどれかをすぐ分類できる
 
 間違った状態
 - Zap 名はあるが event の意味が曖昧
