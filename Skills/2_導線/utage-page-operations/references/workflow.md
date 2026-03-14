@@ -5,11 +5,99 @@
 - ファネル一覧: `/funnel`
 - ページ一覧: `/funnel/{funnel_id}/page`
 - ページ編集: `/funnel/{funnel_id}/page/{page_id}/edit`
+- `登録経路` 一覧: `/funnel/{funnel_id}/tracking`
+- `登録経路` 追加: `/funnel/{funnel_id}/tracking/create`
 - data: `/funnel/{funnel_id}/data`
 - data daily: `/funnel/{funnel_id}/data/daily`
 - tracking: `/funnel/{funnel_id}/tracking`
 
+## representative route
+
+- AI 代表
+  - ファネル: `AI：メインファネル_Meta広告`
+  - ページ一覧: `/funnel/TXUOxBYkYr9e/page`
+  - ページ編集: `/funnel/TXUOxBYkYr9e/page/GaXTNREaZQ5C/edit`
+  - preview: `/page/GaXTNREaZQ5C?preview=true`
+  - runtime helper 実測
+    - `title = AIカレッジ_FB広告_optin2_長め_みかみ式_緑LPテイスト_FV AI美女2_分野を問わない_累計10万人_お詫び`
+    - `is_high_speed_mode = 1`
+    - `first_view_css` あり
+    - `css = null`
+    - `js_head / js_body_top / js_body` あり
+    - `js_head` には `Google Tag Manager / Meta Pixel / TikTok Pixel`
+    - `js_body` には `email domain typo check / Yahoo メール弾き`
+- スキルプラス代表
+  - ファネル: `スキルプラス_Meta広告`
+  - ページ一覧: `/funnel/d0imwFvGWVbA/page`
+  - ページ編集: `/funnel/d0imwFvGWVbA/page/lvy1yBHf1VvZ/edit`
+  - preview: `/page/lvy1yBHf1VvZ?preview=true`
+  - runtime helper 実測
+    - `title = メインLP_みかみさんFV_オレンジボタン_要素並び替え_特典(30億社長)_新テイスト荻野_AMAZON_CTAテスト②_ベネフィット追加_権威東北大学_全CR配信`
+    - `is_high_speed_mode = 1`
+    - `first_view_css` あり
+    - `css = null`
+    - `js_head` あり
+    - `js_body_top / js_body = null`
+    - `js_head` には `TikTok Pixel / Meta Pixel / 著名人用 Meta Pixel`
+
+## 公開ページの署名を読む時の current 基準
+
+- helper
+  - `python3 System/scripts/utage_public_page_signature.py <public_url>`
+- まず見る値
+  - `first_style_len`
+  - `script_tag_count`
+  - `shortio_url_count`
+  - `follow_token_count`
+  - `auto_redirect_hits`
+- 読み方
+  - `follow_token_count > 0` かつ `auto_redirect_hits` に `liff.line.me`
+    - `LINEへ送るページ` の可能性が高い
+  - `first_style_len` が大きく、`googletagmanager` があり、`follow_token_count = 0`
+    - `FV補正が厚いLP` を疑う
+  - `script_tag_count` が多くても、`follow_token_count = 0` かつ short.io / LIFF が無い
+    - まず `content / transition page` を疑う
+  - `auto_redirect_hits` に `location.href` があるだけ
+    - それだけでは redirect page の根拠にしない
+  - `first_style_len = 0` で `script_tag_count` も少なく、redirect も short.io も LIFF も無い
+    - `コンテンツを見せるだけの page` を疑う
+
+## representative public page の読み方
+
+- `スキルプラス thank you redirect = https://school.addness.co.jp/p/E6g12WwMhDWI`
+  - `follow=%40` あり
+  - `liff.line.me` あり
+  - `js_body_top` で自動遷移させる thank you 型
+- `共通ファン化動画 = https://school.addness.co.jp/p/q84ikoiP7swW`
+  - `first_style_len = 0`
+  - `script_tag_count = 6`
+  - redirect / short.io / LIFF なし
+  - content page と読む
+- `AIキャンプ campaign CTA page = https://school.addness.co.jp/p/nWmuzGZoQEdD`
+  - `follow_token_count = 1`
+  - `auto_redirect_hits = liff.line.me`
+  - LINE 遷移型
+- `センサーズ 15分OTO = https://school.addness.co.jp/p/ggDUz4esErGX`
+  - `script_tag_count = 17`
+  - `auto_redirect_hits = location.href`
+  - `follow=%40 = 0`
+  - short.io / LIFF なし
+  - redirect page ではなく content / transition page と読む
+
 ## page edit の current UI
+
+### editor 上部で最初に確認するラベル
+
+- `戻る`
+- `PC`
+- `SP`
+- `ページ設定`
+- `AIアシスト`
+- `要素一覧`
+- `プレビュー`
+- `保存`
+
+スキルプラス代表例では、これに加えて `ポップアップ` が見える。
 
 ### settings menu
 
@@ -78,9 +166,27 @@
 
 - 同じページに対して複数作れる
 - 目的は `どこから来たかを分けて見ること`
+- `広告IDだから必ず切る` ではない
+- `流入元を切り分けて見たい時に作る分析軸` として扱う
 - 代表値
   - `Meta広告-AI-LP1-CR01015`
   - `Meta広告-スキルプラス-LP4-CR00001`
+
+## 保存前後の最小チェックリスト
+
+### 保存前
+
+- この page の役割を `LP / thanks / ユーザー登録 / content` のどれかで言える
+- 主CTAが何か言える
+- `シナリオ / アクション / 遷移先` がどこにあるか言える
+- `登録経路` を増やす理由を説明できる
+
+### 保存後
+
+- `プレビュー` か公開URLで主CTAを押す
+- 想定した `short.io / LIFF / UTAGE 次ページ` に着地する
+- `bodyタグの最初に挿入するjs` を使う page は、自動遷移の実挙動まで確認する
+- 表示文字列ではなく実際の hyperlink / button action を確認する
 
 ## exact smoke 手順
 
@@ -94,6 +200,12 @@
 8. `遷移先`
 9. 公開ページで主CTAを押す
 10. final destination まで確認
+
+## 注意
+
+- `location.href` や `setTimeout` の文字列だけで redirect page と断定しない
+- `見えている URL` と `実際の hyperlink` は別物になりうる
+- まず実 click、次に short.io、次に public signature、その後に edit/runtime を見る
 
 ## Addness 側で見るべき補足
 
