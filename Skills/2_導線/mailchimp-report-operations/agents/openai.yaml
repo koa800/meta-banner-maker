@@ -1,4 +1,4 @@
 interface:
   display_name: "Mailchimpレポート"
   short_description: "Mailchimpの report と click-details を exact に読む"
-  default_prompt: "Use $mailchimp-report-operations to inspect a Mailchimp journey or campaign report and determine the actual main CTA from click-details."
+  default_prompt: "Mailchimp の Journey または Campaign の report を見て、click-details から実際の main CTA を判断したい"

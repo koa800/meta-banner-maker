@@ -69,6 +69,19 @@
 - email は webhook payload の email-like key から引く
 - Zap 名だけで family と event の意味が読める
 
+## 30秒レビューの順番
+
+1. `Name`
+2. `Apps`
+3. `Location`
+4. `Status`
+5. step 1 が `Webhooks by Zapier / Catch Hook` か
+6. step 2 が `Mailchimp / Add/Update Subscriber` か
+7. `Audience*`
+8. `Subscriber Email*`
+9. `Tag(s)`
+10. その tag が downstream で何を起動するか
+
 ## relay を読む最小チェック
 
 1. この Zap は何 event を relay しているか
@@ -76,3 +89,12 @@
 3. 付与される tag は何か
 4. その tag 名は business event と一致しているか
 5. duplicate や例外 relay になっていないか
+
+## cleanup の原則
+
+- exploratory に builder を開いただけなら `Untitled Zap / Draft` を残さない
+- 削除前に
+  - `Folder`
+  - `Status`
+  - `Last modified`
+  を見て、current published relay ではないことを確認する

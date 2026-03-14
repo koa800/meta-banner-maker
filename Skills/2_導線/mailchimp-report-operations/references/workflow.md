@@ -26,6 +26,17 @@
 - 対象 row の report
 - main CTA 判定は `click-details`
 
+## benchmark の見方
+
+- 広い母集団への regular campaign
+  - `open_rate 9〜11%`
+  - `click_rate 0.04〜0.21%`
+- 高温 segment への regular campaign
+  - `open_rate 38〜46%`
+  - `click_rate 0.59〜4.99%`
+
+rate 単体で良し悪しを決めず、必ず `誰に送ったか` とセットで読む。
+
 ## Addness 側の重要解釈
 
 - regular campaign の main CTA は
