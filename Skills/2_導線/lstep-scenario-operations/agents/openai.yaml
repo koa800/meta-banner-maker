@@ -1,0 +1,4 @@
+interface:
+  display_name: "LSTEP シナリオ配信運用"
+  short_description: "Lステップのシナリオ配信を新規作成、step 設計、テスト、削除まで安全に進める"
+  default_prompt: "Lステップのシナリオ配信を正しい UI 手順で作成・検証したい"
