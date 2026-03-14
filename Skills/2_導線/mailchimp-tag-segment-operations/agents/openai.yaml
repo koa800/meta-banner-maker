@@ -1,4 +1,4 @@
 interface:
   display_name: "Mailchimpタグ・セグメント"
   short_description: "Mailchimpの tag と saved segment を exact に扱う"
-  default_prompt: "Use $mailchimp-tag-segment-operations to choose or define tags and saved segments safely for Mailchimp journeys or campaigns."
+  default_prompt: "Mailchimp の Journey や Campaign のために、tag と saved segment を安全に切りたい"
