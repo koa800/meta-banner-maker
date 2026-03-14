@@ -1,0 +1,4 @@
+interface:
+  display_name: "UTAGE content review"
+  short_description: "UTAGE のページを、promise と CTA と遷移まで含めてレビューする"
+  default_prompt: "UTAGE の既存ページを分解して、何を再現し何を変えるべきか判断したい"
