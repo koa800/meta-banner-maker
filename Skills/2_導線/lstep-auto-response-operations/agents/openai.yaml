@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lステップ自動応答"
+  short_description: "Lステップの自動応答を exact 手順で作成・削除する"
+  default_prompt: "Lステップの自動応答を正しい UI 手順で作成・検証したい"
