@@ -156,6 +156,19 @@ folder は step ではなく `Zap details` 側で管理する。
 - `Folder`
 - current の新規は原則 `甲原`
 
+### 30秒レビューの順番
+
+1. `Name`
+2. `Apps`
+3. `Location`
+4. `Status`
+5. step 1 が `Webhooks by Zapier / Catch Hook` か
+6. step 2 が `Mailchimp / Add/Update Subscriber` か
+7. `Audience*`
+8. `Subscriber Email*`
+9. `Tag(s)`
+10. その tag が downstream で何を起動するか
+
 ## 最小 relay 構成
 
 最低でも次が揃っていることを確認する。
@@ -215,6 +228,13 @@ exploratory な draft を開いただけなら、その場で削除する。
 - `Delete Zap`
 
 `Untitled Zap` を残さない。
+
+cleanup 前に最低でも次を見る。
+- `Folder`
+- `Status`
+- `Last modified`
+
+つまり、current の published relay を消さずに、探索中の `Untitled Zap / Draft` だけを消す。
 
 ## NG
 

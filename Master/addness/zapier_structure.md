@@ -259,6 +259,37 @@
 
 ### pattern 2.5: 商品 family の course-specific purchase relay
 
+## current を読む最短順
+
+Zapier の current 一覧や editor を見た時は、まず次の順で読む。
+
+1. `Name`
+2. `Apps`
+3. `Location`
+4. `Status`
+5. step 1 の app / event
+6. step 2 の app / event
+7. `Audience*`
+8. `Subscriber Email*`
+9. `Tag(s)`
+10. その tag が downstream の Mailchimp で何を起動するか
+
+これで、
+- relay family
+- 何の event か
+- Mailchimp 側の意味
+を 30 秒で切る。
+
+## draft cleanup の原則
+
+- exploratory に builder を開いた時は `Untitled Zap / Draft` を残さない
+- 削除前に、必ず
+  - `Folder`
+  - `Status`
+  - `Last modified`
+  を見て、current published relay ではないことを確認する
+- Addness の新規資産は `甲原` folder を正にするが、既存 current relay は無理に移動しない
+
 - Zap 名
   - `マインドセットコース_アクションマップ購入`
 - trigger
@@ -732,6 +763,14 @@
 - email は payload のどの key か
 - 付与する tag は何か
 - 既存 Zap を流用するのか、新規 Zap を切るのか
+
+## 実装前の最小チェック
+
+- この relay が起動した後、Mailchimp 側で何を起こしたいかを 1 文で言えるか
+- tag 名が英語で 1 meaning になっているか
+- email mapping の key が payload に実在するか
+- 既存 Zap 変更と新規 Zap 作成のどちらかを説明できるか
+- relay 作成後、どの Journey / Campaign 条件に効くかを説明できるか
 
 ## 新規設定の標準手順
 
