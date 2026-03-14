@@ -11,6 +11,14 @@ Zapier の current 主戦場である `Webhook -> Mailchimp Add/Update Subscribe
 
 Addness 固有の Zap 名、tag 名、folder 運用、current representative は `Master/addness/zapier_structure.md` を正本にする。この skill は、会社をまたいで再利用できる relay 手順だけを持つ。
 
+## ツールそのものの役割
+
+Zapier は、あるシステムで起きた event を別のシステムへ渡し、state や action を接続する relay system です。
+
+## アドネスでの役割
+
+アドネスでは Zapier を、UTAGE やその他 front system の event を Mailchimp が扱える audience と tag に変換する relay layer として使う。表の顧客体験を作るツールではなく、裏で接続を成立させるシステムです。
+
 ## 役割
 
 この relay は、front system で起きた business event を、Mailchimp が扱える audience + tag に変換する。
@@ -34,6 +42,14 @@ Addness 固有の Zap 名、tag 名、folder 運用、current representative は
 - member status
 - update existing の可否
 - 既存 relay を触るか新規 relay を作るか
+
+## 実装前の最小チェック
+
+- その event は `Journey` を起動したいのか、`Campaign` の対象条件を作りたいのか
+- Mailchimp 側で付けたい tag 名が、英語で 1 meaning になっているか
+- email mapping に使う key が webhook payload で実在するか
+- 既存 Zap の変更で済むのか、新規 Zap を切るべきかを 1 文で説明できるか
+- downstream 側で `その tag が何を起動するか` を説明できるか
 
 ## Workflow
 
@@ -104,6 +120,13 @@ representative family
 8. Zap 名と tag の意味が一致しているか
 9. downstream の Mailchimp 側で、その tag が何を起動するか
 
+Mailchimp step では、少なくとも次の field label を UI 上で確認する。
+- `Audience*`
+- `Subscriber Email*`
+- `Tag(s)`
+- `Status`
+- `Update Existing`
+
 ### create builder の見方
 
 新規 builder を開いたら、最初に次を見る。
@@ -117,6 +140,17 @@ representative family
 - `Catch Hook`
 - `Mailchimp`
 - `Add/Update Subscriber`
+
+Mailchimp action の exact 入口で固定するラベル
+- `Choose app & event`
+- `Action event`
+- `Account`
+- `Set up action`
+- `Audience*`
+- `Subscriber Email*`
+- `Tag(s)`
+- `Status`
+- `Update Existing`
 
 folder は step ではなく `Zap details` 側で管理する。
 - `Folder`
@@ -160,6 +194,20 @@ Addness の current では、次は main family と分けて読む。
 - 同じ event を別名 relay として重複作成していない
 - `SMS` 例外 relay を `Mailchimp tag relay` と混同していない
 
+## 保存前後の最小チェック
+
+- 保存前
+  - `Trigger = Webhooks by Zapier / Catch Hook`
+  - `Action = Mailchimp / Add/Update Subscriber`
+  - audience
+  - email mapping
+  - tag
+  が埋まっているか
+- 保存後
+  - 一覧で `Name / Apps / Location / Status` が意図どおりか
+  - `Folder` が `甲原` か
+  - downstream の Mailchimp 側で、その tag を条件にした導線が読めるか
+
 ## cleanup
 
 exploratory な draft を開いただけなら、その場で削除する。
@@ -195,6 +243,14 @@ exploratory な draft を開いただけなら、その場で削除する。
 - Zap 名はあるが event の意味が曖昧
 - audience と tag の整合が取れていない
 - relay 先の Mailchimp 条件を見ずに完了扱いにする
+
+## ここで止めて確認する条件
+
+- webhook payload の key 名が current 実装と違って見える
+- 既存 Zap を変えると、複数の current funnel に波及しそう
+- 付けたい tag が Mailchimp 側の current 命名規則に乗っていない
+- `Webhooks by Zapier -> Mailchimp Add/Update Subscriber` 以外の family を新規で使いたい
+- relay 先が Mailchimp ではなく、外部 API や Google Sheets で本番影響が読みにくい
 
 ## References
 
