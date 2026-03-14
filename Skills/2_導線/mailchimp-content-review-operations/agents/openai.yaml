@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mailchimp content review"
+  short_description: "Mailchimp のメール本文を、認識変換と CTA まで含めてレビューする"
+  default_prompt: "Mailchimp の既存メールを分解して、何を再現し何を変えるべきか判断したい"
