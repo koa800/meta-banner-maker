@@ -204,6 +204,40 @@ rate の良し悪しは、必ず `誰に送ったか` とセットで読む。
 - main CTA は 1 つに絞れているか
 - secondary CTA は主目的を邪魔していないか
 
+## 2026-03 の representative 実例
+
+- `AI全自動PR_3通目(3/15)`
+  - `sent = 259,401`
+  - `open_rate = 5.45%`
+  - `click_rate = 0.056%`
+  - main CTA は `direct LINE`
+  - follow family は `%40631igmlz`
+  - 読み方
+    - 広い母集団への後半追撃
+    - `Campaign` の出来だけでなく、送る順番と母集団温度も一緒に見る
+- `AI全自動PR_1通目(3/13)`
+  - `sent = 259,813`
+  - `open_rate = 10.05%`
+  - `click_rate = 0.213%`
+  - main CTA は `direct LINE`
+  - 読み方
+    - 同じ広い母集団でも 1 通目は反応が高くなりやすい
+- `AI全自動PR_1通目(3/13) (copy 01)`
+  - `sent = 259,426`
+  - `open_rate = 9.10%`
+  - `click_rate = 0.251%`
+  - main CTA は `direct LINE`
+  - 読み方
+    - `copy` 付きでも `sent > 0` なら current 実績
+- `Resend: AIキャンプ`
+  - `sent = 247,861`
+  - `open_rate = 5.99%`
+  - `click_rate = 0.059%`
+  - main CTA は `UTAGE`
+  - 読み方
+    - `regular campaign` でも `UTAGE` 主導の現役例がある
+    - したがって `Campaign = direct LINE` と決め打ちしない
+
 ## ベストな活用場面
 
 - 今回だけ送る promotion や告知を打ちたい時
