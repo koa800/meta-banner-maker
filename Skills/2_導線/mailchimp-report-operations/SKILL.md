@@ -198,6 +198,44 @@ current の読み分け
   を目安に読む
 - したがって rate 単体で良し悪しを決めず、`誰に送ったか` を先に固定する
 
+### 2026-03 の representative 実例
+
+- `AI全自動PR_3通目(3/15)`
+  - `sent = 259,401`
+  - `open_rate = 5.45%`
+  - `click_rate = 0.056%`
+  - main CTA は `direct LINE`
+  - follow family は `%40631igmlz`
+  - 読み方
+    - 広い母集団への後半追撃
+    - まず本文改善より `温度の低い母集団へ後半通を打っているか` を疑う
+- `AI全自動PR_1通目(3/13)`
+  - `sent = 259,813`
+  - `open_rate = 10.05%`
+  - `click_rate = 0.213%`
+  - main CTA は `direct LINE`
+  - follow family は `%40631igmlz`
+  - 読み方
+    - 同じ広い母集団でも、1 通目は 3 通目より自然に反応が高い
+    - 1 通目と 3 通目は本文だけでなく `送る順番` もセットで比較する
+- `AI全自動PR_1通目(3/13) (copy 01)`
+  - `sent = 259,426`
+  - `open_rate = 9.10%`
+  - `click_rate = 0.251%`
+  - main CTA は `direct LINE`
+  - follow family は `%40303zgzwt`
+  - 読み方
+    - `copy` 付きでも `sent > 0` なら current 実績として読む
+    - follow family が変わると click の質も変わりうる
+- `Resend: AIキャンプ`
+  - `sent = 247,861`
+  - `open_rate = 5.99%`
+  - `click_rate = 0.059%`
+  - main CTA は `UTAGE`
+  - 読み方
+    - `regular campaign` でも `UTAGE` 主導の現役例がある
+    - つまり `regular campaign = direct LINE` と決め打ちしない
+
 ## current の読み分け
 
 - `direct LINE` は 1 つではない
