@@ -108,6 +108,89 @@ representative family
 - `フリープラン / プロモーション` relay
 - `SMS` 例外 relay
 
+## representative pattern
+
+### オプトイン relay 型
+
+- 目的
+  - front の登録 event を Mailchimp の `audience + tag` に変換する
+- 先に見る場所
+  - `Webhooks by Zapier / Catch Hook`
+  - `Mailchimp / Add/Update Subscriber`
+  - `Audience*`
+  - `Subscriber Email*`
+  - `Tag(s)`
+- 向いている場面
+  - LP opt-in
+  - フォーム登録
+
+### 購入 relay 型
+
+- 目的
+  - 購入 event を Mailchimp 側の購入後 state に変換する
+- 先に見る場所
+  - webhook payload の商品識別 key
+  - `Tag(s)`
+  - downstream の Journey 起動条件
+- 向いている場面
+  - 商品購入
+  - 会員化
+
+### promotion relay 型
+
+- 目的
+  - 単発 promotion の対象条件を作る
+- 先に見る場所
+  - event の意味
+  - `Tag(s)`
+  - `Campaign` 側の segment 条件
+- 向いている場面
+  - フリープラン
+  - プロモーション
+  - 期間限定施策
+
+### 例外 relay 型
+
+- 目的
+  - Mailchimp 以外の downstream へ例外処理を渡す
+- 先に見る場所
+  - `Apps`
+  - relay 先 API
+  - current 本線との切り分け
+- 向いている場面
+  - SMS
+  - Sheets post
+  - 一時例外処理
+
+## representative pattern を読む時の問い
+
+- この relay は `オプトイン / 購入 / promotion / 例外` のどれか
+- 入力 event を、どの state に変換しているか
+- `Audience*` と `Tag(s)` の組み合わせは、その目的に対して自然か
+- downstream は `Journey` を起動したいのか、`Campaign` 対象を作りたいのか
+- 既存 relay の修正で済むのか、新規 relay に分けるべきか
+
+## ベストな活用場面
+
+- front system の event を Mailchimp の state に安全に変換したい時
+- `Journey` 起動用 tag を relay で安定供給したい時
+- `Campaign` 用の高温セグメントを、別 system からの event で育てたい時
+
+## よくあるエラー
+
+- webhook payload の email key を誤る
+- `Audience*` は合っているが `Tag(s)` が downstream の実運用とズレる
+- 既存 Zap を流用すべき場面で、新しい relay を乱立させる
+- `Untitled Zap / Draft` を残して current relay と混ざる
+
+## エラー時の切り分け順
+
+1. この relay が `オプトイン / 購入 / promotion / 例外` のどれかを切る
+2. `Catch Hook` の payload で email key を確認する
+3. `Add/Update Subscriber` の `Audience* / Subscriber Email* / Tag(s)` を確認する
+4. downstream の Mailchimp 側で、その tag が何を起動または除外するか確認する
+5. 新規 relay にすべきか、既存 relay 修正で足りるかを再判定する
+
 ### relay を読む時の確認項目
 
 1. step 1 が `Webhooks by Zapier / Catch Hook`
@@ -155,6 +238,38 @@ Mailchimp action の exact 入口で固定するラベル
 folder は step ではなく `Zap details` 側で管理する。
 - `Folder`
 - current の新規は原則 `甲原`
+
+### 新規 relay の exact 順
+
+1. `Create`
+2. `Create Zap`
+3. builder 上部で `Untitled Zap` を確認
+4. 右上または details 側で `Folder = 甲原`
+5. `Trigger`
+6. `Webhooks by Zapier`
+7. `Catch Hook`
+8. `Action`
+9. `Mailchimp`
+10. `Add/Update Subscriber`
+11. `Audience*`
+12. `Subscriber Email*`
+13. `Tag(s)`
+14. `Status`
+15. `Update Existing`
+16. Zap 名を business event が読める名前へ変更
+
+current の Addness では、`Trigger` より前に `Folder` と `Zap 名の意味` を固定しておくと、draft が増えても事故りにくい。
+
+### publish 前に UI 上で必ず見るラベル
+
+- `Publish`
+- `Test trigger`
+- `Test step`
+- `Audience*`
+- `Subscriber Email*`
+- `Tag(s)`
+
+`Publish` は `Test trigger` と `Test step` を通してから押す。`Audience* / Subscriber Email* / Tag(s)` を埋めただけで publish しない。
 
 ### 30秒レビューの順番
 
@@ -207,19 +322,53 @@ Addness の current では、次は main family と分けて読む。
 - 同じ event を別名 relay として重複作成していない
 - `SMS` 例外 relay を `Mailchimp tag relay` と混同していない
 
-## 保存前後の最小チェック
+## 保存前の最小チェック
 
-- 保存前
-  - `Trigger = Webhooks by Zapier / Catch Hook`
-  - `Action = Mailchimp / Add/Update Subscriber`
-  - audience
-  - email mapping
-  - tag
-  が埋まっているか
-- 保存後
-  - 一覧で `Name / Apps / Location / Status` が意図どおりか
-  - `Folder` が `甲原` か
-  - downstream の Mailchimp 側で、その tag を条件にした導線が読めるか
+- `Trigger = Webhooks by Zapier / Catch Hook`
+- `Action = Mailchimp / Add/Update Subscriber`
+- audience
+- email mapping
+- tag
+が埋まっているか
+
+## 保存後の最小チェック
+
+- 一覧で `Name / Apps / Location / Status` が意図どおりか
+- `Folder` が `甲原` か
+- downstream の Mailchimp 側で、その tag を条件にした導線が読めるか
+
+## 構築精度だけを見る時のチェック
+
+1. この relay が `オプトイン / 購入 / promotion / 例外` のどれかで 1 文になっているか
+2. `Trigger` と `Action` が current family から外れていないか
+3. `Subscriber Email*` が webhook payload の正しい key を指しているか
+4. `Audience*` と `Tag(s)` が downstream の Mailchimp 条件と整合しているか
+5. `Folder = 甲原` と Zap 名の event 意味が一致しているか
+6. `Test trigger` と `Test step` で最低限の疎通確認ができているか
+7. exploratory な `Untitled Zap / Draft` を残さず cleanup できるか
+
+## relay 作成後の最終確認順
+
+1. 一覧へ戻る
+2. `Name`
+3. `Apps`
+4. `Location`
+5. `Status`
+6. editor を開き直す
+7. `Audience*`
+8. `Subscriber Email*`
+9. `Tag(s)`
+10. `Update Existing`
+11. downstream の Mailchimp 側で、その tag が何を起動するか
+
+この順で見れば、`Zapier 上では正しそうだが downstream が違う` を先に潰せる。
+
+## 完成条件
+
+- Zap 名だけで event の意味が読める
+- `Webhook -> Mailchimp Add/Update Subscriber` の 2 step 構造を説明できる
+- audience / email mapping / tag を 1 回で言える
+- downstream の Mailchimp 条件まで追える
 
 ## cleanup
 
@@ -235,6 +384,13 @@ cleanup 前に最低でも次を見る。
 - `Last modified`
 
 つまり、current の published relay を消さずに、探索中の `Untitled Zap / Draft` だけを消す。
+
+current の exact cleanup 導線は
+- title menu
+- `Delete`
+- `Delete Zap?`
+- `Delete Zap`
+の順で扱う。
 
 ## NG
 

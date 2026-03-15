@@ -71,8 +71,77 @@ Addness 固有の current 例、代表 tag、配信実績のある segment は `
 - 基本構造は `media_funnel_event`
 - 例
   - `meta_ai_optin`
-  - `x_skillplus_webinar1_optin`
-  - `linead_sns_consult_reserve`
+- `x_skillplus_webinar1_optin`
+- `linead_sns_consult_reserve`
+
+## representative pattern
+
+### Journey state 型
+
+- 目的
+  - evergreen の入口条件を作る
+- 先に見る場所
+  - `Tag added`
+  - trigger tag 名
+  - downstream の Journey 名
+- 向いている場面
+  - opt-in
+  - 購入後 state
+  - 継続教育
+
+### Campaign targeting 型
+
+- 目的
+  - 1回きりの配信対象を切る
+- 先に見る場所
+  - `Audience`
+  - `Segment or Tag`
+  - `Exclude`
+- 向いている場面
+  - 単発 promotion
+  - 再案内
+  - 告知
+
+### Exclusion 型
+
+- 目的
+  - 送りたくない人を外して配信事故を防ぐ
+- 先に見る場所
+  - exclude 条件
+  - 既存 state との競合
+- 向いている場面
+  - 購入者除外
+  - 予約済み除外
+  - 高温リストの保護
+
+## representative pattern を読む時の問い
+
+- これは `Journey state / Campaign targeting / Exclusion` のどれか
+- tag を作るべきか、saved segment を使うべきか
+- この条件は evergreen の state か、一時的な配信条件か
+- downstream で何を起動または除外したいのか
+- tag 名を見て `媒体 / ファネル / イベント` を 1 回で言えるか
+
+## ベストな活用場面
+
+- evergreen の入口条件を `Tag added` で固定したい時
+- 単発配信の対象を `saved segment / tag / exclude` で明確に切りたい時
+- downstream の `Journey` と `Campaign` の入口を混ぜずに管理したい時
+
+## よくあるエラー
+
+- evergreen 用の state を campaign 向けの一時条件として切ってしまう
+- 日本語のまま tag 名を作ろうとする
+- `saved segment` で済むのに、不要な新規 tag を増やす
+- `Exclude` を後回しにして、送ってはいけない相手を外し忘れる
+
+## エラー時の切り分け順
+
+1. それが `Journey` 入口か `Campaign` 対象条件かを切る
+2. audience を固定する
+3. 新規 tag が必要か、既存 tag か saved segment で足りるかを判定する
+4. `誰に送るか` と `誰を除外するか` を 1 文ずつ言う
+5. downstream の `Journey / Campaign` 側で intended な条件になっているか確認する
 
 ## Workflow
 
@@ -129,14 +198,21 @@ Addness 固有の current 例、代表 tag、配信実績のある segment は `
 - Journey なら trigger tag を説明できる
 - Campaign なら `saved segment / tag / exclude` を 1 回で説明できる
 
-## 保存前後の最小チェック
+## 保存前の最小チェック
 
-- 保存前
-  - tag か saved segment のどちらを作るべきか説明できるか
-  - `誰に送らないか` も必要なら決めているか
-- 保存後
-  - tag 名や segment 条件を見て `誰に送るか` を 1 回で言えるか
-  - Journey / Campaign の downstream 条件と矛盾していないか
+- tag か saved segment のどちらを作るべきか説明できるか
+- `誰に送らないか` も必要なら決めているか
+
+## 保存後の最小チェック
+
+- tag 名や segment 条件を見て `誰に送るか` を 1 回で言えるか
+- Journey / Campaign の downstream 条件と矛盾していないか
+
+## 完成条件
+
+- tag 名だけで `媒体 / ファネル / イベント` が読める
+- saved segment と exclude の役割を説明できる
+- Journey と Campaign の入口を混同しない
 
 ## NG
 
