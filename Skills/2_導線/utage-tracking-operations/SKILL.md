@@ -95,6 +95,27 @@ Addness 固有の funnel 名、current representative、どの粒度で登録経
    - `ページ`
 4. 保存
 
+### live で確認できた current 実装
+
+- temporary funnel 配下でも `create -> delete` が通る
+- current create form の visible labels
+  - `管理名称`
+  - `ファネルステップ`
+  - `ページ`
+- current select name
+  - `step_id`
+  - `page_id`
+- `管理名称` だけでは保存されない
+- 少なくとも `ファネルステップ` は選択が必要
+- temporary funnel 直後は `ページ = 指定しない` だけのことがある
+
+つまり最初の exact 判断は、
+- `step_id` に intended な step があるか
+- `page_id` に intended な page があるか
+を保存前に見ること
+
+これが取れない時は、`登録経路` 追加より先に funnel/page 側の状態を疑う
+
 ### 作成後の確認
 
 1. `データ(合算)` へ移動
@@ -112,6 +133,7 @@ Addness 固有の funnel 名、current representative、どの粒度で登録経
 
 - `データ(合算)` と `データ(日別)` の両方で条件が使えるか
 - 一覧で `登録経路名` と `接続ページ名` が intended か
+- `delete_action` を row 単位で見つけられるか
 
 ## 完成条件
 
@@ -139,6 +161,7 @@ Addness 固有の funnel 名、current representative、どの粒度で登録経
 - `管理名称` を見ても流入元が分からない
 - `ファネルステップ` と `ページ` を曖昧に選ぶ
 - `データ(日別)` を見ずに終える
+- `管理名称` だけ入れて保存し、step/page の結びつきを未確認のまま終える
 
 ## 正誤判断
 

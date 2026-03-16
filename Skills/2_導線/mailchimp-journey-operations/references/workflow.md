@@ -16,8 +16,11 @@
 - 2段階認証は current では
   - `Send code via SMS`
   - LINE の `Mailchimp認証` グループでコード確認
+    - current では group name が空で返ることがある
+    - helper は `Mailchimp認証` という表示名だけでなく、known `group_id = Ce2900a5b8c1efb939b3778262f1a9808` も優先する
   - verify 画面へ入力
   の順
+- 補助取得が必要な時は `python3 System/scripts/mailchimp_tfa_code_helper.py --wait-seconds 90`
 
 ## create の current UI
 

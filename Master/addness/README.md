@@ -38,9 +38,9 @@
 
 - Lステップ: `9.8 / 10`
 - UTAGE: `9.7 / 10`
-- Mailchimp: `9.4 / 10`
-- short.io: `9.6 / 10`
-- Zapier: `9.3 / 10`
+- Mailchimp: `9.5 / 10`
+- short.io: `9.7 / 10`
+- Zapier: `9.4 / 10`
 
 ## live 開始前チェック
 
@@ -52,14 +52,45 @@
 - Lステップは `auth_alive=true` かつ `account_name が intended account` の時だけ、API / cookie 経由の exact 作業に入る
 - `mailchimp.api_alive=true` なら、Journey / Campaign / report の API 読解は進められる
 - `shortio.api_alive=true` なら、short.io の作成 / 編集 / 統計 / 台帳同期は進められる
+- 2026-03-17 の current では、`sp013` で `作成 -> URL管理シート記録 -> 実 click -> link-stats` まで end-to-end を確認できた
+- `link-stats` では `humanClicks=1`、`2026-03-16` に 1 click が入っていることを確認済み
 - `Playwright.connect_over_cdp` が timeout する回は、`python3 System/scripts/chrome_raw_cdp.py` を使う raw fallback を先に試す
+- `python3 System/scripts/zapier_family_snapshot.py --limit 5` も raw fallback で再取得できる
+  - current では `Webhook -> Mailchimp Add/Update Subscriber` family と `Google Sheets -> webhook post` family を再確認できた
+  - `Untitled Zap` のように `steps=[]` で `signature=\"\"` の row は draft 候補として扱い、family の意味読みから外す
 - 2026-03-17 の current では、UTAGE と Zapier は raw fallback で `ALREADY_LOGGED_IN_RAW` まで確認できた
 - UTAGE は raw fallback で
   - `商品管理`
   - `アクション設定`
+  - `登録経路`
   の `create -> delete` まで再現できた
+- 2026-03-17 の current では `登録経路 > 追加` も live で `create -> delete` を再確認した
+  - `管理名称` だけでは保存できない
+  - 少なくとも `ファネルステップ` の選択が必要
+  - temporary funnel cleanup まで完了
+- 2026-03-17 の current では `ページ > 追加` も raw probe で `create -> delete` を再確認した
+  - `名称` を正しく入れないと `名称は必ず指定してください。` で止まる
+  - `ページ一覧` の actual URL は created row action から取る
+  - `row_link` の page id と `編集` route の page id が一致しないことがある
 - Mailchimp は raw fallback で `https://us5.admin.mailchimp.com/login/tfa-post` の verify 画面到達まで確認できた
 - helper は hanging せず `LOGIN_NEEDS_TFA` で返るところまでは安定
+- `Resend code` 後に `mailchimp_tfa_code_helper.py --wait` を流した current 実行では `found=false`
+  - つまり今の `group-log API` は Mailchimp 認証コードの today メッセージを拾えていない
+  - current blocker は `コード取得経路` であって、Mailchimp の login 導線そのものではない
+- 2026-03-17 の current では browser 上で `Success! Your SMS verification code is on its way! Check your phone to catch it!` まで確認した
+  - それでも helper は `found=false` だった
+  - つまり current blocker は `SMS送信` ではなく `today の LINE group-log 取得`
+- `mailchimp_tfa_code_helper.py` は current で
+  - `Mailchimp認証` グループ優先
+  - known `group_id = Ce2900a5b8c1efb939b3778262f1a9808` も優先
+  - 複数の code pattern 許容
+  - warning suppress
+  に更新済み
+  - current の `group-log API` では、この group が `group_name=""` で返る回がある
+- それでも `found=false` の時は、helper ではなく server 側の group-log 取得経路を疑う
+- Mailchimp API では `saved segment create -> delete` と `ensure-member -> add-tag -> remove-tag -> archive-member` まで live exact 済み
+- `ensure-member` 直後の `add-tag` は、一時的に `404` になる回がある
+  - current では `member` で見えてから再試行すると成功した
 
 ## 最新 readiness snapshot
 
@@ -330,7 +361,7 @@
 | Lステップ | アクション管理 | 読解中心 | 最小複合 1本 |
 | Lステップ | リッチメニュー | 読解中心 | 2ボタン 1本 |
 | UTAGE | ページ | representative 読解済み、`ファネル -> 追加 -> 空白のファネル -> 詳細 -> このファネルを追加する -> 一覧確認 -> row delete` 済み、row action は `slug route` / delete は `numeric id form` と確認済み | 1変更 -> rollback |
-| UTAGE | 登録経路 | 読解中心 | 1追加 -> rollback |
+| UTAGE | 登録経路 | create -> delete 再確認済み、`管理名称` だけでは保存できず `ファネルステップ` 選択が必要と確認済み | 計測確認の representative を増やす |
 | UTAGE | 商品管理 / 商品詳細管理 / 購入後アクション | product create / rollback 再確認済み、detail create/save/cleanup 再確認済み、action create/save/delete 再確認済み | representative を増やす |
 | UTAGE | 会員サイト | representative 読解済み | 1変更 -> rollback |
 | UTAGE | 動画管理 / メディア管理 | representative 読解済み | small change -> smoke |
@@ -350,6 +381,9 @@
 - Zapier
   - `python3 System/scripts/zapier_create_delete_probe.py --with-action` は current で `Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap` まで通った
   - exploratory draft の cleanup は `python3 System/scripts/zapier_cleanup_untitled.py` で `after_count=0` まで戻せる
+  - `zapier_create_delete_probe.py` は current で raw fallback を持つ
+  - ただし raw fallback は `Trigger` 入口までは押せても `app search` を開けない回がある
+  - つまり Zapier の create probe は current では `Playwright.connect_over_cdp が生きている回` を優先し、raw fallback は補助扱いにする
   - `python3 System/scripts/zapier_create_delete_probe.py --with-action --with-second-action` は cleanup まで通るが、`second_action_selected = false`
   - first action 後の current builder には
     - `Choose an event`
@@ -369,7 +403,7 @@
 ### UTAGE
 
 - `ページ -> 商品管理 -> 商品詳細管理 -> 購入後アクション -> バンドルコース` を新規案件目線で live create / rollback まで further exact 化
-  - `商品管理 / 商品詳細管理 / 購入後アクション` は最小 create/save/delete が 1 本ずつ済んだので、残差は `ページ / 登録経路 / 会員サイト / 動画管理` の live save 本数
+  - `商品管理 / 商品詳細管理 / 購入後アクション / 登録経路` は最小 create/save/delete を再確認済みなので、残差は `ページ / 会員サイト / 動画管理` の live save 本数
   - 2026-03-17 の raw probe では
     - `商品管理`: `before 0 -> after_create 1 -> after_delete 0`
     - `アクション設定`: `before 0 -> after_create 1 -> after_delete 0`

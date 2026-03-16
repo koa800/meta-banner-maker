@@ -19,6 +19,17 @@ Addness 固有の current 例、代表 tag、配信実績のある segment は `
 
 アドネスでは `tag` と `saved segment` を、単なる分類ではなく `どの認識変換を次に流すか` を決める入口条件として使う。`Journey` の state と `Campaign` の単発対象を混ぜないのが重要です。
 
+## live で確認できた current 挙動
+
+- `saved segment`
+  - `create-static-empty -> delete`
+  まで live exact 済み
+- `tag`
+  - `ensure-member -> add-tag -> remove-tag -> archive-member`
+  まで live exact 済み
+- `ensure-member` 直後の `add-tag` は、一時的に `404` になる回がある
+  - current では `member` で対象が見えてから再試行すると成功した
+
 ## 役割
 
 `tag` と `saved segment` は、誰に送るかを定義する state layer です。

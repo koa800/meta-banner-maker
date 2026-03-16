@@ -11,6 +11,16 @@
 - data daily: `/funnel/{funnel_id}/data/daily`
 - tracking: `/funnel/{funnel_id}/tracking`
 
+## current probe で分かったこと
+
+- `ファネル -> 追加` で選んだ template の slug と、実際に作られた funnel の slug は一致しないことがある
+- actual な `ページ一覧` URL は、created row action から取り直す
+- current では `row_link` の page id と `編集` route の page id が一致しないことがある
+- exploratory page 作成後は、URL を推測せず `row action > ページ一覧 > row の 編集` の順で再取得する
+
+- current の `ページ追加` では、`名称` が未入力だと `名称は必ず指定してください。` で保存されない
+- `create_url` に留まったまま `page_row_link` が出ない時は、まず `名称` の validation を疑う
+
 ## representative route
 
 - AI 代表

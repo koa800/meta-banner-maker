@@ -6,17 +6,29 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import warnings
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import requests
-
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = ROOT / "System" / "line_bot_local" / "config.json"
-CODE_PATTERN = re.compile(r"Mailchimp verification code is:\s*(\d{6})", re.IGNORECASE)
+TARGET_GROUP_NAMES = {"Mailchimp認証"}
+TARGET_GROUP_IDS = {"Ce2900a5b8c1efb939b3778262f1a9808"}
+CODE_PATTERNS = [
+    re.compile(r"Mailchimp verification code is:\s*(\d{6})", re.IGNORECASE),
+    re.compile(r"Mailchimp.*?(\d{6})", re.IGNORECASE | re.DOTALL),
+    re.compile(r"認証コード[:：]?\s*(\d{6})"),
+]
+
+warnings.filterwarnings(
+    "ignore",
+    message="urllib3 v2 only supports OpenSSL 1.1.1+.*",
+)
+
+import requests
 
 
 @dataclass
@@ -56,7 +68,11 @@ def iter_mailchimp_codes(max_days: int = 7) -> list[MailchimpVerificationCode]:
             group_name = str(group_data.get("group_name") or "")
             for message in group_data.get("messages") or []:
                 text = str(message.get("text") or "")
-                match = CODE_PATTERN.search(text)
+                match = None
+                for pattern in CODE_PATTERNS:
+                    match = pattern.search(text)
+                    if match:
+                        break
                 if not match:
                     continue
                 hits.append(
@@ -68,7 +84,18 @@ def iter_mailchimp_codes(max_days: int = 7) -> list[MailchimpVerificationCode]:
                         raw_text=text,
                     )
                 )
-    hits.sort(key=lambda item: item.timestamp, reverse=True)
+    def sort_key(item: MailchimpVerificationCode) -> tuple[bool, bool, float]:
+        try:
+            stamp = datetime.fromisoformat(item.timestamp).timestamp()
+        except Exception:
+            stamp = 0.0
+        return (
+            item.group_id not in TARGET_GROUP_IDS,
+            item.group_name not in TARGET_GROUP_NAMES,
+            -stamp,
+        )
+
+    hits.sort(key=sort_key)
     return hits
 
 

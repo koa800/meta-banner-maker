@@ -159,8 +159,12 @@
   - `python3 System/scripts/utage_page_create_delete_probe.py`
     - temporary funnel を `create`
     - created row action の `ページ一覧` から actual slug を取得
-    - `追加 -> 名称 -> 保存`
-    - page row 出現を確認
+    - current では `名称` 未入力のまま保存すると `名称は必ず指定してください。` で止まる
+    - 2026-03-17 の raw probe では、`名称` selector を `ページ名` 系だけに寄せると false negative になった
+    - current の probe は `名称` も受ける selector に直して `create -> delete` を再確認済み
+    - `ページ一覧` の actual URL は created row action から取る
+    - current では `row_link` の page id と `編集` route の page id が一致しないことがある
+    - `create_url` に留まったまま `page_row_link` が出ない時は、まず `名称` の validation を疑う
     - temporary funnel `delete` で rollback
     - current 実績
       - `page_list_url = /funnel/4eAriUd6li3Z/page`
@@ -196,7 +200,13 @@
     - action 一覧 `1件追加`
     - row dropdown 内の `削除` で cleanup
     まで済み
-  - 残差は `ページ / 登録経路 / 会員サイト / 動画管理` の live save 本数
+  - `登録経路 > 追加` は
+    - live create form snapshot
+    - `管理名称 / ファネルステップ / ページ`
+      の current field 確認
+    - temporary funnel 配下で `create -> delete`
+    まで済み
+  - 残差は `ページ / 会員サイト / 動画管理` の live save 本数
 - `会員サイト 1変更` の save -> smoke -> rollback
 - `動画管理 / メディア管理` の small change を増やして downstream まで確認
 
@@ -669,6 +679,22 @@ UTAGE で迷いやすいのは、`何を作りたいか` ではなく `どの一
   - `https://school.addness.co.jp/funnel/d0imwFvGWVbA/tracking/create`
   - heading は `登録経路`
   - current create 画面は `グループ / 管理名称 / ファネルステップ / ページ / 保存` を先に見る
+- 2026-03-17 live probe:
+  - temporary funnel 配下で `create -> delete` を完了
+  - route 名:
+    - `ZZ_TEST_UTAGE_tracking_20260317_061339`
+  - `管理名称` だけでは足りず、少なくとも `ファネルステップ` の選択が必要
+  - create form の current selects:
+    - `step_id`
+      - 例: `空白のファネル`
+    - `page_id`
+      - temporary funnel 直後は `指定しない` だけのことがある
+  - current 実績:
+    - `tracking_create_url = /funnel/YTnL5DUwtwuE/tracking/create`
+    - row 出現を確認
+    - `delete_action = /funnel/YTnL5DUwtwuE/tracking/510DSJvuGmhk`
+    - tracking delete 成功
+    - temporary funnel delete で cleanup 完了
 - つまり `登録経路` は、単なるラベルではなく
   - どの step に属するか
   - どの page を指すか

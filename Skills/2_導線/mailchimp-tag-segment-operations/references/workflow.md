@@ -106,6 +106,24 @@
   - `tag add -> rollback` の exact 性は API helper で live 確認済み
   - ただし future に status や tags_count が変わる可能性があるので、使用前に `member` を再確認する
 
+### 2026-03-17 の live exact
+
+- saved segment:
+  - `ZZ_TEST_20260317_segment_probe`
+  - `create-static-empty -> delete`
+  - `id=4641625`
+  - delete `204`
+- member:
+  - `koa800sea.nifs+zzrouteprobe20260317@gmail.com`
+- 通したこと:
+  - `ensure-member`
+  - `add-tag --tag youtube_skillplus_routeprobe`
+  - `remove-tag --tag youtube_skillplus_routeprobe`
+  - `archive-member`
+- current 学習:
+  - `ensure-member` 直後の `add-tag` は、一時的に `404` になる回があった
+  - current では `member` で対象が見えてから再試行すると成功した
+
 ## ここで止めて確認する条件
 
 - `tag` と `saved segment` のどちらで切るべきか曖昧

@@ -286,6 +286,23 @@ dashboard の current 実例として、次が見えている。
 - cleanup:
   - resolve で一致 link が見つからないことまで確認済み
 
+### 2026-03-17 の実案件 end-to-end
+
+- link:
+  - `https://skill.addness.co.jp/sp013`
+- title:
+  - `（スキルプラス公式TV）YouTube _スキルプラス_直リストイン`
+- 通した順:
+  - `Lステップ` の `流入経路分析` を先に作成
+  - short.io を作成
+  - URL管理シートへ記録
+  - 実際に short.io を踏んで final destination を確認
+  - `link-stats` で click を確認
+- 実確認できたこと:
+  - final destination は intended な `liff.line.me ... lp=GnsXlA`
+  - `link-stats` では `humanClicks=1`
+  - `2026-03-16` に 1 click が反映されている
+
 ## 動画から固定するルール
 
 ### 1. 作成前
