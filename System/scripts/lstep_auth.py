@@ -73,6 +73,38 @@ def build_session(referer: str, source: dict[str, Any]) -> requests.Session:
     return s
 
 
+def fetch_authenticated_context(s: requests.Session, page_url: str) -> dict[str, Any] | None:
+    try:
+        resp = s.get(page_url, timeout=60)
+        resp.raise_for_status()
+    except Exception:
+        return None
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    app = soup.select_one("liny-app")
+    if not app:
+        return None
+
+    session_raw = app.get("v-bind:session")
+    if not session_raw:
+        return None
+
+    try:
+        session_data = json.loads(html.unescape(session_raw))
+    except Exception:
+        return None
+
+    user = session_data.get("user") or {}
+    account = session_data.get("account") or {}
+    return {
+        "user_id": user.get("id"),
+        "user_name": user.get("name"),
+        "account_id": account.get("id"),
+        "account_name": account.get("name"),
+        "page_url": page_url,
+    }
+
+
 def probe_source(source: dict[str, Any], referer: str, probe_url: str = DEFAULT_PROBE_URL) -> dict[str, Any]:
     result: dict[str, Any] = {
         "label": source.get("label"),
@@ -106,6 +138,10 @@ def probe_source(source: dict[str, Any], referer: str, probe_url: str = DEFAULT_
             except Exception:
                 json_ok = False
         result["auth_alive"] = json_ok
+        if json_ok:
+            context = fetch_authenticated_context(s, referer)
+            if context:
+                result["authenticated_context"] = context
     except Exception as exc:
         result["error"] = str(exc)
         result["auth_alive"] = False
@@ -265,6 +301,7 @@ def auth_probe(referer: str, probe_url: str = DEFAULT_PROBE_URL) -> dict[str, An
         "probe_url": probe_url,
         "auth_alive": bool(working),
         "working_source": working.get("label") if working else None,
+        "authenticated_context": working.get("authenticated_context") if working else None,
         "cdp": cdp,
         "sources": source_results,
         "login_page": login_page,
@@ -276,11 +313,21 @@ def auth_probe(referer: str, probe_url: str = DEFAULT_PROBE_URL) -> dict[str, An
     }
 
 
-def build_authenticated_session(referer: str, probe_url: str = DEFAULT_PROBE_URL) -> requests.Session:
+def build_authenticated_session(
+    referer: str,
+    probe_url: str = DEFAULT_PROBE_URL,
+    expected_account_name: str | None = None,
+) -> requests.Session:
     for source in cookie_sources():
         result = probe_source(source, referer=referer, probe_url=probe_url)
         if result.get("auth_alive"):
-            return build_session(referer=referer, source=source)
+            s = build_session(referer=referer, source=source)
+            if expected_account_name:
+                context = result.get("authenticated_context") or fetch_authenticated_context(s, referer)
+                current_name = (context or {}).get("account_name")
+                if current_name != expected_account_name:
+                    continue
+            return s
     probe = parse_login_page()
     recaptcha = ((probe.get("server_data") or {}).get("recaptcha") or {}).get("enabled")
     message = (
