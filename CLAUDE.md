@@ -589,6 +589,7 @@ Python スクリプトからのパス解決は `Path(__file__).resolve().parent`
 
 ## コミットルール
 
+- タスク完了時は、原則としてコミットと push までを同じセッション内で行う。`コミットだけで止める` `push しない` と明示された場合だけ未 push で止める
 - `System/line_bot/` への変更は `cd System/line_bot && git add . && git commit` でサブモジュールに個別コミット
 - その後 `git push origin main` で Render に自動デプロイ
 - メインリポジトリ側も変更があれば別途コミット
