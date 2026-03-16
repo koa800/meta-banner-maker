@@ -185,19 +185,6 @@ def auto_rename_unnamed_files(unnamed_files: list, dated_files: dict, dry_run: b
 
         next_date += timedelta(days=1)
 
-    # LINE通知
-    if renamed and not dry_run:
-        dates = [DATE_PATTERN.match(f).group(1) for f in renamed]
-        if len(dates) == 1:
-            date_info = dates[0]
-        else:
-            date_info = f"{dates[0]} 〜 {dates[-1]}"
-        message = (
-            f"📊 CSV自動リネーム: {len(renamed)} 件\n"
-            f"{date_info} として処理します"
-        )
-        send_line_notify(message)
-
     return renamed
 
 
@@ -308,13 +295,6 @@ def sync_to_sheet(dry_run=False):
         range_notation = f"B2:D{len(data)}"
         ws.update(values=all_rows, range_name=range_notation)
         logger.info(f"一括書き込み完了: {range_notation}")
-
-    # 5. 更新完了をLINE通知
-    dates = [u["date"] for u in updates]
-    first = dates[0]
-    last = dates[-1]
-    message = f"📊 元データシート更新完了: {len(updates)} 件\n{first} 〜 {last}"
-    send_line_notify(message)
 
     return len(updates)
 
@@ -427,14 +407,6 @@ def build_daily_sheet(dry_run=False):
     ws.update_acell("A1", f"最終更新: {now}")
 
     logger.info(f"スキルプラス（日別）構築完了: {len(all_rows)} 行")
-
-    # 7. LINE通知
-    message = (
-        f"📊 スキルプラス（日別）シート更新完了\n"
-        f"{dates[0]} 〜 {dates[-1]}\n"
-        f"{len(dates)} 日分 / {len(all_rows)} 行"
-    )
-    send_line_notify(message)
 
     return len(all_rows)
 
@@ -866,13 +838,6 @@ def build_monthly_sheet(dry_run=False):
     ws.update_acell("A1", f"最終更新: {now}")
 
     logger.info(f"スキルプラス（月別）構築完了: {month_count} ヶ月, {len(sheet_rows)} 行")
-
-    # LINE通知
-    message = (
-        f"📊 スキルプラス（月別）シート更新完了\n"
-        f"{months[0]} 〜 {months[-1]} ({month_count} ヶ月, {len(sheet_rows)} 行)"
-    )
-    send_line_notify(message)
 
     return len(sheet_rows)
 

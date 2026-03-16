@@ -8,7 +8,9 @@ Sends notifications via:
 
 import json
 import os
+import re
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 import requests
@@ -20,6 +22,12 @@ logger = get_logger("notifier")
 MAX_MESSAGE_LEN = 990
 
 DEFAULT_LINE_BOT_SERVER_URL = "https://line-mention-bot-mmzu.onrender.com"
+_PROJECT_ROOT = Path(
+    os.environ.get("ADDNESS_DEPLOY_ROOT", str(Path(__file__).resolve().parents[3]))
+).expanduser().resolve()
+_NOTIFICATION_POLICY_PATH = _PROJECT_ROOT / "System" / "config" / "secretary_notification_policy.json"
+_DIGEST_QUEUE_PATH = _PROJECT_ROOT / "System" / "data" / "secretary_notification_digest.json"
+_notification_policy_cache: dict | None = None
 
 # Slack #ai-team チャネルへの通知
 _SLACK_AI_TEAM_WEBHOOK = os.environ.get("SLACK_AI_TEAM_WEBHOOK_URL", "")
@@ -83,6 +91,133 @@ def get_line_notify_config() -> tuple[str, str, str]:
         resolved_server_url = DEFAULT_LINE_BOT_SERVER_URL
 
     return resolved_server_url, resolved_agent_token, config_source
+
+
+def _load_notification_policy() -> dict:
+    global _notification_policy_cache
+    if _notification_policy_cache is not None:
+        return _notification_policy_cache
+
+    try:
+        _notification_policy_cache = json.loads(
+            _NOTIFICATION_POLICY_PATH.read_text(encoding="utf-8")
+        )
+    except Exception as e:
+        logger.warning(f"notification policy load failed: {e}")
+        _notification_policy_cache = {}
+    return _notification_policy_cache
+
+
+def get_notification_delivery_class(kind: str) -> str:
+    policy = _load_notification_policy()
+    event_defaults = policy.get("event_defaults", {})
+    delivery_class = str(event_defaults.get(kind, "immediate")).strip()
+    return delivery_class if delivery_class in {"immediate", "digest", "silent"} else "immediate"
+
+
+def _load_digest_queue() -> list[dict]:
+    try:
+        if not _DIGEST_QUEUE_PATH.exists():
+            return []
+        payload = json.loads(_DIGEST_QUEUE_PATH.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, list) else []
+    except Exception as e:
+        logger.warning(f"digest queue load failed: {e}")
+        return []
+
+
+def _save_digest_queue(events: list[dict]) -> None:
+    try:
+        _DIGEST_QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = _DIGEST_QUEUE_PATH.with_suffix(".tmp")
+        tmp_path.write_text(
+            json.dumps(events, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        tmp_path.replace(_DIGEST_QUEUE_PATH)
+    except Exception as e:
+        logger.warning(f"digest queue save failed: {e}")
+
+
+def queue_digest_event(kind: str, message: str, summary: str = "", group_id: str = "") -> bool:
+    events = _load_digest_queue()
+    resolved_summary = (summary or message).strip().replace("\n", " ")
+    resolved_summary = re.sub(r"\s+", " ", resolved_summary)[:200]
+
+    for existing in events:
+        if (
+            existing.get("kind") == kind
+            and existing.get("summary") == resolved_summary
+            and existing.get("group_id", "") == group_id
+        ):
+            logger.info("digest event deduplicated", extra={"kind": kind})
+            return True
+
+    events.append(
+        {
+            "kind": kind,
+            "summary": resolved_summary,
+            "message": message,
+            "group_id": group_id,
+            "created_at": datetime.now().isoformat(),
+        }
+    )
+    _save_digest_queue(events)
+    logger.info("digest event queued", extra={"kind": kind, "summary": resolved_summary[:80]})
+    return True
+
+
+def flush_digest_events(title: str, kinds: list[str] | None = None, group_id: str = "") -> bool:
+    events = _load_digest_queue()
+    if not events:
+        return True
+
+    selected: list[dict] = []
+    remaining: list[dict] = []
+    kind_filter = set(kinds or [])
+    for event in events:
+        event_group_id = str(event.get("group_id", "") or "")
+        if event_group_id != group_id:
+            remaining.append(event)
+            continue
+        if kind_filter and event.get("kind") not in kind_filter:
+            remaining.append(event)
+            continue
+        selected.append(event)
+
+    if not selected:
+        return True
+
+    lines = [title, ""]
+    for event in selected[:12]:
+        created_at = str(event.get("created_at", ""))
+        hhmm = created_at[11:16] if len(created_at) >= 16 else "--:--"
+        lines.append(f"・{hhmm} {event.get('summary', '')}")
+
+    remaining_count = len(selected) - 12
+    if remaining_count > 0:
+        lines.append(f"・ほか {remaining_count} 件")
+
+    ok = send_line_notify("\n".join(lines), group_id=group_id)
+    if ok:
+        _save_digest_queue(remaining)
+    return ok
+
+
+def notify_event(
+    kind: str,
+    message: str,
+    summary: str = "",
+    truncate: bool = True,
+    group_id: str = "",
+) -> bool:
+    delivery_class = get_notification_delivery_class(kind)
+    if delivery_class == "silent":
+        logger.info("notification suppressed by policy", extra={"kind": kind})
+        return True
+    if delivery_class == "digest":
+        return queue_digest_event(kind, message=message, summary=summary, group_id=group_id)
+    return send_line_notify(message, truncate=truncate, group_id=group_id)
 
 
 def send_line_notify(message: str, truncate: bool = True, group_id: str = "") -> bool:

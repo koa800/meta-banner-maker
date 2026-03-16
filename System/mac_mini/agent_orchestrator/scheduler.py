@@ -946,7 +946,7 @@ class TaskScheduler:
         """メール処理結果をLINE+Slack通知（返信待ちがある場合のみ）"""
         if not result.success or not result.output:
             return
-        from .notifier import send_line_notify  # LINEのみ
+        from .notifier import notify_event
 
         waiting_m = re.search(r"返信待ち[：:]\s*(\d+)\s*件", result.output)
         delete_m = re.search(r"削除確認[：:]\s*(\d+)\s*件", result.output)
@@ -976,14 +976,22 @@ class TaskScheduler:
         message = f"メールに返信待ちが{waiting}件あります（{account_label}）"
         if delete > 0:
             message += f"\n削除確認も{delete}件あります。"
-        ok = send_line_notify(message)
+        ok = notify_event(
+            "mail_waiting_digest",
+            message,
+            summary=f"メール返信待ち {waiting}件（{account_label}）",
+        )
         if ok:
             self.memory.set_state(state_key, now.isoformat())
             logger.info(f"Mail notification sent for {account}: waiting={waiting}")
         else:
             # 1回リトライ（ネットワーク一時エラー対策）
             import asyncio; await asyncio.sleep(5)
-            ok = send_line_notify(message)
+            ok = notify_event(
+                "mail_waiting_digest",
+                message,
+                summary=f"メール返信待ち {waiting}件（{account_label}）",
+            )
             if ok:
                 self.memory.set_state(state_key, datetime.now().isoformat())
                 logger.info(f"Mail notification sent for {account} (retry): waiting={waiting}")
@@ -3080,7 +3088,7 @@ python3 System/line_notify.py "日報入力が完了しました。
         if error_tasks:
             report_lines.append(f"エラーあり: {', '.join(error_tasks[:5])}")
 
-        send_line_notify("\n".join(report_lines))
+        notify_event("internal_success", "\n".join(report_lines))
 
         report_text = (
             f"--- Daily Agent Report ---\n"
@@ -3243,7 +3251,7 @@ python3 System/line_notify.py "日報入力が完了しました。
 
     async def _run_weekly_idea_proposal(self):
         """毎週月曜: agent_ideas.md から未着手P0/P1を1件ピックアップしてLINE通知"""
-        from .notifier import send_line_notify
+        from .notifier import notify_event
 
         ideas_path = os.path.expanduser(
             os.path.join(self.config.get("paths", {}).get("repo_root", "~/Desktop/cursor"),
@@ -3634,6 +3642,9 @@ python3 System/line_notify.py "日報入力が完了しました。
             # まず簡易的にモデル一覧APIで疎通確認
             req_check = urllib.request.Request(
                 "https://api.openai.com/v1/models",
+        # 低緊急度の通知は朝のまとめでだけ出す
+        flush_digest_events("今朝の確認まとめ", kinds=["mail_waiting_digest"])
+
                 headers={"Authorization": f"Bearer {api_key}"},
             )
             with urllib.request.urlopen(req_check, timeout=15) as resp:
@@ -3786,7 +3797,7 @@ python3 System/line_notify.py "日報入力が完了しました。
     async def _run_weekly_stats(self):
         """毎週月曜9:30: 先週のシステム稼働サマリーをLINE通知"""
         import json as _json
-        from .notifier import send_line_notify  # LINEのみ
+        from .notifier import flush_digest_events, send_line_notify  # LINEのみ
         from datetime import date
 
         stats = self.memory.get_task_stats(since_hours=168)  # 7日間
@@ -4263,15 +4274,11 @@ head -3 "{csv_dir}/{csv_filename}"
         if result.success and "投入完了" in result.output:
             # KPIキャッシュも再生成（AI秘書が最新データを参照できるように）
             cache_result = await self._execute_tool("kpi_cache_build", tools.kpi_cache_build)
-            cache_status = ""
             if cache_result.success:
                 logger.info(f"KPI cache rebuilt after import: {cache_result.output[:200]}")
             else:
-                cache_status = "\n⚠️ KPIキャッシュ再生成に失敗（AI秘書のデータが古い可能性あり）"
                 logger.warning(f"KPI cache build failed after import: {cache_result.error[:200] if cache_result.error else 'unknown'}")
-            send_line_notify(
-                f"KPIデータの更新が完了しました。{cache_status}"
-            )
+                send_line_notify("KPIデータの投入は完了しましたが、KPIキャッシュ再生成に失敗しました。秘書の数値が古い可能性があります。")
             self._record_schedule_success("kpi_daily_import")
         elif result.success and "投入対象なし" in result.output:
             logger.info(f"KPI process: no pending entries to import")
@@ -4291,8 +4298,8 @@ head -3 "{csv_dir}/{csv_filename}"
             cache_result = await self._execute_tool("kpi_cache_build", tools.kpi_cache_build)
             if cache_result.success:
                 logger.info(f"KPI cache rebuilt: {cache_result.output[:200]}")
-                from .notifier import send_line_notify
-                send_line_notify("管理シートの同期とKPIキャッシュの更新が完了しました。")
+                from .notifier import notify_event
+                notify_event("sync_success", "管理シートの同期とKPIキャッシュの更新が完了しました。")
             else:
                 logger.warning(f"KPI cache build failed: {cache_result.error[:200] if cache_result.error else 'unknown'}")
                 from .notifier import send_line_notify
@@ -4509,7 +4516,7 @@ head -3 "{csv_dir}/{csv_filename}"
             if first_error:
                 break
 
-        from .notifier import send_line_notify
+        from .notifier import notify_event, send_line_notify
 
         send_line_notify(
             _format_line_message(
@@ -4581,6 +4588,7 @@ head -3 "{csv_dir}/{csv_filename}"
             f"non_conversion_rows={int(coverage.get('non_conversion_rows', 0) or 0)}"
         )
 
+                notify_event("internal_success", "KPIデータの更新が完了しました。")
     async def _run_kpi_nightly_cache(self):
         """毎晩22:00: KPIキャッシュを再生成（AI秘書が夜間も最新データを参照できるように）"""
         result = await self._execute_tool("kpi_cache_build", tools.kpi_cache_build)
@@ -4619,8 +4627,8 @@ head -3 "{csv_dir}/{csv_filename}"
         if result.success:
             if self._git_pull_consecutive_failures >= 6:
                 # 復旧通知
-                from .notifier import send_line_notify
-                send_line_notify(f"Git同期が復旧しました（{self._git_pull_consecutive_failures}回失敗後）。")
+                from .notifier import notify_event
+                notify_event("self_healed_success", f"Git同期が復旧しました（{self._git_pull_consecutive_failures}回失敗後）。")
             self._git_pull_consecutive_failures = 0
         else:
             self._git_pull_consecutive_failures += 1
@@ -4734,7 +4742,7 @@ head -3 "{csv_dir}/{csv_filename}"
         """毎週日曜10:00: 過去7日間のグループログからメンバーの会話を分析→profiles.jsonに書き込み"""
         import json as _json
         import anthropic as _anthropic
-        from .notifier import send_line_notify
+        from .notifier import flush_digest_events, send_line_notify
         from datetime import date, timedelta
 
         task_id = self.memory.log_task_start("weekly_profile_learning")
@@ -5056,7 +5064,8 @@ JSON以外の文字は出力しないでください。"""}],
             f"{details_section}"
             f"{style_line}{comm_line}"
         )
-        send_line_notify(message)
+        from .notifier import notify_event
+        notify_event("internal_success", message)
         self.memory.log_task_end(
             task_id, "success",
             result_summary=f"Updated {updated_count} profiles, skipped {skipped_count}, style_rules={style_rules_count}, comm_updated={len(comm_updated_names)}"
@@ -5115,6 +5124,8 @@ JSON以外の文字は出力しないでください。"""}],
         self._slack_dispatch_running = True
         try:
             await self._run_slack_dispatch_inner()
+        flush_digest_events("今日の確認まとめ", kinds=["mail_waiting_digest"])
+
         finally:
             self._slack_dispatch_running = False
 
@@ -5430,7 +5441,6 @@ JSON以外の文字は出力しないでください。"""}],
     async def _run_slack_ai_team_check(self):
         """定期チェック: Slack #ai-team の新着メッセージを読み取り→LINEに転送"""
         from .slack_reader import fetch_channel_messages
-        from .notifier import send_line_notify
 
         AI_TEAM_CHANNEL = "C0AGLRJ8N3G"
         state_key = "slack_ai_team_last_ts"
