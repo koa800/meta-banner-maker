@@ -21,6 +21,7 @@
 ## live 開始前チェック
 
 - まず `python3 System/scripts/funnel_tool_live_readiness.py` を実行する
+- `cdp.alive=false` なら、先に `python3 System/scripts/chrome_cdp_bootstrap.py` を実行して 9224 を起こす
 - `cdp.alive=false` なら、UTAGE と Zapier の browser exact 化には入らない
 - `lstep.auth_alive=true` でも十分ではない。`lstep.account_name` が intended な公式LINE account かを必ず確認する
 - 2026-03-16 の current では、`auth_alive=true` でも `account_name=koa800sea` を返した。つまり `認証は生きているが対象 account 文脈はズレている` ケースがある
@@ -167,6 +168,12 @@
 
 - `python3 System/scripts/skill_exact_audit.py /Users/koa800/Desktop/cursor/Skills/2_導線` は `OK: exact audit passed`
 - つまり current の残差は skill 構造不足ではなく、live 実作成 / test / rollback の本数不足
+
+## live 準備 helper
+
+- `python3 System/scripts/chrome_cdp_bootstrap.py`
+  - 9224 の Chrome CDP が死んでいる時に、live 作業用の Chrome を起こす
+  - `live browser ready=false` の時は、まずこの helper を試してから login helper に進む
 
 ## 承認なしで進める範囲
 
