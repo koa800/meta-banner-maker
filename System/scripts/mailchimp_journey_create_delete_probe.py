@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from playwright.async_api import async_playwright
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from mailchimp_login_helper import CDP_URL, ensure_login as ensure_mailchimp_login
 from mailchimp_tag_helper import get_member, update_tags
@@ -267,7 +268,10 @@ async def run_probe() -> dict[str, Any]:
     tag_active = get_member(SAFE_EMAIL)
 
     async with async_playwright() as p:
-        browser = await p.chromium.connect_over_cdp(CDP_URL)
+        try:
+            browser = await p.chromium.connect_over_cdp(CDP_URL, timeout=15000)
+        except PlaywrightTimeoutError as exc:
+            raise RuntimeError("Playwright.connect_over_cdp timeout") from exc
         if not browser.contexts:
             raise RuntimeError("Chrome CDP に context が見つかりません")
         context = browser.contexts[0]
@@ -297,9 +301,12 @@ async def run_probe() -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Mailchimp Journey exploratory create/delete probe")
     parser.parse_args()
-    if ensure_mailchimp_login(AUTOMATIONS_URL) != 0:
+    login_status = ensure_mailchimp_login(AUTOMATIONS_URL)
+    if login_status == 2:
+        raise SystemExit("Mailchimp browser session is not ready. CDP connection timed out.")
+    if login_status != 0:
         raise SystemExit("Mailchimp browser session is not ready. Complete login/TFA first.")
-    result = asyncio.run(run_probe())
+    result = asyncio.run(asyncio.wait_for(run_probe(), timeout=180))
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

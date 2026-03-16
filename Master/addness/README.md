@@ -37,10 +37,10 @@
 ## 最新の厳しめ採点
 
 - Lステップ: `9.8 / 10`
-- UTAGE: `9.6 / 10`
+- UTAGE: `9.7 / 10`
 - Mailchimp: `9.4 / 10`
 - short.io: `9.6 / 10`
-- Zapier: `9.2 / 10`
+- Zapier: `9.3 / 10`
 
 ## live 開始前チェック
 
@@ -52,16 +52,30 @@
 - Lステップは `auth_alive=true` かつ `account_name が intended account` の時だけ、API / cookie 経由の exact 作業に入る
 - `mailchimp.api_alive=true` なら、Journey / Campaign / report の API 読解は進められる
 - `shortio.api_alive=true` なら、short.io の作成 / 編集 / 統計 / 台帳同期は進められる
+- `Playwright.connect_over_cdp` が timeout する回は、`python3 System/scripts/chrome_raw_cdp.py` を使う raw fallback を先に試す
+- 2026-03-17 の current では、UTAGE と Zapier は raw fallback で `ALREADY_LOGGED_IN_RAW` まで確認できた
+- UTAGE は raw fallback で
+  - `商品管理`
+  - `アクション設定`
+  の `create -> delete` まで再現できた
+- Mailchimp は raw fallback で `https://us5.admin.mailchimp.com/login/tfa-post` の verify 画面到達まで確認できた
+- helper は hanging せず `LOGIN_NEEDS_TFA` で返るところまでは安定
 
 ## 最新 readiness snapshot
 
 - CDP: `true`
-- Lステップ auth: `true`
-- Lステップ account: `koa800sea`
+- Lステップ auth: `false`
+- Lステップ account: `null`
+- Lステップ next_action:
+  - `cookie source が全滅で、login page は reCAPTCHA enabled=true。 current session の再取得には browser login が必要。`
 - Mailchimp API: `true`
 - short.io API: `true`
 - UTAGE live browser: `true`
 - Zapier live browser: `true`
+- Mailchimp browser:
+  - `2-factor authentication | Mailchimp`
+  - `login/tfa-post` まで raw fallback で到達
+  - helper は `LOGIN_NEEDS_TFA` で clean return
 
 ## 実際に触って確認できている範囲
 
@@ -176,6 +190,9 @@
       - `value`
       - `バンドルコース 必須`
       - `商品 必須`
+- current browser helper の補足
+  - `utage_login_helper.py` は `Playwright.connect_over_cdp` timeout 時、`chrome_raw_cdp.py` を使う raw fallback に切り替える
+  - 2026-03-17 の current では `ALREADY_LOGGED_IN_RAW / https://school.addness.co.jp/funnel` を確認
       - `ファネル 必須`
       - `Googleアカウント 必須`
       - `スプレッドシートURL 必須`
@@ -341,7 +358,11 @@
 ### UTAGE
 
 - `ページ -> 商品管理 -> 商品詳細管理 -> 購入後アクション -> バンドルコース` を新規案件目線で live create / rollback まで further exact 化
-- `商品管理 / 商品詳細管理 / 購入後アクション` は最小 create/save/delete が 1 本ずつ済んだので、残差は `ページ / 登録経路 / 会員サイト / 動画管理` の live save 本数
+  - `商品管理 / 商品詳細管理 / 購入後アクション` は最小 create/save/delete が 1 本ずつ済んだので、残差は `ページ / 登録経路 / 会員サイト / 動画管理` の live save 本数
+  - 2026-03-17 の raw probe では
+    - `商品管理`: `before 0 -> after_create 1 -> after_delete 0`
+    - `アクション設定`: `before 0 -> after_create 1 -> after_delete 0`
+    を current browser で再確認済み
 - `会員サイト` と `動画管理 / メディア管理` の実変更本数を増やす
 
 ### Mailchimp
@@ -363,6 +384,9 @@
 - `Action > Mailchimp > Add/Update Subscriber` まで選ぶと `Test` stage まで進めるところも確認済み
 - persisted 済み draft は `assets 一覧 row action Delete -> Delete` か `python3 System/scripts/zapier_cleanup_untitled.py` で `0件` まで cleanup 済み
 - `Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap` の 1 action relay は live 完了
+- current browser helper の補足
+  - `zapier_login_helper.py` は `Playwright.connect_over_cdp` timeout 時、`chrome_raw_cdp.py` を使う raw fallback に切り替える
+  - 2026-03-17 の current では `ALREADY_LOGGED_IN_RAW / https://zapier.com/app/assets/zaps` を確認
 - つまり残差は `trigger 1 + action 2` と representative family の追加
 - dominant family は `Webhook -> Mailchimp Add/Update Subscriber`
   なので、最初の live exact はこの family を優先する

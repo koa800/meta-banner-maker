@@ -9,6 +9,9 @@ import json
 from typing import Any
 
 from playwright.async_api import async_playwright
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+from zapier_login_helper import ensure_login as ensure_zapier_login
 
 
 CDP_URL = "http://127.0.0.1:9224"
@@ -184,7 +187,10 @@ async def _try_choose_webhook_post_action(page) -> dict[str, Any]:
 
 async def run_probe(with_action: bool = False, with_second_action: bool = False) -> dict[str, Any]:
     async with async_playwright() as p:
-        browser = await p.chromium.connect_over_cdp(CDP_URL)
+        try:
+            browser = await p.chromium.connect_over_cdp(CDP_URL, timeout=15000)
+        except PlaywrightTimeoutError as exc:
+            raise RuntimeError("Playwright.connect_over_cdp timeout") from exc
         if not browser.contexts:
             raise RuntimeError("Chrome CDP に context が見つかりません")
         context = browser.contexts[0]
@@ -264,6 +270,11 @@ def main() -> None:
     parser.add_argument("--with-action", action="store_true", help="Mailchimp Add/Update Subscriber まで試す")
     parser.add_argument("--with-second-action", action="store_true", help="2つ目の action として Webhooks POST まで試す")
     args = parser.parse_args()
+    login_status = ensure_zapier_login(ASSETS_URL)
+    if login_status == 2:
+        raise SystemExit("Zapier browser session is not ready. CDP connection timed out.")
+    if login_status != 0:
+        raise SystemExit("Zapier browser session is not ready. Complete login first.")
     result = asyncio.run(run_probe(with_action=args.with_action, with_second_action=args.with_second_action))
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

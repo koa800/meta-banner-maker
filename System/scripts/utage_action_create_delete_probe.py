@@ -5,11 +5,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from datetime import datetime
 from typing import Any
 
 from playwright.async_api import async_playwright
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from chrome_raw_cdp import activate_target
+from chrome_raw_cdp import body_snapshot
+from chrome_raw_cdp import create_target
+from chrome_raw_cdp import eval_target
+from chrome_raw_cdp import find_target
+from chrome_raw_cdp import navigate_target
 from utage_login_helper import ensure_login
 
 
@@ -20,6 +28,165 @@ CREATE_URL = "https://school.addness.co.jp/action/create"
 
 def build_name() -> str:
     return f"ZZ_TEST_{datetime.now().strftime('%Y%m%d_%H%M%S')}_UTAGE_action_probe"
+
+
+def _find_raw_target_id() -> str:
+    target = (
+        find_target(url_contains="school.addness.co.jp/action")
+        or find_target(url_contains="school.addness.co.jp")
+        or find_target(title_contains="UTAGE")
+    )
+    if target is None:
+        target = create_target(LIST_URL)
+    target_id = str(target["id"])
+    activate_target(target_id)
+    return target_id
+
+
+def _raw_count_rows(target_id: str, name: str) -> int:
+    navigate_target(target_id, LIST_URL)
+    time.sleep(2.5)
+    expression = f"""
+(() => {{
+  const rows = Array.from(document.querySelectorAll('tr'));
+  return rows.filter((row) => (row.innerText || '').includes({json.dumps(name, ensure_ascii=False)})).length;
+}})()
+"""
+    return int(eval_target(target_id, expression) or 0)
+
+
+def _raw_fill_action_form(target_id: str, name: str) -> bool:
+    expression = f"""
+(() => {{
+  const setValue = (el, next) => {{
+    const proto = el.tagName === 'SELECT'
+      ? window.HTMLSelectElement.prototype
+      : window.HTMLInputElement.prototype;
+    const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (descriptor && descriptor.set) {{
+      descriptor.set.call(el, next);
+    }} else {{
+      el.value = next;
+    }}
+    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+    el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+  }};
+  const byLabel = (text) => {{
+    const labels = Array.from(document.querySelectorAll('label'));
+    for (const label of labels) {{
+      if (!((label.innerText || '').trim()).includes(text)) continue;
+      return label.control || document.getElementById(label.getAttribute('for'));
+    }}
+    return null;
+  }};
+  const nameInput = byLabel('管理用名称') || document.querySelector('input[name="title"], input[name="name"], input');
+  if (!nameInput) return false;
+  nameInput.focus();
+  setValue(nameInput, {json.dumps(name, ensure_ascii=False)});
+
+  const typeSelect = document.querySelector('select[name="detail[0][type]"]');
+  if (typeSelect) setValue(typeSelect, 'webhook');
+
+  const urlInput = document.querySelector('input[name="detail[0][url]"]');
+  if (urlInput) {{
+    urlInput.focus();
+    setValue(urlInput, 'https://example.com/utage-action-probe');
+  }}
+
+  const dataName = document.querySelector('input[name="detail[0][data][0][name]"]');
+  if (dataName) {{
+    dataName.focus();
+    setValue(dataName, 'source');
+  }}
+
+  const dataValue = document.querySelector('input[name="detail[0][data][0][value]"]');
+  if (dataValue) {{
+    dataValue.focus();
+    setValue(dataValue, 'utage_action_probe');
+  }}
+  return true;
+}})()
+"""
+    return bool(eval_target(target_id, expression))
+
+
+def _raw_click_save(target_id: str) -> bool:
+    expression = """
+(() => {
+  const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], a.btn'));
+  for (const button of buttons) {
+    const text = (button.innerText || button.value || '').trim();
+    if (!text.includes('保存')) continue;
+    button.click();
+    return true;
+  }
+  return false;
+})()
+"""
+    return bool(eval_target(target_id, expression))
+
+
+def _raw_error_texts(target_id: str) -> list[str]:
+    expression = """
+(() => Array.from(document.querySelectorAll('.invalid-feedback, .help-block-error, .error, .text-danger'))
+  .map((el) => (el.innerText || '').trim())
+  .filter(Boolean))()
+"""
+    return eval_target(target_id, expression) or []
+
+
+def _raw_delete_rows(target_id: str, name: str) -> int:
+    deleted = 0
+    while True:
+        navigate_target(target_id, LIST_URL)
+        time.sleep(2.5)
+        expression = f"""
+(() => {{
+  const rows = Array.from(document.querySelectorAll('tr'));
+  for (const row of rows) {{
+    if (!((row.innerText || '').includes({json.dumps(name, ensure_ascii=False)}))) continue;
+    const form = row.querySelector('form.form-delete');
+    if (!form) return false;
+    form.submit();
+    return true;
+  }}
+  return false;
+}})()
+"""
+        triggered = bool(eval_target(target_id, expression))
+        if not triggered:
+            break
+        deleted += 1
+        time.sleep(3)
+    return deleted
+
+
+def run_probe_raw() -> dict[str, Any]:
+    target_id = _find_raw_target_id()
+    name = build_name()
+    before = _raw_count_rows(target_id, name=name)
+    navigate_target(target_id, CREATE_URL)
+    time.sleep(2.5)
+    if not _raw_fill_action_form(target_id, name):
+        raise RuntimeError("raw fallback で アクション設定フォーム を入力できませんでした")
+    if not _raw_click_save(target_id):
+        raise RuntimeError("raw fallback で 保存 を押せませんでした")
+    time.sleep(3)
+    error_texts = _raw_error_texts(target_id)
+    after_create = _raw_count_rows(target_id, name=name)
+    deleted_rows = _raw_delete_rows(target_id, name=name)
+    after_delete = _raw_count_rows(target_id, name=name)
+    snapshot = body_snapshot(target_id)
+    return {
+        "mode": "raw",
+        "name": name,
+        "before_count": before,
+        "after_create_count": after_create,
+        "after_delete_count": after_delete,
+        "deleted_rows": deleted_rows,
+        "save_url": snapshot.get("url") or "",
+        "error_texts": error_texts,
+    }
 
 
 async def count_rows(page, name: str) -> int:
@@ -48,7 +215,10 @@ async def delete_rows(page, name: str) -> int:
 
 async def run_probe() -> dict[str, Any]:
     async with async_playwright() as p:
-        browser = await p.chromium.connect_over_cdp(CDP_URL)
+        try:
+            browser = await p.chromium.connect_over_cdp(CDP_URL, timeout=15000)
+        except PlaywrightTimeoutError:
+            return run_probe_raw()
         if not browser.contexts:
             raise RuntimeError("Chrome CDP に context が見つかりません")
         context = browser.contexts[0]
@@ -79,6 +249,7 @@ async def run_probe() -> dict[str, Any]:
             after_delete = await count_rows(page, name)
 
             return {
+                "mode": "playwright",
                 "name": name,
                 "before_count": before,
                 "after_create_count": after_create,
