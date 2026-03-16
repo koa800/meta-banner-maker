@@ -402,6 +402,15 @@ rate の良し悪しは、必ず `誰に送ったか` とセットで読む。
 
 `Preview` だけで完了にしない。CTA を含む campaign は、最低 1 回 `Send a test email` を通して actual hyperlink を確認する。
 
+### API helper で先に見られるもの
+
+- `python3 System/scripts/mailchimp_campaign_snapshot.py --campaign-id {id}`
+- ここで
+  - `links_detailed`
+  - `hyperlink_mismatches`
+  まで見られる
+- `hyperlink_mismatches` に値が出た時は、表示文字列の URL と実 hyperlink がズレている候補として扱う
+
 ### editor の exact smoke 順
 
 1. `Campaign name`

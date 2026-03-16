@@ -7,10 +7,10 @@ import argparse
 import hashlib
 import json
 import re
-from bs4 import BeautifulSoup
 from pathlib import Path
 from typing import Any
 
+from bs4 import BeautifulSoup
 import requests
 
 
@@ -44,30 +44,90 @@ def classify_href(href: str) -> str:
     return "other"
 
 
+def is_relevant_href(href: str) -> bool:
+    href = href.strip()
+    if not href:
+        return False
+    if href.startswith("mailto:") or href.startswith("tel:"):
+        return False
+    lowered = href.lower()
+    if any(
+        blocked in lowered
+        for blocked in [
+            "fonts.googleapis.com",
+            "fonts.gstatic.com",
+            "*|archive|*",
+            "*|update_profile|*",
+            "*|unsub|*",
+        ]
+    ):
+        return False
+    return True
+
+
 def extract_links(html: str) -> list[str]:
     hrefs = re.findall(r'href=["\\\']([^"\\\']+)["\\\']', html, flags=re.I)
     cleaned: list[str] = []
     for href in hrefs:
         href = href.strip()
-        if not href:
-            continue
-        if href.startswith("mailto:") or href.startswith("tel:"):
-            continue
-        lowered = href.lower()
-        if any(
-            blocked in lowered
-            for blocked in [
-                "fonts.googleapis.com",
-                "fonts.gstatic.com",
-                "*|archive|*",
-                "*|update_profile|*",
-                "*|unsub|*",
-            ]
-        ):
+        if not is_relevant_href(href):
             continue
         if href not in cleaned:
             cleaned.append(href)
     return cleaned
+
+
+def normalize_visible_url(text: str) -> str:
+    normalized = text.strip()
+    normalized = normalized.replace(" ", "")
+    normalized = normalized.replace("\n", "")
+    normalized = normalized.replace("https//", "https://")
+    normalized = normalized.replace("http//", "http://")
+    return normalized
+
+
+def extract_link_objects(html: str) -> list[dict[str, str]]:
+    soup = BeautifulSoup(html, "html.parser")
+    rows: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for anchor in soup.find_all("a"):
+        href = (anchor.get("href") or "").strip()
+        if not is_relevant_href(href):
+            continue
+        text = anchor.get_text(" ", strip=True)
+        key = (text, href)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(
+            {
+                "text": text,
+                "href": href,
+                "type": classify_href(href),
+            }
+        )
+    return rows
+
+
+def detect_display_url_mismatches(link_objects: list[dict[str, str]]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for row in link_objects:
+        text = row.get("text", "")
+        href = row.get("href", "")
+        if not text or "http" not in text.lower():
+            continue
+        visible_url = normalize_visible_url(text)
+        actual_url = normalize_visible_url(href)
+        if visible_url != actual_url:
+            rows.append(
+                {
+                    "visible_text": text,
+                    "visible_url_guess": visible_url,
+                    "actual_href": href,
+                    "type": row.get("type", ""),
+                }
+            )
+    return rows
 
 
 def extract_text_preview(html: str, limit: int = 1200) -> list[str]:
@@ -146,6 +206,8 @@ def build_snapshot(limit: int) -> dict[str, Any]:
         content = get_content(session, base_url, campaign_id)
         html = content.get("html", "")
         hrefs = extract_links(html)
+        link_objects = extract_link_objects(html)
+        hyperlink_mismatches = detect_display_url_mismatches(link_objects)
         main_href = hrefs[0] if hrefs else ""
         top_clicked_urls = summarize_click_details(click_details)
         main_click = top_clicked_urls[0] if top_clicked_urls else {}
@@ -164,6 +226,7 @@ def build_snapshot(limit: int) -> dict[str, Any]:
                 "top_clicked_url": main_click.get("url", ""),
                 "top_clicked_total_clicks": main_click.get("total_clicks", 0),
                 "link_count": len(hrefs),
+                "hyperlink_mismatch_count": len(hyperlink_mismatches),
                 "html_sha1": hashlib.sha1(html.encode("utf-8")).hexdigest(),
             }
         )
@@ -181,6 +244,8 @@ def build_campaign_detail(campaign_id: str) -> dict[str, Any]:
     content = get_content(session, base_url, campaign_id)
     html = content.get("html", "")
     hrefs = extract_links(html)
+    link_objects = extract_link_objects(html)
+    hyperlink_mismatches = detect_display_url_mismatches(link_objects)
     main_href = hrefs[0] if hrefs else ""
     top_clicked_urls = summarize_click_details(click_details)
     main_click = top_clicked_urls[0] if top_clicked_urls else {}
@@ -201,6 +266,8 @@ def build_campaign_detail(campaign_id: str) -> dict[str, Any]:
         "top_clicked_total_clicks": main_click.get("total_clicks", 0),
         "top_clicked_urls": top_clicked_urls[:10],
         "links": hrefs,
+        "links_detailed": link_objects,
+        "hyperlink_mismatches": hyperlink_mismatches,
         "text_preview": extract_text_preview(html),
         "html_sha1": hashlib.sha1(html.encode("utf-8")).hexdigest(),
     }
