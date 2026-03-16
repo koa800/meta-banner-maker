@@ -718,6 +718,7 @@ publish した relay は、最低限次の smoke を通す。
 exploratory な draft を開いただけなら、その場で削除する。
 - builder 右上または title menu
 - `Delete Zap`
+- builder 側で消しにくい時は `Assets > Zaps` の row action を使う
 
 `Untitled Zap` を残さない。
 
@@ -734,6 +735,14 @@ current の exact cleanup 導線は
 - `Delete Zap?`
 - `Delete Zap`
 の順で扱う。
+
+assets 一覧 fallback の exact cleanup 導線は
+- `Assets > Zaps`
+- intended row の `Zap actions`
+- `Delete`
+- confirm `Delete`
+
+exploratory draft は、builder でも assets 一覧でも消せる。使いにくい方に固執せず、`一覧検索で 0件` まで確認できる導線を正とする。
 
 ## 症状から最初に疑う場所
 

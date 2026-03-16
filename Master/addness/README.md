@@ -13,10 +13,10 @@
 ## 最新の厳しめ採点
 
 - Lステップ: `9.8 / 10`
-- UTAGE: `9.5 / 10`
+- UTAGE: `9.6 / 10`
 - Mailchimp: `9.4 / 10`
 - short.io: `9.5 / 10`
-- Zapier: `9.1 / 10`
+- Zapier: `9.3 / 10`
 
 ## live 開始前チェック
 
@@ -65,6 +65,14 @@
   - `メディア管理`
   の読解
 - runtime から code 領域の値取得
+- `商品管理`
+  - exploratory product `ZZ_TEST_20260316_UTAGE_product_exact` の `create -> rollback`
+  - row action:
+    - `開く`
+    - `編集`
+    - `コピー`
+    - `アーカイブ(非表示化)`
+    - `削除`
 
 ### Mailchimp
 
@@ -95,6 +103,7 @@
 ### Zapier
 
 - representative relay の editor / step 読解
+- `Create Zap -> assets 一覧 row action Delete -> cleanup`
 - `Webhooks by Zapier / Catch Hook -> Mailchimp / Add/Update Subscriber`
   family の exact 読解
 - current family snapshot
@@ -119,7 +128,7 @@
 | Lステップ | リッチメニュー | 読解中心 | 2ボタン 1本 |
 | UTAGE | ページ | representative 読解済み | 1変更 -> rollback |
 | UTAGE | 登録経路 | 読解中心 | 1追加 -> rollback |
-| UTAGE | 商品管理 / 商品詳細管理 / 購入後アクション | representative 読解済み | 1本 create -> rollback |
+| UTAGE | 商品管理 / 商品詳細管理 / 購入後アクション | product create / rollback 1本済み | detail / action create を 1本 |
 | UTAGE | 会員サイト | representative 読解済み | 1変更 -> rollback |
 | UTAGE | 動画管理 / メディア管理 | representative 読解済み | small change -> smoke |
 | Mailchimp | Campaign | draft create / delete 済み | representative を増やす |
@@ -127,7 +136,7 @@
 | Mailchimp | tag / saved segment | saved segment の create / delete、tag-search、search-members、safe exploratory member で tag 1件 add -> rollback 済み | UI 側の tag 1件 create -> rollback |  
 | Mailchimp | report | representative 読解済み | actual case を増やす |
 | short.io | short link / create / resolve / update / delete / stats / sheet sync | live 実施済み | 実案件 end-to-end を増やす |
-| Zapier | representative relay 読解 | editor / step 読解済み | 1本 create -> test -> delete |
+| Zapier | representative relay 読解 | editor / step 読解済み、`Create Zap -> Delete Zap` 済み | 1本 create -> test -> delete |
 
 ## いま重要な残差
 
@@ -138,6 +147,7 @@
 ### UTAGE
 
 - `ページ -> 商品管理 -> 商品詳細管理 -> 購入後アクション -> バンドルコース` を新規案件目線で live create / rollback まで further exact 化
+- `商品管理` は `create -> rollback` が 1 本済んだので、残差は `detail / 購入後アクション / 会員サイト` の live save 本数
 - `会員サイト` と `動画管理 / メディア管理` の実変更本数を増やす
 
 ### Mailchimp
@@ -154,6 +164,7 @@
 ### Zapier
 
 - `Create Zap -> Test -> Publish or Delete Zap` の実作成本数を増やす
+- `Create Zap -> assets 一覧 row action Delete -> cleanup` は済んだので、残差は `trigger / action test` と downstream smoke
 - dominant family は `Webhook -> Mailchimp Add/Update Subscriber`
   なので、最初の live exact はこの family を優先する
 
