@@ -77,6 +77,23 @@
 - `購入後シナリオ`
 - `購入後アクション`
 
+live で通った exploratory save:
+- product:
+  - `ZZ_TEST_20260316_223638_UTAGE_detail_create_probe`
+- detail:
+  - `ZZ_TEST_20260316_223638_UTAGE_detail_create_probe_detail`
+- 入れた最小値:
+  - `名称 = ZZ_TEST_*_detail`
+  - `支払方法 = クレジットカード払い`
+  - `決済代行会社 = Stripe`
+  - `決済連携設定 = デフォルト`
+  - `支払回数 = 一回払い`
+  - `金額 = 100`
+- 結果:
+  - detail 一覧に `1件追加`
+  - validation error `0件`
+  - cleanup は `UTAGE_detail_create_probe` pattern で `0件`
+
 detail 代表 2 では、少なくとも次が current 実値として確認できている。
 - `支払方法 = クレジットカード払い`
 - `決済代行会社 = UnivaPay`

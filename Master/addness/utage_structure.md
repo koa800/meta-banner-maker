@@ -88,6 +88,50 @@
 - exact に読めているもの
   - representative な `ページ編集` の構造
   - `商品 -> detail -> action -> bundle` の接続
+  - `商品一覧 row action`
+    - `開く`
+    - `編集`
+    - `コピー`
+    - `アーカイブ(非表示化)`
+    - `削除`
+  - `開く = 商品詳細管理`
+    - route: `/product/{product_id}/detail`
+  - `商品詳細管理 > 追加`
+    - route: `/product/{product_id}/detail/create`
+    - exact な主要ラベル
+      - `名称`
+      - `支払方法`
+      - `決済代行会社`
+      - `決済連携設定`
+      - `支払回数`
+      - `金額`
+      - `登録するシナリオ`
+      - `実行するアクション`
+      - `開放するバンドルコース`
+    - live probe で option 群まで確認した主要 select
+      - `支払方法`
+        - `クレジットカード払い`
+        - `銀行振込`
+      - `決済代行会社`
+        - `Stripe`
+        - `UnivaPay`
+        - `AQUAGATES`
+        - `テレコムクレジット`
+        - `FirstPayment`
+      - `支払回数`
+        - `一回払い`
+        - `複数回払い・分割払い`
+        - `継続課金`
+      - `登録するシナリオ`
+        - current の `ユーザー登録` 系 scenario が大量に並ぶ
+      - `実行するアクション`
+        - current の `バックエンド` 系
+        - `講義保管庫解放アクション` 系が並ぶ
+      - `開放するバンドルコース`
+        - current の `スキルプラス講義保管庫全開放`
+        - `PRM JV用`
+        - `プライム会員限定`
+        などが並ぶ
   - `動画管理` の `サムネイル変更 / チャプター設定 / 分析`
 
 ## まだ live create / rollback を厚くすべき範囲
@@ -95,6 +139,15 @@
 - `ページ 1変更 -> 保存 -> downstream 確認 -> rollback`
 - `登録経路 1追加 -> 計測確認 -> rollback`
 - `商品管理 / 商品詳細管理 / 購入後アクション 1本` の exploratory create -> rollback
+  - `商品管理` は `create -> rollback` 1本済み
+  - `商品詳細管理 > 追加` は
+    - live form snapshot
+    - option 確認
+    - 最小値で `保存成功`
+    - detail 一覧 `1件追加`
+    - cleanup `0件`
+    まで済み
+  - 残差は `購入後アクション` の live save 本数
 - `会員サイト 1変更` の save -> smoke -> rollback
 - `動画管理 / メディア管理` の small change を増やして downstream まで確認
 
@@ -104,7 +157,7 @@
 - 自動ログイン補助:
   - `python3 System/scripts/utage_login_helper.py --target <開きたいURL>`
 - page runtime 抜き取り:
-  - `python3 System/scripts/utage_page_runtime_snapshot.py <edit URL>`
+- `python3 System/scripts/utage_page_runtime_snapshot.py <edit URL>`
 - helper が待機した時の current fallback:
   - まず Chrome CDP (`127.0.0.1:9224`) の既存 edit タブを探し、その tab に raw CDP で直接 attach して `Runtime.evaluate` を行う
   - 既存 tab が見つからない時だけ、background target で edit URL を開く fallback を使う
@@ -121,6 +174,14 @@
     - `js_body_top`
     - `js_body`
     を JSON で抜ける
+- detail create probe:
+  - `python3 System/scripts/utage_detail_form_snapshot.py`
+  - `商品管理 -> 商品詳細管理 > 追加` の live form と option を JSON で取得する
+- detail create/save probe:
+  - `python3 System/scripts/utage_detail_create_delete_probe.py`
+  - exploratory 商品配下で `商品詳細管理 > 追加` を最小値で `保存 -> detail一覧確認 -> cleanup`
+- probe 後の exploratory 商品 cleanup:
+  - `python3 System/scripts/utage_cleanup_test_products.py`
 
 ## 1. ファネル
 

@@ -13,7 +13,7 @@
 ## 最新の厳しめ採点
 
 - Lステップ: `9.8 / 10`
-- UTAGE: `9.7 / 10`
+- UTAGE: `9.8 / 10`
 - Mailchimp: `9.4 / 10`
 - short.io: `9.5 / 10`
 - Zapier: `9.4 / 10`
@@ -65,8 +65,8 @@
   - `メディア管理`
   の読解
 - runtime から code 領域の値取得
-- `商品管理`
-  - exploratory product `ZZ_TEST_20260316_UTAGE_product_exact` の `create -> rollback`
+  - `商品管理`
+    - exploratory product `ZZ_TEST_20260316_UTAGE_product_exact` の `create -> rollback`
   - row action:
     - `開く`
     - `編集`
@@ -87,6 +87,35 @@
       - `登録するシナリオ`
       - `実行するアクション`
       - `開放するバンドルコース`
+    - live で確認した主要 option:
+      - `支払方法`
+        - `クレジットカード払い`
+        - `銀行振込`
+      - `決済代行会社`
+        - `Stripe`
+        - `UnivaPay`
+        - `AQUAGATES`
+        - `テレコムクレジット`
+        - `FirstPayment`
+      - `支払回数`
+        - `一回払い`
+        - `複数回払い・分割払い`
+        - `継続課金`
+      - `登録するシナリオ`
+        - current の `ユーザー登録` 系 scenario が大量に並ぶ
+      - `実行するアクション`
+        - current の `バックエンド` 系
+        - `講義保管庫解放アクション` 系が並ぶ
+      - `開放するバンドルコース`
+        - current の `スキルプラス講義保管庫全開放`
+        - `PRM JV用`
+        - `プライム会員限定`
+        などが並ぶ
+    - exploratory detail
+      - `ZZ_TEST_20260316_223638_UTAGE_detail_create_probe_detail`
+      - 最小値で `保存成功`
+      - detail 一覧に `1件追加` を確認
+      - cleanup は `UTAGE_detail_create_probe` pattern で `0件` を確認
 
 ### Mailchimp
 
@@ -148,7 +177,7 @@
 | Lステップ | リッチメニュー | 読解中心 | 2ボタン 1本 |
 | UTAGE | ページ | representative 読解済み | 1変更 -> rollback |
 | UTAGE | 登録経路 | 読解中心 | 1追加 -> rollback |
-| UTAGE | 商品管理 / 商品詳細管理 / 購入後アクション | product create / rollback 1本済み、detail create page の exact ラベル確認済み | detail / action create を 1本 |
+| UTAGE | 商品管理 / 商品詳細管理 / 購入後アクション | product create / rollback 1本済み、detail create/save/cleanup 1本済み | 購入後アクション create を 1本 |
 | UTAGE | 会員サイト | representative 読解済み | 1変更 -> rollback |
 | UTAGE | 動画管理 / メディア管理 | representative 読解済み | small change -> smoke |
 | Mailchimp | Campaign | draft create / delete 済み | representative を増やす |
@@ -234,6 +263,10 @@
 - `python3 System/scripts/chrome_cdp_bootstrap.py`
   - 9224 の Chrome CDP が死んでいる時に、live 作業用の Chrome を起こす
   - `live browser ready=false` の時は、まずこの helper を試してから login helper に進む
+- `python3 System/scripts/utage_detail_form_snapshot.py`
+  - `商品詳細管理 > 追加` の form と option を live で JSON 化する
+- `python3 System/scripts/utage_cleanup_test_products.py`
+  - `UTAGE_detail_probe` 系の exploratory 商品を cleanup する
 
 ## 承認なしで進める範囲
 

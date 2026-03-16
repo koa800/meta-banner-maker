@@ -212,6 +212,17 @@ live で確認済みの exploratory micro pattern:
   - `アーカイブ(非表示化)`
   - `削除`
 
+detail の live exploratory micro pattern:
+- product:
+  - `ZZ_TEST_20260316_223638_UTAGE_detail_create_probe`
+- detail:
+  - `ZZ_TEST_20260316_223638_UTAGE_detail_create_probe_detail`
+- 最小値で `保存成功`
+- detail 一覧に `1件追加`
+- cleanup:
+  - `python3 System/scripts/utage_cleanup_test_products.py --pattern "UTAGE_detail_create_probe"`
+  - `after_count=0`
+
 ### detail
 
 1. 保存後の `商品詳細管理`
@@ -228,6 +239,20 @@ live で確認済みの exploratory micro pattern:
 4. `購入後の動作設定`
    - `購入後シナリオ`
    - `購入後アクション`
+
+live で通った最小 save 値:
+- `名称`
+  - `ZZ_TEST_*_detail`
+- `支払方法`
+  - `クレジットカード払い`
+- `決済代行会社`
+  - `Stripe`
+- `決済連携設定`
+  - `デフォルト`
+- `支払回数`
+  - `一回払い`
+- `金額`
+  - `100`
 
 current の detail edit で先に見える代表ラベル:
 - `名称`
