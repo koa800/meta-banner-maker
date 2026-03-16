@@ -8,11 +8,14 @@ All write operations are restricted to feature branches — never writes to main
 import os
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
 REPO_ROOT = Path(os.path.expanduser("~/Desktop/cursor"))
+RUNTIME_RESOLVER = REPO_ROOT / "System" / "scripts" / "python_runtime.py"
 ALLOWED_EXTENSIONS = {
     ".py", ".js", ".ts", ".jsx", ".tsx", ".json", ".yaml", ".yml",
     ".md", ".txt", ".sh", ".html", ".css", ".env.example",
@@ -28,6 +31,34 @@ class ToolOutput:
     success: bool
     result: str
     error: str = ""
+
+
+@lru_cache(maxsize=1)
+def _python_binary() -> str:
+    env = os.environ.copy()
+    venv_python = os.path.expanduser("~/agent-env/bin/python3")
+    if os.path.exists(venv_python):
+        env["ADDNESS_PYTHON"] = venv_python
+
+    if RUNTIME_RESOLVER.exists():
+        try:
+            result = subprocess.run(
+                [sys.executable, str(RUNTIME_RESOLVER), "--print-path", "--min", "3.10"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                cwd=str(REPO_ROOT),
+                env=env,
+            )
+            candidate = result.stdout.strip()
+            if result.returncode == 0 and candidate:
+                return candidate
+        except Exception:
+            pass
+
+    if os.path.exists(venv_python):
+        return venv_python
+    return "python3"
 
 
 def _is_safe_path(filepath: str) -> bool:
@@ -268,9 +299,7 @@ def git_show_branch_diff() -> ToolOutput:
 
 def run_test(test_path: str = "", timeout: int = 120) -> ToolOutput:
     """Run Python tests. If test_path is empty, runs all tests found."""
-    python = os.path.expanduser("~/agent-env/bin/python3")
-    if not os.path.exists(python):
-        python = "python3"
+    python = _python_binary()
 
     cmd = [python, "-m", "pytest", "-x", "-v", "--tb=short"]
     if test_path:
@@ -299,9 +328,7 @@ def run_test(test_path: str = "", timeout: int = 120) -> ToolOutput:
 
 def run_syntax_check(path: str) -> ToolOutput:
     """Run Python syntax check on a file."""
-    python = os.path.expanduser("~/agent-env/bin/python3")
-    if not os.path.exists(python):
-        python = "python3"
+    python = _python_binary()
 
     full_path = REPO_ROOT / path
     if not full_path.exists():

@@ -54,8 +54,9 @@ TARGET_HEADERS = [
     "電話番号",
     "メールアドレス",
     "氏名",
-    "優先順位帯",
+    "氏名カナ",
     "運用ステータス",
+    "優先順位帯",
     "初回流入経路",
     "購入商品",
     "最新架電結果",
@@ -142,7 +143,7 @@ RULE_SHEET_ROWS = [
     ["最終挙動", "一覧の考え方", "`架電一覧` は 1顧客 1行で残し、予約完了や対象外も `運用ステータス` で管理する", "件数急減時は更新を止めて前回一覧を保護する"],
     ["テレアポ対象", "母集団", "`個別予約合計 = 0` かつ `電話番号あり`", "この2条件を満たす人だけを抽出する"],
     ["テレアポ対象", "必須キー", "`顧客ID` がある人", "`顧客ID` が空欄の行は一覧に載せない"],
-    ["テレアポ対象", "氏名", "`姓 + 名` を基本にし、欠けるときだけ `LINE名` を使う", "架電時の本人確認に使う"],
+    ["テレアポ対象", "氏名 / 氏名カナ", "`姓 + 名` を基本にし、同値重複なら1つにする。`氏名カナ` は `フリガナ（姓） + フリガナ（名）` を使う", "氏名は参照用に持ち、AIの電話冒頭では名前を呼ばず `ご本人様のお電話でお間違いないでしょうか` で入る"],
     ["テレアポ対象", "対象外_デザジュク", "`初回流入経路` または `初回購入商品` / `最新購入商品` / `購入商品` に `デザジュク` または `デザ塾` を含む人", "スキルプラス販売対象外として一覧に載せない"],
     ["テレアポ対象", "対象外_既存商品", "`初回購入商品` / `最新購入商品` / `購入商品` に `デザイン限界突破3日間合宿` / `コンドウハルキ秘密の部屋` を含む人", "既存オファー購入者として一覧に載せない"],
     ["テレアポ対象", "受講生判定", "`入会日` / `プラン` / `講義保管庫ID` / `クーリングオフ日` / `中途解約日` / 明示的なスキルプラス商品", "受講生判定に入る人は販売対象外として除外する"],
@@ -170,17 +171,17 @@ RULE_SHEET_ROWS = [
     ["架電結果", "拒否", "相手に拒否された、または相手側で切られた", "以後の架電停止判断に使う"],
     ["架電結果", "番号不備", "欠番、桁不備、利用停止など", "通常は `対象外` へ移す"],
     ["架電結果", "対象外", "電話前に対象外と判断した", "履歴上の例外記録用"],
-    ["AI更新ルール", "架電前", "AIは `運用ステータス = 未着手` を優先して読む", "今は `再架電待ち` を持たない"],
-    ["AI更新ルール", "架電後_一覧更新", "`運用ステータス` / `最新架電結果` を更新する", "`最新架電結果` は電話の事実だけを記録する"],
-    ["AI更新ルール", "架電後_履歴追加", "`架電履歴` に `顧客ID` / `架電日` / `架電結果` / `未予約理由` を1行追加する", "1通話 = 1行で残す"],
-    ["AI更新ルール", "予約時", "`個別予約日` に日付が入った人は `予約完了` に更新する", "`顧客マスタ` は読取専用"],
+    ["AI更新ルール", "架電前", "AIは `10:00-20:00` の間に `運用ステータス = 未着手` を優先して読む", "同一顧客への架電は最大3回を前提にする"],
+    ["AI更新ルール", "架電後_一覧更新", "`運用ステータス` / `最新架電結果` を更新する", "`最新架電結果` は電話の事実だけを記録し、`拒否` と `番号不備` は通常 `対象外` にする"],
+    ["AI更新ルール", "架電後_履歴追加", "`架電履歴` に `顧客ID` / `架電日` / `架電結果` / `未予約理由` を1行追加する", "1通話 = 1行で残し、次回架電可否は履歴件数で判断する"],
+    ["AI更新ルール", "予約時", "`個別予約日` に日付が入った人は `予約完了` に更新する", "動線成功は `個別予約日` の入力で判定する"],
     ["運用ガード", "手入力可列", "`架電一覧` では `運用ステータス` / `最新架電結果` だけを運用で触る", "それ以外の列は同期で上書きされる前提"],
     ["運用ガード", "保護", "`架電成績` / `運用チェック` / `抽出条件・優先順位` と `架電一覧` の同期列は warning-only 保護", "誤編集時に警告を出す"],
     ["運用ガード", "エラー検知", "`運用チェック` で同期鮮度と不整合件数を確認する", "`同期鮮度 = 要確認` または件数 > 0 のとき確認する"],
-    ["森本さん確認事項", "送信チャネル", "`メール` / `LINE` / `両方` のどれにするか", "AIがどのチャネルを使うか決める"],
-    ["森本さん確認事項", "送信タイミング", "`架電前` / `架電直後` / 条件次第 のどれにするか", "通話中の案内とセットで決める"],
+    ["森本さん確認事項", "送信チャネル", "`メール` と `LINE` の両方を使う", "ここは確定"],
+    ["森本さん確認事項", "送信タイミング", "`架電前` と `架電直後` のどちらにするか", "通話中の案内文とセットで決める"],
     ["森本さん確認事項", "送信システム", "どのシステムから誰名義で送るか", "AI完結のための実装前提"],
-    ["森本さん確認事項", "導線成功の定義", "`予約リンク送信` / `リンククリック` / `予約フォーム到達` のどこで見るか", "個別予約完了とは別に管理するか決める"],
+    ["森本さん確認事項", "送信文面", "メール文面とLINE文面をどうするか", "予約導線のクリック率に直結するため先に固める"],
 ]
 
 
@@ -189,17 +190,17 @@ def build_score_sheet_rows() -> list[list[str]]:
         ["架電成績", ""],
         ["項目", "総数"],
         ["更新日時", '=TEXT(NOW(),"yyyy/mm/dd hh:mm")'],
-        ["架電対象数", f"=COUNTIFS('{TARGET_TAB_NAME}'!A2:A,"<>",'{TARGET_TAB_NAME}'!F2:F,"未着手")"],
-        ["対応完了", f"=COUNTIFS('{TARGET_TAB_NAME}'!A2:A,"<>",'{TARGET_TAB_NAME}'!F2:F,"対応完了")"],
-        ["応答あり", f"=COUNTIF('{HISTORY_TAB_NAME}'!C2:C,"応答あり")"],
-        ["留守電", f"=COUNTIF('{HISTORY_TAB_NAME}'!C2:C,"留守電")"],
-        ["応答なし", f"=COUNTIF('{HISTORY_TAB_NAME}'!C2:C,"応答なし")"],
-        ["拒否", f"=COUNTIF('{HISTORY_TAB_NAME}'!C2:C,"拒否")"],
-        ["番号不備", f"=COUNTIF('{HISTORY_TAB_NAME}'!C2:C,"番号不備")"],
-        ["予約完了", f"=COUNTIFS('{TARGET_TAB_NAME}'!A2:A,"<>",'{TARGET_TAB_NAME}'!F2:F,"予約完了")"],
+        ["架電対象数", """=COUNTIFS('{tab}'!A2:A,"<>",'{tab}'!F2:F,"未着手")""".format(tab=TARGET_TAB_NAME)],
+        ["対応完了", """=COUNTIFS('{tab}'!A2:A,"<>",'{tab}'!F2:F,"対応完了")""".format(tab=TARGET_TAB_NAME)],
+        ["応答あり", """=COUNTIF('{tab}'!C2:C,"応答あり")""".format(tab=HISTORY_TAB_NAME)],
+        ["留守電", """=COUNTIF('{tab}'!C2:C,"留守電")""".format(tab=HISTORY_TAB_NAME)],
+        ["応答なし", """=COUNTIF('{tab}'!C2:C,"応答なし")""".format(tab=HISTORY_TAB_NAME)],
+        ["拒否", """=COUNTIF('{tab}'!C2:C,"拒否")""".format(tab=HISTORY_TAB_NAME)],
+        ["番号不備", """=COUNTIF('{tab}'!C2:C,"番号不備")""".format(tab=HISTORY_TAB_NAME)],
+        ["予約完了", """=COUNTIFS('{tab}'!A2:A,"<>",'{tab}'!F2:F,"予約完了")""".format(tab=TARGET_TAB_NAME)],
         [
             "予約完了（架電あり）",
-            f"=SUMPRODUCT(N(COUNTIF(IFERROR(UNIQUE(FILTER('{HISTORY_TAB_NAME}'!A2:A,'{HISTORY_TAB_NAME}'!A2:A<>"")),"__NO_HISTORY__"),IFERROR(FILTER('{TARGET_TAB_NAME}'!A2:A,'{TARGET_TAB_NAME}'!A2:A<>"",'{TARGET_TAB_NAME}'!F2:F="予約完了"),"__NO_BOOKING__"))>0))",
+            """=SUMPRODUCT(N(COUNTIF(IFERROR(UNIQUE(FILTER('{history}'!A2:A,'{history}'!A2:A<>"")),"__NO_HISTORY__"),IFERROR(FILTER('{target}'!A2:A,'{target}'!A2:A<>"",'{target}'!F2:F="予約完了"),"__NO_BOOKING__"))>0))""".format(history=HISTORY_TAB_NAME, target=TARGET_TAB_NAME),
         ],
     ]
 
@@ -213,10 +214,10 @@ def build_monitor_sheet_rows(last_synced_at: str, previous_count: int, current_c
         ["前回同期件数", str(previous_count)],
         ["今回同期件数", str(current_count)],
         ["同期件数差分", "=B6-B5"],
-        ["予約完了だが個別予約日なし", f"=COUNTIFS('{TARGET_TAB_NAME}'!A2:A,"<>",'{TARGET_TAB_NAME}'!F2:F,"予約完了",'{TARGET_TAB_NAME}'!J2:J,"")"],
-        ["番号不備だが対象外でない", f"=COUNTIFS('{TARGET_TAB_NAME}'!A2:A,"<>",'{TARGET_TAB_NAME}'!I2:I,"番号不備",'{TARGET_TAB_NAME}'!F2:F,"<>対象外")"],
-        ["架電履歴の顧客ID空欄", f"=IFERROR(ROWS(FILTER('{HISTORY_TAB_NAME}'!B2:B,'{HISTORY_TAB_NAME}'!B2:B<>"",'{HISTORY_TAB_NAME}'!A2:A="")),0)"],
-        ["架電履歴の架電結果空欄", f"=IFERROR(ROWS(FILTER('{HISTORY_TAB_NAME}'!A2:A,'{HISTORY_TAB_NAME}'!A2:A<>"",'{HISTORY_TAB_NAME}'!C2:C="")),0)"],
+        ["予約完了だが個別予約日なし", """=COUNTIFS('{tab}'!A2:A,"<>",'{tab}'!F2:F,"予約完了",'{tab}'!K2:K,"")""".format(tab=TARGET_TAB_NAME)],
+        ["番号不備だが対象外でない", """=COUNTIFS('{tab}'!A2:A,"<>",'{tab}'!J2:J,"番号不備",'{tab}'!F2:F,"<>対象外")""".format(tab=TARGET_TAB_NAME)],
+        ["架電履歴の顧客ID空欄", """=IFERROR(ROWS(FILTER('{tab}'!B2:B,'{tab}'!B2:B<>"",'{tab}'!A2:A="")),0)""".format(tab=HISTORY_TAB_NAME)],
+        ["架電履歴の架電結果空欄", """=IFERROR(ROWS(FILTER('{tab}'!A2:A,'{tab}'!A2:A<>"",'{tab}'!C2:C="")),0)""".format(tab=HISTORY_TAB_NAME)],
     ]
 
 
@@ -276,14 +277,63 @@ def now_jst_text() -> str:
     return datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y/%m/%d %H:%M")
 
 
-def build_contact_name(last_name: str, first_name: str, line_name: str) -> str:
-    last_name = (last_name or "").strip()
-    first_name = (first_name or "").strip()
+def normalize_name_part(value: str) -> str:
+    return re.sub(r"\s+", "", str(value or "").replace("　", " ").strip())
+
+
+def join_name_parts(last_name: str, first_name: str) -> str:
+    last_name = normalize_name_part(last_name)
+    first_name = normalize_name_part(first_name)
     if last_name and first_name:
+        if last_name == first_name:
+            return last_name
         return f"{last_name} {first_name}"
-    if last_name or first_name:
-        return last_name or first_name
-    return (line_name or "").strip()
+    return last_name or first_name
+
+
+def to_katakana(text: str) -> str:
+    converted = []
+    for char in str(text or ""):
+        code = ord(char)
+        if 0x3041 <= code <= 0x3096:
+            converted.append(chr(code + 0x60))
+        else:
+            converted.append(char)
+    return "".join(converted)
+
+
+def normalize_safe_line_name(line_name: str) -> str:
+    normalized = re.sub(r"\s+", " ", str(line_name or "").replace("　", " ").strip())
+    if not normalized:
+        return ""
+    if "@" in normalized or "http" in normalized.lower():
+        return ""
+    if any(ord(ch) > 0xFFFF for ch in normalized):
+        return ""
+    if re.fullmatch(r"[A-Za-z0-9._-]+", normalized):
+        return ""
+    if re.search(r"[!-/:-@\[-`{-~]", normalized):
+        return ""
+    if not re.fullmatch(r"[A-Za-zぁ-んァ-ヶ一-龠々ー・ ]+", normalized):
+        return ""
+    return normalized
+
+
+def build_contact_name(last_name: str, first_name: str, line_name: str) -> str:
+    full_name = join_name_parts(last_name, first_name)
+    if full_name:
+        return full_name
+    return normalize_safe_line_name(line_name)
+
+
+def build_contact_name_kana(last_name_kana: str, first_name_kana: str, line_name: str) -> str:
+    full_kana = join_name_parts(to_katakana(last_name_kana), to_katakana(first_name_kana))
+    if full_kana:
+        return full_kana
+    fallback = normalize_safe_line_name(line_name)
+    if fallback and re.fullmatch(r"[ぁ-んァ-ヶー・ ]+", fallback):
+        return to_katakana(fallback)
+    return ""
 
 
 def ranges_overlap(start_a: int, end_a: int, start_b: int, end_b: int) -> bool:
@@ -595,6 +645,21 @@ class TeleapoSync:
             ws.resize(rows=required_total_rows, cols=len(TARGET_HEADERS))
         return required_total_rows
 
+    def clear_data_validation(self, sheet_id: int, start_row: int, end_row: int, start_col: int, end_col: int) -> dict:
+        return {
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": start_row,
+                    "endRowIndex": end_row,
+                    "startColumnIndex": start_col,
+                    "endColumnIndex": end_col,
+                },
+                "cell": {},
+                "fields": "dataValidation",
+            }
+        }
+
     def set_dropdown_validation(self, sheet_id: int, start_row: int, end_row: int, start_col: int, options: list[str]) -> dict:
         return {
             "setDataValidation": {
@@ -619,8 +684,9 @@ class TeleapoSync:
     def ensure_target_validations(self, row_count: int) -> None:
         ws = self.get_target_worksheet()
         requests = [
+            self.clear_data_validation(ws.id, 1, row_count, 0, len(TARGET_HEADERS)),
             self.set_dropdown_validation(ws.id, 1, row_count, 5, STATUS_OPTIONS),
-            self.set_dropdown_validation(ws.id, 1, row_count, 8, RESULT_OPTIONS),
+            self.set_dropdown_validation(ws.id, 1, row_count, 9, RESULT_OPTIONS),
         ]
         self.call_with_retries(
             "架電一覧プルダウン設定",
@@ -779,7 +845,7 @@ class TeleapoSync:
             start_row=1,
             end_row=target_row_count,
             start_col=6,
-            end_col=8,
+            end_col=9,
             description="架電一覧_同期列_後半",
         )
         self.add_warning_only_protection(
@@ -787,8 +853,8 @@ class TeleapoSync:
             sheet_id=target_ws.id,
             start_row=1,
             end_row=target_row_count,
-            start_col=9,
-            end_col=10,
+            start_col=10,
+            end_col=11,
             description="架電一覧_予約日",
         )
         self.add_warning_only_protection(
@@ -1491,8 +1557,9 @@ class TeleapoSync:
                 phone,
                 self.cell(row, "メールアドレス"),
                 build_contact_name(self.cell(row, "姓"), self.cell(row, "名"), self.cell(row, "LINE名")),
-                priority,
+                build_contact_name_kana(self.cell(row, "フリガナ（姓）"), self.cell(row, "フリガナ（名）"), self.cell(row, "LINE名")),
                 status,
+                priority,
                 route,
                 self.cell(row, "購入商品"),
                 latest_result,
@@ -1574,7 +1641,7 @@ class TeleapoSync:
     def print_summary(self, stats: SyncStats, target_rows: Iterable[list[str]], prefix: str = "") -> None:
         priority_counts: dict[str, int] = {key: 0 for key in PRIORITY_ORDER}
         for row in target_rows:
-            priority = row[4].split("_", 1)[0]
+            priority = row[6].split("_", 1)[0]
             priority_counts[priority] = priority_counts.get(priority, 0) + 1
 
         print(f"{prefix}スキャン件数: {stats.scanned}")

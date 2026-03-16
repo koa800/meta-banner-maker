@@ -1,5 +1,12 @@
 # LP Review
 
+## 情報ラベル
+
+- 所有元: internal
+- 開示レベル: task-limited
+- 承認必須: conditional
+- 共有先: 僕 / 上司 / 並列 / 直下
+
 - 日付:
 - 種別:
 - LP名:

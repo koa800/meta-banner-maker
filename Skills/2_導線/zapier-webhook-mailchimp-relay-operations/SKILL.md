@@ -243,7 +243,26 @@ exploratory に新規 relay を開いた時は、rollback を exact に持つ。
 - create 入口
   - `https://zapier.com/webintent/create-zap?useCase=from-scratch`
 
-current では `Create` を開いた時点で `Untitled Zap / Draft` が残ることがある。探索だけなら、その場で削除まで戻す前提にする。
+2026-03-16 live では、`Create Zap` を開いただけでは assets 一覧に `Untitled Zap` は出なかった。current では、draft が persisted する前に `trigger` 選択などもう 1 段階進む可能性が高い。探索だけなら、builder 側の `Untitled Zap / Draft` と assets 一覧の両方を見て cleanup 判断する。
+
+同日の live では、次を通した。
+- `Trigger > Select the event that starts your Zap`
+- `Search apps -> Webhooks`
+- `Trigger event * -> Catch Hook`
+
+この時点で assets 一覧の `Untitled Zap` 件数が増え、persisted draft として cleanup 対象になることを確認した。
+
+さらに exploratory probe で、次も通した。
+- `Action`
+- `Search apps -> Mailchimp`
+- `Choose an event -> Add/Update Subscriber`
+
+つまり current の最小 exploratory relay は、
+- `Create Zap`
+- `Trigger > Webhooks by Zapier > Catch Hook`
+- `Action > Mailchimp > Add/Update Subscriber`
+- `Delete Zap`
+まで exact に確認済み。
 
 ## exact 手順
 
@@ -384,7 +403,7 @@ representative family
 - webhook payload の email key を誤る
 - `Audience*` は合っているが `Tag(s)` が downstream の実運用とズレる
 - 既存 Zap を流用すべき場面で、新しい relay を乱立させる
-- `Untitled Zap / Draft` を残して current relay と混ざる
+- persisted した `Untitled Zap / Draft` を残して current relay と混ざる
 
 ## エラー時の切り分け順
 
@@ -720,7 +739,7 @@ exploratory な draft を開いただけなら、その場で削除する。
 - `Delete Zap`
 - builder 側で消しにくい時は `Assets > Zaps` の row action を使う
 
-`Untitled Zap` を残さない。
+persisted した `Untitled Zap` を残さない。
 
 cleanup 前に最低でも次を見る。
 - `Folder`

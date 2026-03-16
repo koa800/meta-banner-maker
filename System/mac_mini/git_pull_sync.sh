@@ -12,6 +12,30 @@ REPO_DIR="${ADDNESS_REPO_MIRROR:-$DEPLOY_DIR/_repo}"
 REPO_URL="https://github.com/koa800/meta-banner-maker.git"
 LOG_FILE="$DEPLOY_DIR/System/mac_mini/agent_orchestrator/logs/git_sync.log"
 STATUS_FILE="$DEPLOY_DIR/System/mac_mini/agent_orchestrator/sync_status.json"
+RUNTIME_RESOLVER="$SCRIPT_DIR/../scripts/python_runtime.py"
+
+resolve_python() {
+  if [ -f "$RUNTIME_RESOLVER" ]; then
+    /usr/bin/python3 "$RUNTIME_RESOLVER" --print-path --min 3.10 2>/dev/null && return 0
+  fi
+  if [ -x "$HOME/agent-env/bin/python3" ]; then
+    echo "$HOME/agent-env/bin/python3"
+    return 0
+  fi
+  command -v python3 2>/dev/null || echo /usr/bin/python3
+}
+
+PYTHON_JSON="$(resolve_python)"
+
+json_get() {
+  local file_path="$1"
+  local key="$2"
+  "$PYTHON_JSON" -c "import json; print(json.load(open('$file_path')).get('$key',''))" 2>/dev/null || echo ""
+}
+
+json_quote_stdin() {
+  "$PYTHON_JSON" -c "import json,sys; print(json.dumps(sys.stdin.read()))" 2>/dev/null
+}
 
 log() {
   mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
@@ -23,10 +47,10 @@ notify_line() {
   local config_file="$DEPLOY_DIR/line_bot_local/config.json"
   [ -f "$config_file" ] || return 0
   local server_url token escaped_msg
-  server_url=$(python3 -c "import json; print(json.load(open('$config_file')).get('server_url',''))" 2>/dev/null || echo "")
-  token=$(python3 -c "import json; print(json.load(open('$config_file')).get('agent_token',''))" 2>/dev/null || echo "")
+  server_url=$(json_get "$config_file" "server_url")
+  token=$(json_get "$config_file" "agent_token")
   [ -n "$server_url" ] || return 0
-  escaped_msg=$(printf '%s' "$message" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))" 2>/dev/null) || return 0
+  escaped_msg=$(printf '%s' "$message" | json_quote_stdin) || return 0
   curl -s -X POST "$server_url/notify" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $token" \
@@ -40,9 +64,9 @@ write_status() {
   local changed="${4:-0}"
   # msgに含まれるダブルクォート・バックスラッシュ・改行をエスケープ
   local escaped_msg
-  escaped_msg=$(printf '%s' "$msg" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))" 2>/dev/null) || escaped_msg="\"$msg\""
+  escaped_msg=$(printf '%s' "$msg" | json_quote_stdin) || escaped_msg="\"$msg\""
   local escaped_status
-  escaped_status=$(printf '%s' "$status" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))" 2>/dev/null) || escaped_status="\"$status\""
+  escaped_status=$(printf '%s' "$status" | json_quote_stdin) || escaped_status="\"$status\""
   cat > "$STATUS_FILE" <<EOJSON
 {
   "status": $escaped_status,
@@ -75,18 +99,19 @@ cd "$REPO_DIR"
 # Library版など古いパスを参照していれば自動修正する
 ensure_plist_path() {
   local PLIST=~/Library/LaunchAgents/com.linebot.localagent.plist
-  local CORRECT_AGENT="$DEPLOY_DIR/line_bot_local/local_agent.py"
+  local CORRECT_RUNNER="$DEPLOY_DIR/line_bot_local/run_agent.sh"
   local CORRECT_LOGS="$DEPLOY_DIR/line_bot_local/logs"
 
   [ -f "$PLIST" ] || return 0
 
-  if grep -q "$CORRECT_AGENT" "$PLIST" 2>/dev/null; then
+  if grep -q "$CORRECT_RUNNER" "$PLIST" 2>/dev/null; then
     return 0
   fi
 
   log "plist パス不整合を検出 → 修正します"
 
   mkdir -p "$CORRECT_LOGS"
+  chmod +x "$CORRECT_RUNNER" 2>/dev/null || true
 
   # config.json が新パスに無ければ旧パス（Library版）からコピー
   local OLD_CONFIG="$HOME/Library/LineBot/config.json"
@@ -105,8 +130,8 @@ ensure_plist_path() {
   local AGENT_TOKEN_VAL=""
   local LINE_BOT_URL=""
   if [ -f "$NEW_CONFIG" ]; then
-    AGENT_TOKEN_VAL=$(python3 -c "import json; print(json.load(open('$NEW_CONFIG')).get('agent_token',''))" 2>/dev/null || echo "")
-    LINE_BOT_URL=$(python3 -c "import json; print(json.load(open('$NEW_CONFIG')).get('server_url',''))" 2>/dev/null || echo "")
+    AGENT_TOKEN_VAL=$(json_get "$NEW_CONFIG" "agent_token")
+    LINE_BOT_URL=$(json_get "$NEW_CONFIG" "server_url")
   fi
 
   cat > "$PLIST" <<EOPLIST
@@ -121,9 +146,8 @@ ensure_plist_path() {
     <array>
         <string>/usr/bin/caffeinate</string>
         <string>-s</string>
-        <string>/usr/bin/python3</string>
-        <string>-u</string>
-        <string>${CORRECT_AGENT}</string>
+        <string>/bin/bash</string>
+        <string>${CORRECT_RUNNER}</string>
     </array>
 
     <key>RunAtLoad</key>
@@ -147,7 +171,7 @@ ensure_plist_path() {
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin</string>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
         <key>HOME</key>
@@ -410,7 +434,7 @@ $config_file が存在しません。
   local missing=""
   for key in server_url agent_token; do
     local val
-    val=$(python3 -c "import json; c=json.load(open('$config_file')); print('OK' if c.get('$key') else 'MISSING')" 2>/dev/null || echo "ERROR")
+    val=$("$PYTHON_JSON" -c "import json; c=json.load(open('$config_file')); print('OK' if c.get('$key') else 'MISSING')" 2>/dev/null || echo "ERROR")
     if [ "$val" != "OK" ]; then
       missing="$missing $key"
     fi

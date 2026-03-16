@@ -1,0 +1,4 @@
+interface:
+  display_name: "Miro図解設計"
+  short_description: "Miroで人とAIが理解しやすい関係図と構造図を設計する"
+  default_prompt: "Use $miro-system-diagram to design or refine this Miro board so humans and AI can understand the structure later."

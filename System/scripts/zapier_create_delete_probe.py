@@ -119,7 +119,70 @@ async def _try_choose_mailchimp_action(page) -> dict[str, Any]:
         return result
 
 
-async def run_probe(with_action: bool = False) -> dict[str, Any]:
+async def _try_choose_webhook_post_action(page) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "second_action_app": None,
+        "second_action_event": None,
+        "second_action_selected": False,
+        "post_second_action_stage": None,
+    }
+    try:
+        action_cta_candidates = [
+            page.get_by_text("Add a step", exact=False).first,
+            page.get_by_text("Action", exact=False).first,
+            page.get_by_role("button", name="Action").first,
+        ]
+        clicked = False
+        for locator in action_cta_candidates:
+            try:
+                if await locator.is_visible(timeout=1000):
+                    await locator.click(timeout=5000)
+                    clicked = True
+                    break
+            except Exception:
+                continue
+        if not clicked:
+            return result
+
+        await page.wait_for_timeout(2500)
+        try:
+            await page.get_by_role("textbox", name="Search apps").fill("Webhooks")
+        except Exception:
+            await page.get_by_role("textbox").nth(0).fill("Webhooks")
+        await page.wait_for_timeout(1500)
+        await page.get_by_text("Webhooks", exact=False).first.click(timeout=10000)
+        await page.wait_for_timeout(2500)
+
+        choose_event_candidates = [
+            page.get_by_text("Choose an event", exact=False).first,
+            page.get_by_text("Event", exact=False).first,
+        ]
+        for locator in choose_event_candidates:
+            try:
+                if await locator.is_visible(timeout=1000):
+                    await locator.click(timeout=5000)
+                    break
+            except Exception:
+                continue
+        await page.wait_for_timeout(1500)
+        await page.get_by_text("POST", exact=False).first.click(timeout=10000)
+        await page.wait_for_timeout(2500)
+
+        result["second_action_app"] = "Webhooks by Zapier"
+        result["second_action_event"] = "POST"
+        result["second_action_selected"] = True
+        if await page.locator("text=Choose account").first.is_visible(timeout=1500):
+            result["post_second_action_stage"] = "Choose account"
+        elif await page.locator("text=Set up action").first.is_visible(timeout=1500):
+            result["post_second_action_stage"] = "Set up action"
+        elif await page.locator("text=Test").first.is_visible(timeout=1500):
+            result["post_second_action_stage"] = "Test"
+        return result
+    except Exception:
+        return result
+
+
+async def run_probe(with_action: bool = False, with_second_action: bool = False) -> dict[str, Any]:
     async with async_playwright() as p:
         browser = await p.chromium.connect_over_cdp(CDP_URL)
         if not browser.contexts:
@@ -152,6 +215,15 @@ async def run_probe(with_action: bool = False) -> dict[str, Any]:
             if with_action:
                 action_result = await _try_choose_mailchimp_action(page)
 
+            second_action_result = {
+                "second_action_app": None,
+                "second_action_event": None,
+                "second_action_selected": False,
+                "post_second_action_stage": None,
+            }
+            if with_action and with_second_action and action_result.get("action_selected"):
+                second_action_result = await _try_choose_webhook_post_action(page)
+
             after_create = await _collect_untitled_rows(cleanup_page)
             if len(after_create) <= len(before):
                 raise RuntimeError("Catch Hook まで選択しても persisted draft が assets 一覧に現れませんでした")
@@ -178,6 +250,7 @@ async def run_probe(with_action: bool = False) -> dict[str, Any]:
                 "trigger_app": "Webhooks by Zapier",
                 "trigger_event": "Catch Hook",
                 **action_result,
+                **second_action_result,
                 "after_delete_count": len(after_delete),
                 "deleted": len(after_delete) == len(before),
             }
@@ -189,8 +262,9 @@ async def run_probe(with_action: bool = False) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Zapier exploratory draft create/delete probe")
     parser.add_argument("--with-action", action="store_true", help="Mailchimp Add/Update Subscriber まで試す")
+    parser.add_argument("--with-second-action", action="store_true", help="2つ目の action として Webhooks POST まで試す")
     args = parser.parse_args()
-    result = asyncio.run(run_probe(with_action=args.with_action))
+    result = asyncio.run(run_probe(with_action=args.with_action, with_second_action=args.with_second_action))
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

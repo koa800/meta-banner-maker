@@ -1,6 +1,13 @@
 # Addness 操作ガイド
 
-最終更新: 2026-03-11
+最終更新: 2026-03-17
+
+## 情報ラベル
+
+- 所有元: internal
+- 開示レベル: task-limited
+- 承認必須: conditional
+- 共有先: 僕 / 上司 / 並列 / 直下
 
 **UI は頻繁に変わる前提で扱う。UI手順は補助であり、正本は API / activity log / server action に置く。**
 

@@ -9,6 +9,7 @@ import sys
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
@@ -29,6 +30,7 @@ RUNTIME_DATA_DIR = Path(
     os.environ.get("ADDNESS_RUNTIME_DATA_DIR", str(Path.home() / "agents" / "data"))
 ).expanduser()
 VENV_PYTHON = os.path.expanduser("~/agent-env/bin/python3")
+RUNTIME_RESOLVER = PROJECT_ROOT / "System" / "scripts" / "python_runtime.py"
 
 
 def _run_claude_cli(prompt: str, model: str = "claude-sonnet-4-6",
@@ -54,9 +56,35 @@ class ToolResult:
     return_code: int = 0
 
 
+@lru_cache(maxsize=1)
+def _resolve_python() -> str:
+    env = os.environ.copy()
+    if os.path.exists(VENV_PYTHON):
+        env["ADDNESS_PYTHON"] = VENV_PYTHON
+
+    if RUNTIME_RESOLVER.exists():
+        try:
+            result = subprocess.run(
+                [sys.executable, str(RUNTIME_RESOLVER), "--print-path", "--min", "3.10"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                env=env,
+            )
+            candidate = result.stdout.strip()
+            if result.returncode == 0 and candidate:
+                return candidate
+        except Exception as exc:
+            logger.warning(f"python_runtime resolver failed: {exc}")
+
+    if os.path.exists(VENV_PYTHON):
+        return VENV_PYTHON
+    return sys.executable
+
+
 def _run_script(script_path: str, args: list = None, timeout: int = 300, cwd: str = None) -> ToolResult:
     """Run a Python script with the agent venv interpreter."""
-    python = VENV_PYTHON if os.path.exists(VENV_PYTHON) else sys.executable
+    python = _resolve_python()
     cmd = [python, script_path] + (args or [])
     work_dir = cwd or os.path.dirname(script_path)
     script_name = os.path.basename(script_path)
@@ -265,6 +293,42 @@ def unique_email_sheet_sync(dry_run: bool = False) -> ToolResult:
         args.append("--dry-run")
     return _run_script(
         os.path.join(SYSTEM_DIR, "unique_email_sheet_sync.py"),
+        args,
+        timeout=1800,
+    )
+
+
+def email_registration_count_sheet_sync(dry_run: bool = False) -> ToolResult:
+    """全メール登録件数管理シートを再生成する"""
+    args = []
+    if dry_run:
+        args.append("--dry-run")
+    return _run_script(
+        os.path.join(SYSTEM_DIR, "email_registration_count_sheet_sync.py"),
+        args,
+        timeout=1800,
+    )
+
+
+def email_collection_metrics_sheet_sync(dry_run: bool = False) -> ToolResult:
+    """メール集計の統合シートを再生成する"""
+    args = []
+    if dry_run:
+        args.append("--dry-run")
+    return _run_script(
+        os.path.join(SYSTEM_DIR, "email_collection_metrics_sheet_sync.py"),
+        args,
+        timeout=1800,
+    )
+
+
+def booking_metrics_sheet_sync(dry_run: bool = False) -> ToolResult:
+    """個別面談データの集計シートを再生成する"""
+    args = []
+    if dry_run:
+        args.append("--dry-run")
+    return _run_script(
+        os.path.join(SYSTEM_DIR, "booking_metrics_sheet_sync.py"),
         args,
         timeout=1800,
     )
@@ -854,6 +918,9 @@ TOOL_REGISTRY = {
     "sheets_read": {"fn": sheets_read, "description": "Googleスプレッドシートのデータを読み取り"},
     "sheets_sync": {"fn": sheets_sync, "description": "管理シートのCSVキャッシュを同期"},
     "unique_email_sheet_sync": {"fn": unique_email_sheet_sync, "description": "UUメールアドレス管理シートを再生成"},
+    "email_registration_count_sheet_sync": {"fn": email_registration_count_sheet_sync, "description": "全メール登録件数管理シートを再生成"},
+    "email_collection_metrics_sheet_sync": {"fn": email_collection_metrics_sheet_sync, "description": "メール集計の統合シートを再生成"},
+    "booking_metrics_sheet_sync": {"fn": booking_metrics_sheet_sync, "description": "個別面談データの集計シートを再生成"},
     "interview_insights_sync": {"fn": interview_insights_sync, "description": "収録URL から CDP の定性欄を補完"},
     "interview_insights_backfill": {"fn": interview_insights_backfill, "description": "面談定性の backlog をまとめて補完"},
     "interview_insights_analyze": {"fn": interview_insights_analyze, "description": "LTV別の面談定性比較を更新"},

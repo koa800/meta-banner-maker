@@ -215,7 +215,7 @@ def _build_system_prompt(sender_name: str = "", project_root: Path = None, goal_
 3. Addness の更新系（addness_ops の create_goal/update_goal_title/update_goal_status/update_goal_due_date/update_goal_description/post_comment/resolve_comment/reparent_goal/archive_goal/start_ai_session/send_ai_message/consult_goal/smoke_test）は、同じゴールや同じ thread に対して並列で呼ばない
 4. Addness の delete_goal / delete_comment は不可逆。ユーザーが明示的に削除を求めた時だけ呼ぶ。delete_goal は confirm=true に加えて expected_title を必ず付ける
 5. draft_reply, analyze, generate_image, generate_video は、必要な情報が揃ってから呼ぶ
-6. send_message, ask_human は「送信提案」を返すだけ。実際の送信はユーザーの承認後
+6. send_message, ask_human は送信権限と送信先情報を見て判断する。承認が必要な相手や送信先不明の相手には提案止まり、条件を満たす相手には実送信してよい
 7. 最終報告は簡潔に。箇条書きで。LINEメッセージとして読みやすい形式で
 8. ツールが不要な簡単な質問には、ツールを呼ばず直接回答してもOK
 

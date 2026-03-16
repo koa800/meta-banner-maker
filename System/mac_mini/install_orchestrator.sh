@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ORCH_DIR="$SCRIPT_DIR/agent_orchestrator"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 VENV_PYTHON="$HOME/agent-env/bin/python3"
+RUNTIME_RESOLVER="$PROJECT_ROOT/System/scripts/python_runtime.py"
 PLIST_NAME="com.addness.agent-orchestrator"
 PLIST_DST="$HOME/Library/LaunchAgents/${PLIST_NAME}.plist"
 LOG_DIR="$ORCH_DIR/logs"
@@ -18,6 +19,21 @@ if [ ! -f "$VENV_PYTHON" ]; then
     exit 1
 fi
 
+if ! "$VENV_PYTHON" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)" 2>/dev/null; then
+    echo "ERROR: $VENV_PYTHON is below Python 3.10"
+    echo "       Re-run setup_phase1.sh to recreate ~/agent-env with Homebrew Python 3.12."
+    exit 1
+fi
+
+resolve_python() {
+    if [ -f "$RUNTIME_RESOLVER" ]; then
+        ADDNESS_PYTHON="$VENV_PYTHON" /usr/bin/python3 "$RUNTIME_RESOLVER" --print-path --min 3.10 2>/dev/null && return 0
+    fi
+    echo "$VENV_PYTHON"
+}
+
+CONFIG_PYTHON="$(resolve_python)"
+
 LINE_CONFIG=""
 if [ -f "$PROJECT_ROOT/line_bot_local/config.json" ]; then
     LINE_CONFIG="$PROJECT_ROOT/line_bot_local/config.json"
@@ -28,8 +44,8 @@ fi
 AGENT_TOKEN_VAL=""
 LINE_BOT_URL=""
 if [ -n "$LINE_CONFIG" ]; then
-    AGENT_TOKEN_VAL=$(python3 -c "import json; print(json.load(open('$LINE_CONFIG')).get('agent_token',''))" 2>/dev/null || echo "")
-    LINE_BOT_URL=$(python3 -c "import json; print(json.load(open('$LINE_CONFIG')).get('server_url',''))" 2>/dev/null || echo "")
+    AGENT_TOKEN_VAL=$("$CONFIG_PYTHON" -c "import json; print(json.load(open('$LINE_CONFIG')).get('agent_token',''))" 2>/dev/null || echo "")
+    LINE_BOT_URL=$("$CONFIG_PYTHON" -c "import json; print(json.load(open('$LINE_CONFIG')).get('server_url',''))" 2>/dev/null || echo "")
 fi
 
 cat > "$PLIST_DST" <<PLIST
@@ -66,6 +82,8 @@ cat > "$PLIST_DST" <<PLIST
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>PYTHONPATH</key>
         <string>${SCRIPT_DIR}</string>
+        <key>ADDNESS_PYTHON</key>
+        <string>${VENV_PYTHON}</string>
         <key>ADDNESS_DEPLOY_ROOT</key>
         <string>${PROJECT_ROOT}</string>
         <key>ADDNESS_CONFIG_PATH</key>

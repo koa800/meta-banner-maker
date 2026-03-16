@@ -1,8 +1,30 @@
 # learning レイヤー
 
-最終更新: 2026-03-13
+最終更新: 2026-03-17
+
+## 情報ラベル
+
+- 所有元: internal
+- 開示レベル: role-limited
+- 承認必須: conditional
+- 共有先: 僕 / 上司 / 並列
 
 `Master/learning/` は、運用から生まれた学習データの置き場です。4層そのものではなく、`前提` と `rules` を育てるための更新材料を持つ補助層です。
+
+## 情報ラベルの既定値
+
+- `execution_rules.json`
+  - 所有元: `internal`
+  - 開示レベル: `role-limited`
+  - 承認必須: `conditional`
+  - 共有先: `僕 / 上司 / 並列`
+- `style_rules.json` と reply / action / feedback 系ログ、`hinata_memory.md`, `insights.md`
+  - 所有元: `self`
+  - 開示レベル: `self-only`
+  - 承認必須: `always`
+  - 共有先: `僕`
+
+この階層の JSON は実装都合で top-level 構造を変えにくいため、個別ラベルではなく path 既定値で監査する。
 
 ## 主なファイル
 

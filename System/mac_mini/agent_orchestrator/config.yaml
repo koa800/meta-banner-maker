@@ -33,6 +33,15 @@ schedule:
   unique_email_sheet_sync:
     cron: "18 */2 * * *"         # 2時間ごと  UUメールアドレス管理シートを再生成
     enabled: true
+  email_registration_count_sheet_sync:
+    cron: "28 */2 * * *"         # 2時間ごと  全メール登録件数管理シートを再生成
+    enabled: true
+  email_collection_metrics_sheet_sync:
+    cron: "38 */2 * * *"         # 2時間ごと  メール集計の統合シートを再生成
+    enabled: true
+  booking_metrics_sheet_sync:
+    cron: "48 */2 * * *"         # 2時間ごと  個別面談データの集計シートを再生成
+    enabled: true
   teleapo_sync:
     cron: "15 6 * * *"           # 06:15  AIテレアポ対象を顧客マスタから再生成
     enabled: true
@@ -94,8 +103,8 @@ schedule:
 
   # === 日報リマインド ===
   daily_report_reminder:
-    cron: "0 12,19 * * mon-fri"    # 平日 12:00/19:00 チームメンバーの日報未記入リマインド
-    enabled: true
+    cron: "0 12,19 * * mon-fri"    # 2026-03-16 以降は無効化（広告チームLINEグループへの自動催促を停止）
+    enabled: false
 
   # === 日中 ===
   looker_csv_download:

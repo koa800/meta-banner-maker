@@ -1,5 +1,14 @@
 # アカウント・認証情報
 
+最終更新: 2026-03-17
+
+## 情報ラベル
+
+- 所有元: self
+- 開示レベル: self-only
+- 承認必須: always
+- 共有先: 僕
+
 ## Googleアカウント
 
 - **甲原**: `koa800sea.nifs@gmail.com`（Claude Max 20x, Google API）

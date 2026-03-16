@@ -55,6 +55,20 @@ async def _fill_first_visible(page, selectors: list[str], value: str) -> bool:
     return False
 
 
+async def _visible_texts(page, selector: str, limit: int = 20) -> list[str]:
+    try:
+        items = await page.locator(selector).evaluate_all(
+            """(nodes, maxItems) => nodes
+              .map((node) => (node.innerText || node.textContent || '').trim())
+              .filter(Boolean)
+              .slice(0, maxItems)""",
+            limit,
+        )
+        return [item for item in items if isinstance(item, str) and item.strip()]
+    except Exception:
+        return []
+
+
 async def _open_builder(page) -> None:
     await page.goto(AUTOMATIONS_URL, wait_until="domcontentloaded", timeout=120000)
     await page.wait_for_timeout(3000)
@@ -67,7 +81,17 @@ async def _open_builder(page) -> None:
         ],
     )
     if not clicked:
-        raise RuntimeError("`Build from scratch` を押せませんでした")
+        diagnostics = {
+            "url": page.url,
+            "title": await page.title(),
+            "buttons": await _visible_texts(page, "button"),
+            "links": await _visible_texts(page, "a"),
+            "headings": await _visible_texts(page, "h1, h2, h3"),
+        }
+        raise RuntimeError(
+            "`Build from scratch` を押せませんでした: "
+            + json.dumps(diagnostics, ensure_ascii=False)
+        )
     await page.wait_for_timeout(4000)
 
 

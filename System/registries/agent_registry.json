@@ -1,6 +1,8 @@
 {
-  "version": "2026-03-07",
-  "generated_from": "Master/people/profiles.json",
+  "version": "2026-03-17",
+  "policy_version": "2026-03-17",
+  "shared_context_model": "scoped_v1",
+  "generated_from": "Master/company/people_public.json + Master/brains/*/brain_manifest.json",
   "entities": {
     "kohara_clone_brain": {
       "name": "kohara_clone_brain",
@@ -8,7 +10,14 @@
       "brain_kind": "kohara_clone",
       "manifest_path": "Master/brains/kohara/brain_manifest.json",
       "update_policy": "user_only",
-      "shared_context": "global"
+      "shared_context": "self-context",
+      "base_audience": "僕",
+      "context_access": [
+        "self-context",
+        "internal-context",
+        "actor-context"
+      ],
+      "disclosure_rule_source": "Master/rules/開示境界ルール.md"
     },
     "hinata_brain": {
       "name": "hinata_brain",
@@ -16,7 +25,13 @@
       "brain_kind": "hinata",
       "manifest_path": "Master/brains/hinata/brain_manifest.json",
       "update_policy": "verified_facts_only_to_company",
-      "shared_context": "global"
+      "shared_context": "internal-context",
+      "base_audience": "直下",
+      "context_access": [
+        "internal-context",
+        "actor-context"
+      ],
+      "disclosure_rule_source": "Master/rules/開示境界ルール.md"
     },
     "line_secretary": {
       "name": "line_secretary",
@@ -26,9 +41,43 @@
       "role_description": "情報整理、数値確認、内部メンバーへの軽い確認、返信案作成、甲原名義での送信、スケジュール調整、マネジメント上の対策を担う。",
       "channels": [
         "line",
-        "chatwork"
+        "chatwork",
+        "email"
       ],
-      "shared_context": "global",
+      "shared_context": "self-context",
+      "base_audience": "僕",
+      "context_access": [
+        "self-context",
+        "internal-context",
+        "actor-context"
+      ],
+      "disclosure_rule_source": "Master/rules/開示境界ルール.md",
+      "message_policy": {
+        "default_level": "Lv0",
+        "approval_flow": "proposal_then_owner_approval",
+        "management_unit": "per_person",
+        "promotion_strategy": "assistant_proposes_owner_confirms",
+        "owner_confirmation_required": true,
+        "auto_reply_to_superiors": false,
+        "levels": {
+          "Lv0": "送信禁止。下書きのみ",
+          "Lv1": "毎回承認後に送信可",
+          "Lv2": "定型連絡だけ自動送信可",
+          "Lv3": "通常連絡まで自動送信可。重要連絡は承認必要"
+        },
+        "promotion_thresholds": {
+          "templated_messages_without_major_edits": 5,
+          "normal_messages_without_issue": 10
+        },
+        "important_message_rules": [
+          "謝罪や訂正が入る",
+          "相手の感情に強く影響する",
+          "約束、期限、金額、条件を確定させる",
+          "対外的な印象や関係性に影響する",
+          "甲原さん本人の評価や意思として受け取られる",
+          "一度送ると取り返しがつきにくい"
+        ]
+      },
       "authority": {
         "mode": "staged_autonomy",
         "approved_actions": [
@@ -51,7 +100,14 @@
       "channels": [
         "cursor"
       ],
-      "shared_context": "global",
+      "shared_context": "self-context",
+      "base_audience": "僕",
+      "context_access": [
+        "self-context",
+        "internal-context",
+        "actor-context"
+      ],
+      "disclosure_rule_source": "Master/rules/開示境界ルール.md",
       "authority": {
         "mode": "target_full_autonomy",
         "approved_actions": [
@@ -75,7 +131,39 @@
         "slack",
         "addness"
       ],
-      "shared_context": "global",
+      "shared_context": "internal-context",
+      "base_audience": "直下",
+      "context_access": [
+        "internal-context",
+        "actor-context"
+      ],
+      "disclosure_rule_source": "Master/rules/開示境界ルール.md",
+      "message_policy": {
+        "default_level": "Lv0",
+        "approval_flow": "proposal_then_owner_approval",
+        "management_unit": "per_person",
+        "promotion_strategy": "assistant_proposes_owner_confirms",
+        "owner_confirmation_required": true,
+        "auto_reply_to_superiors": true,
+        "levels": {
+          "Lv0": "送信禁止。下書きのみ",
+          "Lv1": "毎回承認後に送信可",
+          "Lv2": "定型連絡だけ自動送信可",
+          "Lv3": "通常連絡まで自動送信可。重要連絡は承認必要"
+        },
+        "promotion_thresholds": {
+          "templated_messages_without_major_edits": 5,
+          "normal_messages_without_issue": 10
+        },
+        "important_message_rules": [
+          "謝罪や訂正が入る",
+          "相手の感情に強く影響する",
+          "約束、期限、金額、条件を確定させる",
+          "対外的な印象や関係性に影響する",
+          "甲原さん本人の評価や意思として受け取られる",
+          "一度送ると取り返しがつきにくい"
+        ]
+      },
       "authority": {
         "mode": "verified_facts_only",
         "approved_actions": [

@@ -1,6 +1,13 @@
 # rules
 
-最終更新: 2026-03-09
+最終更新: 2026-03-17
+
+## 情報ラベル
+
+- 所有元: internal
+- 開示レベル: role-limited
+- 承認必須: conditional
+- 共有先: 僕 / 上司 / 並列 / 直下
 
 このファイルは、成功と失敗から抽出した再現ルールを溜める場所です。単なる知識メモではなく、「次回の判断を強くするための禁止・推奨」を残します。
 
@@ -9,6 +16,8 @@
 - 行動OS: `Master/learning/execution_rules.json`
 - 判断OS: `Master/self_clone/kohara/BRAIN_OS.md`
 - トーン・NGワード: `Master/self_clone/kohara/IDENTITY.md`
+- 開示境界の正本: `Master/rules/開示境界ルール.md`
+- 実行主体ごとの閲覧・出力: `Master/rules/実行主体別の閲覧・出力ルール.md`
 - 広告・導線の具体ルール: `Master/rules/広告・導線ルール.md`
 
 この `rules.md` は、それらを置き換えるものではなく、成果物運用から増えていくルールの受け皿です。
@@ -77,4 +86,6 @@
 
 ## 具体ルール
 
+- 開示境界: [開示境界ルール.md](/Users/koa800/Desktop/cursor/Master/rules/開示境界ルール.md)
+- 実行主体別の閲覧・出力: [実行主体別の閲覧・出力ルール.md](/Users/koa800/Desktop/cursor/Master/rules/実行主体別の閲覧・出力ルール.md)
 - 広告・導線: [広告・導線ルール.md](/Users/koa800/Desktop/cursor/Master/rules/広告・導線ルール.md)

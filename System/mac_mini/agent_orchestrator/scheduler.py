@@ -55,6 +55,15 @@ _CDP_SOURCE_MANAGEMENT_TAB = "データソース管理"
 _UNIQUE_EMAIL_SHEET_ID = "1mtfvXN92_vtzwLhOiTcufdLJ6vkfn8oYjCiqC0ZK6j8"
 _UNIQUE_EMAIL_SUMMARY_TAB = "メール集計サマリー"
 _UNIQUE_EMAIL_SOURCE_TAB = "データソース管理"
+_EMAIL_REGISTRATION_COUNT_SHEET_ID = "1RsRkGaHCFsFc1nT1lMQFyNG-f13llH4UX9Bl_EYxNjU"
+_EMAIL_REGISTRATION_COUNT_SUMMARY_TAB = "メール登録件数サマリー"
+_EMAIL_REGISTRATION_COUNT_SOURCE_TAB = "データソース管理"
+_EMAIL_COLLECTION_METRICS_SHEET_ID = "13HS9KmlTdxQwMMaK45H3Ga1mMTUiJdhYKWnrExge_yY"
+_EMAIL_COLLECTION_METRICS_SUMMARY_TAB = "メール集計サマリー"
+_EMAIL_COLLECTION_METRICS_SOURCE_TAB = "データソース管理"
+_BOOKING_METRICS_SHEET_ID = "1ip_RARDHmQvTjmaVavw1L71ltPrn4Kg6sa__njqyQZ8"
+_BOOKING_METRICS_SUMMARY_TAB = "個別予約サマリー"
+_BOOKING_METRICS_SOURCE_TAB = "データソース管理"
 _TELEAPO_SHEET_ID = "12RGMUfU8Wj0CCdcRfY7kI56kdATV7wDXjvYmGdQb_Nk"
 _TELEAPO_TARGET_TAB = "架電一覧"
 _CLAUDE_CHROME_EXTENSION_ID = "fcoeoabgfenejglbffodgkkbkcdhcgfn"
@@ -482,6 +491,9 @@ class TaskScheduler:
             "sheets_sync": self._run_sheets_sync,
             "cdp_sync": self._run_cdp_sync,
             "unique_email_sheet_sync": self._run_unique_email_sheet_sync,
+            "email_registration_count_sheet_sync": self._run_email_registration_count_sheet_sync,
+            "email_collection_metrics_sheet_sync": self._run_email_collection_metrics_sheet_sync,
+            "booking_metrics_sheet_sync": self._run_booking_metrics_sheet_sync,
             "teleapo_sync": self._run_teleapo_sync,
             "interview_insights_sync": self._run_interview_insights_sync,
             "interview_insights_backfill": self._run_interview_insights_backfill,
@@ -781,7 +793,7 @@ class TaskScheduler:
         logger.info("Scheduler shut down")
 
     # タスク失敗通知を送らないタスク（自前でエラーハンドリングするもの）
-    _NO_FAILURE_NOTIFY = {"health_check", "oauth_health_check", "render_health_check", "anthropic_credit_check", "secretary_goal_progress", "interview_insights_sync", "interview_insights_backfill", "interview_insights_analysis", "unique_email_sheet_sync"}
+    _NO_FAILURE_NOTIFY = {"health_check", "oauth_health_check", "render_health_check", "anthropic_credit_check", "secretary_goal_progress", "interview_insights_sync", "interview_insights_backfill", "interview_insights_analysis", "unique_email_sheet_sync", "email_registration_count_sheet_sync", "email_collection_metrics_sheet_sync", "booking_metrics_sheet_sync"}
     # git_pull_syncは独自の頻度制限付き通知を実装（_run_git_pull_sync参照）
 
     async def _execute_tool(self, task_name: str, tool_fn, **kwargs) -> tools.ToolResult:
@@ -1783,7 +1795,58 @@ market_trends.md の全文をそのまま出力してください。既存の内
     def _cdp_call(self, ws_url: str, method: str, params: dict | None = None):
         """CDP メソッドを1回実行して result を返す。"""
         import json
-        import websocket
+        try:
+            import websocket
+        except ModuleNotFoundError:
+            import subprocess
+
+            node_script = r"""
+const wsUrl = process.argv[1];
+const method = process.argv[2];
+const params = JSON.parse(process.argv[3]);
+const ws = new WebSocket(wsUrl);
+
+ws.addEventListener('open', () => {
+  ws.send(JSON.stringify({ id: 1, method, params }));
+});
+
+ws.addEventListener('message', (event) => {
+  const message = JSON.parse(event.data);
+  if (message.id !== 1) return;
+  process.stdout.write(JSON.stringify(message));
+  ws.close();
+});
+
+ws.addEventListener('error', (event) => {
+  const payload = {
+    error: {
+      message: event.message || 'WebSocket error',
+    },
+  };
+  process.stdout.write(JSON.stringify(payload));
+  process.exit(1);
+});
+"""
+            result = subprocess.run(
+                [
+                    "node",
+                    "-e",
+                    node_script,
+                    ws_url,
+                    method,
+                    json.dumps(params or {}, ensure_ascii=False),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            raw = (result.stdout or result.stderr or "").strip()
+            if not raw:
+                raise RuntimeError(f"CDP {method} failed: node fallback returned empty output")
+            message = json.loads(raw)
+            if message.get("error"):
+                raise RuntimeError(message["error"].get("message", f"CDP {method} failed"))
+            return message.get("result", {})
 
         ws = websocket.create_connection(ws_url, timeout=10)
         try:
@@ -2042,6 +2105,216 @@ market_trends.md の全文をそのまま出力してください。既存の内
                 pass
             _time.sleep(1)
         return False
+
+    def _fetch_looker_page_text_via_cdp(
+        self,
+        page_url: str,
+        required_texts: list[str],
+        timeout_seconds: int = 30,
+    ):
+        """Looker Studio ページを CDP で開き、本文テキストを返す。"""
+        import time as _time
+
+        ws_url = self._get_chrome_page_ws_url("lookerstudio.google.com", open_url=page_url)
+        if not ws_url:
+            return False, "Chrome CDP で Looker Studio ページを開けませんでした"
+
+        try:
+            self._cdp_call(ws_url, "Page.enable")
+        except Exception:
+            pass
+
+        try:
+            self._cdp_call(ws_url, "Page.navigate", {"url": _normalize_looker_url(page_url)})
+        except Exception as e:
+            return False, f"Looker Studio への遷移失敗: {e}"
+
+        if not self._wait_looker_page_text(ws_url, required_texts, timeout_seconds=timeout_seconds):
+            return False, "Looker Studio ページの読み込み待ちでタイムアウトしました"
+
+        _time.sleep(1)
+
+        try:
+            title = self._cdp_runtime_evaluate(ws_url, "document.title") or ""
+            body_text = self._cdp_runtime_evaluate(
+                ws_url,
+                "document.body ? document.body.innerText : ''",
+            ) or ""
+        except Exception as e:
+            return False, f"Looker Studio の本文取得失敗: {e}"
+
+        access_denied_signals = [
+            "アクセスが拒否されました",
+            "Access denied",
+            "Google アカウントでログイン",
+            "ログイン",
+        ]
+        if any(signal in body_text for signal in access_denied_signals):
+            return False, "Looker Studio のログインまたはアクセス権で停止しました"
+
+        return True, {
+            "title": title,
+            "text": body_text,
+        }
+
+    def _parse_looker_daily_metrics_from_text(self, page_text: str, target_date):
+        """日別データページの本文から対象日の数値を抜く。"""
+        date_label = target_date.strftime("%Y/%m/%d")
+        lines = [line.strip() for line in str(page_text or "").splitlines() if line.strip()]
+
+        for idx, line in enumerate(lines):
+            if line != date_label:
+                continue
+            row = lines[idx + 1: idx + 8]
+            if len(row) < 6:
+                break
+            return {
+                "visitors": _to_int(row[0]),
+                "reservations": _to_int(row[1]),
+                "sales": _to_int(row[2]),
+                "members": _to_int(row[4]),
+                "cancellations": _to_int(row[5]),
+            }
+
+        raise ValueError(f"日別データページに {date_label} の行が見つかりません")
+
+    def _parse_looker_member_metrics_from_text(self, page_text: str, target_date):
+        """会員数ページの本文から対象日の会員数と解約数を抜く。"""
+        date_label = target_date.strftime("%Y/%m/%d")
+        lines = [line.strip() for line in str(page_text or "").splitlines() if line.strip()]
+
+        for idx, line in enumerate(lines):
+            if line != date_label:
+                continue
+            row = lines[idx + 1: idx + 4]
+            if len(row) < 2:
+                break
+            return {
+                "members": _to_int(row[0]),
+                "cancellations": _to_int(row[1]),
+            }
+
+        raise ValueError(f"会員数ページに {date_label} の行が見つかりません")
+
+    def _read_sheet_single_cell(self, project_root, cell: str):
+        """sheets_manager.py 経由で単一セルを読み取る。"""
+        import ast
+        import subprocess
+
+        result = subprocess.run(
+            [
+                "python3",
+                "System/sheets_manager.py",
+                "read",
+                "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk",
+                "日報",
+                f"{cell}:{cell}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=str(project_root),
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            return False, f"日報シート {cell} の読み取り失敗: {detail[:160]}"
+
+        match = re.search(r"行1:\s*(\[.*\])", result.stdout)
+        if not match:
+            return False, f"日報シート {cell} の読み取り結果を解釈できません"
+
+        row = ast.literal_eval(match.group(1))
+        return True, str(row[0]) if row else ""
+
+    def _write_daily_report_via_cdp(self, project_root, target_date, target_col: str, subscription_new: int):
+        """CDP 直読み + Sheets API で日報を入力する。"""
+        import subprocess
+
+        daily_ok, daily_payload = self._fetch_looker_page_text_via_cdp(
+            _LOOKER_DAILY_REPORT_URL,
+            ["日付", "集客数", "個別予約数", "着金売上"],
+            timeout_seconds=40,
+        )
+        if not daily_ok:
+            return False, daily_payload
+
+        try:
+            daily_metrics = self._parse_looker_daily_metrics_from_text(
+                daily_payload["text"],
+                target_date,
+            )
+        except Exception as e:
+            return False, f"Looker 日別データの解析失敗: {e}"
+
+        member_source = "member_page"
+        try:
+            member_ok, member_payload = self._fetch_looker_page_text_via_cdp(
+                _LOOKER_MEMBER_REPORT_URL,
+                ["日付", "会員数", "解約数"],
+                timeout_seconds=20,
+            )
+            if not member_ok:
+                raise RuntimeError(member_payload)
+            member_metrics = self._parse_looker_member_metrics_from_text(
+                member_payload["text"],
+                target_date,
+            )
+        except Exception as e:
+            member_metrics = {
+                "members": daily_metrics["members"],
+                "cancellations": daily_metrics["cancellations"],
+            }
+            member_source = "daily_page"
+            logger.warning(f"日報自動入力: 会員数ページの取得失敗 → 日別データ列を使用: {e}")
+
+        values_by_cell = {
+            f"{target_col}5": str(daily_metrics["sales"]),
+            f"{target_col}7": str(daily_metrics["visitors"]),
+            f"{target_col}9": str(daily_metrics["reservations"]),
+            f"{target_col}13": str(member_metrics["members"]),
+            f"{target_col}14": str(member_metrics["cancellations"]),
+            f"{target_col}15": str(subscription_new),
+        }
+
+        for cell, value in values_by_cell.items():
+            result = subprocess.run(
+                [
+                    "python3",
+                    "System/sheets_manager.py",
+                    "write",
+                    "16W1zALKZrnGeesjTlmsraDfw3i71tcdYJE686cmUaTk",
+                    cell,
+                    value,
+                    "日報",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=str(project_root),
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "").strip()
+                return False, f"日報シート {cell} の書き込み失敗: {detail[:160]}"
+
+        verified_values = {}
+        for cell, expected in values_by_cell.items():
+            read_ok, actual_or_err = self._read_sheet_single_cell(project_root, cell)
+            if not read_ok:
+                return False, actual_or_err
+            verified_values[cell] = actual_or_err
+            if _to_int(actual_or_err) != _to_int(expected):
+                return False, f"日報シート {cell} の検証失敗: {actual_or_err} != {expected}"
+
+        return True, {
+            "sales": daily_metrics["sales"],
+            "visitors": daily_metrics["visitors"],
+            "reservations": daily_metrics["reservations"],
+            "members": member_metrics["members"],
+            "cancellations": member_metrics["cancellations"],
+            "subscription_new": subscription_new,
+            "member_source": member_source,
+            "verified_values": verified_values,
+        }
 
     def _export_looker_current_table_via_cdp(self, ws_url, csv_path):
         """現在表示中の Looker テーブルを CSV として書き出す。"""
@@ -2655,17 +2928,7 @@ cat {creds_file}
         from datetime import date, timedelta
 
         logger.info("日報自動入力: 開始")
-
-        # プリフライトチェック（Chrome 自動起動含む）
-        ok, claude_cmd, secretary_config, project_root, preflight_err = self._ensure_claude_chrome_ready()
-        if not ok:
-            logger.error(f"日報自動入力: プリフライト失敗 - {preflight_err}")
-            preflight_lower = (preflight_err or "").lower()
-            if secretary_config and ("oauth" in preflight_lower or "credential" in preflight_lower):
-                self._request_claude_approval_only("日報の自動入力", secretary_config)
-            else:
-                send_line_notify(f"日報の自動入力を始めようとしましたが、準備段階で失敗しました。\n{preflight_err}")
-            return
+        project_root = self.project_root
 
         target_date = date.today() - timedelta(days=1)
         target_md = f"{target_date.month}/{target_date.day}"
@@ -2728,6 +2991,62 @@ cat {creds_file}
         # 対象列が特定できなければ中断
         if not target_col:
             send_line_notify(f"日報の自動入力を始めようとしましたが、日報シートの対象列が特定できませんでした。\n{col_err}")
+            return
+
+        # ── 第1経路: Chrome CDP 直読み + Sheets API で完結 ──
+        cdp_success, cdp_payload = self._write_daily_report_via_cdp(
+            project_root,
+            target_date,
+            target_col,
+            subscription_new,
+        )
+        if cdp_success:
+            warning_lines = []
+            if (
+                cdp_payload["sales"] == 0
+                and cdp_payload["visitors"] == 0
+                and cdp_payload["reservations"] == 0
+                and cdp_payload["members"] == 0
+                and cdp_payload["cancellations"] == 0
+            ):
+                warning_lines.append("⚠️ 全数値ゼロ: データ更新遅延の可能性")
+            elif cdp_payload["sales"] == 0 or cdp_payload["visitors"] == 0:
+                warning_lines.append("⚠️ 異常値検出")
+
+            report_lines = [
+                "日報入力が完了しました。",
+                "",
+                f"集客数: {cdp_payload['visitors']}人",
+                f"個別予約数: {cdp_payload['reservations']}件",
+                f"着金売上: ¥{cdp_payload['sales']:,}",
+                f"会員数: {cdp_payload['members']}人（解約: {cdp_payload['cancellations']}人）",
+                f"サブスク新規: {cdp_payload['subscription_new']}人",
+            ]
+            if cdp_payload["member_source"] == "daily_page":
+                report_lines.append("※ 会員数ページに対象日がなかったため、日別データの会員数列を使用")
+            report_lines.extend(warning_lines)
+
+            send_line_notify("\n".join(report_lines))
+            logger.info(
+                "日報自動入力: CDP直実行で完了 - "
+                f"sales={cdp_payload['sales']} visitors={cdp_payload['visitors']} "
+                f"reservations={cdp_payload['reservations']} members={cdp_payload['members']} "
+                f"cancellations={cdp_payload['cancellations']} subscription_new={cdp_payload['subscription_new']}"
+            )
+            self._record_schedule_success("daily_report_input")
+            return
+
+        logger.warning(f"日報自動入力: CDP直実行失敗 → Claude fallback へ移行: {cdp_payload}")
+
+        # ── 第2経路: Claude Code + Chrome MCP ──
+        ok, claude_cmd, secretary_config, project_root, preflight_err = self._ensure_claude_chrome_ready()
+        if not ok:
+            logger.error(f"日報自動入力: プリフライト失敗 - {preflight_err}")
+            preflight_lower = (preflight_err or "").lower()
+            if secretary_config and ("oauth" in preflight_lower or "credential" in preflight_lower):
+                self._request_claude_approval_only("日報の自動入力", secretary_config)
+            else:
+                send_line_notify(f"日報の自動入力を始めようとしましたが、準備段階で失敗しました。\n{preflight_err}")
             return
 
         # ── サブスク部分の指示 ──
@@ -3069,7 +3388,7 @@ python3 System/line_notify.py "日報入力が完了しました。
             send_line_notify(f"日報リマインド中に想定外のエラーが出ました。")
 
     async def _run_daily_report(self):
-        from .notifier import send_line_notify
+        from .notifier import notify_event
         from datetime import date
         summary = self.memory.get_daily_summary()
         stats = self.memory.get_task_stats(since_hours=24)
@@ -3251,7 +3570,7 @@ python3 System/line_notify.py "日報入力が完了しました。
 
     async def _run_weekly_idea_proposal(self):
         """毎週月曜: agent_ideas.md から未着手P0/P1を1件ピックアップしてLINE通知"""
-        from .notifier import notify_event
+        from .notifier import send_line_notify
 
         ideas_path = os.path.expanduser(
             os.path.join(self.config.get("paths", {}).get("repo_root", "~/Desktop/cursor"),
@@ -3307,7 +3626,7 @@ python3 System/line_notify.py "日報入力が完了しました。
 
     async def _run_daily_addness_digest(self):
         """毎朝8:30: actionable-tasks.md（タスク）+ カレンダー（今日の予定）をLINE通知"""
-        from .notifier import send_line_notify  # LINEのみ
+        from .notifier import flush_digest_events, send_line_notify  # LINEのみ
         from datetime import date
 
         actionable_path = self.master_dir / "addness" / "actionable-tasks.md"
@@ -3326,6 +3645,9 @@ python3 System/line_notify.py "日報入力が完了しました。
 
         # 特殊な締め切り・リマインダーチェック（90/30/7日前に通知）
         await self._check_special_reminders(send_line_notify)
+
+        # 低緊急度の通知は朝のまとめでだけ出す
+        flush_digest_events("今朝の確認まとめ", kinds=["mail_waiting_digest"])
 
     async def _notify_today_calendar(self, send_line_notify):
         """今日のカレンダー予定をLINE通知（予定がなければスキップ）"""
@@ -3642,9 +3964,6 @@ python3 System/line_notify.py "日報入力が完了しました。
             # まず簡易的にモデル一覧APIで疎通確認
             req_check = urllib.request.Request(
                 "https://api.openai.com/v1/models",
-        # 低緊急度の通知は朝のまとめでだけ出す
-        flush_digest_events("今朝の確認まとめ", kinds=["mail_waiting_digest"])
-
                 headers={"Authorization": f"Bearer {api_key}"},
             )
             with urllib.request.urlopen(req_check, timeout=15) as resp:
@@ -3797,7 +4116,7 @@ python3 System/line_notify.py "日報入力が完了しました。
     async def _run_weekly_stats(self):
         """毎週月曜9:30: 先週のシステム稼働サマリーをLINE通知"""
         import json as _json
-        from .notifier import flush_digest_events, send_line_notify  # LINEのみ
+        from .notifier import send_line_notify  # LINEのみ
         from datetime import date
 
         stats = self.memory.get_task_stats(since_hours=168)  # 7日間
@@ -4267,7 +4586,7 @@ head -3 "{csv_dir}/{csv_filename}"
 
     async def _run_kpi_daily_import(self):
         """毎日12:00: 元データの全未処理分を投入（day-2に限らずバックフィル）"""
-        from .notifier import send_line_notify
+        from .notifier import notify_event, send_line_notify
 
         # process は元データの「完了」エントリを全て検出して日別に投入する
         result = await self._execute_tool("kpi_process", tools.kpi_process)
@@ -4276,6 +4595,7 @@ head -3 "{csv_dir}/{csv_filename}"
             cache_result = await self._execute_tool("kpi_cache_build", tools.kpi_cache_build)
             if cache_result.success:
                 logger.info(f"KPI cache rebuilt after import: {cache_result.output[:200]}")
+                notify_event("internal_success", "KPIデータの更新が完了しました。")
             else:
                 logger.warning(f"KPI cache build failed after import: {cache_result.error[:200] if cache_result.error else 'unknown'}")
                 send_line_notify("KPIデータの投入は完了しましたが、KPIキャッシュ再生成に失敗しました。秘書の数値が古い可能性があります。")
@@ -4405,6 +4725,111 @@ head -3 "{csv_dir}/{csv_filename}"
             )
         )
 
+    async def _run_email_registration_count_sheet_sync(self):
+        """2時間ごと: 全メール登録件数管理シートを再生成する。"""
+        result = await self._execute_tool(
+            "email_registration_count_sheet_sync",
+            tools.email_registration_count_sheet_sync,
+        )
+        if result.success:
+            logger.info(f"Email registration count sheet sync completed: {(result.output or '')[-300:]}")
+            return
+
+        from .notifier import send_line_notify
+
+        send_line_notify(
+            _format_line_message(
+                "全メール登録件数更新が止まりました",
+                summary_lines=[
+                    (result.error or "詳細エラーを取得できませんでした")[:200],
+                ],
+                action_lines=[
+                    "まず メール登録件数サマリー を開いて、件数が更新されていないか確認してください",
+                    "次に データソース管理 を開いて、参照元の構造が変わっていないか確認してください",
+                ],
+                links=[
+                    (
+                        "全メール登録数 / メール登録件数サマリー",
+                        _build_sheet_url(_EMAIL_REGISTRATION_COUNT_SHEET_ID, _EMAIL_REGISTRATION_COUNT_SUMMARY_TAB),
+                    ),
+                    (
+                        "全メール登録数 / データソース管理",
+                        _build_sheet_url(_EMAIL_REGISTRATION_COUNT_SHEET_ID, _EMAIL_REGISTRATION_COUNT_SOURCE_TAB),
+                    ),
+                ],
+            )
+        )
+
+    async def _run_email_collection_metrics_sheet_sync(self):
+        """2時間ごと: メール集計の統合シートを再生成する。"""
+        result = await self._execute_tool(
+            "email_collection_metrics_sheet_sync",
+            tools.email_collection_metrics_sheet_sync,
+        )
+        if result.success:
+            logger.info(f"Email collection metrics sheet sync completed: {(result.output or '')[-300:]}")
+            return
+
+        from .notifier import send_line_notify
+
+        send_line_notify(
+            _format_line_message(
+                "メール集計の統合シート更新が止まりました",
+                summary_lines=[
+                    (result.error or "詳細エラーを取得できませんでした")[:200],
+                ],
+                action_lines=[
+                    "まず メール集計サマリー を開いて、件数が更新されていないか確認してください",
+                    "次に データソース管理 を開いて、参照元の構造が変わっていないか確認してください",
+                ],
+                links=[
+                    (
+                        "メール集計 / メール集計サマリー",
+                        _build_sheet_url(_EMAIL_COLLECTION_METRICS_SHEET_ID, _EMAIL_COLLECTION_METRICS_SUMMARY_TAB),
+                    ),
+                    (
+                        "メール集計 / データソース管理",
+                        _build_sheet_url(_EMAIL_COLLECTION_METRICS_SHEET_ID, _EMAIL_COLLECTION_METRICS_SOURCE_TAB),
+                    ),
+                ],
+            )
+        )
+
+    async def _run_booking_metrics_sheet_sync(self):
+        """2時間ごと: 個別面談データの集計シートを再生成する。"""
+        result = await self._execute_tool(
+            "booking_metrics_sheet_sync",
+            tools.booking_metrics_sheet_sync,
+        )
+        if result.success:
+            logger.info(f"Booking metrics sheet sync completed: {(result.output or '')[-300:]}")
+            return
+
+        from .notifier import send_line_notify
+
+        send_line_notify(
+            _format_line_message(
+                "個別面談データ更新が止まりました",
+                summary_lines=[
+                    (result.error or "詳細エラーを取得できませんでした")[:200],
+                ],
+                action_lines=[
+                    "まず 個別予約サマリー を開いて、件数や最新集計日が更新されていないか確認してください",
+                    "次に データソース管理 を開いて、個別予約数のステータスと参照元を確認してください",
+                ],
+                links=[
+                    (
+                        "個別面談データ / 個別予約サマリー",
+                        _build_sheet_url(_BOOKING_METRICS_SHEET_ID, _BOOKING_METRICS_SUMMARY_TAB),
+                    ),
+                    (
+                        "個別面談データ / データソース管理",
+                        _build_sheet_url(_BOOKING_METRICS_SHEET_ID, _BOOKING_METRICS_SOURCE_TAB),
+                    ),
+                ],
+            )
+        )
+
     async def _run_teleapo_sync(self):
         """毎朝: 顧客マスタから AIテレアポ一覧を更新する。"""
         import subprocess
@@ -4516,7 +4941,7 @@ head -3 "{csv_dir}/{csv_filename}"
             if first_error:
                 break
 
-        from .notifier import notify_event, send_line_notify
+        from .notifier import send_line_notify
 
         send_line_notify(
             _format_line_message(
@@ -4588,7 +5013,6 @@ head -3 "{csv_dir}/{csv_filename}"
             f"non_conversion_rows={int(coverage.get('non_conversion_rows', 0) or 0)}"
         )
 
-                notify_event("internal_success", "KPIデータの更新が完了しました。")
     async def _run_kpi_nightly_cache(self):
         """毎晩22:00: KPIキャッシュを再生成（AI秘書が夜間も最新データを参照できるように）"""
         result = await self._execute_tool("kpi_cache_build", tools.kpi_cache_build)
@@ -4642,7 +5066,7 @@ head -3 "{csv_dir}/{csv_filename}"
     async def _run_daily_group_digest(self):
         """毎日21:10: グループLINEの1日分の会話を意思決定向けに要約して報告"""
         import json as _json
-        from .notifier import send_line_notify
+        from .notifier import flush_digest_events, send_line_notify
         from datetime import date
 
         today_str = date.today().isoformat()
@@ -4738,11 +5162,12 @@ head -3 "{csv_dir}/{csv_filename}"
         else:
             logger.warning("daily_group_digest: LINE notification failed")
 
+        flush_digest_events("今日の確認まとめ", kinds=["mail_waiting_digest"])
+
     async def _run_weekly_profile_learning(self):
         """毎週日曜10:00: 過去7日間のグループログからメンバーの会話を分析→profiles.jsonに書き込み"""
         import json as _json
         import anthropic as _anthropic
-        from .notifier import flush_digest_events, send_line_notify
         from datetime import date, timedelta
 
         task_id = self.memory.log_task_start("weekly_profile_learning")
@@ -5124,8 +5549,6 @@ JSON以外の文字は出力しないでください。"""}],
         self._slack_dispatch_running = True
         try:
             await self._run_slack_dispatch_inner()
-        flush_digest_events("今日の確認まとめ", kinds=["mail_waiting_digest"])
-
         finally:
             self._slack_dispatch_running = False
 
@@ -5441,6 +5864,7 @@ JSON以外の文字は出力しないでください。"""}],
     async def _run_slack_ai_team_check(self):
         """定期チェック: Slack #ai-team の新着メッセージを読み取り→LINEに転送"""
         from .slack_reader import fetch_channel_messages
+        from .notifier import send_line_notify
 
         AI_TEAM_CHANNEL = "C0AGLRJ8N3G"
         state_key = "slack_ai_team_last_ts"

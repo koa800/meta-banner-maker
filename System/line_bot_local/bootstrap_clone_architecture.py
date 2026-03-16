@@ -59,9 +59,11 @@ def bootstrap() -> None:
     _write_json_if_missing(
         BRAINS_DIR / "kohara" / "people_private.json",
         {
-            "version": "2026-03-07",
-            "owner": "kohara_clone_brain",
-            "approval_required": True,
+            "version": "2026-03-17",
+            "owner": "self",
+            "disclosure_level": "self-only",
+            "approval_required": "always",
+            "audience": ["僕"],
             "people": {},
             "pending_hypotheses": [],
             "updated_at": datetime.now().isoformat(timespec="seconds"),
@@ -70,9 +72,11 @@ def bootstrap() -> None:
     _write_json_if_missing(
         BRAINS_DIR / "hinata" / "people_private.json",
         {
-            "version": "2026-03-07",
-            "owner": "hinata_brain",
-            "approval_required": True,
+            "version": "2026-03-17",
+            "owner": "internal",
+            "disclosure_level": "role-limited",
+            "approval_required": "always",
+            "audience": ["僕", "上司", "並列"],
             "people": {},
             "pending_hypotheses": [],
             "updated_at": datetime.now().isoformat(timespec="seconds"),

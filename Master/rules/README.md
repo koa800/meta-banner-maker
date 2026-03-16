@@ -1,15 +1,28 @@
 # rules レイヤー
 
-最終更新: 2026-03-09
+最終更新: 2026-03-17
 
 `Master/rules/` は、再現ルールと NG を置く場所です。
 
+## 情報ラベル
+
+- 所有元: internal
+- 開示レベル: role-limited
+- 承認必須: conditional
+- 共有先: 僕 / 上司 / 並列 / 直下
+
 - 入口: `rules.md`
+- 開示境界: `開示境界ルール.md`
+- 実行主体別の運用: `実行主体別の閲覧・出力ルール.md`
 - 具体ルール: `広告・導線ルール.md`
 - 役割: 成功失敗から抽出した判断ルールを残す
 - 昇格先: 3回以上再利用できる原理は `Skills/`
 
 最初に見るファイルは [rules.md](/Users/koa800/Desktop/cursor/Master/rules/rules.md)。
+開示範囲と出力の止め方を見るときは [開示境界ルール.md](/Users/koa800/Desktop/cursor/Master/rules/開示境界ルール.md) を参照する。
+実行主体ごとの閲覧、context、送信権限を見るときは [実行主体別の閲覧・出力ルール.md](/Users/koa800/Desktop/cursor/Master/rules/実行主体別の閲覧・出力ルール.md) を参照する。
+高リスク資産へラベルを付けるときは、同ファイルの `owner / disclosure_level / approval_required / audience` をそのまま使う。
+ラベル対象の抜け確認は `python3 System/scripts/master_label_audit.py` を使う。
 広告と導線の判断を見るときは [広告・導線ルール.md](/Users/koa800/Desktop/cursor/Master/rules/広告・導線ルール.md) を参照する。
 ルール化の前に、`事実 -> 観察 -> 解釈 -> 確度` を分けて残す。
 

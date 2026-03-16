@@ -12,6 +12,30 @@ DEPLOY_DIR="${ADDNESS_DEPLOY_ROOT:-$PROJECT_ROOT}"
 LOG_FILE="$SCRIPT_DIR/service_watchdog.log"
 ORCH_FINGERPRINT_FILE="$SCRIPT_DIR/.orchestrator_fingerprint"
 ORCH_INSTALL_SCRIPT="$DEPLOY_DIR/System/mac_mini/install_orchestrator.sh"
+RUNTIME_RESOLVER="$DEPLOY_DIR/System/scripts/python_runtime.py"
+
+resolve_python() {
+  if [ -f "$RUNTIME_RESOLVER" ]; then
+    /usr/bin/python3 "$RUNTIME_RESOLVER" --print-path --min 3.10 2>/dev/null && return 0
+  fi
+  if [ -x "$HOME/agent-env/bin/python3" ]; then
+    echo "$HOME/agent-env/bin/python3"
+    return 0
+  fi
+  command -v python3 2>/dev/null || echo /usr/bin/python3
+}
+
+PYTHON_JSON="$(resolve_python)"
+
+json_get() {
+  local file_path="$1"
+  local key="$2"
+  "$PYTHON_JSON" -c "import json; print(json.load(open('$file_path')).get('$key',''))" 2>/dev/null || echo ""
+}
+
+json_quote_stdin() {
+  "$PYTHON_JSON" -c "import json,sys; print(json.dumps(sys.stdin.read()))" 2>/dev/null
+}
 
 # --- ログ ---
 log() {
@@ -29,10 +53,10 @@ notify_line() {
   local config_file="$DEPLOY_DIR/line_bot_local/config.json"
   [ -f "$config_file" ] || return 0
   local server_url token escaped_msg
-  server_url=$(python3 -c "import json; print(json.load(open('$config_file')).get('server_url',''))" 2>/dev/null || echo "")
-  token=$(python3 -c "import json; print(json.load(open('$config_file')).get('agent_token',''))" 2>/dev/null || echo "")
+  server_url=$(json_get "$config_file" "server_url")
+  token=$(json_get "$config_file" "agent_token")
   [ -n "$server_url" ] || return 0
-  escaped_msg=$(printf '%s' "$message" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))" 2>/dev/null) || return 0
+  escaped_msg=$(printf '%s' "$message" | json_quote_stdin) || return 0
   curl -s -X POST "$server_url/notify" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $token" \
@@ -162,7 +186,9 @@ fi
 if [ "$RECOVERED" -eq 0 ]; then
   # 正常時は定期的にログ（10回に1回だけ）
   # 最終正常ログの行数で判定
-  NORMAL_COUNT=$(grep -c "OK: 全サービス稼働中" "$LOG_FILE" 2>/dev/null || echo "0")
+  NORMAL_COUNT=$(grep -c "OK: 全サービス稼働中" "$LOG_FILE" 2>/dev/null || true)
+  NORMAL_COUNT=$(printf '%s\n' "$NORMAL_COUNT" | tail -n 1 | tr -d '[:space:]')
+  [ -n "$NORMAL_COUNT" ] || NORMAL_COUNT=0
   if [ "$((NORMAL_COUNT % 10))" -eq 0 ]; then
     log "OK: 全サービス稼働中"
   fi

@@ -1,8 +1,12 @@
 {
-  "version": "2026-03-07",
-  "owner": "kohara_clone_brain",
-  "approval_required": true,
+  "version": "2026-03-17",
+  "owner": "self",
+  "disclosure_level": "self-only",
+  "approval_required": "always",
+  "audience": [
+    "僕"
+  ],
   "people": {},
   "pending_hypotheses": [],
-  "updated_at": "2026-03-07T20:29:57"
+  "updated_at": "2026-03-17T00:00:00"
 }

@@ -1,6 +1,14 @@
 {
   "brain_id": "hinata_brain",
   "kind": "hinata",
+  "owner": "internal",
+  "disclosure_level": "role-limited",
+  "approval_required": "conditional",
+  "audience": [
+    "僕",
+    "上司",
+    "並列"
+  ],
   "update_policy": "verified_facts_only_to_company",
   "sections": {
     "persona": "Master/brains/hinata/persona.md",

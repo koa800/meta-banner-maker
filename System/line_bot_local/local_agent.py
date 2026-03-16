@@ -20,6 +20,8 @@ import requests
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import clone_registry
+
 # Coordinator（ゴール実行エンジン）
 _COORDINATOR_AVAILABLE = False
 try:
@@ -100,8 +102,47 @@ BRAIN_OS_MD = _tcc_safe_path(
 _RUNTIME_DATA_DIR = Path.home() / "agents" / "data"
 _RUNTIME_DATA_DIR.mkdir(parents=True, exist_ok=True)
 OS_SYNC_STATE_FILE = _RUNTIME_DATA_DIR / "os_sync_state.json"
+CONTACT_STATE_FILE = _RUNTIME_DATA_DIR / "contact_state.json"
+DISCLOSURE_EXCEPTION_LOG_FILE = _RUNTIME_DATA_DIR / "disclosure_exceptions.json"
 _SKILLS_ROOT = _PROJECT_ROOT / "Skills"
 _LEGACY_SKILLS_DIR = _SYSTEM_DIR / "line_bot" / "skills"
+
+_MESSAGE_LEVEL_ORDER = {"Lv0": 0, "Lv1": 1, "Lv2": 2, "Lv3": 3}
+_DEFAULT_SEND_AUTHORITY = {
+    "level": "Lv0",
+    "last_updated_at": "",
+    "last_updated_by": "",
+    "note": "",
+    "review_stats": {
+        "templated_streak": 0,
+        "normal_streak": 0,
+        "total_approvals": 0,
+        "total_corrections": 0,
+        "last_review_type": "",
+        "last_review_at": "",
+    },
+}
+_DISCLOSURE_SCOPE_ALIASES = {
+    "operation": "operation",
+    "操作手順": "operation",
+    "judgment": "judgment",
+    "判断基準": "judgment",
+    "background": "background",
+    "背景": "background",
+    "背景事情": "background",
+    "strategy": "strategy",
+    "数値・戦略": "strategy",
+    "strategy_need_to_know": "strategy_need_to_know",
+    "実行に必要な戦略": "strategy_need_to_know",
+    "situation": "situation",
+    "状況": "situation",
+    "required_conditions": "required_conditions",
+    "必要条件": "required_conditions",
+    "people_insight": "people_insight",
+    "対人見立て": "people_insight",
+    "hypothesis": "hypothesis",
+    "仮説": "hypothesis",
+}
 
 # Claude Code CLI（ブラウザ系の例外処理）
 # 秘書アカウント（koa800.secretary@gmail.com）を優先しつつ、
@@ -2123,40 +2164,465 @@ def lookup_sender_profile(sender_name: str, chatwork_account_id: str = ""):
     return profile
 
 
+def _load_contact_state_runtime() -> dict:
+    try:
+        if CONTACT_STATE_FILE.exists():
+            data = json.loads(CONTACT_STATE_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except Exception as e:
+        print(f"⚠️ contact_state 読み込みエラー: {e}")
+    return {}
+
+
+def _save_contact_state_runtime(contact_state: dict):
+    try:
+        CONTACT_STATE_FILE.write_text(
+            json.dumps(contact_state, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        print(f"⚠️ contact_state 保存エラー: {e}")
+
+
+def _normalize_send_authority(send_authority: dict | None) -> dict:
+    base = json.loads(json.dumps(_DEFAULT_SEND_AUTHORITY, ensure_ascii=False))
+    payload = send_authority if isinstance(send_authority, dict) else {}
+    base["level"] = payload.get("level", base["level"]) if payload.get("level") in _MESSAGE_LEVEL_ORDER else base["level"]
+    base["last_updated_at"] = str(payload.get("last_updated_at", "") or "")
+    base["last_updated_by"] = str(payload.get("last_updated_by", "") or "")
+    base["note"] = str(payload.get("note", "") or "")
+    history = payload.get("history", [])
+    base["history"] = history if isinstance(history, list) else []
+
+    review_stats = payload.get("review_stats", {})
+    if not isinstance(review_stats, dict):
+        review_stats = {}
+    merged_stats = dict(base["review_stats"])
+    for key in merged_stats:
+        value = review_stats.get(key)
+        if key.endswith("_streak") or key.startswith("total_"):
+            merged_stats[key] = int(value or 0)
+        else:
+            merged_stats[key] = str(value or "")
+    base["review_stats"] = merged_stats
+
+    promotion_candidate = payload.get("promotion_candidate")
+    base["promotion_candidate"] = promotion_candidate if isinstance(promotion_candidate, dict) else {}
+    return base
+
+
+def _normalize_delivery_targets(delivery_targets: dict | None) -> dict:
+    payload = delivery_targets if isinstance(delivery_targets, dict) else {}
+    normalized = {
+        "line": {
+            "user_id": "",
+            "group_id": "",
+            "last_seen_at": "",
+        },
+        "chatwork": {
+            "room_id": "",
+            "account_id": "",
+            "last_seen_at": "",
+        },
+        "email": {
+            "address": "",
+            "last_seen_at": "",
+        },
+    }
+    for channel, fields in normalized.items():
+        source = payload.get(channel, {})
+        if not isinstance(source, dict):
+            source = {}
+        for key in fields:
+            fields[key] = str(source.get(key, "") or "")
+    return normalized
+
+
+def _normalize_contact_state_entry(entry) -> dict:
+    if isinstance(entry, str):
+        entry = {"last_contact": entry}
+    if not isinstance(entry, dict):
+        entry = {}
+    normalized = dict(entry)
+    conversations = normalized.get("conversations", [])
+    normalized["conversations"] = conversations if isinstance(conversations, list) else []
+    normalized["send_authority"] = _normalize_send_authority(normalized.get("send_authority"))
+    normalized["delivery_targets"] = _normalize_delivery_targets(normalized.get("delivery_targets"))
+    return normalized
+
+
+def _resolve_contact_state_entry(
+    person_name: str,
+    contact_state: dict | None = None,
+) -> tuple[str, str | None, dict | None, dict, str | None]:
+    matched_key, profile, _ = _resolve_person_identity(person_name)
+    state = contact_state if isinstance(contact_state, dict) else _load_contact_state_runtime()
+    source_key = None
+    if matched_key and matched_key in state:
+        source_key = matched_key
+    elif person_name in state:
+        source_key = person_name
+    entry = _normalize_contact_state_entry(state.get(source_key))
+    canonical_key = matched_key or person_name.strip() or "unknown"
+    return canonical_key, matched_key, profile, entry, source_key
+
+
+def _classify_message_review(text: str) -> str:
+    content = str(text or "").strip()
+    if not content:
+        return "normal"
+    if len(content) <= 120 and content.count("\n") <= 1:
+        return "templated"
+    return "normal"
+
+
+def _build_promotion_candidate(level: str, review_stats: dict) -> dict:
+    templated_streak = int(review_stats.get("templated_streak", 0) or 0)
+    normal_streak = int(review_stats.get("normal_streak", 0) or 0)
+    current_level = _MESSAGE_LEVEL_ORDER.get(level, 0)
+
+    if current_level <= _MESSAGE_LEVEL_ORDER["Lv1"] and templated_streak >= 5:
+        return {
+            "suggested_level": "Lv2",
+            "reason": f"定型連絡を {templated_streak} 回連続で大きな修正なしで承認",
+            "status": "pending",
+            "suggested_at": datetime.now().isoformat(),
+        }
+
+    if current_level <= _MESSAGE_LEVEL_ORDER["Lv2"] and normal_streak >= 10:
+        return {
+            "suggested_level": "Lv3",
+            "reason": f"通常連絡を {normal_streak} 回連続で問題なく承認",
+            "status": "pending",
+            "suggested_at": datetime.now().isoformat(),
+        }
+
+    return {}
+
+
+def _record_send_authority_review(sender_name: str, message_text: str, approved_without_major_edit: bool) -> dict:
+    if not sender_name:
+        return {}
+
+    contact_state = _load_contact_state_runtime()
+    canonical_key, _, _, entry, source_key = _resolve_contact_state_entry(sender_name, contact_state)
+    send_authority = entry.get("send_authority", _normalize_send_authority({}))
+    review_stats = send_authority.get("review_stats", {})
+    review_type = _classify_message_review(message_text)
+
+    if approved_without_major_edit:
+        review_stats["total_approvals"] = int(review_stats.get("total_approvals", 0) or 0) + 1
+        if review_type == "templated":
+            review_stats["templated_streak"] = int(review_stats.get("templated_streak", 0) or 0) + 1
+        else:
+            review_stats["normal_streak"] = int(review_stats.get("normal_streak", 0) or 0) + 1
+    else:
+        review_stats["total_corrections"] = int(review_stats.get("total_corrections", 0) or 0) + 1
+        if review_type == "templated":
+            review_stats["templated_streak"] = 0
+        else:
+            review_stats["normal_streak"] = 0
+
+    review_stats["last_review_type"] = review_type
+    review_stats["last_review_at"] = datetime.now().isoformat()
+    send_authority["review_stats"] = review_stats
+
+    new_candidate = _build_promotion_candidate(send_authority.get("level", "Lv0"), review_stats)
+    existing_candidate = send_authority.get("promotion_candidate", {})
+    if new_candidate:
+        if existing_candidate.get("suggested_level") != new_candidate.get("suggested_level") or existing_candidate.get("status") != "pending":
+            send_authority["promotion_candidate"] = new_candidate
+            new_candidate["person_name"] = canonical_key
+    entry["send_authority"] = send_authority
+    if source_key and source_key != canonical_key:
+        contact_state.pop(source_key, None)
+    contact_state[canonical_key] = entry
+    _save_contact_state_runtime(contact_state)
+    return new_candidate
+
+
+def _update_send_authority(person_name: str, level: str, approved_by: str = "甲原海人", note: str = "") -> tuple[str, dict]:
+    if level not in _MESSAGE_LEVEL_ORDER:
+        raise ValueError(f"未対応の権限レベルです: {level}")
+
+    contact_state = _load_contact_state_runtime()
+    canonical_key, _, _, entry, source_key = _resolve_contact_state_entry(person_name, contact_state)
+    send_authority = entry.get("send_authority", _normalize_send_authority({}))
+    previous_level = send_authority.get("level", "Lv0")
+    send_authority["level"] = level
+    send_authority["last_updated_at"] = datetime.now().isoformat()
+    send_authority["last_updated_by"] = approved_by
+    send_authority["note"] = note
+    send_authority["promotion_candidate"] = {}
+    history = send_authority.get("history", [])
+    history.append(
+        {
+            "previous_level": previous_level,
+            "new_level": level,
+            "approved_by": approved_by,
+            "note": note,
+            "updated_at": send_authority["last_updated_at"],
+        }
+    )
+    send_authority["history"] = history[-20:]
+    entry["send_authority"] = send_authority
+    if source_key and source_key != canonical_key:
+        contact_state.pop(source_key, None)
+    contact_state[canonical_key] = entry
+    _save_contact_state_runtime(contact_state)
+    return canonical_key, send_authority
+
+
+def _inspect_send_authority(person_name: str) -> tuple[str, dict]:
+    canonical_key, _, _, entry, _ = _resolve_contact_state_entry(person_name)
+    return canonical_key, entry.get("send_authority", _normalize_send_authority({}))
+
+
+def _load_disclosure_exception_log() -> list[dict]:
+    try:
+        if DISCLOSURE_EXCEPTION_LOG_FILE.exists():
+            data = json.loads(DISCLOSURE_EXCEPTION_LOG_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return data
+    except Exception as e:
+        print(f"⚠️ disclosure_exceptions 読み込みエラー: {e}")
+    return []
+
+
+def _save_disclosure_exception_log(entries: list[dict]):
+    try:
+        DISCLOSURE_EXCEPTION_LOG_FILE.write_text(
+            json.dumps(entries, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        print(f"⚠️ disclosure_exceptions 保存エラー: {e}")
+
+
+def _log_disclosure_exception(
+    recipient: str,
+    subject: str,
+    allowed_scope: str,
+    approval_type: str = "今回限り",
+    approved_by: str = "甲原海人",
+    note: str = "",
+) -> dict:
+    entries = _load_disclosure_exception_log()
+    scope_tokens = []
+    for token in re.split(r"[、,，/・]", allowed_scope):
+        normalized = _DISCLOSURE_SCOPE_ALIASES.get(str(token or "").strip(), "")
+        if normalized and normalized not in scope_tokens:
+            scope_tokens.append(normalized)
+    entry = {
+        "exception_id": datetime.now().strftime("%Y%m%d%H%M%S%f"),
+        "recipient": recipient,
+        "subject": subject,
+        "allowed_scope": allowed_scope,
+        "scope_tokens": scope_tokens,
+        "approval_type": approval_type,
+        "approved_by": approved_by,
+        "approved_at": datetime.now().isoformat(),
+        "consumed_at": "",
+        "note": note,
+    }
+    entries.append(entry)
+    entries = entries[-200:]
+    _save_disclosure_exception_log(entries)
+    return entry
+
+
+def _sync_delivery_targets_from_reply_task(sender_name: str, arguments: dict, profile: dict | None = None):
+    if not sender_name:
+        return
+
+    contact_state = _load_contact_state_runtime()
+    canonical_key, _, _, entry, source_key = _resolve_contact_state_entry(sender_name, contact_state)
+    delivery_targets = entry.get("delivery_targets", _normalize_delivery_targets({}))
+    now = datetime.now().isoformat()
+    changed = False
+
+    platform = str(arguments.get("platform", "line") or "line").strip().lower()
+    if platform == "line":
+        user_id = str(arguments.get("sender_id", "") or "").strip()
+        group_id = str(arguments.get("group_id", "") or "").strip()
+        if user_id:
+            line_target = delivery_targets.get("line", {})
+            if line_target.get("user_id") != user_id:
+                line_target["user_id"] = user_id
+                changed = True
+            if group_id and line_target.get("group_id") != group_id:
+                line_target["group_id"] = group_id
+                changed = True
+            if line_target.get("last_seen_at") != now:
+                line_target["last_seen_at"] = now
+                changed = True
+            delivery_targets["line"] = line_target
+    elif platform == "chatwork":
+        room_id = str(arguments.get("chatwork_room_id", "") or arguments.get("group_id", "") or "").strip()
+        account_id = str(arguments.get("chatwork_account_id", "") or "").strip()
+        if room_id:
+            cw_target = delivery_targets.get("chatwork", {})
+            if cw_target.get("room_id") != room_id:
+                cw_target["room_id"] = room_id
+                changed = True
+            if account_id and cw_target.get("account_id") != account_id:
+                cw_target["account_id"] = account_id
+                changed = True
+            if cw_target.get("last_seen_at") != now:
+                cw_target["last_seen_at"] = now
+                changed = True
+            delivery_targets["chatwork"] = cw_target
+
+    email = ""
+    if isinstance(profile, dict):
+        email = str(profile.get("email", "") or "").strip()
+    if email:
+        email_target = delivery_targets.get("email", {})
+        if email_target.get("address") != email:
+            email_target["address"] = email
+            changed = True
+        if not email_target.get("last_seen_at"):
+            email_target["last_seen_at"] = now
+            changed = True
+        delivery_targets["email"] = email_target
+
+    if not changed:
+        return
+
+    entry["delivery_targets"] = delivery_targets
+    if source_key and source_key != canonical_key:
+        contact_state.pop(source_key, None)
+    contact_state[canonical_key] = entry
+    _save_contact_state_runtime(contact_state)
+
+
+def _normalize_delivery_channel(channel: str) -> str:
+    normalized = str(channel or "").strip().lower()
+    aliases = {
+        "line": "line",
+        "ライン": "line",
+        "chatwork": "chatwork",
+        "cw": "chatwork",
+        "チャットワーク": "chatwork",
+        "email": "email",
+        "mail": "email",
+        "メール": "email",
+    }
+    return aliases.get(normalized, "")
+
+
+def _register_delivery_target(
+    person_name: str,
+    channel: str,
+    primary_value: str,
+    secondary_value: str = "",
+    approved_by: str = "甲原海人",
+    note: str = "",
+) -> tuple[str, dict]:
+    normalized_channel = _normalize_delivery_channel(channel)
+    if normalized_channel not in {"line", "chatwork", "email"}:
+        raise ValueError(f"未対応の送信チャネルです: {channel}")
+
+    primary = str(primary_value or "").strip()
+    secondary = str(secondary_value or "").strip()
+    if not primary:
+        raise ValueError("送信先の値が空です")
+
+    contact_state = _load_contact_state_runtime()
+    canonical_key, _, _, entry, source_key = _resolve_contact_state_entry(person_name, contact_state)
+    delivery_targets = entry.get("delivery_targets", _normalize_delivery_targets({}))
+    target = dict(delivery_targets.get(normalized_channel, {}) or {})
+    now = datetime.now().isoformat()
+
+    if normalized_channel == "line":
+        target["user_id"] = primary
+        if secondary:
+            target["group_id"] = secondary
+    elif normalized_channel == "chatwork":
+        target["room_id"] = primary
+        if secondary:
+            target["account_id"] = secondary
+    elif normalized_channel == "email":
+        target["address"] = primary
+    target["last_seen_at"] = now
+    delivery_targets[normalized_channel] = target
+    entry["delivery_targets"] = delivery_targets
+
+    updates = entry.get("delivery_target_updates", [])
+    if not isinstance(updates, list):
+        updates = []
+    updates.append(
+        {
+            "channel": normalized_channel,
+            "primary_value": primary,
+            "secondary_value": secondary,
+            "approved_by": approved_by,
+            "note": note,
+            "updated_at": now,
+        }
+    )
+    entry["delivery_target_updates"] = updates[-20:]
+
+    if source_key and source_key != canonical_key:
+        contact_state.pop(source_key, None)
+    contact_state[canonical_key] = entry
+    _save_contact_state_runtime(contact_state)
+    return canonical_key, entry
+
+
+def _inspect_delivery_target(person_name: str) -> tuple[str, dict]:
+    canonical_key, _, _, entry, _ = _resolve_contact_state_entry(person_name)
+    return canonical_key, entry.get("delivery_targets", _normalize_delivery_targets({}))
+
+
 # ===== 情報開示ルール =====
-# 甲原さんとして返信するとき、相手のカテゴリに応じて出していい情報を制御する
-# 秘書グループでの甲原さん本人とのやり取りには制限なし
+# 甲原さんとして返信するとき、相手区分に応じて出していい情報を制御する
+# 「脳は同じ、出力だけを相手別に絞る」という現在ルールを反映する
 _DISCLOSURE_RULES = {
-    "owner": {
-        # 甲原さん本人 → 全情報OK
-        "categories": {"本人"},
-        "allowed": {"schedule", "private", "kpi", "project", "profiles", "general"},
+    "僕": {
+        "allowed": {"all"},
         "note": "",
     },
-    "internal": {
-        # 内部メンバー → 事業情報OK、個人情報NG
-        "categories": {"上司", "直下メンバー", "横（並列）"},
-        "allowed": {"kpi", "project", "general"},
+    "上司": {
+        "allowed": {"operation", "judgment", "background", "strategy"},
         "note": (
-            "【情報開示制限: 内部メンバー】\n"
-            "- 甲原の予定・スケジュールは教えない（「本人に直接聞いてください」と返す）\n"
-            "- 甲原のプライベート・個人的な事情は教えない\n"
-            "- 他の人のプロファイル情報は教えない\n"
-            "- 事業数値（売上・ROAS等）・プロジェクト進捗はOK\n"
+            "【開示境界: 上司】\n"
+            "- 操作手順、判断基準、背景事情、数値・戦略は共有してよい\n"
+            "- 対人見立ては必要な場合だけ要約して共有する\n"
+            "- 認証情報、個人情報、未公開の契約条件、生の内面は出さない\n"
+            "- 返答は結論 -> 理由/背景 -> 次アクションの順でまとめる\n"
         ),
     },
-    "external": {
-        # 外部パートナー・未登録者 → 一般知識のみ
-        "categories": {"外部パートナー", ""},
-        "allowed": {"general"},
+    "並列": {
+        "allowed": {"operation", "judgment", "background", "strategy"},
         "note": (
-            "【情報開示制限: 外部メンバー】\n"
-            "- 甲原の予定・スケジュールは教えない\n"
-            "- 甲原のプライベート・個人的な事情は教えない\n"
-            "- 事業数値（売上・ROAS・広告費等）は一切教えない\n"
-            "- プロジェクト進捗・社内の動きは教えない\n"
-            "- 他の人のプロファイル情報は教えない\n"
-            "- 一般的なビジネス知識・公開情報のみ回答OK\n"
+            "【開示境界: 並列】\n"
+            "- 操作手順、判断基準、背景事情、数値・戦略は共有してよい\n"
+            "- 対人見立ては必要な場合だけ要約して共有する\n"
+            "- 認証情報、個人情報、未公開の契約条件、生の内面は出さない\n"
+            "- 返答は結論 -> 理由/背景 -> 次アクションの順でまとめる\n"
+        ),
+    },
+    "直下": {
+        "allowed": {"operation", "judgment", "background", "strategy_need_to_know"},
+        "note": (
+            "【開示境界: 直下】\n"
+            "- その人の目的に必要な情報だけ渡す。渡しすぎて混乱させない\n"
+            "- 操作手順、判断基準、背景事情は実行に必要な範囲だけ共有する\n"
+            "- 数値・戦略は実行に必要な範囲だけ共有する\n"
+            "- 対人見立ては原則出さない。必要なら伝え方レベルに要約する\n"
+            "- 秘匿情報、生の人物評価、未整理の内面は出さない\n"
+        ),
+    },
+    "外部": {
+        "allowed": {"situation", "required_conditions"},
+        "note": (
+            "【開示境界: 外部】\n"
+            "- 渡すのは状況と必要条件までに留める\n"
+            "- 具体的な内部判断、社内進行、未公開の数値・戦略、対人見立ては出さない\n"
+            "- 操作手順も必要最小限に絞る\n"
+            "- 認証情報、個人情報、秘匿情報は出さない\n"
         ),
     },
 }
@@ -2164,10 +2630,8 @@ _DISCLOSURE_RULES = {
 
 def _get_disclosure_level(category: str) -> dict:
     """送信者カテゴリから開示レベルを返す"""
-    for level in _DISCLOSURE_RULES.values():
-        if category in level["categories"]:
-            return level
-    return _DISCLOSURE_RULES["external"]  # 未登録者は外部扱い
+    audience = clone_registry.map_category_to_audience(category)
+    return _DISCLOSURE_RULES.get(audience, _DISCLOSURE_RULES["外部"])
 
 
 def build_sender_context(sender_name: str) -> str:
@@ -2837,6 +3301,114 @@ def call_claude_api(instruction: str, task: dict):
                     return False, f"⚠️  「{person_name}」さんのプロファイルが見つかりません"
             return True, "メモ保存完了"
 
+        if function_name == "update_send_authority":
+            person_name = arguments.get("person_name", "")
+            level = arguments.get("level", "")
+            note = arguments.get("note", "")
+            approved_by = arguments.get("approved_by", "甲原海人")
+            if not person_name or not level:
+                return False, "person_name と level が必要です"
+            try:
+                canonical_key, send_authority = _update_send_authority(
+                    person_name=person_name,
+                    level=level,
+                    approved_by=approved_by,
+                    note=note,
+                )
+            except ValueError as e:
+                return False, str(e)
+            return True, f"🔐 {canonical_key}さんの送信権限を {send_authority.get('level', level)} に更新しました"
+
+        if function_name == "register_delivery_target":
+            person_name = arguments.get("person_name", "")
+            channel = arguments.get("channel", "")
+            primary_value = arguments.get("primary_value", "")
+            secondary_value = arguments.get("secondary_value", "")
+            note = arguments.get("note", "")
+            approved_by = arguments.get("approved_by", "甲原海人")
+            if not person_name or not channel or not primary_value:
+                return False, "person_name / channel / primary_value が必要です"
+            try:
+                canonical_key, entry = _register_delivery_target(
+                    person_name=person_name,
+                    channel=channel,
+                    primary_value=primary_value,
+                    secondary_value=secondary_value,
+                    approved_by=approved_by,
+                    note=note,
+                )
+            except ValueError as e:
+                return False, str(e)
+            targets = entry.get("delivery_targets", {})
+            target = targets.get(_normalize_delivery_channel(channel), {})
+            return True, (
+                f"📮 {canonical_key}さんの送信先を登録しました\n"
+                f"チャネル: {_normalize_delivery_channel(channel)}\n"
+                f"内容: {json.dumps(target, ensure_ascii=False)}"
+            )
+
+        if function_name == "inspect_delivery_target":
+            person_name = arguments.get("person_name", "")
+            if not person_name:
+                return False, "person_name が必要です"
+            canonical_key, targets = _inspect_delivery_target(person_name)
+            lines = [f"📮 {canonical_key} さんの送信先"]
+            for channel in ("line", "chatwork", "email"):
+                target = targets.get(channel, {}) if isinstance(targets, dict) else {}
+                values = [str(value) for key, value in target.items() if key != "last_seen_at" and value]
+                if values:
+                    suffix = f" / 最終更新: {target.get('last_seen_at', '')}" if target.get("last_seen_at") else ""
+                    lines.append(f"- {channel}: {', '.join(values)}{suffix}")
+                else:
+                    lines.append(f"- {channel}: 未登録")
+            return True, "\n".join(lines)
+
+        if function_name == "inspect_send_authority":
+            person_name = arguments.get("person_name", "")
+            if not person_name:
+                return False, "person_name が必要です"
+            canonical_key, send_authority = _inspect_send_authority(person_name)
+            review_stats = send_authority.get("review_stats", {})
+            candidate = send_authority.get("promotion_candidate", {})
+            lines = [
+                f"🔐 {canonical_key} さんの送信権限",
+                f"現在レベル: {send_authority.get('level', 'Lv0')}",
+                f"最終更新: {send_authority.get('last_updated_at', '') or '未設定'}",
+                f"更新者: {send_authority.get('last_updated_by', '') or '未設定'}",
+                f"定型承認連続: {int(review_stats.get('templated_streak', 0) or 0)} 回",
+                f"通常承認連続: {int(review_stats.get('normal_streak', 0) or 0)} 回",
+            ]
+            if candidate:
+                lines.append(
+                    f"昇格候補: {candidate.get('suggested_level', '')} / {candidate.get('reason', '')}"
+                )
+            return True, "\n".join(lines)
+
+        if function_name == "log_disclosure_exception":
+            recipient = arguments.get("recipient", "")
+            subject = arguments.get("subject", "")
+            allowed_scope = arguments.get("allowed_scope", "")
+            approval_type = arguments.get("approval_type", "今回限り")
+            note = arguments.get("note", "")
+            approved_by = arguments.get("approved_by", "甲原海人")
+            if not recipient or not subject or not allowed_scope:
+                return False, "recipient / subject / allowed_scope が必要です"
+            entry = _log_disclosure_exception(
+                recipient=recipient,
+                subject=subject,
+                allowed_scope=allowed_scope,
+                approval_type=approval_type,
+                approved_by=approved_by,
+                note=note,
+            )
+            return True, (
+                f"🪪 例外承認を記録しました\n"
+                f"相手: {entry['recipient']}\n"
+                f"対象: {entry['subject']}\n"
+                f"範囲: {entry['allowed_scope']}\n"
+                f"扱い: {entry['approval_type']}"
+            )
+
         # ===== フィードバック保存タスク =====
         if function_name == "capture_feedback":
             fb_type = arguments.get("type", "note")
@@ -2893,6 +3465,20 @@ def call_claude_api(instruction: str, task: dict):
                 "timestamp": datetime.now().isoformat(),
             }
             save_feedback_example(fb_data)
+            promotion_note = ""
+            if fb_type in {"approval", "correction"}:
+                candidate = _record_send_authority_review(
+                    sender_name=fb_data.get("sender_name", ""),
+                    message_text=fb_data.get("actual_sent", "") or fb_data.get("ai_suggested", ""),
+                    approved_without_major_edit=(fb_type == "approval"),
+                )
+                if candidate:
+                    promotion_note = (
+                        f"\n💡 {candidate.get('person_name', fb_data.get('sender_name', ''))} さんは "
+                        f"{candidate.get('suggested_level', '')} 候補です"
+                        f"（{candidate.get('reason', '')}）"
+                        f"\n反映するなら: 権限 {candidate.get('person_name', fb_data.get('sender_name', ''))} {candidate.get('suggested_level', '')}"
+                    )
             if fb_type == "note":
                 note_preview = fb_data.get("note", "")[:40]
                 print(f"   📝 スタイルノート保存: 「{note_preview}」")
@@ -2900,8 +3486,13 @@ def call_claude_api(instruction: str, task: dict):
             else:
                 sender = fb_data.get("sender_name", "")
                 actual = fb_data.get("actual_sent", "")[:30]
-                print(f"   📝 修正例保存: {sender} → 「{actual}」")
-                return True, f"📝 修正例を学習しました"
+                if fb_type == "approval":
+                    print(f"   📝 承認例保存: {sender} → 「{actual}」")
+                else:
+                    print(f"   📝 修正例保存: {sender} → 「{actual}」")
+                if fb_type == "approval":
+                    return True, f"📝 承認パターンを学習しました{promotion_note}"
+                return True, f"📝 修正例を学習しました{promotion_note}"
 
         # ===== 返信案生成タスクの専用処理 =====
         if function_name == "generate_reply_suggestion":
@@ -2921,6 +3512,7 @@ def call_claude_api(instruction: str, task: dict):
 
             # プロファイルから送信者情報を取得（Chatwork account_idでも検索）
             profile = lookup_sender_profile(sender_name, chatwork_account_id=cw_account_id)
+            _sync_delivery_targets_from_reply_task(sender_name, arguments, profile)
             profile_info = ""
             category_line = ""
             if profile:
@@ -3294,6 +3886,7 @@ def call_claude_api(instruction: str, task: dict):
                         existing = {"last_contact": existing, "conversations": []}
                     elif not isinstance(existing, dict):
                         existing = {"conversations": []}
+                    # send_authority などの個人別設定は既存 dict 上で保持する
                     existing["last_contact"] = datetime.now().isoformat()
                     # 会話要約を追記（1人あたり最大20件）
                     conv_entry = {

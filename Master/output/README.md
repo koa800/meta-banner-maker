@@ -1,8 +1,35 @@
 # output レイヤー
 
-最終更新: 2026-03-14
+最終更新: 2026-03-17
+
+## 情報ラベル
+
+- 所有元: internal
+- 開示レベル: task-limited
+- 承認必須: conditional
+- 共有先: 僕 / 上司 / 並列 / 直下
 
 ここは、実際に出した成果物と、その結果を残す場所です。大事なのは「出したもの」より「次回の判断に戻せる形で残すこと」です。
+
+## 情報ラベルの既定値
+
+- `Master/output/経理/**`
+  - 所有元: `self`
+  - 開示レベル: `self-only`
+  - 承認必須: `always`
+  - 共有先: `僕`
+- `Master/output/引き継ぎ/**`
+  - 所有元: `internal`
+  - 開示レベル: `task-limited`
+  - 承認必須: `conditional`
+  - 共有先: `僕 / 上司 / 並列 / 直下`
+- `Master/output/*.md` と review template
+  - 所有元: `internal`
+  - 開示レベル: `task-limited`
+  - 承認必須: `conditional`
+  - 共有先: `僕 / 上司 / 並列 / 直下`
+
+ファイルに個別ラベルがある場合は、上の既定値より個別ラベルを優先する。
 
 ## 置くもの
 

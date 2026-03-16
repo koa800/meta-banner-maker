@@ -2,7 +2,37 @@
 # LINE Bot Local Agent 起動スクリプト
 # 未設定なら Secret Manager から ANTHROPIC_API_KEY / LOCAL_AGENT_TOKEN を取得して注入（gcloud 利用時）
 
-cd "$(dirname "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
+resolve_runtime_resolver() {
+  local candidate
+  for candidate in \
+    "$SCRIPT_DIR/../scripts/python_runtime.py" \
+    "$SCRIPT_DIR/../System/scripts/python_runtime.py"
+  do
+    if [ -f "$candidate" ]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+resolve_python() {
+  local resolver
+  resolver="$(resolve_runtime_resolver 2>/dev/null || true)"
+  if [ -n "$resolver" ]; then
+    /usr/bin/python3 "$resolver" --print-path --min 3.10 2>/dev/null && return 0
+  fi
+
+  if [ -x "$HOME/agent-env/bin/python3" ]; then
+    echo "$HOME/agent-env/bin/python3"
+    return 0
+  fi
+
+  command -v python3 2>/dev/null || echo /usr/bin/python3
+}
 
 # gcloud でシークレット取得（5秒タイムアウト）
 fetch_secret() {
@@ -21,4 +51,5 @@ elif command -v gcloud >/dev/null 2>&1; then
   echo "   環境変数 ANTHROPIC_API_KEY / LOCAL_AGENT_TOKEN を手動で設定してください"
 fi
 
-exec /usr/bin/python3 local_agent.py
+PYTHON_BIN="$(resolve_python)"
+exec "$PYTHON_BIN" -u local_agent.py

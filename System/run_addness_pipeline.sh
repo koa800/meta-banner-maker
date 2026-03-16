@@ -2,9 +2,23 @@
 # Addnessパイプライン実行スクリプト
 # 成功・失敗どちらもSlack（定常業務）に通知する
 
-PYTHON=/usr/bin/python3
-SYSTEM_DIR="/Users/koa800/Desktop/cursor/System"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+RUNTIME_RESOLVER="$SCRIPT_DIR/scripts/python_runtime.py"
+SYSTEM_DIR="$SCRIPT_DIR"
 LOG="$SYSTEM_DIR/addness.log"
+
+resolve_python() {
+    if [ -f "$RUNTIME_RESOLVER" ]; then
+        /usr/bin/python3 "$RUNTIME_RESOLVER" --print-path --min 3.10 2>/dev/null && return 0
+    fi
+    if [ -x "$HOME/agent-env/bin/python3" ]; then
+        echo "$HOME/agent-env/bin/python3"
+        return 0
+    fi
+    command -v python3 2>/dev/null || echo /usr/bin/python3
+}
+
+PYTHON="$(resolve_python)"
 
 resolve_webhook_url() {
     "$PYTHON" - <<'PY'
@@ -79,7 +93,7 @@ run_step() {
     eval "$var_name=\"\$output\""
 }
 
-export PATH=/usr/local/bin:/usr/bin:/bin
+export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
 run_step "addness_fetcher"         OUT_FETCHER   $PYTHON "$SYSTEM_DIR/addness_fetcher.py"
 run_step "addness_to_context"      OUT_CONTEXT   $PYTHON "$SYSTEM_DIR/addness_to_context.py"

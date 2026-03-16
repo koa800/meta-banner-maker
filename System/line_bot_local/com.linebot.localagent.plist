@@ -9,9 +9,8 @@
     <array>
         <string>/usr/bin/caffeinate</string>
         <string>-s</string>
-        <string>/usr/bin/python3</string>
-        <string>-u</string>
-        <string>/Users/koa800/Desktop/cursor/System/line_bot_local/local_agent.py</string>
+        <string>/bin/bash</string>
+        <string>/Users/koa800/Desktop/cursor/System/line_bot_local/run_agent.sh</string>
     </array>
 
     <key>RunAtLoad</key>
@@ -35,7 +34,7 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin</string>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
         <key>HOME</key>

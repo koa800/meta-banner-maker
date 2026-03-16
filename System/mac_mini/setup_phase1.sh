@@ -51,14 +51,37 @@ echo "  -> git, python3.12, node, rclone, jq, coreutils, gcloud"
 # ---- Python 仮想環境 ----
 echo "[4/6] Python 仮想環境を作成..."
 VENV_PATH="$HOME/agent-env"
-if [ -d "$VENV_PATH" ]; then
-    echo "  -> 既に存在: $VENV_PATH"
+BREW_PYTHON="$(brew --prefix python@3.12 2>/dev/null)/bin/python3.12"
+if [ ! -x "$BREW_PYTHON" ]; then
+    BREW_PYTHON="$(command -v python3.12 2>/dev/null || true)"
+fi
+if [ -z "$BREW_PYTHON" ] || [ ! -x "$BREW_PYTHON" ]; then
+    echo "  -> python3.12 が見つかりません。Homebrew の python@3.12 を確認してください。"
+    exit 1
+fi
+
+if [ -d "$VENV_PATH" ] && [ -x "$VENV_PATH/bin/python3" ]; then
+    if "$VENV_PATH/bin/python3" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)" 2>/dev/null; then
+        echo "  -> 既に存在: $VENV_PATH"
+    else
+        echo "  -> 既存仮想環境が Python 3.10 未満のため再作成します"
+        rm -rf "$VENV_PATH"
+        "$BREW_PYTHON" -m venv "$VENV_PATH"
+        echo "  -> 作成: $VENV_PATH"
+    fi
 else
-    python3 -m venv "$VENV_PATH"
+    rm -rf "$VENV_PATH"
+    "$BREW_PYTHON" -m venv "$VENV_PATH"
     echo "  -> 作成: $VENV_PATH"
 fi
+
+if ! "$VENV_PATH/bin/python3" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"; then
+    echo "  -> 仮想環境の Python が 3.10 以上ではありません"
+    exit 1
+fi
+
 source "$VENV_PATH/bin/activate"
-pip install --upgrade pip setuptools wheel
+"$VENV_PATH/bin/python3" -m pip install --upgrade pip setuptools wheel
 echo "  -> pip, setuptools, wheel を更新"
 
 # ---- Google Cloud SDK 初期設定 ----
@@ -105,18 +128,18 @@ SYSTEM_DIR="$REPO_PATH/System"
 if [ -d "$SYSTEM_DIR" ]; then
     # ローカルエージェント依存関係
     if [ -f "$SYSTEM_DIR/line_bot_local/requirements.txt" ]; then
-        pip install -r "$SYSTEM_DIR/line_bot_local/requirements.txt"
+        "$VENV_PATH/bin/python3" -m pip install -r "$SYSTEM_DIR/line_bot_local/requirements.txt"
         echo "  -> line_bot_local 依存関係インストール済み"
     fi
 
     # Playwright
-    pip install playwright apscheduler fastapi uvicorn watchdog pyyaml aiohttp aiosqlite
-    playwright install chromium
+    "$VENV_PATH/bin/python3" -m pip install playwright apscheduler fastapi uvicorn watchdog pyyaml aiohttp aiosqlite
+    "$VENV_PATH/bin/python3" -m playwright install chromium
     echo "  -> Playwright + オーケストレーター依存関係インストール済み"
 
     # オーケストレーター依存関係
     if [ -f "$SYSTEM_DIR/mac_mini/agent_orchestrator/requirements.txt" ]; then
-        pip install -r "$SYSTEM_DIR/mac_mini/agent_orchestrator/requirements.txt"
+        "$VENV_PATH/bin/python3" -m pip install -r "$SYSTEM_DIR/mac_mini/agent_orchestrator/requirements.txt"
         echo "  -> agent_orchestrator 依存関係インストール済み"
     fi
 fi

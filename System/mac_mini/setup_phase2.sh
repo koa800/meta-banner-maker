@@ -15,6 +15,23 @@ set -e
 REPO_DIR="$HOME/Desktop/cursor"
 SYSTEM_DIR="$REPO_DIR/System"
 VENV_PATH="$HOME/agent-env"
+VENV_PYTHON="$VENV_PATH/bin/python3"
+RUNTIME_RESOLVER="$SYSTEM_DIR/scripts/python_runtime.py"
+
+resolve_python() {
+    if [ -x "$VENV_PYTHON" ]; then
+        echo "$VENV_PYTHON"
+        return 0
+    fi
+
+    if [ -f "$RUNTIME_RESOLVER" ]; then
+        /usr/bin/python3 "$RUNTIME_RESOLVER" --print-path --min 3.10 2>/dev/null && return 0
+    fi
+
+    command -v python3 2>/dev/null || echo /usr/bin/python3
+}
+
+PYTHON_BIN="$(resolve_python)"
 
 echo "========================================"
 echo "  Mac Mini Agent - Phase 2 移行・稼働確認"
@@ -60,27 +77,27 @@ fi
 echo ""
 echo "[2/5] AI News Notifier テスト..."
 cd "$SYSTEM_DIR"
-if python3 -c "import openai; import requests" 2>/dev/null; then
+if "$PYTHON_BIN" -c "import openai; import requests" 2>/dev/null; then
     echo "  依存関係OK。手動実行テスト:"
-    echo "    cd $SYSTEM_DIR && python3 ai_news_notifier.py"
+    echo "    cd $SYSTEM_DIR && $PYTHON_BIN ai_news_notifier.py"
 else
     echo "  依存関係が不足しています。pip install openai requests を実行してください。"
 fi
 
 echo ""
 echo "[3/5] Addness フェッチャーテスト..."
-if python3 -c "import playwright" 2>/dev/null; then
+if "$PYTHON_BIN" -c "import playwright" 2>/dev/null; then
     echo "  Playwright OK。手動実行テスト:"
-    echo "    cd $SYSTEM_DIR && python3 addness_fetcher.py"
+    echo "    cd $SYSTEM_DIR && $PYTHON_BIN addness_fetcher.py"
 else
     echo "  Playwright が見つかりません。pip install playwright && playwright install chromium を実行してください。"
 fi
 
 echo ""
 echo "[4/5] メール管理テスト..."
-if python3 -c "from google.oauth2.credentials import Credentials" 2>/dev/null; then
+if "$PYTHON_BIN" -c "from google.oauth2.credentials import Credentials" 2>/dev/null; then
     echo "  Google API OK。手動実行テスト:"
-    echo "    cd $SYSTEM_DIR && python3 mail_manager.py run --dry-run"
+    echo "    cd $SYSTEM_DIR && $PYTHON_BIN mail_manager.py run --dry-run"
 else
     echo "  google-auth が見つかりません。pip install google-api-python-client google-auth-oauthlib を実行してください。"
 fi

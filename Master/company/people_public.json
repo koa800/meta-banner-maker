@@ -1,6 +1,15 @@
 {
-  "version": "2026-03-07",
+  "version": "2026-03-17",
   "generated_from": "Master/people/profiles.json",
+  "owner": "internal",
+  "disclosure_level": "role-limited",
+  "approval_required": "conditional",
+  "audience": [
+    "僕",
+    "上司",
+    "並列",
+    "直下"
+  ],
   "people": {
     "三上 功太": {
       "name": "三上 功太",

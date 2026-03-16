@@ -6,7 +6,7 @@
 |------|------|
 | プロジェクト名 | AI秘書作成 |
 | 開始日 | 2026年2月18日 |
-| 最終更新 | 2026年3月16日（秘書通知ポリシーの正本化と、通知棚卸し基準を追加） |
+| 最終更新 | 2026年3月17日（開示例外の実行反映と送信先手動登録まで実装反映） |
 | ステータス | 🚀 継続開発中 |
 
 ---
@@ -36,7 +36,9 @@
                                │  - conversation.py: 会話ループ  │
                                │  - llm_router.py: モデル切替     │
                                │  - memory_manager.py: 長期脳 +   │
-                               │    shared context bus + shell状態 │
+                               │    scoped context bus           │
+                               │    (self/internal/actor) +      │
+                               │    shell状態                     │
                                │  - GPT-5.4デフォルト（proも切替可） │
                                │  - フォールバック: 5.4→Opus→Sonnet→4.1│
                                │  - tool_use で自律的にツール選択  │
@@ -229,6 +231,31 @@
 62. **shared context bus**: `memory_manager.py` を長期記憶 / 共有短期文脈 / shell別会話状態に分離。`event_stream.jsonl` と `active_context.json` を追加し、LINE秘書とCursorクローンが同じ短期文脈を共有できる土台を作成
 63. **same brain + multiple shells**: `conversation.py` は `甲原クローン脳` を manifest 経由で読み込み、`current_self / awakened_self / identity / brain_os` を system prompt に注入。shell 差分は `agent_registry.json` の role/authority で管理
 64. **Skills 正本統一**: `local_agent.py` は `Skills/` を正本として再帰読み込みするよう変更。旧 `System/line_bot/skills/` は互換 fallback のみ
+
+2026-03-16 追記:
+- `shared_context` を `self-context / internal-context / actor-context` の3層に分離。秘書グループは self、個別文脈は actor、社内共通運用は internal を使う
+- `agent_registry.json` に `base_audience / context_access / message_policy` を追加。shell ごとに見てよい文脈と既定送信レベルを持てるようにした
+- `contact_state.json` は会話要約に加えて、相手ごとの `send_authority.level` を保持できる構造に拡張。既定値は `Lv0`
+- `handler_runner.py` の `send_message / ask_human` は、相手区分、個人別権限レベル、重要連絡判定、承認要否を提案文に表示する
+- `generate_reply_suggestion` の受信メタ情報から `contact_state.json` に `delivery_targets` を保存し、LINE user_id / Chatwork room_id が分かる相手は後続の実送信に使えるようにした
+- 未接触相手でも `people_public` に email があれば、`delivery_targets.email` の bootstrap 値として使う
+- LINE / Chatwork の送信先は、Render 側の `contact_routes` 永続キャッシュに `sender_id / room_id` を保存して維持する。`/api/contact-route` はまずこのキャッシュを返し、不足時だけ `pending_messages` の直近履歴を fallback として使い、Mac mini 側へキャッシュする
+- `local_agent.py` の開示制御は `僕 / 上司 / 並列 / 直下 / 外部` ベースへ更新し、外部には状況と必要条件だけ、直下には目的に必要な情報だけを渡すようにした
+- `capture_feedback` は返信承認の連続実績を `contact_state.json` に蓄積し、`Lv2 / Lv3` の昇格候補が出たら提案文を返す
+- `send_message / ask_human` は、承認不要かつ送信先情報が分かる相手なら Render の `/api/outbound-message` 経由で LINE / Chatwork / Gmail へ実送信する
+- `send_message / ask_human` は `disclosure_subject / disclosure_scope` を受け取り、通常の開示境界を超える情報は `disclosure_exceptions.json` の例外承認が無ければ送信提案で止める。`今回限り` の例外は実送信時に消費する
+- `send_message / ask_human` は本文から `KPI / 売上 / 方針 / 対人見立て / 仮説 / 認証情報` 系の追加開示リスクも推定し、申告スコープより危ない内容を検知したら自動送信を止める
+- 実送信・提案・保留・失敗は `outbound_message_audit.jsonl` に監査ログとして残し、`誰に / どの権限で / どのチャネルへ / どの開示条件で` 動いたかを後から追える
+- 秘書グループの明示コマンドを追加
+  - `権限確認 [人名]`
+  - `権限 [人名] Lv0-Lv3 [メモ任意]`
+  - `送信先確認 [人名]`
+  - `送信先登録 [人名] | [line/chatwork/email] | [主値] | [副値任意] | [メモ任意]`
+  - `例外承認 [相手] | [何を] | [どこまで]`
+  - `例外承認恒久候補 [相手] | [何を] | [どこまで]`
+- `例外承認` は Mac mini 側の `disclosure_exceptions.json` に `誰に / 何を / どこまで / 承認種別 / 承認日時` を保存する
+- `送信先登録` は Mac mini 側の `contact_state.json` に `delivery_targets` を直接書き込む。履歴も `delivery_target_updates` として残す
+- `権限` / `例外承認` コマンドは成功時だけ静かに完了し、保存失敗時は秘書グループへエラーを返す
 
 ### Phase 14: 日向 Addness 承認フロー（実装完了）
 65. **日向コメントの承認フロー化**: `pending_messages` に `platform=addness` を追加。`/api/addness/hinata-feedback` で日向の未解決コメントを登録し、既存の LINE 承認フローに接続。同じ `goal_id + sender_name + timestamp` の Addness コメントは重複登録しない

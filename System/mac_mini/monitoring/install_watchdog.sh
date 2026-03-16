@@ -9,10 +9,20 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+RUNTIME_RESOLVER="$REPO_ROOT/System/scripts/python_runtime.py"
 
 DEPLOY_DIR="$HOME/.config/addness/monitoring"
 PLIST_NAME="com.addness.mac-mini-watchdog"
 PLIST_DST="$HOME/Library/LaunchAgents/${PLIST_NAME}.plist"
+
+resolve_python() {
+    if [ -f "$RUNTIME_RESOLVER" ]; then
+        /usr/bin/python3 "$RUNTIME_RESOLVER" --print-path --min 3.10 2>/dev/null && return 0
+    fi
+    command -v python3 2>/dev/null || echo /usr/bin/python3
+}
+
+PYTHON_BIN="$(resolve_python)"
 
 if launchctl list 2>/dev/null | grep -q "$PLIST_NAME"; then
     echo "既存ジョブを停止..."
@@ -45,7 +55,7 @@ cat > "$PLIST_DST" << PLIST
     <string>${PLIST_NAME}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/python3</string>
+        <string>${PYTHON_BIN}</string>
         <string>${DEPLOY_DIR}/external_watchdog.py</string>
     </array>
     <key>StartInterval</key>
@@ -71,5 +81,5 @@ echo ""
 echo "管理コマンド:"
 echo "   状態確認: launchctl list | grep $PLIST_NAME"
 echo "   停止:     launchctl unload $PLIST_DST"
-echo "   手動実行: python3 $DEPLOY_DIR/external_watchdog.py"
+echo "   手動実行: $PYTHON_BIN $DEPLOY_DIR/external_watchdog.py"
 echo "   ログ確認: tail -20 $LOG_FILE"

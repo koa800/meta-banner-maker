@@ -26,6 +26,55 @@ AGENT_REGISTRY_PATH = REGISTRIES_DIR / "agent_registry.json"
 KOHARA_MANIFEST_PATH = BRAINS_DIR / "kohara" / "brain_manifest.json"
 HINATA_MANIFEST_PATH = BRAINS_DIR / "hinata" / "brain_manifest.json"
 
+_CATEGORY_TO_AUDIENCE = {
+    "本人": "僕",
+    "上司": "上司",
+    "横（並列）": "並列",
+    "直下メンバー": "直下",
+    "メンバー": "直下",
+    "外部パートナー": "外部",
+    "": "外部",
+}
+
+_PERSON_LOOKUP_FIELDS = (
+    "name",
+    "line_display_name",
+    "line_my_name",
+    "chatwork_display_name",
+    "real_name",
+    "katakana",
+    "email",
+)
+
+_HONORIFIC_SUFFIXES = ("さん", "ちゃん", "くん", "君", "様")
+
+_KOHARA_CONTEXT_ACCESS = ["self-context", "internal-context", "actor-context"]
+_INTERNAL_CONTEXT_ACCESS = ["internal-context", "actor-context"]
+
+_DEFAULT_MESSAGE_POLICY = {
+    "approval_flow": "proposal_then_owner_approval",
+    "management_unit": "per_person",
+    "promotion_strategy": "assistant_proposes_owner_confirms",
+    "levels": {
+        "Lv0": "送信禁止。下書きのみ",
+        "Lv1": "毎回承認後に送信可",
+        "Lv2": "定型連絡だけ自動送信可",
+        "Lv3": "通常連絡まで自動送信可。重要連絡は承認必要",
+    },
+    "promotion_thresholds": {
+        "templated_messages_without_major_edits": 5,
+        "normal_messages_without_issue": 10,
+    },
+    "important_message_rules": [
+        "謝罪や訂正が入る",
+        "相手の感情に強く影響する",
+        "約束、期限、金額、条件を確定させる",
+        "対外的な印象や関係性に影響する",
+        "甲原さん本人の評価や意思として受け取られる",
+        "一度送ると取り返しがつきにくい",
+    ],
+}
+
 
 DEFAULT_AWAKENED_SELF = """# 覚醒した僕
 
@@ -103,6 +152,16 @@ def _ensure_list(values: Any) -> list:
     return []
 
 
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged: dict[str, Any] = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def resolve_repo_path(path_value: str | None) -> Path | None:
     if not path_value:
         return None
@@ -110,6 +169,19 @@ def resolve_repo_path(path_value: str | None) -> Path | None:
     if path.is_absolute():
         return path
     return REPO_ROOT / path
+
+
+def normalize_person_lookup(value: str | None) -> str:
+    text = str(value or "").strip().replace(" ", "").replace("　", "").lower()
+    for suffix in _HONORIFIC_SUFFIXES:
+        if text.endswith(suffix):
+            text = text[: -len(suffix)]
+            break
+    return text
+
+
+def map_category_to_audience(category: str | None) -> str:
+    return _CATEGORY_TO_AUDIENCE.get(str(category or ""), "外部")
 
 
 def load_legacy_profiles() -> dict[str, Any]:
@@ -173,11 +245,79 @@ def _normalize_human_entity(name: str, person: dict[str, Any]) -> dict[str, Any]
         "type": "human",
         "category": person.get("category", ""),
         "relationship": person.get("relationship", ""),
+        "line_display_name": person.get("line_display_name", ""),
+        "email": person.get("email", ""),
         "best_for": domains[:3],
         "domains": domains,
         "status": "active",
         "source": "people_public",
     }
+
+
+def _infer_base_audience(name: str, entity: dict[str, Any]) -> str:
+    if entity.get("type") == "human":
+        category = str(entity.get("category", ""))
+        return map_category_to_audience(category)
+    if name in {"kohara_clone_brain", "cursor_clone", "line_secretary"}:
+        return "僕"
+    if name in {"hinata_brain", "hinata_shell"}:
+        return "直下"
+    return "外部"
+
+
+def _default_context_access(name: str, entity: dict[str, Any]) -> list[str]:
+    if name in {"kohara_clone_brain", "cursor_clone", "line_secretary"}:
+        return list(_KOHARA_CONTEXT_ACCESS)
+    if name in {"hinata_brain", "hinata_shell"}:
+        return list(_INTERNAL_CONTEXT_ACCESS)
+    return []
+
+
+def _default_message_policy(name: str, entity: dict[str, Any]) -> dict[str, Any] | None:
+    if entity.get("type") != "shell":
+        return None
+    policy = dict(_DEFAULT_MESSAGE_POLICY)
+    policy["default_level"] = "Lv0"
+    policy["owner_confirmation_required"] = True
+    policy["auto_reply_to_superiors"] = False if name == "line_secretary" else True
+    return policy
+
+
+def _normalize_registry_entity(name: str, entity: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(entity)
+    normalized.setdefault("base_audience", _infer_base_audience(name, normalized))
+
+    default_context_access = _default_context_access(name, normalized)
+    if default_context_access:
+        normalized["context_access"] = _ensure_list(normalized.get("context_access")) or default_context_access
+
+    default_message_policy = _default_message_policy(name, normalized)
+    if default_message_policy:
+        existing_policy = normalized.get("message_policy", {})
+        if not isinstance(existing_policy, dict):
+            existing_policy = {}
+        normalized["message_policy"] = _deep_merge(default_message_policy, existing_policy)
+
+    if normalized.get("type") in {"brain", "shell"}:
+        normalized.setdefault("disclosure_rule_source", "Master/rules/開示境界ルール.md")
+
+    return normalized
+
+
+def _normalize_registry_payload(data: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(data)
+    normalized["version"] = "2026-03-17"
+    normalized.setdefault("policy_version", "2026-03-17")
+    normalized.setdefault("shared_context_model", "scoped_v1")
+
+    entities = normalized.get("entities", {})
+    if not isinstance(entities, dict):
+        entities = {}
+    normalized["entities"] = {
+        name: _normalize_registry_entity(name, entity if isinstance(entity, dict) else {})
+        for name, entity in entities.items()
+    }
+    return normalized
 
 
 def _normalize_legacy_agent_entity(name: str, latest: dict[str, Any]) -> dict[str, Any]:
@@ -241,7 +381,7 @@ def derive_agent_registry_from_legacy(
             "brain_kind": "kohara_clone",
             "manifest_path": "Master/brains/kohara/brain_manifest.json",
             "update_policy": "user_only",
-            "shared_context": "global",
+            "shared_context": "self-context",
         },
         "hinata_brain": {
             "name": "hinata_brain",
@@ -249,7 +389,7 @@ def derive_agent_registry_from_legacy(
             "brain_kind": "hinata",
             "manifest_path": "Master/brains/hinata/brain_manifest.json",
             "update_policy": "verified_facts_only_to_company",
-            "shared_context": "global",
+            "shared_context": "internal-context",
         },
         "line_secretary": {
             "name": "line_secretary",
@@ -257,8 +397,8 @@ def derive_agent_registry_from_legacy(
             "brain": "kohara_clone_brain",
             "role": "secretary",
             "role_description": "情報整理、数値確認、内部メンバーへの軽い確認、返信案作成、甲原名義での送信、スケジュール調整、マネジメント上の対策を担う。",
-            "channels": ["line", "chatwork"],
-            "shared_context": "global",
+            "channels": ["line", "chatwork", "email"],
+            "shared_context": "self-context",
             "authority": {
                 "mode": "staged_autonomy",
                 "approved_actions": [
@@ -279,7 +419,7 @@ def derive_agent_registry_from_legacy(
             "role": "strategic_clone",
             "role_description": "甲原そのものとして思考し、構造化、設計、判断、実装推進を担う。",
             "channels": ["cursor"],
-            "shared_context": "global",
+            "shared_context": "self-context",
             "authority": {
                 "mode": "target_full_autonomy",
                 "approved_actions": [
@@ -300,7 +440,7 @@ def derive_agent_registry_from_legacy(
             "role": "execution_manager",
             "role_description": "進捗管理、障害除去、事実ベースの共有に集中する。",
             "channels": ["slack", "addness"],
-            "shared_context": "global",
+            "shared_context": "internal-context",
             "authority": {
                 "mode": "verified_facts_only",
                 "approved_actions": [
@@ -321,17 +461,17 @@ def derive_agent_registry_from_legacy(
         if entity_type in {"ai", "workflow"}:
             entities[name] = _normalize_legacy_agent_entity(name, latest)
 
-    return {
-        "version": "2026-03-07",
-        "generated_from": "Master/people/profiles.json",
+    return _normalize_registry_payload({
+        "version": "2026-03-17",
+        "generated_from": "Master/company/people_public.json + Master/brains/*/brain_manifest.json",
         "entities": entities,
-    }
+    })
 
 
 def load_agent_registry() -> dict[str, Any]:
     data = _read_json(AGENT_REGISTRY_PATH, {})
     if isinstance(data, dict) and data.get("entities"):
-        return data
+        return _normalize_registry_payload(data)
     public_registry = load_people_public_registry()
     return derive_agent_registry_from_legacy(people_public=public_registry)
 
@@ -353,6 +493,44 @@ def get_agent_config(agent_name: str) -> dict[str, Any]:
 def get_agent_transfer(agent_name: str) -> dict[str, Any]:
     entity = get_entity(agent_name)
     return entity.get("transfer", {})
+
+
+def resolve_human_entity(name_or_alias: str) -> tuple[str | None, dict[str, Any]]:
+    lookup_key = normalize_person_lookup(name_or_alias)
+    if not lookup_key:
+        return None, {}
+
+    registry = load_agent_registry().get("entities", {})
+    people_public = load_people_public_registry().get("people", {})
+    legacy_profiles = load_legacy_profiles()
+
+    for entity_name, entity in registry.items():
+        if not isinstance(entity, dict) or entity.get("type") != "human":
+            continue
+
+        aliases = {normalize_person_lookup(entity_name)}
+        for source in (
+            entity,
+            people_public.get(entity_name, {}),
+            legacy_profiles.get(entity_name, {}).get("latest", {}),
+        ):
+            if not isinstance(source, dict):
+                continue
+            for field in _PERSON_LOOKUP_FIELDS:
+                value = source.get(field, "")
+                normalized = normalize_person_lookup(value)
+                if normalized:
+                    aliases.add(normalized)
+
+        if lookup_key in aliases:
+            merged = {}
+            public_payload = people_public.get(entity_name, {})
+            if isinstance(public_payload, dict):
+                merged.update(public_payload)
+            merged.update(entity)
+            return entity_name, merged
+
+    return None, {}
 
 
 def build_agent_summary() -> str:

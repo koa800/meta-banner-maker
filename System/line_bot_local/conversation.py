@@ -48,6 +48,7 @@ def _load_execution_rules() -> str:
 def build_system_prompt(
     channel_type: str,
     sender_context: str = "",
+    sender_name: str = "",
     channel_id: str = "",
     shell_name: str = "line_secretary",
 ) -> str:
@@ -56,7 +57,13 @@ def build_system_prompt(
     shell_policy = clone_registry.get_shell_policy(shell_name)
     rules = _load_execution_rules()
     memory = memory_manager.load_long_term_memory()
-    shared_context = memory_manager.build_shared_context_block(channel_id)
+    current_scope, actor_key = _resolve_context_scope(channel_type, sender_name)
+    shared_context = memory_manager.build_shared_context_block(
+        channel_id,
+        shell_policy=shell_policy,
+        current_scope=current_scope,
+        actor_key=actor_key,
+    )
 
     if channel_type == "secretary_group":
         return _build_secretary_prompt(brain, shell_policy, rules, memory, shared_context)
@@ -68,6 +75,14 @@ def build_system_prompt(
         return _build_secretary_prompt(brain, shell_policy, rules, memory, shared_context)
 
 
+def _resolve_context_scope(channel_type: str, sender_name: str = "") -> tuple[str, str]:
+    if channel_type == "secretary_group":
+        return "self-context", None
+    if channel_type in {"mention", "qa"} and sender_name:
+        return "actor-context", sender_name
+    return "internal-context", None
+
+
 def _build_secretary_prompt(
     brain: dict,
     shell_policy: dict,
@@ -77,6 +92,9 @@ def _build_secretary_prompt(
 ) -> str:
     approved_actions = shell_policy.get("authority", {}).get("approved_actions", [])
     approved_text = "\n".join(f"- {action}" for action in approved_actions) if approved_actions else "- 承認済み権限のみ"
+    context_access = ", ".join(shell_policy.get("context_access", [])) or "internal-context"
+    message_policy = shell_policy.get("message_policy", {})
+    default_level = message_policy.get("default_level", "Lv0")
     return f"""あなたはアドネス株式会社のAI秘書です。甲原さん（こうはらさん）のパートナーとして動きます。
 
 ## あなたの役割
@@ -108,6 +126,11 @@ def _build_secretary_prompt(
 - 不要になった情報は update_memory ツールで削除する
 - 「覚えておいて」と言われたら必ず覚える
 - shell 間で共有される短期文脈も判断材料に使う
+- 参照できる context 範囲: {context_access}
+- self-context は内的判断に使ってよいが、そのまま相手へ引用しない
+- 非本人への送信の初期レベルは {default_level}。承認不要でも送信先情報が未記録なら自動送信しない。ただし people_public に email がある相手は email を bootstrap に使ってよく、LINE / Chatwork はサーバー側の直近履歴から bootstrap できる
+- send_message / ask_human の結果には、相手ごとの送信権限レベル、承認要否、送信可否が表示される。表示された条件を優先する
+- 外部や直下へ通常の開示境界を超える情報を渡すときは、send_message / ask_human で disclosure_subject と disclosure_scope を明示する。例外承認が無ければ止まる
 
 {rules}
 
@@ -146,6 +169,8 @@ def _build_mention_prompt(
 - IDENTITY.md の口調・価値観を忠実に再現する
 - 必要なら「覚醒した僕」として今の判断を補正してよい
 - ただし、人物理解の深い推測は会話中のみ利用し、永続化は承認後
+- self-context は内的判断に使ってよいが、そのまま相手へ引用しない
+- 相手別に必要な範囲だけ開示し、内部の具体や秘匿情報は出さない
 
 ## 返信前の内部整理
 - まず「今何が起きているか」を一文で把握する
@@ -419,11 +444,13 @@ def process_message(
         応答テキスト
     """
     shell_name = "line_secretary"
+    context_scope, actor_key = _resolve_context_scope(channel_type, sender_name)
 
     # 1. システムプロンプト構築
     system_prompt = build_system_prompt(
         channel_type,
         sender_context,
+        sender_name=sender_name,
         channel_id=channel_id,
         shell_name=shell_name,
     )
@@ -444,6 +471,8 @@ def process_message(
             "channel_type": channel_type,
             "sender_name": sender_name,
         },
+        scope=context_scope,
+        actor_key=actor_key,
     )
 
     # 3. ユーザーメッセージを会話履歴に追加
@@ -472,6 +501,8 @@ def process_message(
             "channel_type": channel_type,
             "sender_name": sender_name,
         },
+        scope=context_scope,
+        actor_key=actor_key,
     )
     memory_manager.update_active_context(
         channel_id=channel_id,
@@ -481,6 +512,8 @@ def process_message(
             "channel_type": channel_type,
             "sender_name": sender_name,
         },
+        scope=context_scope,
+        actor_key=actor_key,
     )
 
     return response_text

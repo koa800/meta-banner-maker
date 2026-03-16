@@ -1,8 +1,15 @@
 # Master 設計図
 
-最終更新: 2026-03-11
+最終更新: 2026-03-17
 
 `Master/` は、AIの脳みその設計図です。目的は「情報を置くこと」ではなく、「使うたびに判断精度が上がる構造を作ること」です。ここで作る脳は `スキルプラス専用` ではなく、甲原さんのOS・信念・今やっていること・これからやりたいことを統合して、世界中の `ありがとう` を増やすための判断を行う脳です。
+
+## 情報ラベル
+
+- 所有元: internal
+- 開示レベル: role-limited
+- 承認必須: conditional
+- 共有先: 僕 / 上司 / 並列 / 直下
 
 ## 最上位からの流れ
 
@@ -39,6 +46,8 @@ Master/
 - `knowledge`: 過去LP、数値、導線、顧客理解、一次観察などの素材。
 - `rules`: 成功・失敗から抽出した「こうする」「これはやらない」。
 - `output`: 実際に出したLP、文面、企画、提案、その結果。
+- 高リスク資産には `owner / disclosure_level / approval_required / audience` の情報ラベルを付け、共有境界を構造的に判断できる形へ寄せる。
+- legacy ファイル群は、個別ラベルを付けきるまでの間 `path 単位の既定ラベル` を持ってよい。個別ラベルがある場合は、そちらを優先する。
 
 ## 使ったら育てる
 
@@ -122,12 +131,17 @@ output を作る
 - 前提更新ルール: [更新ルール.md](/Users/koa800/Desktop/cursor/Master/前提/更新ルール.md)
 - 面談定性の比較知識: [面談定性比較.md](/Users/koa800/Desktop/cursor/Master/knowledge/面談定性比較.md)
 - ルール蓄積: [rules.md](/Users/koa800/Desktop/cursor/Master/rules/rules.md)
+- 開示境界の正本: [開示境界ルール.md](/Users/koa800/Desktop/cursor/Master/rules/開示境界ルール.md)
+- 実行主体別の閲覧・出力: [実行主体別の閲覧・出力ルール.md](/Users/koa800/Desktop/cursor/Master/rules/実行主体別の閲覧・出力ルール.md)
 - 広告・導線の具体ルール: [広告・導線ルール.md](/Users/koa800/Desktop/cursor/Master/rules/広告・導線ルール.md)
 - 成果物運用: [README.md](/Users/koa800/Desktop/cursor/Master/output/README.md)
 
 ## 次に整理する対象
 
 - `Master/addness/proactive_output/` を `Master/output/` 正本運用へ寄せる
+- `System/registries/agent_registry.json` と shared context を、新しい開示境界ルールに寄せる
+- 高リスク資産への情報ラベル付与を `people_private -> 定常運用知識 -> 内部構造メモ` の順で広げる
+- ラベル対象の抜けは `python3 System/scripts/master_label_audit.py` で検知する
 - 既存の LP / CR の失敗事例を `rules` と `output` に流し込む
 - `前提/用語定義` の定義保留語を埋める
 - 面談定性比較を継続更新し、`過去の解決策` の件数を増やして `knowledge -> rules` 昇格を進める

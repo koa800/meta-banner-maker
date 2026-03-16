@@ -8,7 +8,7 @@ handler_type:
   - subprocess:         外部Pythonスクリプトを実行
   - function:           local_agent.py から渡されたコールバック関数を実行
   - file_read:          ファイルを読み込んで返す
-  - action:             L3+ 確認が必要な操作。実行せず提案テキストを返す
+  - action:             権限と送信先に応じて実送信または提案を返す
   - api_call:           agent_registry.json の preferred_agent → interface.config に従って外部API呼び出し
   - workflow_endpoint:  ワークフローエンドポイント（Mac Mini Orchestrator等）にHTTP POST
   - mcp:                MCP プロトコル呼び出し（将来用）
@@ -19,10 +19,80 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from datetime import datetime
 
 import requests
 
-from clone_registry import get_agent_config, get_agent_transfer
+from clone_registry import (
+    get_agent_config,
+    get_agent_transfer,
+    get_shell_policy,
+    map_category_to_audience,
+    normalize_person_lookup,
+    resolve_human_entity,
+)
+
+
+_RUNTIME_DATA_DIR = Path.home() / "agents" / "data"
+_CONTACT_STATE_PATH = _RUNTIME_DATA_DIR / "contact_state.json"
+_DISCLOSURE_EXCEPTION_PATH = _RUNTIME_DATA_DIR / "disclosure_exceptions.json"
+_OUTBOUND_AUDIT_LOG_PATH = _RUNTIME_DATA_DIR / "outbound_message_audit.jsonl"
+_MESSAGE_LEVELS = {"Lv0", "Lv1", "Lv2", "Lv3"}
+_IMPORTANT_MESSAGE_RULES = (
+    ("謝罪や訂正が入る", ("申し訳", "すみません", "お詫び", "訂正", "誤り")),
+    ("相手の感情に強く影響する", ("不快", "困らせ", "残念", "クレーム", "怒")),
+    ("約束や期限を確定させる", ("期限", "締切", "納期", "本日中", "明日", "来週", "確定", "決定", "約束")),
+    ("金額や条件を確定させる", ("円", "万円", "請求", "見積", "契約", "条件", "返金")),
+    ("本人の評価や意思として受け取られる", ("方針", "承認", "許可", "判断", "進めます", "やります")),
+)
+_ROUTINE_MESSAGE_HINTS = (
+    "了解",
+    "承知",
+    "確認しました",
+    "共有ありがとう",
+    "共有ありがとうございます",
+    "受け取りました",
+    "進捗共有",
+    "リマインド",
+    "日程調整",
+)
+_DISCLOSURE_SCOPE_ALIASES = {
+    "operation": "operation",
+    "操作手順": "operation",
+    "judgment": "judgment",
+    "判断基準": "judgment",
+    "background": "background",
+    "背景": "background",
+    "背景事情": "background",
+    "strategy": "strategy",
+    "数値戦略": "strategy",
+    "数値・戦略": "strategy",
+    "strategy_need_to_know": "strategy_need_to_know",
+    "必要戦略": "strategy_need_to_know",
+    "実行に必要な戦略": "strategy_need_to_know",
+    "situation": "situation",
+    "状況": "situation",
+    "required_conditions": "required_conditions",
+    "必要条件": "required_conditions",
+    "people_insight": "people_insight",
+    "対人見立て": "people_insight",
+    "hypothesis": "hypothesis",
+    "仮説": "hypothesis",
+    "未確定仮説": "hypothesis",
+}
+_BASE_DISCLOSURE_SCOPES = {
+    "僕": {"all"},
+    "上司": {"operation", "judgment", "background", "strategy"},
+    "並列": {"operation", "judgment", "background", "strategy"},
+    "直下": {"operation", "judgment", "background", "strategy_need_to_know"},
+    "外部": {"situation", "required_conditions"},
+}
+_DISCLOSURE_GUARD_KEYWORDS = {
+    "strategy": ("kpi", "ltv", "roas", "cpa", "売上", "利益", "利益率", "購入率", "オプトイン率", "方針", "戦略"),
+    "people_insight": ("強め", "逆効果", "この人は", "言い方", "伝え方", "刺さる", "動く", "人柄"),
+    "hypothesis": ("仮説", "推定", "かもしれ", "おそらく", "未確定"),
+    "secret": ("パスワード", "token", "secret", "client_secret", "認証情報", "個人情報", "契約条件"),
+}
 
 
 class HandlerRunner:
@@ -46,6 +116,7 @@ class HandlerRunner:
 
         # subprocess 用の環境変数を構築（config.json から APIキーを注入）
         self._subprocess_env = self._build_subprocess_env()
+        self._runtime_api_config = self._load_runtime_api_config()
 
     def _load_profiles(self) -> dict:
         """legacy profiles.json を読み込む（後方互換用）"""
@@ -71,6 +142,24 @@ class HandlerRunner:
                 pass
         return env
 
+    def _load_runtime_api_config(self) -> dict:
+        config_path = Path(__file__).parent / "config.json"
+        payload = {}
+        if config_path.exists():
+            try:
+                payload = json.loads(config_path.read_text(encoding="utf-8"))
+            except Exception:
+                payload = {}
+
+        return {
+            "server_url": os.environ.get("LINE_BOT_SERVER_URL") or payload.get("server_url", ""),
+            "agent_token": (
+                os.environ.get("AGENT_TOKEN")
+                or os.environ.get("LOCAL_AGENT_TOKEN")
+                or payload.get("agent_token", "")
+            ),
+        }
+
     def _get_agent_config(self, agent_name: str) -> dict:
         """agent_registry からエージェントの interface.config を取得する"""
         return get_agent_config(agent_name)
@@ -78,6 +167,524 @@ class HandlerRunner:
     def _get_agent_transfer(self, agent_name: str) -> dict:
         """agent_registry からエージェントの transfer 情報を取得する"""
         return get_agent_transfer(agent_name)
+
+    def _load_contact_state(self) -> dict:
+        if not _CONTACT_STATE_PATH.exists():
+            return {}
+        try:
+            data = json.loads(_CONTACT_STATE_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _save_contact_state(self, contact_state: dict):
+        try:
+            _RUNTIME_DATA_DIR.mkdir(parents=True, exist_ok=True)
+            _CONTACT_STATE_PATH.write_text(
+                json.dumps(contact_state, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def _load_disclosure_exception_log(self) -> list:
+        if not _DISCLOSURE_EXCEPTION_PATH.exists():
+            return []
+        try:
+            data = json.loads(_DISCLOSURE_EXCEPTION_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        return data if isinstance(data, list) else []
+
+    def _save_disclosure_exception_log(self, entries: list):
+        try:
+            _RUNTIME_DATA_DIR.mkdir(parents=True, exist_ok=True)
+            _DISCLOSURE_EXCEPTION_PATH.write_text(
+                json.dumps(entries, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def _append_outbound_audit_log(self, payload: dict):
+        try:
+            _RUNTIME_DATA_DIR.mkdir(parents=True, exist_ok=True)
+            with _OUTBOUND_AUDIT_LOG_PATH.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
+    def _normalize_contact_state_entry(self, entry) -> dict:
+        if isinstance(entry, str):
+            entry = {"last_contact": entry}
+        if not isinstance(entry, dict):
+            entry = {}
+        normalized = dict(entry)
+        conversations = normalized.get("conversations", [])
+        normalized["conversations"] = conversations if isinstance(conversations, list) else []
+
+        send_authority = normalized.get("send_authority", {})
+        if not isinstance(send_authority, dict):
+            send_authority = {}
+        level = str(send_authority.get("level", "")).strip()
+        if level in _MESSAGE_LEVELS:
+            send_authority["level"] = level
+        else:
+            send_authority.pop("level", None)
+        normalized["send_authority"] = send_authority
+
+        delivery_targets = normalized.get("delivery_targets", {})
+        if not isinstance(delivery_targets, dict):
+            delivery_targets = {}
+        normalized["delivery_targets"] = {
+            "line": {
+                "user_id": str((delivery_targets.get("line", {}) or {}).get("user_id", "") or ""),
+                "group_id": str((delivery_targets.get("line", {}) or {}).get("group_id", "") or ""),
+                "last_seen_at": str((delivery_targets.get("line", {}) or {}).get("last_seen_at", "") or ""),
+            },
+            "chatwork": {
+                "room_id": str((delivery_targets.get("chatwork", {}) or {}).get("room_id", "") or ""),
+                "account_id": str((delivery_targets.get("chatwork", {}) or {}).get("account_id", "") or ""),
+                "last_seen_at": str((delivery_targets.get("chatwork", {}) or {}).get("last_seen_at", "") or ""),
+            },
+            "email": {
+                "address": str((delivery_targets.get("email", {}) or {}).get("address", "") or ""),
+                "last_seen_at": str((delivery_targets.get("email", {}) or {}).get("last_seen_at", "") or ""),
+            },
+        }
+        return normalized
+
+    def _merge_delivery_targets(self, base_targets: dict, incoming_targets: dict) -> dict:
+        merged = self._normalize_contact_state_entry({"delivery_targets": base_targets}).get("delivery_targets", {})
+        source = incoming_targets if isinstance(incoming_targets, dict) else {}
+        for channel in ("line", "chatwork", "email"):
+            incoming_channel = source.get(channel, {})
+            if not isinstance(incoming_channel, dict):
+                continue
+            merged_channel = dict(merged.get(channel, {}) or {})
+            for key, value in incoming_channel.items():
+                if value:
+                    merged_channel[key] = str(value)
+            merged[channel] = merged_channel
+        return merged
+
+    def _normalize_disclosure_subject(self, subject: str) -> str:
+        return str(subject or "").strip().replace(" ", "").replace("　", "").lower()
+
+    def _parse_disclosure_scopes(self, raw_scopes) -> list[str]:
+        values = []
+        if isinstance(raw_scopes, str):
+            normalized_text = raw_scopes.replace("、", ",").replace("，", ",").replace("・", ",").replace("/", ",")
+            values = [item.strip() for item in normalized_text.split(",")]
+        elif isinstance(raw_scopes, list):
+            values = [str(item).strip() for item in raw_scopes]
+
+        scopes: list[str] = []
+        for value in values:
+            if not value:
+                continue
+            scope = _DISCLOSURE_SCOPE_ALIASES.get(value, _DISCLOSURE_SCOPE_ALIASES.get(value.lower(), ""))
+            if scope and scope not in scopes:
+                scopes.append(scope)
+        return scopes
+
+    def _infer_disclosure_risks(self, text: str) -> list[str]:
+        content = str(text or "").strip().lower()
+        risks: list[str] = []
+        if not content:
+            return risks
+        for scope, keywords in _DISCLOSURE_GUARD_KEYWORDS.items():
+            if any(keyword in content for keyword in keywords):
+                risks.append(scope)
+        return risks
+
+    def _find_matching_disclosure_exception(self, recipient: str, subject: str, requested_scopes: list[str]) -> dict:
+        normalized_recipient = normalize_person_lookup(recipient)
+        canonical_name, _ = resolve_human_entity(recipient)
+        normalized_canonical = normalize_person_lookup(canonical_name or "")
+        normalized_subject = self._normalize_disclosure_subject(subject)
+        requested_scope_set = set(requested_scopes)
+        if not normalized_subject or not requested_scope_set:
+            return {}
+
+        entries = self._load_disclosure_exception_log()
+        for entry in reversed(entries):
+            if not isinstance(entry, dict):
+                continue
+            entry_recipient = normalize_person_lookup(entry.get("recipient", ""))
+            if entry_recipient not in {normalized_recipient, normalized_canonical}:
+                continue
+            if self._normalize_disclosure_subject(entry.get("subject", "")) != normalized_subject:
+                continue
+            if entry.get("approval_type") == "今回限り" and entry.get("consumed_at"):
+                continue
+
+            entry_scope_tokens = entry.get("scope_tokens", [])
+            if not isinstance(entry_scope_tokens, list) or not entry_scope_tokens:
+                entry_scope_tokens = self._parse_disclosure_scopes(entry.get("allowed_scope", ""))
+            if not requested_scope_set.issubset(set(entry_scope_tokens)):
+                continue
+            return entry
+        return {}
+
+    def _consume_disclosure_exception(self, exception_id: str):
+        if not exception_id:
+            return
+        entries = self._load_disclosure_exception_log()
+        changed = False
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("exception_id", "")) != str(exception_id):
+                continue
+            if entry.get("approval_type") != "今回限り" or entry.get("consumed_at"):
+                return
+            entry["consumed_at"] = datetime.now().isoformat()
+            changed = True
+            break
+        if changed:
+            self._save_disclosure_exception_log(entries)
+
+    def _bootstrap_delivery_targets(self, recipient: str, policy: dict, requested_channel: str = "") -> dict:
+        delivery_targets = policy.get("delivery_targets", {}) if isinstance(policy, dict) else {}
+        need_line = requested_channel == "line" and not (delivery_targets.get("line", {}) or {}).get("user_id")
+        need_chatwork = requested_channel == "chatwork" and not (delivery_targets.get("chatwork", {}) or {}).get("room_id")
+        need_any = not requested_channel and not any(
+            [
+                (delivery_targets.get("line", {}) or {}).get("user_id"),
+                (delivery_targets.get("chatwork", {}) or {}).get("room_id"),
+                (delivery_targets.get("email", {}) or {}).get("address"),
+            ]
+        )
+        if not (need_line or need_chatwork or need_any):
+            return policy
+
+        server_url = str(self._runtime_api_config.get("server_url", "") or "").rstrip("/")
+        agent_token = str(self._runtime_api_config.get("agent_token", "") or "")
+        if not server_url:
+            return policy
+
+        headers = {}
+        if agent_token:
+            headers["Authorization"] = f"Bearer {agent_token}"
+
+        try:
+            resp = requests.get(
+                f"{server_url}/api/contact-route",
+                headers=headers,
+                params={"recipient": recipient},
+                timeout=15,
+            )
+            data = resp.json()
+        except Exception:
+            return policy
+
+        if not resp.ok or not data.get("success"):
+            return policy
+
+        bootstrapped_targets = data.get("delivery_targets", {})
+        merged_targets = self._merge_delivery_targets(delivery_targets, bootstrapped_targets)
+        updated_policy = dict(policy)
+        updated_policy["delivery_targets"] = merged_targets
+
+        canonical_name = str(updated_policy.get("canonical_name", recipient) or recipient)
+        contact_state = self._load_contact_state()
+        entry = self._normalize_contact_state_entry(contact_state.get(canonical_name))
+        entry["delivery_targets"] = merged_targets
+        contact_state[canonical_name] = entry
+        self._save_contact_state(contact_state)
+        return updated_policy
+
+    def _resolve_recipient_policy(self, recipient: str, shell_name: str = "line_secretary") -> dict:
+        shell_policy = get_shell_policy(shell_name)
+        message_policy = shell_policy.get("message_policy", {}) if isinstance(shell_policy, dict) else {}
+        default_level = str(message_policy.get("default_level", "Lv0") or "Lv0")
+        canonical_name, entity = resolve_human_entity(recipient)
+        category = str(entity.get("category", "")) if entity else ""
+        audience = str(entity.get("base_audience", "")) if entity else ""
+        if not audience:
+            audience = map_category_to_audience(category)
+
+        contact_state = self._load_contact_state()
+        entry = None
+        if canonical_name and canonical_name in contact_state:
+            entry = contact_state.get(canonical_name)
+        elif recipient in contact_state:
+            entry = contact_state.get(recipient)
+        normalized_entry = self._normalize_contact_state_entry(entry)
+        send_authority = normalized_entry.get("send_authority", {})
+        delivery_targets = normalized_entry.get("delivery_targets", {})
+        if isinstance(entity, dict):
+            entity_email = str(entity.get("email", "") or "").strip()
+            if entity_email and not (delivery_targets.get("email", {}) or {}).get("address"):
+                delivery_targets = dict(delivery_targets)
+                email_target = dict(delivery_targets.get("email", {}) or {})
+                email_target["address"] = entity_email
+                delivery_targets["email"] = email_target
+        level = str(send_authority.get("level", "")).strip() or default_level
+        level_source = "個別設定" if send_authority.get("level") else "既定値"
+
+        return {
+            "recipient": recipient,
+            "canonical_name": canonical_name or recipient,
+            "known_recipient": bool(entity),
+            "category": category,
+            "audience": audience or "外部",
+            "level": level,
+            "level_source": level_source,
+            "shell_message_policy": message_policy,
+            "delivery_targets": delivery_targets,
+        }
+
+    def _choose_outbound_channel(self, delivery_targets: dict) -> str:
+        candidates = []
+        line_target = delivery_targets.get("line", {}) if isinstance(delivery_targets, dict) else {}
+        if line_target.get("user_id"):
+            candidates.append(("line", str(line_target.get("last_seen_at", "") or "")))
+        chatwork_target = delivery_targets.get("chatwork", {}) if isinstance(delivery_targets, dict) else {}
+        if chatwork_target.get("room_id"):
+            candidates.append(("chatwork", str(chatwork_target.get("last_seen_at", "") or "")))
+        email_target = delivery_targets.get("email", {}) if isinstance(delivery_targets, dict) else {}
+        if email_target.get("address"):
+            candidates.append(("email", str(email_target.get("last_seen_at", "") or "")))
+        if not candidates:
+            return ""
+        candidates.sort(key=lambda item: item[1], reverse=True)
+        return candidates[0][0]
+
+    def _dispatch_outbound_message(self, channel: str, content: str, policy: dict) -> tuple[str, str]:
+        server_url = str(self._runtime_api_config.get("server_url", "") or "").rstrip("/")
+        agent_token = str(self._runtime_api_config.get("agent_token", "") or "")
+        delivery_targets = policy.get("delivery_targets", {}) if isinstance(policy, dict) else {}
+
+        payload = {
+            "channel": channel,
+            "content": content,
+            "recipient": policy.get("canonical_name", policy.get("recipient", "")),
+        }
+
+        if channel == "line":
+            line_target = delivery_targets.get("line", {}) if isinstance(delivery_targets, dict) else {}
+            line_user_id = str(line_target.get("user_id", "") or "").strip()
+            if not line_user_id:
+                return "deferred", "LINE の user_id が未記録です"
+            payload["line_user_id"] = line_user_id
+        elif channel == "chatwork":
+            chatwork_target = delivery_targets.get("chatwork", {}) if isinstance(delivery_targets, dict) else {}
+            room_id = str(chatwork_target.get("room_id", "") or "").strip()
+            if not room_id:
+                return "deferred", "Chatwork の room_id が未記録です"
+            payload["chatwork_room_id"] = room_id
+            account_id = str(chatwork_target.get("account_id", "") or "").strip()
+            if account_id:
+                payload["chatwork_account_id"] = account_id
+        elif channel == "email":
+            email_target = delivery_targets.get("email", {}) if isinstance(delivery_targets, dict) else {}
+            email_address = str(email_target.get("address", "") or "").strip()
+            if not email_address:
+                return "deferred", "email アドレスが未記録です"
+            payload["email_to"] = email_address
+            payload["mail_subject"] = str(policy.get("mail_subject", "") or "").strip()
+            payload["mail_account"] = str(policy.get("mail_account", "") or "kohara").strip()
+        else:
+            return "deferred", f"未対応の送信チャネルです: {channel}"
+
+        if not server_url:
+            return "failed", "LINE_BOT_SERVER_URL が未設定です"
+
+        headers = {"Content-Type": "application/json"}
+        if agent_token:
+            headers["Authorization"] = f"Bearer {agent_token}"
+
+        try:
+            resp = requests.post(
+                f"{server_url}/api/outbound-message",
+                headers=headers,
+                json=payload,
+                timeout=30,
+            )
+            data = resp.json()
+        except requests.Timeout:
+            return "failed", "送信 API がタイムアウトしました"
+        except requests.ConnectionError:
+            return "failed", "送信 API に接続できません"
+        except ValueError:
+            return "failed", "送信 API のレスポンスが不正です"
+        except Exception as e:
+            return "failed", f"送信 API 呼び出しでエラー: {e}"
+
+        if resp.ok and data.get("success"):
+            sent_id = str(data.get("sent_id", "") or "")
+            return "sent", f"送信済み{f'（ID: {sent_id}）' if sent_id else ''}"
+
+        return "failed", str(data.get("error", f"HTTP {resp.status_code}"))
+
+    def _is_important_message(self, text: str, audience: str) -> tuple[bool, list[str]]:
+        content = str(text or "").strip()
+        reasons: list[str] = []
+        if audience == "外部" and content:
+            reasons.append("対外連絡は対外的な印象や関係性に影響する")
+        for label, keywords in _IMPORTANT_MESSAGE_RULES:
+            if any(keyword in content for keyword in keywords):
+                reasons.append(label)
+        unique_reasons: list[str] = []
+        for reason in reasons:
+            if reason not in unique_reasons:
+                unique_reasons.append(reason)
+        return bool(unique_reasons), unique_reasons[:3]
+
+    def _is_routine_message(self, text: str, urgency: str = "normal") -> bool:
+        content = str(text or "").strip()
+        if not content or urgency == "high":
+            return False
+        if len(content) > 120 or content.count("\n") >= 3:
+            return False
+        return any(keyword in content for keyword in _ROUTINE_MESSAGE_HINTS)
+
+    def _evaluate_send_policy(
+        self,
+        recipient: str,
+        message_text: str,
+        *,
+        urgency: str = "normal",
+        shell_name: str = "line_secretary",
+        disclosure_subject: str = "",
+        requested_scopes=None,
+    ) -> dict:
+        policy = self._resolve_recipient_policy(recipient, shell_name=shell_name)
+        important, important_reasons = self._is_important_message(message_text, policy["audience"])
+        routine_candidate = self._is_routine_message(message_text, urgency=urgency)
+        message_policy = policy.get("shell_message_policy", {})
+        auto_reply_to_superiors = bool(message_policy.get("auto_reply_to_superiors", True))
+        requested_scope_tokens = self._parse_disclosure_scopes(requested_scopes)
+        base_scopes = _BASE_DISCLOSURE_SCOPES.get(policy["audience"], _BASE_DISCLOSURE_SCOPES["外部"])
+        extra_requested_scopes = [
+            scope for scope in requested_scope_tokens
+            if "all" not in base_scopes and scope not in base_scopes
+        ]
+        inferred_risks = self._infer_disclosure_risks(message_text)
+        uncovered_inferred_risks = [
+            scope for scope in inferred_risks
+            if scope not in requested_scope_tokens
+            and ("all" not in base_scopes and scope not in base_scopes)
+        ]
+        matched_exception = {}
+
+        approval_required = True
+        rule_notes: list[str] = []
+        if policy["audience"] == "上司" and not auto_reply_to_superiors:
+            approval_required = True
+            rule_notes.append("上司への自動返信は無効")
+        elif policy["level"] == "Lv0":
+            approval_required = True
+            rule_notes.append("この相手は下書きのみ")
+        elif policy["level"] == "Lv1":
+            approval_required = True
+            rule_notes.append("この相手は毎回承認後に送信")
+        elif policy["level"] == "Lv2":
+            approval_required = important or not routine_candidate
+            rule_notes.append("定型連絡だけ自動送信可")
+        elif policy["level"] == "Lv3":
+            approval_required = important
+            rule_notes.append("通常連絡まで自動送信可。重要連絡は承認必要")
+
+        if not policy["known_recipient"]:
+            suffix = "未登録のため外部扱い"
+            rule_notes.append(suffix)
+
+        if extra_requested_scopes:
+            if not disclosure_subject:
+                approval_required = True
+                rule_notes.append("追加開示には disclosure_subject が必要")
+            else:
+                matched_exception = self._find_matching_disclosure_exception(
+                    policy["canonical_name"],
+                    disclosure_subject,
+                    extra_requested_scopes,
+                )
+                if matched_exception:
+                    rule_notes.append(
+                        f"例外承認あり: {matched_exception.get('approval_type', '今回限り')} / {matched_exception.get('subject', disclosure_subject)}"
+                    )
+                else:
+                    approval_required = True
+                    rule_notes.append(
+                        f"追加開示は例外承認待ち: {disclosure_subject} / {', '.join(extra_requested_scopes)}"
+                    )
+        if uncovered_inferred_risks:
+            approval_required = True
+            rule_notes.append(
+                f"内容から追加開示候補を検知: {', '.join(uncovered_inferred_risks)}"
+            )
+
+        policy.update(
+            {
+                "important": important,
+                "important_reasons": important_reasons,
+                "routine_candidate": routine_candidate,
+                "approval_required": approval_required,
+                "rule_note": " / ".join(rule_notes),
+                "disclosure_subject": disclosure_subject,
+                "requested_scopes": requested_scope_tokens,
+                "extra_requested_scopes": extra_requested_scopes,
+                "inferred_disclosure_risks": inferred_risks,
+                "matched_disclosure_exception": matched_exception,
+                "disclosure_exception_consumable": bool(
+                    matched_exception
+                    and matched_exception.get("approval_type") == "今回限り"
+                    and not matched_exception.get("consumed_at")
+                ),
+            }
+        )
+        return policy
+
+    def _format_policy_block(self, policy: dict) -> str:
+        recipient_label = policy["canonical_name"]
+        if policy["recipient"] != recipient_label:
+            recipient_label = f"{policy['recipient']} -> {recipient_label}"
+
+        if policy["category"]:
+            audience_line = f"{policy['audience']}（{policy['category']}）"
+        else:
+            audience_line = f"{policy['audience']}（未登録）"
+
+        lines = [
+            f"宛先解決: {recipient_label}",
+            f"相手区分: {audience_line}",
+            f"送信権限: {policy['level']}（{policy['level_source']}）",
+        ]
+        available_channels = []
+        delivery_targets = policy.get("delivery_targets", {}) if isinstance(policy, dict) else {}
+        if (delivery_targets.get("line", {}) or {}).get("user_id"):
+            available_channels.append("line")
+        if (delivery_targets.get("chatwork", {}) or {}).get("room_id"):
+            available_channels.append("chatwork")
+        if (delivery_targets.get("email", {}) or {}).get("address"):
+            available_channels.append("email")
+        lines.append(
+            f"送信先情報: {', '.join(available_channels)}"
+            if available_channels
+            else "送信先情報: 未記録"
+        )
+        if policy.get("requested_scopes"):
+            lines.append(f"開示スコープ: {', '.join(policy['requested_scopes'])}")
+        if policy.get("inferred_disclosure_risks"):
+            lines.append(f"検知リスク: {', '.join(policy['inferred_disclosure_risks'])}")
+        if policy.get("disclosure_subject"):
+            lines.append(f"開示対象: {policy['disclosure_subject']}")
+        if policy["important"]:
+            lines.append("重要連絡判定: 該当")
+            lines.append(f"判定理由: {' / '.join(policy['important_reasons'])}")
+        elif policy["routine_candidate"]:
+            lines.append("連絡種別: 定型連絡候補")
+        lines.append(
+            "現行ルール: 承認後に送信"
+            if policy["approval_required"]
+            else "現行ルール: 承認なし送信可の範囲"
+        )
+        if policy["rule_note"]:
+            lines.append(f"補足: {policy['rule_note']}")
+        return "\n".join(lines)
 
     def run(self, tool_name: str, arguments: dict) -> str:
         """ツールを実行して結果テキストを返す"""
@@ -541,7 +1148,7 @@ class HandlerRunner:
             return f"ファイル読み込みエラー: {e}"
 
     # ------------------------------------------------------------------
-    # action: L3+ 確認が必要。実行せず提案テキストを返す
+    # action: 権限と送信先に応じて実送信または提案を返す
     # ------------------------------------------------------------------
     def _run_action(self, tool_def: dict, arguments: dict) -> str:
         tool_name = tool_def["name"]
@@ -550,22 +1157,224 @@ class HandlerRunner:
             recipient = arguments.get("recipient", "不明")
             channel = arguments.get("channel", "line")
             content = arguments.get("content", "")
+            policy = self._evaluate_send_policy(
+                recipient,
+                content,
+                disclosure_subject=str(arguments.get("disclosure_subject", "") or "").strip(),
+                requested_scopes=arguments.get("disclosure_scope"),
+            )
+            policy = self._bootstrap_delivery_targets(recipient, policy, requested_channel=str(channel))
+            policy["mail_subject"] = str(arguments.get("subject", "") or "").strip()
+            policy["mail_account"] = str(arguments.get("mail_account", "") or "kohara").strip()
+            policy_block = self._format_policy_block(policy)
+            if policy["approval_required"]:
+                final_note = "※この連絡は甲原さんの承認後に送信してください"
+                self._append_outbound_audit_log(
+                    {
+                        "timestamp": datetime.now().isoformat(),
+                        "tool": tool_name,
+                        "recipient": policy["recipient"],
+                        "canonical_name": policy["canonical_name"],
+                        "audience": policy["audience"],
+                        "level": policy["level"],
+                        "channel": channel,
+                        "result": "proposal",
+                        "approval_required": True,
+                        "disclosure_subject": policy.get("disclosure_subject", ""),
+                        "requested_scopes": policy.get("requested_scopes", []),
+                        "rule_note": policy.get("rule_note", ""),
+                    }
+                )
+                return (
+                    f"【送信提案】\n"
+                    f"{policy_block}\n"
+                    f"送信チャネル: {channel}\n"
+                    f"内容:\n{content}\n\n"
+                    f"{final_note}"
+                )
+
+            send_status, send_note = self._dispatch_outbound_message(channel, content, policy)
+            if send_status == "sent":
+                if policy.get("disclosure_exception_consumable"):
+                    self._consume_disclosure_exception(
+                        str((policy.get("matched_disclosure_exception") or {}).get("exception_id", "") or "")
+                    )
+                self._append_outbound_audit_log(
+                    {
+                        "timestamp": datetime.now().isoformat(),
+                        "tool": tool_name,
+                        "recipient": policy["recipient"],
+                        "canonical_name": policy["canonical_name"],
+                        "audience": policy["audience"],
+                        "level": policy["level"],
+                        "channel": channel,
+                        "result": "sent",
+                        "approval_required": False,
+                        "disclosure_subject": policy.get("disclosure_subject", ""),
+                        "requested_scopes": policy.get("requested_scopes", []),
+                        "rule_note": policy.get("rule_note", ""),
+                        "exception_id": str((policy.get("matched_disclosure_exception") or {}).get("exception_id", "") or ""),
+                    }
+                )
+                return (
+                    f"【送信完了】\n"
+                    f"{policy_block}\n"
+                    f"送信チャネル: {channel}\n"
+                    f"内容:\n{content}\n\n"
+                    f"送信結果: {send_note}"
+                )
+            self._append_outbound_audit_log(
+                {
+                    "timestamp": datetime.now().isoformat(),
+                    "tool": tool_name,
+                    "recipient": policy["recipient"],
+                    "canonical_name": policy["canonical_name"],
+                    "audience": policy["audience"],
+                    "level": policy["level"],
+                    "channel": channel,
+                    "result": send_status,
+                    "approval_required": False,
+                    "disclosure_subject": policy.get("disclosure_subject", ""),
+                    "requested_scopes": policy.get("requested_scopes", []),
+                    "rule_note": policy.get("rule_note", ""),
+                    "dispatch_note": send_note,
+                }
+            )
             return (
                 f"【送信提案】\n"
-                f"宛先: {recipient}（{channel}）\n"
+                f"{policy_block}\n"
+                f"送信チャネル: {channel}\n"
                 f"内容:\n{content}\n\n"
-                f"※送信するには甲原さんの承認が必要です"
+                f"※承認なし送信の条件は満たしていますが、自動送信できませんでした\n"
+                f"理由: {send_note}"
             )
 
         elif tool_name == "ask_human":
             recipient = arguments.get("recipient", "不明")
             message = arguments.get("message", "")
             urgency = arguments.get("urgency", "normal")
+            channel = arguments.get("channel", "")
+            policy = self._evaluate_send_policy(
+                recipient,
+                message,
+                urgency=urgency,
+                disclosure_subject=str(arguments.get("disclosure_subject", "") or "").strip(),
+                requested_scopes=arguments.get("disclosure_scope"),
+            )
+            policy = self._bootstrap_delivery_targets(recipient, policy, requested_channel=str(channel or ""))
+            policy["mail_subject"] = str(arguments.get("subject", "") or "").strip()
+            policy["mail_account"] = str(arguments.get("mail_account", "") or "kohara").strip()
+            policy_block = self._format_policy_block(policy)
+            selected_channel = str(channel or self._choose_outbound_channel(policy.get("delivery_targets", {})) or "")
+            channel_line = f"送信チャネル: {selected_channel}\n" if selected_channel else ""
+            if policy["approval_required"]:
+                final_note = "※この依頼は甲原さんの承認後に送信してください"
+                self._append_outbound_audit_log(
+                    {
+                        "timestamp": datetime.now().isoformat(),
+                        "tool": tool_name,
+                        "recipient": policy["recipient"],
+                        "canonical_name": policy["canonical_name"],
+                        "audience": policy["audience"],
+                        "level": policy["level"],
+                        "channel": selected_channel or channel,
+                        "result": "proposal",
+                        "approval_required": True,
+                        "disclosure_subject": policy.get("disclosure_subject", ""),
+                        "requested_scopes": policy.get("requested_scopes", []),
+                        "rule_note": policy.get("rule_note", ""),
+                    }
+                )
+                return (
+                    f"【依頼提案】\n"
+                    f"{policy_block}\n"
+                    f"緊急度: {urgency}\n"
+                    f"{channel_line}"
+                    f"内容:\n{message}\n\n"
+                    f"{final_note}"
+                )
+
+            if not selected_channel:
+                self._append_outbound_audit_log(
+                    {
+                        "timestamp": datetime.now().isoformat(),
+                        "tool": tool_name,
+                        "recipient": policy["recipient"],
+                        "canonical_name": policy["canonical_name"],
+                        "audience": policy["audience"],
+                        "level": policy["level"],
+                        "channel": "",
+                        "result": "deferred",
+                        "approval_required": False,
+                        "disclosure_subject": policy.get("disclosure_subject", ""),
+                        "requested_scopes": policy.get("requested_scopes", []),
+                        "rule_note": "利用可能な送信経路が未記録",
+                    }
+                )
+                return (
+                    f"【依頼提案】\n"
+                    f"{policy_block}\n"
+                    f"緊急度: {urgency}\n"
+                    f"内容:\n{message}\n\n"
+                    f"※承認なし送信の条件は満たしていますが、利用可能な送信経路が未記録です"
+                )
+
+            send_status, send_note = self._dispatch_outbound_message(selected_channel, message, policy)
+            if send_status == "sent":
+                if policy.get("disclosure_exception_consumable"):
+                    self._consume_disclosure_exception(
+                        str((policy.get("matched_disclosure_exception") or {}).get("exception_id", "") or "")
+                    )
+                self._append_outbound_audit_log(
+                    {
+                        "timestamp": datetime.now().isoformat(),
+                        "tool": tool_name,
+                        "recipient": policy["recipient"],
+                        "canonical_name": policy["canonical_name"],
+                        "audience": policy["audience"],
+                        "level": policy["level"],
+                        "channel": selected_channel,
+                        "result": "sent",
+                        "approval_required": False,
+                        "disclosure_subject": policy.get("disclosure_subject", ""),
+                        "requested_scopes": policy.get("requested_scopes", []),
+                        "rule_note": policy.get("rule_note", ""),
+                        "exception_id": str((policy.get("matched_disclosure_exception") or {}).get("exception_id", "") or ""),
+                    }
+                )
+                return (
+                    f"【依頼送信完了】\n"
+                    f"{policy_block}\n"
+                    f"緊急度: {urgency}\n"
+                    f"送信チャネル: {selected_channel}\n"
+                    f"内容:\n{message}\n\n"
+                    f"送信結果: {send_note}"
+                )
+            self._append_outbound_audit_log(
+                {
+                    "timestamp": datetime.now().isoformat(),
+                    "tool": tool_name,
+                    "recipient": policy["recipient"],
+                    "canonical_name": policy["canonical_name"],
+                    "audience": policy["audience"],
+                    "level": policy["level"],
+                    "channel": selected_channel,
+                    "result": send_status,
+                    "approval_required": False,
+                    "disclosure_subject": policy.get("disclosure_subject", ""),
+                    "requested_scopes": policy.get("requested_scopes", []),
+                    "rule_note": policy.get("rule_note", ""),
+                    "dispatch_note": send_note,
+                }
+            )
             return (
                 f"【依頼提案】\n"
-                f"宛先: {recipient}（緊急度: {urgency}）\n"
+                f"{policy_block}\n"
+                f"緊急度: {urgency}\n"
+                f"{channel_line}"
                 f"内容:\n{message}\n\n"
-                f"※送信するには甲原さんの承認が必要です"
+                f"※承認なし送信の条件は満たしていますが、自動送信できませんでした\n"
+                f"理由: {send_note}"
             )
 
         return f"アクション '{tool_name}' は確認が必要です。引数: {json.dumps(arguments, ensure_ascii=False)}"

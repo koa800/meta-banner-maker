@@ -370,7 +370,7 @@
     },
     {
       "name": "send_message",
-      "description": "LINE・Chatwork・メールでメッセージを送信する。必ず送信内容を甲原さんに確認してから実行すること",
+      "description": "LINE・Chatwork・メールでメッセージを送信する。相手ごとの送信権限と送信先情報を確認し、条件を満たす場合は実送信する",
       "confirmation_level": "L3",
       "handler_type": "action",
       "input_schema": {
@@ -392,6 +392,41 @@
           "content": {
             "type": "string",
             "description": "送信内容"
+          },
+          "disclosure_subject": {
+            "type": "string",
+            "description": "通常の開示境界を超える情報を含む場合の対象名。例: KPI共有, 内部判断共有"
+          },
+          "disclosure_scope": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "operation",
+                "judgment",
+                "background",
+                "strategy",
+                "strategy_need_to_know",
+                "situation",
+                "required_conditions",
+                "people_insight",
+                "hypothesis"
+              ]
+            },
+            "description": "この送信で相手に渡す情報スコープ。通常の範囲を超える場合は disclosure_subject とセットで指定する"
+          },
+          "subject": {
+            "type": "string",
+            "description": "メール送信時の件名。省略時は自動補完"
+          },
+          "mail_account": {
+            "type": "string",
+            "enum": [
+              "kohara",
+              "personal",
+              "gwsadmin"
+            ],
+            "description": "メール送信時に使う Gmail アカウント。省略時は kohara"
           }
         },
         "required": [
@@ -403,7 +438,7 @@
     },
     {
       "name": "ask_human",
-      "description": "チームメンバーに質問・確認・依頼をする。甲原さんの承認後にメッセージを送信する",
+      "description": "チームメンバーに質問・確認・依頼をする。相手ごとの送信権限と送信先情報を確認し、条件を満たす場合は実送信する",
       "confirmation_level": "L3",
       "handler_type": "action",
       "input_schema": {
@@ -417,6 +452,41 @@
             "type": "string",
             "description": "質問・依頼の内容"
           },
+          "disclosure_subject": {
+            "type": "string",
+            "description": "通常の開示境界を超える情報を含む場合の対象名。例: KPI共有, 内部判断共有"
+          },
+          "disclosure_scope": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "operation",
+                "judgment",
+                "background",
+                "strategy",
+                "strategy_need_to_know",
+                "situation",
+                "required_conditions",
+                "people_insight",
+                "hypothesis"
+              ]
+            },
+            "description": "この依頼で相手に渡す情報スコープ。通常の範囲を超える場合は disclosure_subject とセットで指定する"
+          },
+          "subject": {
+            "type": "string",
+            "description": "メール送信時の件名。省略時は自動補完"
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "line",
+              "chatwork",
+              "email"
+            ],
+            "description": "送信チャネル。未指定なら記録済みの最近のチャネルを優先"
+          },
           "urgency": {
             "type": "string",
             "enum": [
@@ -425,6 +495,15 @@
               "low"
             ],
             "description": "緊急度"
+          },
+          "mail_account": {
+            "type": "string",
+            "enum": [
+              "kohara",
+              "personal",
+              "gwsadmin"
+            ],
+            "description": "メール送信時に使う Gmail アカウント。省略時は kohara"
           }
         },
         "required": [

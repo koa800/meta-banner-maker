@@ -289,14 +289,14 @@ def build_source_management_rows() -> List[List[str]]:
             "過去UTAGE CSV",
             str(PAST_UTAGE_CSV_DIR),
             "",
-            "初回整備で過去分を補完した履歴",
+            "【アドネス株式会社】集客データ（メールアドレス）に日付が無いメールだけを補完する履歴",
         ],
         [
             "初回整備のみ",
             "顧客データ（メールアドレスのみ）",
             "メール集客データ",
             '=HYPERLINK("https://docs.google.com/spreadsheets/d/1iD3DGxNhZruyjYcA5n6oXRDk2ZGA3uMDOo0stQS9Y00/edit","シートを開く")',
-            "初回整備で旧登録日を補完した履歴",
+            "【アドネス株式会社】集客データ（メールアドレス）に日付が無いメールだけを補完する履歴",
         ],
         [
             "出力",
@@ -312,7 +312,7 @@ def build_rule_rows() -> List[List[str]]:
     return [
         ["項目", "ルール", "目的"],
         ["母集団", "顧客マスター + メールのみ だけを使う", "メール集客の全体像を安定して管理するため"],
-        ["登録日", "集客データ（メールアドレス）の各流入経路タブ A列 を正とし、同じメールは最も古い日付を使う", "登録日の正本を1つに固定するため"],
+        ["登録日", "【アドネス株式会社】集客データ（メールアドレス）の各流入経路タブ A列 を正とし、そこに日付が無いメールだけを過去CSVとメール集客データで補完する", "登録日の正本を1つに固定するため"],
         ["件数の増やし方", "UTAGE元データや過去CSVだけで新しいメール件数を足さない", "母集団が勝手に膨らまないようにするため"],
         ["複数アドレス", "1顧客IDでメールアドレスを2個以上持つ人だけを複数アドレスユーザーに出す", "人数とメール数を分けて見るため"],
         ["自動生成タブ", "UUメールアドレス / 日別UUメールアドレス数 / 複数アドレスユーザー / メール集計サマリー は手編集しない", "再生成で上書きされるため"],
@@ -397,6 +397,12 @@ def merge_earliest_dates(target: Dict[str, str], source: Dict[str, str]) -> None
         update_earliest(target, email, date_str)
 
 
+def override_dates(target: Dict[str, str], source: Dict[str, str]) -> None:
+    for email, date_str in source.items():
+        if email and date_str:
+            target[email] = date_str
+
+
 def collect_registration_dates(gc) -> Tuple[Dict[str, str], Dict[str, int]]:
     raw_spreadsheet = gc.open_by_key(RAW_SOURCE_SHEET_ID)
     raw_dates, raw_stats = collect_sheet_earliest_dates(raw_spreadsheet.worksheets())
@@ -406,10 +412,14 @@ def collect_registration_dates(gc) -> Tuple[Dict[str, str], Dict[str, int]]:
 
     csv_dates, csv_stats = collect_csv_earliest_dates(PAST_UTAGE_CSV_DIR)
 
-    combined_dates = load_date_cache()
-    merge_earliest_dates(combined_dates, raw_dates)
+    # 「【アドネス株式会社】集客データ（メールアドレス）」の各流入経路タブ A列を
+    # 登録日の正本として扱う。過去CSVと「メール集客データ」は、正本に日付が無い
+    # メールだけを補完する用途に留め、正本より古い日付で上書きしない。
+    combined_dates = {}
+    merge_earliest_dates(combined_dates, load_date_cache())
     merge_earliest_dates(combined_dates, csv_dates)
     merge_earliest_dates(combined_dates, legacy_dates)
+    override_dates(combined_dates, raw_dates)
     save_date_cache(combined_dates)
 
     stats = {

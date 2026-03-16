@@ -39,6 +39,7 @@ SOURCE_STATUS_HISTORY_PATH = DATA_DIR / "cdp_source_status_history.json"
 SIMILARITY_LOG_PATH = DATA_DIR / "cdp_email_warnings.json"
 LOCK_FILE_PATH = DATA_DIR / "cdp_sync.lock"
 LOCK_TIMEOUT_SECONDS = 600  # 10分でロックタイムアウト
+SOURCE_STALE_DAYS = 7
 
 _HEADER_AUTOFIX_HINTS = {
     "メールアドレス": (
@@ -3511,6 +3512,9 @@ class CDPSync:
         route_tabs = route_ss.worksheets()
 
         all_entries = []  # [(登録日, メールアドレス, タブ名), ...]
+        route_tab_count = 0
+        date_count = 0
+        email_count = 0
         for ws in route_tabs:
             rows = ws.get_all_values()
             if len(rows) <= 1:
@@ -3522,18 +3526,27 @@ class CDPSync:
                                  if "メール" in h)
             except StopIteration:
                 continue
+            route_tab_count += 1
             date_idx = 0  # 登録日は1列目
             for row in rows[1:]:
+                date_val = row[date_idx].strip() if date_idx < len(row) else ""
                 email = row[email_idx].strip().lower() if email_idx < len(row) else ""
+                if date_val:
+                    date_count += 1
                 if not email or "@" not in email:
                     continue
-                date_val = row[date_idx].strip() if date_idx < len(row) else ""
+                email_count += 1
                 all_entries.append((date_val, email, ws.title))
 
         print(f"  経路別タブから {len(all_entries)} 件のメールアドレスを取得")
+        source_counts = {
+            "登録日": date_count,
+            "メールアドレス": email_count,
+            "初回流入経路": route_tab_count,
+        }
 
         if not all_entries:
-            return {"added": 0, "skipped_master": 0, "skipped_dup": 0}
+            return {"added": 0, "skipped_master": 0, "skipped_dup": 0, "source_counts": source_counts}
 
         # 2. CDPマスタのメールアドレス一覧を取得
         # 主メールと補助メールの両方を除外対象にする
@@ -3593,7 +3606,7 @@ class CDPSync:
             if dry_run and new_rows:
                 print(f"  ドライラン: {len(new_rows)} 件を書き込み予定")
             return {"added": len(new_rows), "skipped_master": skipped_master,
-                    "skipped_dup": skipped_dup}
+                    "skipped_dup": skipped_dup, "source_counts": source_counts}
 
         # 5. 書き込み（500行チャンク + リトライ）
         start_row = len(lead_data) + 1
@@ -3618,7 +3631,7 @@ class CDPSync:
 
         print(f"  {len(new_rows)} 件を集客データシートに追加")
         return {"added": len(new_rows), "skipped_master": skipped_master,
-                "skipped_dup": skipped_dup}
+                "skipped_dup": skipped_dup, "source_counts": source_counts}
 
     # ─── 集客データシートの掃除 ─────────────────────────
 
@@ -3693,7 +3706,7 @@ class CDPSync:
         Args:
             source_url: ソースのスプレッドシートURL
             source_tab: ソースのタブ名
-            status: "正常" / "停止"
+            status: "正常" / "未同期" / "停止"
             error_count: エラー件数
             detail: 状態変化の補足メモ
         """
@@ -3751,6 +3764,255 @@ class CDPSync:
                     "new_error_count": error_count,
                     "detail": str(detail or "").strip(),
                 })
+
+    def collect_lead_source_counts(self):
+        """メール集客データのデータソース管理タブに書く更新数を集計する。"""
+        route_ss = self.client.open_by_key(ROUTE_TAB_SHEET_ID)
+        route_tabs = route_ss.worksheets()
+
+        date_count = 0
+        email_count = 0
+        route_count = 0
+
+        for ws in route_tabs:
+            rows = ws.get_all_values()
+            if len(rows) <= 1:
+                continue
+            header = rows[0]
+            try:
+                email_idx = next(i for i, h in enumerate(header) if "メール" in h)
+            except StopIteration:
+                continue
+
+            route_count += 1
+            for row in rows[1:]:
+                if row and row[0].strip():
+                    date_count += 1
+                if email_idx < len(row) and row[email_idx].strip():
+                    email_count += 1
+
+        return {
+            "登録日": date_count,
+            "メールアドレス": email_count,
+            "初回流入経路": route_count,
+        }
+
+    def ensure_lead_source_status_ui(self):
+        """メール集客データ側のステータス列に顧客マスタと同じUIを適用する。"""
+        lead_ss = self.client.open_by_key(LEAD_SHEET_ID)
+        lead_ws = lead_ss.worksheet("データソース管理")
+        destination_end_row = max(101, lead_ws.row_count)
+        status_range = {
+            "sheetId": lead_ws.id,
+            "startRowIndex": 1,
+            "endRowIndex": destination_end_row,
+            "startColumnIndex": 6,
+            "endColumnIndex": 7,
+        }
+        service = self._get_sheets_service()
+        metadata = service.spreadsheets().get(
+            spreadsheetId=LEAD_SHEET_ID,
+            fields="sheets(properties(sheetId,title),conditionalFormats)"
+        ).execute()
+
+        delete_requests = []
+        for sheet in metadata.get("sheets", []):
+            if sheet.get("properties", {}).get("sheetId") != lead_ws.id:
+                continue
+            rules = sheet.get("conditionalFormats", [])
+            for idx in range(len(rules) - 1, -1, -1):
+                rule = rules[idx]
+                for rule_range in rule.get("ranges", []):
+                    if (
+                        rule_range.get("sheetId") == lead_ws.id
+                        and rule_range.get("startColumnIndex") == 6
+                        and rule_range.get("endColumnIndex") == 7
+                    ):
+                        delete_requests.append({
+                            "deleteConditionalFormatRule": {
+                                "sheetId": lead_ws.id,
+                                "index": idx,
+                            }
+                        })
+                        break
+
+        requests = delete_requests + [
+            {
+                "repeatCell": {
+                    "range": status_range,
+                    "cell": {
+                        "dataValidation": {
+                            "condition": {
+                                "type": "ONE_OF_LIST",
+                                "values": [
+                                    {"userEnteredValue": "正常"},
+                                    {"userEnteredValue": "未同期"},
+                                    {"userEnteredValue": "停止"},
+                                ],
+                            },
+                            "showCustomUi": True,
+                        },
+                        "userEnteredFormat": {
+                            "horizontalAlignment": "CENTER",
+                            "wrapStrategy": "CLIP",
+                            "textFormat": {
+                                "fontFamily": "Arial",
+                                "fontSize": 10,
+                            },
+                        },
+                    },
+                    "fields": "dataValidation,userEnteredFormat.horizontalAlignment,userEnteredFormat.wrapStrategy,userEnteredFormat.textFormat.fontFamily,userEnteredFormat.textFormat.fontSize",
+                }
+            },
+            {
+                "addConditionalFormatRule": {
+                    "index": 0,
+                    "rule": {
+                        "ranges": [status_range],
+                        "booleanRule": {
+                            "condition": {
+                                "type": "TEXT_EQ",
+                                "values": [{"userEnteredValue": "正常"}],
+                            },
+                            "format": {
+                                "backgroundColor": {
+                                    "red": 0.8509804,
+                                    "green": 0.91764706,
+                                    "blue": 0.8235294,
+                                }
+                            },
+                        },
+                    },
+                }
+            },
+            {
+                "addConditionalFormatRule": {
+                    "index": 1,
+                    "rule": {
+                        "ranges": [status_range],
+                        "booleanRule": {
+                            "condition": {
+                                "type": "TEXT_EQ",
+                                "values": [{"userEnteredValue": "未同期"}],
+                            },
+                            "format": {
+                                "backgroundColor": {
+                                    "red": 1,
+                                    "green": 0.94509804,
+                                    "blue": 0.8,
+                                }
+                            },
+                        },
+                    },
+                }
+            },
+            {
+                "addConditionalFormatRule": {
+                    "index": 2,
+                    "rule": {
+                        "ranges": [status_range],
+                        "booleanRule": {
+                            "condition": {
+                                "type": "TEXT_EQ",
+                                "values": [{"userEnteredValue": "停止"}],
+                            },
+                            "format": {
+                                "backgroundColor": {
+                                    "red": 0.95686275,
+                                    "green": 0.8,
+                                    "blue": 0.8,
+                                }
+                            },
+                        },
+                    },
+                }
+            },
+        ]
+        lead_ss.batch_update({"requests": requests})
+
+    def update_lead_source_status(self, status, count_map=None, detail="", touch_sync_time=True):
+        """メール集客データ側のデータソース管理タブを更新する。"""
+        lead_ss = self.client.open_by_key(LEAD_SHEET_ID)
+        ws = lead_ss.worksheet("データソース管理")
+        self.ensure_lead_source_status_ui()
+        data = ws.get_all_values()
+        now = datetime.now().strftime("%Y/%m/%d %H:%M")
+
+        updates = []
+        matched_rows = []
+        count_map = count_map or {}
+
+        for i, row in enumerate(data[1:], 2):
+            if len(row) < 2 or row[1].strip() != "経路別タブシート":
+                continue
+
+            cdp_column = row[0].strip()
+            previous_status = row[6].strip() if len(row) > 6 else ""
+            previous_sync = row[7].strip() if len(row) > 7 else ""
+            previous_count = row[8].strip() if len(row) > 8 else ""
+            matched_rows.append({
+                "row_no": i,
+                "cdp_column": cdp_column,
+                "previous_status": previous_status,
+                "previous_sync": previous_sync,
+                "previous_count": previous_count,
+            })
+
+            if touch_sync_time:
+                updates.append({"range": f"G{i}:H{i}", "values": [[status, now]]})
+            else:
+                updates.append({"range": f"G{i}", "values": [[status]]})
+
+            if cdp_column in count_map:
+                updates.append({"range": f"I{i}", "values": [[count_map[cdp_column]]]})
+
+        if updates:
+            ws.batch_update(updates, value_input_option="USER_ENTERED")
+
+        if matched_rows:
+            changed = any(
+                row["previous_status"] != status
+                or (touch_sync_time and row["previous_sync"] != now)
+                or (
+                    row["cdp_column"] in count_map
+                    and row["previous_count"] != str(count_map[row["cdp_column"]])
+                )
+                for row in matched_rows
+            )
+            if changed:
+                self.source_status_history.append({
+                    "timestamp": now,
+                    "target_sheet": "メール集客データ",
+                    "source_url": f"https://docs.google.com/spreadsheets/d/{ROUTE_TAB_SHEET_ID}/edit",
+                    "source_tab": "各経路タブ",
+                    "affected_rows": [row["row_no"] for row in matched_rows],
+                    "affected_columns": [row["cdp_column"] for row in matched_rows],
+                    "previous_statuses": sorted({row["previous_status"] for row in matched_rows if row["previous_status"]}),
+                    "previous_sync_values": sorted({row["previous_sync"] for row in matched_rows if row["previous_sync"]}),
+                    "previous_counts": sorted({row["previous_count"] for row in matched_rows if row["previous_count"]}),
+                    "new_status": status,
+                    "new_sync": now if touch_sync_time else "",
+                    "new_counts": count_map,
+                    "detail": str(detail or "").strip(),
+                })
+
+    def run_lead_sync(self, dry_run=False):
+        """経路別タブ -> メール集客データ同期とステータス更新をまとめて実行する。"""
+        try:
+            lead_stats = self.sync_route_tabs_to_lead(dry_run=dry_run)
+            if not dry_run:
+                self.update_lead_source_status(
+                    "正常",
+                    count_map=lead_stats.get("source_counts", {}),
+                )
+            return lead_stats
+        except Exception as exc:
+            if not dry_run:
+                try:
+                    self.update_lead_source_status("停止", detail=str(exc))
+                except Exception:
+                    pass
+            raise
 
     def refresh_source_counts(self):
         """データソース管理の更新数を、各行のソーススプレッドシート（E列）を
@@ -3840,7 +4102,31 @@ class CDPSync:
             ws.batch_update(updates, value_input_option="USER_ENTERED")
             print(f"更新数を実ソースデータ件数で反映: {len(updates)}行")
 
-    def check_source_staleness(self):
+    def refresh_lead_source_counts(self):
+        """メール集客データ側のデータソース管理へ更新数を書き込む。"""
+        count_map = self.collect_lead_source_counts()
+        lead_ss = self.client.open_by_key(LEAD_SHEET_ID)
+        ws = lead_ss.worksheet("データソース管理")
+        self.ensure_lead_source_status_ui()
+        data = ws.get_all_values()
+        updates = []
+
+        for i, row in enumerate(data[1:], 2):
+            if len(row) < 2 or row[1].strip() != "経路別タブシート":
+                continue
+            cdp_column = row[0].strip()
+            if cdp_column not in count_map:
+                continue
+            updates.append({
+                "range": f"I{i}",
+                "values": [[count_map[cdp_column]]],
+            })
+
+        if updates:
+            ws.batch_update(updates, value_input_option="USER_ENTERED")
+            print(f"メール集客データの更新数を反映: {len(updates)}行")
+
+    def check_source_staleness(self, update_status=False):
         """データソース管理の全ソースの鮮度をチェックし、異常を返す
 
         Returns:
@@ -3850,8 +4136,9 @@ class CDPSync:
         data = ws.get_all_values()
         stale = []
         seen = set()  # 同一ソースの重複チェック
+        updates = []
 
-        for row in data[1:]:
+        for i, row in enumerate(data[1:], 2):
             if len(row) < 11 or not row[0].strip():
                 continue
             cdp_col = row[0].strip()
@@ -3865,19 +4152,73 @@ class CDPSync:
                 continue
             seen.add(source_key)
 
+            desired_status = "正常"
             if not last_sync:
                 stale.append(f"{cdp_col}（{source}/{tab}）: 未同期")
+                desired_status = "未同期"
+            else:
+                try:
+                    last_date = parse_source_datetime(last_sync)
+                    if last_date is None:
+                        raise ValueError(last_sync)
+                    days = (datetime.now() - last_date).days
+                    if days >= SOURCE_STALE_DAYS:
+                        stale.append(f"{source}/{tab}: {days}日未同期")
+                        desired_status = "未同期"
+                except ValueError:
+                    stale.append(f"{source}/{tab}: 日付不正（{last_sync}）")
+                    desired_status = "未同期"
+
+            if status == "停止":
+                continue
+            if update_status and status != desired_status:
+                updates.append({"range": f"J{i}", "values": [[desired_status]]})
+
+        if updates:
+            ws.batch_update(updates, value_input_option="USER_ENTERED")
+
+        return stale
+
+    def check_lead_source_staleness(self, update_status=False):
+        """メール集客データ側のデータソース管理の鮮度をチェックする。"""
+        lead_ss = self.client.open_by_key(LEAD_SHEET_ID)
+        ws = lead_ss.worksheet("データソース管理")
+        data = ws.get_all_values()
+        stale = []
+        updates = []
+
+        for i, row in enumerate(data[1:], 2):
+            if len(row) < 2 or row[1].strip() != "経路別タブシート":
                 continue
 
-            try:
-                last_date = parse_source_datetime(last_sync)
-                if last_date is None:
-                    raise ValueError(last_sync)
-                days = (datetime.now() - last_date).days
-                if days >= 7:
-                    stale.append(f"{source}/{tab}: {days}日未同期")
-            except ValueError:
-                stale.append(f"{source}/{tab}: 日付不正（{last_sync}）")
+            cdp_col = row[0].strip()
+            status = row[6].strip() if len(row) > 6 else ""
+            last_sync = row[7].strip() if len(row) > 7 else ""
+            desired_status = "正常"
+
+            if not last_sync:
+                stale.append(f"{cdp_col}（経路別タブシート）: 未同期")
+                desired_status = "未同期"
+            else:
+                try:
+                    last_date = parse_source_datetime(last_sync)
+                    if last_date is None:
+                        raise ValueError(last_sync)
+                    days = (datetime.now() - last_date).days
+                    if days >= SOURCE_STALE_DAYS:
+                        stale.append(f"{cdp_col}（経路別タブシート）: {days}日未同期")
+                        desired_status = "未同期"
+                except ValueError:
+                    stale.append(f"{cdp_col}（経路別タブシート）: 日付不正（{last_sync}）")
+                    desired_status = "未同期"
+
+            if status == "停止":
+                continue
+            if update_status and status != desired_status:
+                updates.append({"range": f"G{i}", "values": [[desired_status]]})
+
+        if updates:
+            ws.batch_update(updates, value_input_option="USER_ENTERED")
 
         return stale
 
@@ -4805,18 +5146,29 @@ class CDPSync:
 
         # 経路別タブ → 集客データシートの同期
         try:
-            lead_stats = self.sync_route_tabs_to_lead(dry_run=dry_run)
+            lead_stats = self.run_lead_sync(dry_run=dry_run)
             if lead_stats:
                 total_stats["lead_added"] = lead_stats.get("added", 0)
         except Exception as e:
             total_stats["errors"] += 1
             print(f"  集客データ同期エラー: {e}")
 
+        # full sync の最後に、顧客マスタと重なるメールを集客データから必ず掃除する
+        if not dry_run:
+            try:
+                final_lead_cleaned = self._clean_lead_sheet([])
+                if final_lead_cleaned:
+                    total_stats["lead_cleaned"] = total_stats.get("lead_cleaned", 0) + final_lead_cleaned
+            except Exception as e:
+                print(f"  集客データ最終掃除エラー: {e}")
+
         # 鮮度チェック（7日以上未同期のソースを検出）
         stale_sources = []
         if not dry_run:
             try:
-                stale_sources = self.check_source_staleness()
+                stale_sources = self.check_source_staleness(update_status=True)
+                lead_stale_sources = self.check_lead_source_staleness(update_status=True)
+                stale_sources.extend(lead_stale_sources)
                 if stale_sources:
                     print(f"\n⚠️ 未同期ソース検出: {len(stale_sources)}件")
                     for s in stale_sources:
@@ -4834,6 +5186,8 @@ class CDPSync:
             print(f"自動修復: {len(total_stats['repairs'])}件")
         if total_stats["errors"]:
             print(f"エラー: {total_stats['errors']}件")
+        if total_stats.get("lead_cleaned"):
+            print(f"集客データ掃除: {total_stats['lead_cleaned']}件")
         if total_stats["aborted"]:
             print(f"\n⚠️ ソース変更により中断: {len(total_stats['aborted'])}件")
             for a in total_stats["aborted"]:
@@ -4859,6 +5213,10 @@ class CDPSync:
                 self.refresh_source_counts()
             except Exception as e:
                 print(f"更新数反映でエラー（データ同期は完了済み）: {e}")
+            try:
+                self.refresh_lead_source_counts()
+            except Exception as e:
+                print(f"メール集客データの更新数反映でエラー（データ同期は完了済み）: {e}")
 
         # 全タブの罫線を保証（手動追加行も含めて漏れを防ぐ）
         if not dry_run:
@@ -5026,7 +5384,7 @@ CDP同期スクリプト
     elif cmd == "sync-leads":
         dry_run = "--dry-run" in sys.argv
         sync.load_master()
-        sync.sync_route_tabs_to_lead(dry_run=dry_run)
+        sync.run_lead_sync(dry_run=dry_run)
 
     elif cmd == "backfill-computed":
         # 集計カラム（セミナー予約合計/個別予約合計/累計購入回数/LTV）を一括再計算

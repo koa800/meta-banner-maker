@@ -1,6 +1,12 @@
 {
   "brain_id": "kohara_clone_brain",
   "kind": "kohara_clone",
+  "owner": "self",
+  "disclosure_level": "self-only",
+  "approval_required": "always",
+  "audience": [
+    "僕"
+  ],
   "update_policy": "user_only",
   "sections": {
     "brain_os": "Master/self_clone/kohara/BRAIN_OS.md",
