@@ -12,6 +12,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import re
 import time
 from collections import Counter
@@ -27,6 +29,7 @@ SOURCE_SHEET_ID = "1l2gHhdUMfRANEDmZNfgpjx8KZi0yVCEknckjtpvYwBo"
 SOURCE_TAB_NAME = "個別予約集計botログ"
 TARGET_SHEET_ID = "1ip_RARDHmQvTjmaVavw1L71ltPrn4Kg6sa__njqyQZ8"
 TARGET_SPREADSHEET_TITLE = "【アドネス株式会社】個別面談データ"
+NOTIFICATION_STATE_PATH = os.path.join(os.path.dirname(__file__), "data", "booking_notification_log_state.json")
 
 COUNT_TAB_NAME = "日別個別予約数"
 UU_TAB_NAME = "日別個別予約数（UU）"
@@ -579,26 +582,29 @@ def load_notification_log_stats(target) -> Dict[str, str]:
         }
 
     values = ws.get_all_values()
-    if len(values) <= 1:
+    event_count = 0
+    for row in values[1:]:
+        row = row + [""] * max(0, 8 - len(row))
+        if any(str(cell).strip() for cell in row[:6]):
+            event_count += 1
+    state = {}
+    if os.path.exists(NOTIFICATION_STATE_PATH):
+        try:
+            with open(NOTIFICATION_STATE_PATH, "r", encoding="utf-8") as f:
+                state = json.load(f)
+        except Exception:
+            state = {}
+
+    latest_imported_at = str(state.get("updated_at") or "").strip()
+
+    if event_count == 0:
         return {
             "ステータス": "未接続",
-            "最終同期日": "",
+            "最終同期日": latest_imported_at,
             "更新数": "0",
             "エラー数": "0",
             "メモ": "Slack通知の取込待ち",
         }
-
-    latest_imported_at = ""
-    event_count = 0
-    for row in values[1:]:
-        row = row + [""] * max(0, 16 - len(row))
-        slack_ts = str(row[9]).strip()
-        if not slack_ts:
-            continue
-        event_count += 1
-        imported_at = str(row[10]).strip()
-        if imported_at:
-            latest_imported_at = imported_at
 
     return {
         "ステータス": "正常" if event_count else "未接続",
@@ -651,7 +657,7 @@ def build_source_rows(stats: Dict[str, object], notification_stats: Dict[str, st
             "2",
             f"https://docs.google.com/spreadsheets/d/{TARGET_SHEET_ID}/edit",
             NOTIFICATION_LOG_TAB_NAME,
-            "A〜P列",
+            "A〜H列",
             "Slack 通知を 1イベント1行で保存",
             "★【個別予約完了】★ が付いた時に通知",
             notification_stats["ステータス"],

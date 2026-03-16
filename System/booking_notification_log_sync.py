@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import time
@@ -32,6 +33,7 @@ TARGET_SHEET_ID = "1ip_RARDHmQvTjmaVavw1L71ltPrn4Kg6sa__njqyQZ8"
 TARGET_TAB_NAME = "個別予約通知ログ"
 DEFAULT_CHANNEL_NAME = os.environ.get("BOOKING_NOTIFICATION_SLACK_CHANNEL_NAME", "個別予約通知")
 MESSAGE_TAG = "★【個別予約完了】★"
+STATE_PATH = os.path.join(os.path.dirname(__file__), "data", "booking_notification_log_state.json")
 
 TAB_COLOR = "#1A73E8"
 HEADER_BG = {"red": 0.26, "green": 0.52, "blue": 0.96}
@@ -48,22 +50,14 @@ PROTECTION_DESCRIPTION = "個別面談データ自動生成: 個別予約通知�
 WRITE_RETRY_SECONDS = (5, 10, 20, 40)
 
 COLUMNS = [
-    "Slack投稿日時",
     "タグ付与日時",
     "LINE名",
     "LSTEPメンバーID",
     "Lステップアカウント名",
     "予約導線種別",
-    "タグ名",
     "通知リンク",
-    "Slackチャンネル名",
-    "Slack ts",
-    "取込日時",
-    "照合メールアドレス",
-    "照合電話番号",
-    "顧客ID",
-    "状態",
-    "通知本文",
+    "メールアドレス",
+    "電話番号",
 ]
 
 ACCOUNT_RE = re.compile(r"^[\(（](.+?)\s*タグ通知[\)）]$")
@@ -74,42 +68,38 @@ URL_RE = re.compile(r"https?://\S+")
 
 @dataclass
 class NotificationRecord:
-    slack_posted_at: str
     tagged_at: str
     line_name: str
     member_id: str
     account_name: str
     route_type: str
-    tag_name: str
     notification_url: str
-    slack_channel_name: str
     slack_ts: str
-    imported_at: str
-    matched_email: str
-    matched_phone: str
-    customer_id: str
-    status: str
-    raw_text: str
+    email: str
+    phone: str
 
     def to_row(self) -> List[str]:
         return [
-            self.slack_posted_at,
             self.tagged_at,
             self.line_name,
             self.member_id,
             self.account_name,
             self.route_type,
-            self.tag_name,
             self.notification_url,
-            self.slack_channel_name,
-            self.slack_ts,
-            self.imported_at,
-            self.matched_email,
-            self.matched_phone,
-            self.customer_id,
-            self.status,
-            self.raw_text,
+            self.email,
+            self.phone,
         ]
+
+    @property
+    def dedupe_key(self) -> str:
+        return " | ".join(
+            [
+                self.tagged_at,
+                self.account_name,
+                self.member_id,
+                self.line_name,
+            ]
+        ).strip()
 
 
 def col_letter(col_num: int) -> str:
@@ -200,10 +190,10 @@ def ensure_tab(spreadsheet):
             f"{TARGET_TAB_NAME} タブの作成",
             lambda: spreadsheet.add_worksheet(title=TARGET_TAB_NAME, rows=1000, cols=len(COLUMNS)),
         )
-    if ws.row_count < 1000 or ws.col_count < len(COLUMNS):
+    if ws.row_count < 1000 or ws.col_count != len(COLUMNS):
         worksheet_write_with_retry(
             f"{TARGET_TAB_NAME} タブのサイズ調整",
-            lambda: ws.resize(rows=max(ws.row_count, 1000), cols=max(ws.col_count, len(COLUMNS))),
+            lambda: ws.resize(rows=max(ws.row_count, 1000), cols=len(COLUMNS)),
         )
     return ws
 
@@ -214,7 +204,7 @@ def ensure_header(ws) -> None:
         return
     worksheet_write_with_retry(
         f"{TARGET_TAB_NAME} のヘッダー設定",
-        lambda: ws.update("A1:P1", [COLUMNS], value_input_option="USER_ENTERED"),
+        lambda: ws.update(range_name=f"A1:{col_letter(len(COLUMNS))}1", values=[COLUMNS], value_input_option="USER_ENTERED"),
     )
 
 
@@ -223,27 +213,20 @@ def load_existing_rows(ws) -> Dict[str, NotificationRecord]:
     existing: Dict[str, NotificationRecord] = {}
     for row in values[1:]:
         row = row + [""] * max(0, len(COLUMNS) - len(row))
-        slack_ts = str(row[9]).strip()
-        if not slack_ts:
-            continue
-        existing[slack_ts] = NotificationRecord(
-            slack_posted_at=str(row[0]).strip(),
-            tagged_at=str(row[1]).strip(),
-            line_name=str(row[2]).strip(),
-            member_id=str(row[3]).strip(),
-            account_name=str(row[4]).strip(),
-            route_type=str(row[5]).strip(),
-            tag_name=str(row[6]).strip(),
-            notification_url=str(row[7]).strip(),
-            slack_channel_name=str(row[8]).strip(),
-            slack_ts=slack_ts,
-            imported_at=str(row[10]).strip(),
-            matched_email=str(row[11]).strip(),
-            matched_phone=str(row[12]).strip(),
-            customer_id=str(row[13]).strip(),
-            status=str(row[14]).strip() or "未照合",
-            raw_text=str(row[15]).strip(),
+        record = NotificationRecord(
+            tagged_at=str(row[0]).strip(),
+            line_name=str(row[1]).strip(),
+            member_id=str(row[2]).strip(),
+            account_name=str(row[3]).strip(),
+            route_type=str(row[4]).strip(),
+            notification_url=str(row[5]).strip(),
+            slack_ts="",
+            email=str(row[6]).strip(),
+            phone=str(row[7]).strip(),
         )
+        if not record.dedupe_key:
+            continue
+        existing[record.dedupe_key] = record
     return existing
 
 
@@ -296,62 +279,49 @@ def parse_notification_message(message: dict, channel_name: str) -> Optional[Not
     if not slack_ts:
         return None
 
-    slack_posted_at = ""
-    try:
-        slack_posted_at = datetime.fromtimestamp(float(slack_ts)).strftime("%Y/%m/%d %H:%M")
-    except Exception:
-        pass
-
-    imported_at = datetime.now().strftime("%Y/%m/%d %H:%M")
     route_type = infer_route_type(text)
 
     return NotificationRecord(
-        slack_posted_at=slack_posted_at,
         tagged_at=tagged_at,
         line_name=line_name,
         member_id=member_id,
         account_name=account_name,
         route_type=route_type,
-        tag_name=MESSAGE_TAG,
         notification_url=notification_url,
-        slack_channel_name=channel_name,
         slack_ts=slack_ts,
-        imported_at=imported_at,
-        matched_email="",
-        matched_phone="",
-        customer_id="",
-        status="未照合",
-        raw_text=text,
+        email="",
+        phone="",
     )
 
 
 def merge_records(existing: Dict[str, NotificationRecord], parsed: Iterable[NotificationRecord]) -> List[NotificationRecord]:
     merged = dict(existing)
     for record in parsed:
-        if record.slack_ts in merged:
-            current = merged[record.slack_ts]
-            merged[record.slack_ts] = NotificationRecord(
-                slack_posted_at=record.slack_posted_at or current.slack_posted_at,
+        key = record.dedupe_key
+        if key in merged:
+            current = merged[key]
+            merged[key] = NotificationRecord(
                 tagged_at=record.tagged_at or current.tagged_at,
                 line_name=record.line_name or current.line_name,
                 member_id=record.member_id or current.member_id,
                 account_name=record.account_name or current.account_name,
                 route_type=record.route_type or current.route_type,
-                tag_name=record.tag_name or current.tag_name,
                 notification_url=record.notification_url or current.notification_url,
-                slack_channel_name=record.slack_channel_name or current.slack_channel_name,
-                slack_ts=current.slack_ts,
-                imported_at=record.imported_at or current.imported_at,
-                matched_email=current.matched_email,
-                matched_phone=current.matched_phone,
-                customer_id=current.customer_id,
-                status=current.status or "未照合",
-                raw_text=record.raw_text or current.raw_text,
+                slack_ts=record.slack_ts or current.slack_ts,
+                email=current.email,
+                phone=current.phone,
             )
         else:
-            merged[record.slack_ts] = record
+            merged[key] = record
 
-    return sorted(merged.values(), key=lambda item: float(item.slack_ts))
+    return sorted(
+        merged.values(),
+        key=lambda item: (
+            item.tagged_at or "",
+            item.account_name or "",
+            item.line_name or "",
+        ),
+    )
 
 
 def write_rows(ws, rows: List[List[str]]) -> None:
@@ -420,7 +390,7 @@ def apply_style(spreadsheet, ws, row_count: int) -> None:
         },
     ]
 
-    widths = [140, 140, 180, 130, 180, 140, 140, 260, 150, 110, 140, 180, 160, 120, 120, 420]
+    widths = [150, 180, 150, 180, 140, 280, 220, 180]
     for index, width in enumerate(widths):
         requests.append(set_column_width_request(ws.id, index, index + 1, width))
 
@@ -497,6 +467,28 @@ def build_rows(records: List[NotificationRecord]) -> List[List[str]]:
     return rows
 
 
+def load_state() -> dict:
+    if not os.path.exists(STATE_PATH):
+        return {}
+    try:
+        with open(STATE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_state(last_ts: str, imported_count: int, channel_name: str) -> None:
+    os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
+    payload = {
+        "last_ts": last_ts,
+        "imported_count": imported_count,
+        "channel_name": channel_name,
+        "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M"),
+    }
+    with open(STATE_PATH, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="個別予約通知ログを更新する")
     parser.add_argument("--channel-name", default=DEFAULT_CHANNEL_NAME, help="Slack チャンネル名")
@@ -512,9 +504,8 @@ def main() -> None:
     ws = ensure_tab(spreadsheet)
     ensure_header(ws)
     existing = load_existing_rows(ws)
-    oldest = ""
-    if existing:
-        oldest = str(max(float(ts) for ts in existing.keys()) - 1)
+    state = load_state()
+    oldest = str(state.get("last_ts") or "").strip()
 
     parsed = fetch_parsed_records(args.channel_name, args.limit, oldest=oldest)
     merged = merge_records(existing, parsed)
@@ -533,6 +524,10 @@ def main() -> None:
     write_rows(ws, rows)
     apply_style(spreadsheet, ws, len(rows))
     apply_protection(spreadsheet, ws)
+    latest_ts = oldest
+    if parsed:
+        latest_ts = max((record.slack_ts for record in parsed if record.slack_ts), default=oldest)
+    save_state(latest_ts or "", len(merged), args.channel_name)
 
     print(
         f"【アドネス株式会社】個別面談データ / {TARGET_TAB_NAME} を更新しました。"
