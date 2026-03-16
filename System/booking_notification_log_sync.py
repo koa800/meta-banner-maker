@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import os
 import re
@@ -60,7 +61,7 @@ COLUMNS = [
     "電話番号",
 ]
 
-ACCOUNT_RE = re.compile(r"^[\(（](.+?)\s*タグ通知[\)）]$")
+ACCOUNT_RE = re.compile(r"^[\(（](.+?)[\)）]\s*タグ通知$")
 EVENT_AT_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
 LINE_NAME_RE = re.compile(r"^(.+?)にタグ[「\"]?★【個別予約完了】★[」\"]?が追加されました。?$")
 URL_RE = re.compile(r"https?://\S+")
@@ -101,6 +102,15 @@ class NotificationRecord:
             ]
         ).strip()
 
+    @property
+    def legacy_key(self) -> str:
+        return " | ".join(
+            [
+                self.tagged_at,
+                self.line_name,
+            ]
+        ).strip()
+
 
 def col_letter(col_num: int) -> str:
     result = ""
@@ -108,6 +118,21 @@ def col_letter(col_num: int) -> str:
         col_num, rem = divmod(col_num - 1, 26)
         result = chr(65 + rem) + result
     return result
+
+
+def normalize_tagged_at(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        pass
+    if re.match(r"^\d{4}-\d{2}-\d{2} \d{1,2}:\d{2}:\d{2}$", raw):
+        date_part, time_part = raw.split(" ", 1)
+        hour, minute, second = time_part.split(":")
+        return f"{date_part} {int(hour):02d}:{minute}:{second}"
+    return raw
 
 
 def is_quota_error(exc: APIError) -> bool:
@@ -214,7 +239,7 @@ def load_existing_rows(ws) -> Dict[str, NotificationRecord]:
     for row in values[1:]:
         row = row + [""] * max(0, len(COLUMNS) - len(row))
         record = NotificationRecord(
-            tagged_at=str(row[0]).strip(),
+            tagged_at=normalize_tagged_at(row[0]),
             line_name=str(row[1]).strip(),
             member_id=str(row[2]).strip(),
             account_name=str(row[3]).strip(),
@@ -234,7 +259,7 @@ def parse_member_id(url: str) -> str:
     if not url:
         return ""
     try:
-        parsed = urlparse(url)
+        parsed = urlparse(html.unescape(url))
         return (parse_qs(parsed.query).get("id") or [""])[0]
     except Exception:
         return ""
@@ -271,8 +296,13 @@ def parse_notification_message(message: dict, channel_name: str) -> Optional[Not
         if name_match:
             line_name = name_match.group(1).strip()
             continue
+        if "<http://" in line or "<https://" in line:
+            embedded = re.search(r"<(https?://[^>|]+)", line)
+            if embedded:
+                notification_url = html.unescape(embedded.group(1).strip())
+                continue
         if line.startswith("http://") or line.startswith("https://"):
-            notification_url = line
+            notification_url = html.unescape(line)
 
     member_id = parse_member_id(notification_url)
     slack_ts = str(message.get("ts") or "").strip()
@@ -282,7 +312,7 @@ def parse_notification_message(message: dict, channel_name: str) -> Optional[Not
     route_type = infer_route_type(text)
 
     return NotificationRecord(
-        tagged_at=tagged_at,
+        tagged_at=normalize_tagged_at(tagged_at),
         line_name=line_name,
         member_id=member_id,
         account_name=account_name,
@@ -314,8 +344,27 @@ def merge_records(existing: Dict[str, NotificationRecord], parsed: Iterable[Noti
         else:
             merged[key] = record
 
+    collapsed: Dict[str, NotificationRecord] = {}
+    for record in merged.values():
+        key = record.legacy_key or record.dedupe_key
+        if key in collapsed:
+            current = collapsed[key]
+            collapsed[key] = NotificationRecord(
+                tagged_at=record.tagged_at or current.tagged_at,
+                line_name=record.line_name or current.line_name,
+                member_id=record.member_id or current.member_id,
+                account_name=record.account_name or current.account_name,
+                route_type=record.route_type or current.route_type,
+                notification_url=record.notification_url or current.notification_url,
+                slack_ts=record.slack_ts or current.slack_ts,
+                email=current.email or record.email,
+                phone=current.phone or record.phone,
+            )
+        else:
+            collapsed[key] = record
+
     return sorted(
-        merged.values(),
+        collapsed.values(),
         key=lambda item: (
             item.tagged_at or "",
             item.account_name or "",
