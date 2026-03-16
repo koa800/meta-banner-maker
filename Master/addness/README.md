@@ -37,7 +37,7 @@
 ## 最新の厳しめ採点
 
 - Lステップ: `9.8 / 10`
-- UTAGE: `9.7 / 10`
+- UTAGE: `9.8 / 10`
 - Mailchimp: `9.5 / 10`
 - short.io: `9.7 / 10`
 - Zapier: `9.4 / 10`
@@ -405,9 +405,16 @@
 - `ページ -> 商品管理 -> 商品詳細管理 -> 購入後アクション -> バンドルコース` を新規案件目線で live create / rollback まで further exact 化
   - `商品管理 / 商品詳細管理 / 購入後アクション / 登録経路` は最小 create/save/delete を再確認済みなので、残差は `ページ / 会員サイト / 動画管理` の live save 本数
   - 2026-03-17 の raw probe では
-    - `商品管理`: `before 0 -> after_create 1 -> after_delete 0`
-    - `アクション設定`: `before 0 -> after_create 1 -> after_delete 0`
-    を current browser で再確認済み
+  - `商品管理`: `before 0 -> after_create 1 -> after_delete 0`
+  - `アクション設定`: `before 0 -> after_create 1 -> after_delete 0`
+  を current browser で再確認済み
+  - `商品詳細管理 > 追加` も raw fallback で再確認済み
+    - `before_product_count = 0`
+    - `after_product_count = 1`
+    - `detail_row_count = 1`
+    - `save_result.error_texts = []`
+    - save 後 URL は `.../detail` 一覧へ戻る
+    - temp product cleanup まで完了
 - `会員サイト` と `動画管理 / メディア管理` の実変更本数を増やす
 
 ### Mailchimp

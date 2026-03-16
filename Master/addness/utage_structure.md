@@ -245,6 +245,12 @@
 - detail create/save probe:
   - `python3 System/scripts/utage_detail_create_delete_probe.py`
   - exploratory 商品配下で `商品詳細管理 > 追加` を最小値で `保存 -> detail一覧確認 -> cleanup`
+  - current では raw fallback でも
+    - `before_product_count = 0`
+    - `after_product_count = 1`
+    - `detail_row_count = 1`
+    - `save_result.error_texts = []`
+    を確認済み
 - page create/save probe:
   - `python3 System/scripts/utage_page_create_delete_probe.py`
   - temporary funnel 配下で `ページ一覧 -> 追加 -> 名称 -> 保存 -> row 確認 -> funnel delete rollback`
