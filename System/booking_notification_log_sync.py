@@ -37,6 +37,8 @@ DEFAULT_CHANNEL_NAME = os.environ.get("BOOKING_NOTIFICATION_SLACK_CHANNEL_NAME",
 MESSAGE_TAG = "★【個別予約完了】★"
 STATE_PATH = os.path.join(os.path.dirname(__file__), "data", "booking_notification_log_state.json")
 LSTEP_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+LEGACY_BOOKING_SHEET_ID = "1LAzT12KfHKDJTuI69DEdDmS7oD0T6Kz9V5D0mdJDPsQ"
+LEGACY_BOOKING_TAB_NAME = "シート1"
 
 TAB_COLOR = "#1A73E8"
 HEADER_BG = {"red": 0.26, "green": 0.52, "blue": 0.96}
@@ -53,11 +55,10 @@ PROTECTION_DESCRIPTION = "個別面談データ自動生成: 個別予約通知�
 WRITE_RETRY_SECONDS = (5, 10, 20, 40)
 
 COLUMNS = [
-    "タグ付与日時",
+    "予約イベント日時",
     "LINE名",
     "LSTEPメンバーID",
     "Lステップアカウント名",
-    "予約導線種別",
     "通知リンク",
     "メールアドレス",
     "電話番号",
@@ -66,7 +67,6 @@ COLUMNS = [
 ACCOUNT_RE = re.compile(r"^[\(（](.+?)[\)）]\s*タグ通知$")
 EVENT_AT_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
 LINE_NAME_RE = re.compile(r"^(.+?)にタグ[「\"]?★【個別予約完了】★[」\"]?が追加されました。?$")
-URL_RE = re.compile(r"https?://\S+")
 EMAIL_HEADER_RE = re.compile(r"メールアドレス|登録メールアドレス|占いメールアドレス")
 PHONE_HEADER_RE = re.compile(r"電話番号|お電話番号|携帯番号")
 
@@ -89,7 +89,6 @@ class NotificationRecord:
     line_name: str
     member_id: str
     account_name: str
-    route_type: str
     notification_url: str
     slack_ts: str
     email: str
@@ -101,7 +100,6 @@ class NotificationRecord:
             self.line_name,
             self.member_id,
             self.account_name,
-            self.route_type,
             self.notification_url,
             self.email,
             self.phone,
@@ -109,23 +107,29 @@ class NotificationRecord:
 
     @property
     def dedupe_key(self) -> str:
-        return " | ".join(
-            [
-                self.tagged_at,
-                self.account_name,
-                self.member_id,
-                self.line_name,
-            ]
-        ).strip()
+        parts = [
+            self.tagged_at,
+            self.account_name,
+            self.member_id,
+            self.line_name,
+            self.email,
+            self.phone,
+        ]
+        if not any(parts):
+            return ""
+        return " | ".join(parts).strip()
 
     @property
     def legacy_key(self) -> str:
-        return " | ".join(
-            [
-                self.tagged_at,
-                self.line_name,
-            ]
-        ).strip()
+        parts = [
+            self.tagged_at,
+            self.line_name,
+            self.email,
+            self.phone,
+        ]
+        if not any(parts):
+            return ""
+        return " | ".join(parts).strip()
 
 
 def col_letter(col_num: int) -> str:
@@ -140,14 +144,26 @@ def normalize_tagged_at(value: str) -> str:
     raw = str(value or "").strip()
     if not raw:
         return ""
-    try:
-        return datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").strftime("%Y-%m-%d %H:%M:%S")
-    except ValueError:
-        pass
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y/%m/%d %H:%M",
+    ):
+        try:
+            dt = datetime.strptime(raw, fmt)
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            pass
     if re.match(r"^\d{4}-\d{2}-\d{2} \d{1,2}:\d{2}:\d{2}$", raw):
         date_part, time_part = raw.split(" ", 1)
         hour, minute, second = time_part.split(":")
         return f"{date_part} {int(hour):02d}:{minute}:{second}"
+    if re.match(r"^\d{4}/\d{2}/\d{2} \d{1,2}:\d{2}:\d{2}$", raw):
+        date_part, time_part = raw.split(" ", 1)
+        year, month, day = date_part.split("/")
+        hour, minute, second = time_part.split(":")
+        return f"{year}-{month}-{day} {int(hour):02d}:{minute}:{second}"
     return raw
 
 
@@ -215,7 +231,6 @@ def enrich_contact_fields(record: NotificationRecord) -> NotificationRecord:
         line_name=record.line_name,
         member_id=record.member_id,
         account_name=record.account_name,
-        route_type=record.route_type,
         notification_url=record.notification_url,
         slack_ts=record.slack_ts,
         email=record.email or str(contact.get("email") or "").strip(),
@@ -324,18 +339,22 @@ def ensure_header(ws) -> None:
 def load_existing_rows(ws) -> Dict[str, NotificationRecord]:
     values = ws.get_all_values()
     existing: Dict[str, NotificationRecord] = {}
+    header = values[0] if values else []
+    is_old_format = len(header) >= 8 and str(header[4]).strip() == "予約導線種別"
     for row in values[1:]:
-        row = row + [""] * max(0, len(COLUMNS) - len(row))
+        row = row + [""] * max(0, 8 - len(row))
+        notification_url = str(row[5]).strip() if is_old_format else str(row[4]).strip()
+        email = str(row[6]).strip() if is_old_format else str(row[5]).strip()
+        phone = str(row[7]).strip() if is_old_format else str(row[6]).strip()
         record = NotificationRecord(
             tagged_at=normalize_tagged_at(row[0]),
             line_name=str(row[1]).strip(),
             member_id=str(row[2]).strip(),
             account_name=str(row[3]).strip(),
-            route_type=str(row[4]).strip(),
-            notification_url=str(row[5]).strip(),
+            notification_url=notification_url,
             slack_ts="",
-            email=str(row[6]).strip(),
-            phone=str(row[7]).strip(),
+            email=email,
+            phone=phone,
         )
         if not record.dedupe_key:
             continue
@@ -351,14 +370,6 @@ def parse_member_id(url: str) -> str:
         return (parse_qs(parsed.query).get("id") or [""])[0]
     except Exception:
         return ""
-
-
-def infer_route_type(text: str) -> str:
-    if "イベント予約" in text:
-        return "イベント予約"
-    if "カレンダー予約" in text:
-        return "カレンダー予約"
-    return ""
 
 
 def parse_notification_message(message: dict, channel_name: str) -> Optional[NotificationRecord]:
@@ -397,19 +408,56 @@ def parse_notification_message(message: dict, channel_name: str) -> Optional[Not
     if not slack_ts:
         return None
 
-    route_type = infer_route_type(text)
-
     return enrich_contact_fields(NotificationRecord(
         tagged_at=normalize_tagged_at(tagged_at),
         line_name=line_name,
         member_id=member_id,
         account_name=account_name,
-        route_type=route_type,
         notification_url=notification_url,
         slack_ts=slack_ts,
         email="",
         phone="",
     ))
+
+
+def load_legacy_records() -> List[NotificationRecord]:
+    gc = get_client()
+    spreadsheet = gc.open_by_key(LEGACY_BOOKING_SHEET_ID)
+    ws = spreadsheet.worksheet(LEGACY_BOOKING_TAB_NAME)
+    values = ws.get_all_values()
+    if not values:
+        return []
+
+    header = values[0]
+    header_index = {name: idx for idx, name in enumerate(header)}
+    required = {"面談予約日", "LINE名", "面談キャンセル", "メールアドレス", "電話番号"}
+    missing = required - set(header_index)
+    if missing:
+        raise RuntimeError(f"過去の個別予約データに必要列がありません: {sorted(missing)}")
+
+    records: List[NotificationRecord] = []
+    for raw_row in values[1:]:
+        row = raw_row + [""] * max(0, len(header) - len(raw_row))
+        cancelled = str(row[header_index["面談キャンセル"]]).strip().upper()
+        if cancelled == "TRUE":
+            continue
+        tagged_at = normalize_tagged_at(row[header_index["面談予約日"]])
+        line_name = str(row[header_index["LINE名"]]).strip()
+        email = str(row[header_index["メールアドレス"]]).strip()
+        phone = str(row[header_index["電話番号"]]).strip()
+        if not tagged_at or not any((line_name, email, phone)):
+            continue
+        records.append(NotificationRecord(
+            tagged_at=tagged_at,
+            line_name=line_name,
+            member_id="",
+            account_name="",
+            notification_url="",
+            slack_ts="",
+            email=email,
+            phone=phone,
+        ))
+    return records
 
 
 def merge_records(existing: Dict[str, NotificationRecord], parsed: Iterable[NotificationRecord]) -> List[NotificationRecord]:
@@ -423,11 +471,10 @@ def merge_records(existing: Dict[str, NotificationRecord], parsed: Iterable[Noti
                 line_name=record.line_name or current.line_name,
                 member_id=record.member_id or current.member_id,
                 account_name=record.account_name or current.account_name,
-                route_type=record.route_type or current.route_type,
                 notification_url=record.notification_url or current.notification_url,
                 slack_ts=record.slack_ts or current.slack_ts,
-                email=current.email,
-                phone=current.phone,
+                email=current.email or record.email,
+                phone=current.phone or record.phone,
             )
         else:
             merged[key] = record
@@ -442,7 +489,6 @@ def merge_records(existing: Dict[str, NotificationRecord], parsed: Iterable[Noti
                 line_name=record.line_name or current.line_name,
                 member_id=record.member_id or current.member_id,
                 account_name=record.account_name or current.account_name,
-                route_type=record.route_type or current.route_type,
                 notification_url=record.notification_url or current.notification_url,
                 slack_ts=record.slack_ts or current.slack_ts,
                 email=current.email or record.email,
@@ -463,6 +509,12 @@ def merge_records(existing: Dict[str, NotificationRecord], parsed: Iterable[Noti
 
 def write_rows(ws, rows: List[List[str]]) -> None:
     end_cell = f"{col_letter(len(COLUMNS))}{len(rows)}"
+    target_rows = max(len(rows), 20)
+    if ws.row_count != target_rows or ws.col_count != len(COLUMNS):
+        worksheet_write_with_retry(
+            f"{TARGET_TAB_NAME} タブのサイズ最適化",
+            lambda: ws.resize(rows=target_rows, cols=len(COLUMNS)),
+        )
     worksheet_write_with_retry(f"{TARGET_TAB_NAME} の既存データ削除", ws.clear)
     worksheet_write_with_retry(
         f"{TARGET_TAB_NAME} の書き込み",
@@ -527,7 +579,7 @@ def apply_style(spreadsheet, ws, row_count: int) -> None:
         },
     ]
 
-    widths = [150, 180, 150, 180, 140, 280, 220, 180]
+    widths = [170, 180, 150, 180, 300, 220, 180]
     for index, width in enumerate(widths):
         requests.append(set_column_width_request(ws.id, index, index + 1, width))
 
@@ -639,19 +691,21 @@ def main() -> None:
     gc = get_client()
     spreadsheet = gc.open_by_key(TARGET_SHEET_ID)
     ws = ensure_tab(spreadsheet)
-    ensure_header(ws)
     existing = load_existing_rows(ws)
+    ensure_header(ws)
     state = load_state()
     oldest = str(state.get("last_ts") or "").strip()
 
-    parsed = fetch_parsed_records(args.channel_name, args.limit, oldest=oldest)
-    merged = merge_records(existing, parsed)
+    legacy_records = load_legacy_records()
+    slack_records = fetch_parsed_records(args.channel_name, args.limit, oldest=oldest)
+    merged = merge_records(existing, [*legacy_records, *slack_records])
 
     if args.dry_run:
         print(
             "dry-run: "
             f"既存={len(existing):,}, "
-            f"新規候補={len(parsed):,}, "
+            f"過去取込={len(legacy_records):,}, "
+            f"Slack新規候補={len(slack_records):,}, "
             f"保存後={len(merged):,}, "
             f"チャンネル={args.channel_name}"
         )
@@ -662,8 +716,8 @@ def main() -> None:
     apply_style(spreadsheet, ws, len(rows))
     apply_protection(spreadsheet, ws)
     latest_ts = oldest
-    if parsed:
-        latest_ts = max((record.slack_ts for record in parsed if record.slack_ts), default=oldest)
+    if slack_records:
+        latest_ts = max((record.slack_ts for record in slack_records if record.slack_ts), default=oldest)
     save_state(latest_ts or "", len(merged), args.channel_name)
 
     print(
