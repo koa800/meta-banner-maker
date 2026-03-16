@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import html
 import json
 import os
@@ -35,6 +36,7 @@ TARGET_TAB_NAME = "個別予約通知ログ"
 DEFAULT_CHANNEL_NAME = os.environ.get("BOOKING_NOTIFICATION_SLACK_CHANNEL_NAME", "個別予約通知")
 MESSAGE_TAG = "★【個別予約完了】★"
 STATE_PATH = os.path.join(os.path.dirname(__file__), "data", "booking_notification_log_state.json")
+LSTEP_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
 TAB_COLOR = "#1A73E8"
 HEADER_BG = {"red": 0.26, "green": 0.52, "blue": 0.96}
@@ -65,6 +67,20 @@ ACCOUNT_RE = re.compile(r"^[\(（](.+?)[\)）]\s*タグ通知$")
 EVENT_AT_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
 LINE_NAME_RE = re.compile(r"^(.+?)にタグ[「\"]?★【個別予約完了】★[」\"]?が追加されました。?$")
 URL_RE = re.compile(r"https?://\S+")
+EMAIL_HEADER_RE = re.compile(r"メールアドレス|登録メールアドレス|占いメールアドレス")
+PHONE_HEADER_RE = re.compile(r"電話番号|お電話番号|携帯番号")
+
+ACCOUNT_SNAPSHOT_FILES = {
+    "みかみ＠AI_個別専用": "lstep_mikami_ai_kobetsu.csv",
+    "みかみ＠個別専用": "lstep_mikami_kobetsu.csv",
+    "スキルプラス＠企画専用": "lstep_skillplus.csv",
+    "【スキルプラス】フリープラン": "lstep_skillplus_freeplan.csv",
+    "フリープラン企画専用": "lstep_freeplan_kikaku.csv",
+    "【みかみ】アドネス株式会社": "lstep_mikami_addness.csv",
+    "スキルプラス【サポートLINE】": "lstep_skillplus_support.csv",
+}
+
+_snapshot_index_cache: Dict[str, Dict[str, Dict[str, str]]] = {}
 
 
 @dataclass
@@ -133,6 +149,78 @@ def normalize_tagged_at(value: str) -> str:
         hour, minute, second = time_part.split(":")
         return f"{date_part} {int(hour):02d}:{minute}:{second}"
     return raw
+
+
+def normalize_account_name(value: str) -> str:
+    return str(value or "").strip().replace("@", "＠")
+
+
+def pick_best_value(row: List[str], indexes: List[int]) -> str:
+    for index in indexes:
+        if index < len(row):
+            value = str(row[index]).strip()
+            if value:
+                return value
+    return ""
+
+
+def load_snapshot_index(account_name: str) -> Dict[str, Dict[str, str]]:
+    normalized = normalize_account_name(account_name)
+    if normalized in _snapshot_index_cache:
+        return _snapshot_index_cache[normalized]
+
+    filename = ACCOUNT_SNAPSHOT_FILES.get(normalized)
+    if not filename:
+        _snapshot_index_cache[normalized] = {}
+        return {}
+
+    path = os.path.join(LSTEP_DATA_DIR, filename)
+    if not os.path.exists(path):
+        _snapshot_index_cache[normalized] = {}
+        return {}
+
+    with open(path, "r", encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.reader(f))
+    if len(rows) < 2:
+        _snapshot_index_cache[normalized] = {}
+        return {}
+
+    header = rows[1]
+    email_indexes = [i for i, col in enumerate(header) if EMAIL_HEADER_RE.search(str(col))]
+    phone_indexes = [i for i, col in enumerate(header) if PHONE_HEADER_RE.search(str(col))]
+    index: Dict[str, Dict[str, str]] = {}
+    for row in rows[2:]:
+        if not row:
+            continue
+        member_id = str(row[0]).strip()
+        if not member_id:
+            continue
+        index[member_id] = {
+            "email": pick_best_value(row, email_indexes),
+            "phone": pick_best_value(row, phone_indexes),
+        }
+    _snapshot_index_cache[normalized] = index
+    return index
+
+
+def enrich_contact_fields(record: NotificationRecord) -> NotificationRecord:
+    if not record.account_name or not record.member_id:
+        return record
+    snapshot = load_snapshot_index(record.account_name)
+    if not snapshot:
+        return record
+    contact = snapshot.get(record.member_id) or {}
+    return NotificationRecord(
+        tagged_at=record.tagged_at,
+        line_name=record.line_name,
+        member_id=record.member_id,
+        account_name=record.account_name,
+        route_type=record.route_type,
+        notification_url=record.notification_url,
+        slack_ts=record.slack_ts,
+        email=record.email or str(contact.get("email") or "").strip(),
+        phone=record.phone or str(contact.get("phone") or "").strip(),
+    )
 
 
 def is_quota_error(exc: APIError) -> bool:
@@ -311,7 +399,7 @@ def parse_notification_message(message: dict, channel_name: str) -> Optional[Not
 
     route_type = infer_route_type(text)
 
-    return NotificationRecord(
+    return enrich_contact_fields(NotificationRecord(
         tagged_at=normalize_tagged_at(tagged_at),
         line_name=line_name,
         member_id=member_id,
@@ -321,7 +409,7 @@ def parse_notification_message(message: dict, channel_name: str) -> Optional[Not
         slack_ts=slack_ts,
         email="",
         phone="",
-    )
+    ))
 
 
 def merge_records(existing: Dict[str, NotificationRecord], parsed: Iterable[NotificationRecord]) -> List[NotificationRecord]:

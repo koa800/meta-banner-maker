@@ -611,8 +611,8 @@ def load_notification_log_stats(target) -> Dict[str, str]:
         "最終同期日": latest_imported_at,
         "更新数": f"{event_count:,}" if event_count else "0",
         "エラー数": "0",
-        "メモ": "Slack #個別予約通知 から取り込んだ通知ログ",
-    }
+            "メモ": "Slack #個別予約通知 から取り込み。LSTEPメンバーIDで友だち一覧CSVに一致した時はメールアドレス / 電話番号も補完する",
+        }
 
 
 def build_source_rows(stats: Dict[str, object], notification_stats: Dict[str, str]) -> List[List[str]]:
