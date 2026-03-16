@@ -8,7 +8,7 @@
 
 - Lステップ: `9.8 / 10`
 - UTAGE: `9.5 / 10`
-- Mailchimp: `9.4 / 10`
+- Mailchimp: `9.5 / 10`
 - short.io: `9.5 / 10`
 - Zapier: `9.1 / 10`
 
@@ -41,7 +41,8 @@
   - `会員サイト` と `動画管理 / メディア管理` の representative を、実案件の分岐判断までさらに厚くすること
 - Mailchimp
   - `Journey` を `trigger -> email step -> Send Test Emails -> cleanup` まで無迷いで再現すること
-  - `tag / saved segment` を `新規作成 -> rollback -> downstream smoke` まで exact に回すこと
+  - `saved segment` は `新規作成 -> delete` まで実施済み
+  - 残差は `tag 1件` を `新規作成 -> rollback -> downstream smoke` まで exact に回すこと
   - `report` の漏斗診断を actual case でさらに増やすこと
 - short.io
   - `新規作成 / 差し替え / 既存流用`
@@ -62,7 +63,6 @@
 - Mailchimp
   - `Journey 1本`
   - `tag 1件`
-  - `saved segment 1件`
   を live で `作成 -> Send Test Emails or downstream smoke -> cleanup` まで通す
 - Zapier
   - `Catch Hook -> Mailchimp Add/Update Subscriber`
@@ -88,7 +88,7 @@
 | UTAGE | 動画管理 / メディア管理 | representative 読解済み | small change -> smoke |
 | Mailchimp | Campaign | draft create / delete 済み | representative を増やす |
 | Mailchimp | Journey | trigger 入口まで済み | 1本 create -> Send Test Emails -> cleanup |
-| Mailchimp | tag / saved segment | 読解中心 | 1件ずつ create -> rollback |
+| Mailchimp | tag / saved segment | saved segment の create / delete 済み | tag 1件 create -> rollback |
 | Mailchimp | report | representative 読解済み | actual case を増やす |
 | short.io | short link / edit / stats / sheet sync | live 実施済み | 実案件 end-to-end を増やす |
 | Zapier | representative relay 読解 | editor / step 読解済み | 1本 create -> test -> delete |
@@ -124,6 +124,7 @@
   - regular `Campaign` の draft 作成 / 削除
   - `Journey` の `Build from scratch -> Name flow -> Audience -> trigger`
   - `report` の漏斗確認
+  - `saved segment 1件` の create / delete
 - `short.io`
   - テスト短縮URLの作成 / 編集 / 統計確認 / API 確認 / URL管理シート同期
 - `Zapier`
@@ -137,7 +138,8 @@
   - `ページ / 登録経路 / 商品 / 商品詳細管理 / 購入後アクション / 会員サイト` の small change -> rollback
 - `Mailchimp`
   - `Journey 1本` の create -> test -> cleanup
-  - `tag / saved segment` の create -> rollback
+  - `saved segment` の create / delete は実施済み
+  - `tag 1件` の create -> rollback
 - `Zapier`
   - `Create Zap -> Test -> Delete Zap` の live 実作成
 
