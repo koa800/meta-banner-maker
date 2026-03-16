@@ -361,6 +361,9 @@ UTAGE は `URL を知っている` だけで編集を続けない。login に戻
 
 つまり、最初の exploratory create は `追加 -> 空白のファネル -> 詳細 -> このファネルを追加する` で切る。
 
+current の exploratory probe では、`このファネルを追加する` は UI click より `button.btn-add の form.submit()` が安定した。
+live exact は `python3 System/scripts/utage_funnel_create_delete_probe.py` を正にする。
+
 ### 役割別の見方
 
 #### `LP`

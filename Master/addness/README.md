@@ -13,7 +13,7 @@
 ## 最新の厳しめ採点
 
 - Lステップ: `9.8 / 10`
-- UTAGE: `9.5 / 10`
+- UTAGE: `9.6 / 10`
 - Mailchimp: `9.4 / 10`
 - short.io: `9.5 / 10`
 - Zapier: `9.1 / 10`
@@ -198,7 +198,7 @@
 | Lステップ | 回答フォーム | 作成 / テスト送信 / 削除 済み | 2問以上の pattern |
 | Lステップ | アクション管理 | 読解中心 | 最小複合 1本 |
 | Lステップ | リッチメニュー | 読解中心 | 2ボタン 1本 |
-| UTAGE | ページ | representative 読解済み | 1変更 -> rollback |
+| UTAGE | ページ | representative 読解済み、`ファネル -> 追加 -> 空白のファネル -> 詳細 -> このファネルを追加する -> 一覧確認 -> row delete` 済み | 1変更 -> rollback |
 | UTAGE | 登録経路 | 読解中心 | 1追加 -> rollback |
 | UTAGE | 商品管理 / 商品詳細管理 / 購入後アクション | product create / rollback 1本済み、detail create/save/cleanup 1本済み、action create/save/delete 1本済み | representative を増やす |
 | UTAGE | 会員サイト | representative 読解済み | 1変更 -> rollback |

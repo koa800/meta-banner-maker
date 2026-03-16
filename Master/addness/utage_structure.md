@@ -204,6 +204,15 @@
 - 登録経路: ページ設定内の `登録経路`
 - `追加` の current 導線:
   - `ファネル -> 追加 -> 空白のファネル -> 詳細 -> このファネルを追加する`
+  - current の exploratory probe では、`このファネルを追加する` は button click より `button.btn-add の form.submit()` が安定した
+  - `System/scripts/utage_funnel_create_delete_probe.py`
+    で `create -> 一覧確認 -> row delete` まで確認済み
+  - 2026-03-16 の probe 実績:
+    - `before_count = 257`
+    - `after_create_count = 258`
+    - `created_id = 232380`
+    - `after_delete_count = 257`
+    - `deleted = true`
 
 ### current の target group と代表ファネル
 
