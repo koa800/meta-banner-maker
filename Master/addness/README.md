@@ -13,10 +13,10 @@
 ## 最新の厳しめ採点
 
 - Lステップ: `9.8 / 10`
-- UTAGE: `9.8 / 10`
+- UTAGE: `9.5 / 10`
 - Mailchimp: `9.4 / 10`
 - short.io: `9.5 / 10`
-- Zapier: `9.4 / 10`
+- Zapier: `9.1 / 10`
 
 ## live 開始前チェック
 
@@ -116,6 +116,29 @@
       - 最小値で `保存成功`
       - detail 一覧に `1件追加` を確認
       - cleanup は `UTAGE_detail_create_probe` pattern で `0件` を確認
+  - `アクション設定 > 追加`
+    - route: `/action/create`
+    - live で確認した主要ラベル:
+      - `管理用名称`
+      - `種類`
+      - `URL`
+      - `name`
+      - `value`
+      - `バンドルコース 必須`
+      - `商品 必須`
+      - `ファネル 必須`
+      - `Googleアカウント 必須`
+      - `スプレッドシートURL 必須`
+      - `シート 必須`
+    - exploratory action
+      - `ZZ_TEST_20260316_225035_UTAGE_action_probe`
+      - `種類 = webhook`
+      - `URL = https://example.com/utage-action-probe`
+      - `name = source`
+      - `value = utage_action_probe`
+      - 最小値で `保存成功`
+      - action 一覧に `1件追加` を確認
+      - row dropdown 内の `form-delete` で `1件削除` を確認
 
 ### Mailchimp
 
@@ -177,7 +200,7 @@
 | Lステップ | リッチメニュー | 読解中心 | 2ボタン 1本 |
 | UTAGE | ページ | representative 読解済み | 1変更 -> rollback |
 | UTAGE | 登録経路 | 読解中心 | 1追加 -> rollback |
-| UTAGE | 商品管理 / 商品詳細管理 / 購入後アクション | product create / rollback 1本済み、detail create/save/cleanup 1本済み | 購入後アクション create を 1本 |
+| UTAGE | 商品管理 / 商品詳細管理 / 購入後アクション | product create / rollback 1本済み、detail create/save/cleanup 1本済み、action create/save/delete 1本済み | representative を増やす |
 | UTAGE | 会員サイト | representative 読解済み | 1変更 -> rollback |
 | UTAGE | 動画管理 / メディア管理 | representative 読解済み | small change -> smoke |
 | Mailchimp | Campaign | draft create / delete 済み | representative を増やす |
@@ -206,7 +229,7 @@
 ### UTAGE
 
 - `ページ -> 商品管理 -> 商品詳細管理 -> 購入後アクション -> バンドルコース` を新規案件目線で live create / rollback まで further exact 化
-- `商品管理` は `create -> rollback` が 1 本済んだので、残差は `detail / 購入後アクション / 会員サイト` の live save 本数
+- `商品管理 / 商品詳細管理 / 購入後アクション` は最小 create/save/delete が 1 本ずつ済んだので、残差は `ページ / 登録経路 / 会員サイト / 動画管理` の live save 本数
 - `会員サイト` と `動画管理 / メディア管理` の実変更本数を増やす
 
 ### Mailchimp
@@ -265,6 +288,12 @@
   - `live browser ready=false` の時は、まずこの helper を試してから login helper に進む
 - `python3 System/scripts/utage_detail_form_snapshot.py`
   - `商品詳細管理 > 追加` の form と option を live で JSON 化する
+- `python3 System/scripts/utage_action_list_snapshot.py`
+  - `アクション設定` 一覧の `追加` 導線と representative row を live で取得する
+- `python3 System/scripts/utage_action_form_snapshot.py`
+  - `アクション設定 > 追加` の form と option を live で JSON 化する
+- `python3 System/scripts/utage_action_create_delete_probe.py`
+  - `アクション設定 > 追加` を最小値で `保存 -> 一覧確認 -> form-delete cleanup` まで通す
 - `python3 System/scripts/utage_cleanup_test_products.py`
   - `UTAGE_detail_probe` 系の exploratory 商品を cleanup する
 
