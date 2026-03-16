@@ -3,21 +3,23 @@
 【アドネス株式会社】個別面談データ を再生成する。
 
 第1版の方針:
-- 正本候補は `【アドネス】顧客管理シート / 個別予約集計botログ`
+- 現行の正本候補は `【アドネス】顧客管理シート / 個別予約集計botログ`
 - `個別予約数` だけを先に接続する
 - `個別予約数（UU）` は将来用の枠だけを作り、今は未接続にする
-- `★【個別予約完了】★` は正本ではなく、タグ検証用に扱う
+- `★【個別予約完了】★` は現時点では日別件数の正本に使わず、将来の通知ログ正本候補として扱う
 """
 
 from __future__ import annotations
 
 import argparse
 import re
+import time
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, Iterable, List, Sequence
 
+from gspread.exceptions import APIError
 from sheets_manager import get_client
 
 
@@ -73,6 +75,7 @@ PROTECTED_EDITOR_EMAILS = [
 PROTECTION_PREFIX = "個別面談データ自動生成"
 
 DATE_RE = re.compile(r"^\d{4}/\d{2}/\d{2}$")
+WRITE_RETRY_SECONDS = (5, 10, 20, 40)
 
 
 @dataclass
@@ -155,12 +158,46 @@ def pad_rows(rows: List[List[str]], min_rows: int, min_cols: int) -> List[List[s
     return padded
 
 
+def is_quota_error(exc: APIError) -> bool:
+    status_code = getattr(getattr(exc, "response", None), "status_code", None)
+    return status_code == 429 or "Quota exceeded" in str(exc)
+
+
+def run_write_with_retry(description: str, func):
+    last_error = None
+    waits = (0, *WRITE_RETRY_SECONDS)
+    for attempt, wait_seconds in enumerate(waits, start=1):
+        if wait_seconds:
+            time.sleep(wait_seconds)
+        try:
+            return func()
+        except APIError as exc:
+            if not is_quota_error(exc) or attempt == len(waits):
+                raise
+            last_error = exc
+            print(
+                f"{description}: Sheets の書き込み回数制限に当たったため "
+                f"{wait_seconds or 0}秒後に再試行します。"
+            )
+    if last_error:
+        raise last_error
+
+
+def batch_update_with_retry(spreadsheet, body: dict, description: str) -> None:
+    run_write_with_retry(description, lambda: spreadsheet.batch_update(body))
+
+
+def worksheet_write_with_retry(description: str, func) -> None:
+    run_write_with_retry(description, func)
+
+
 def ensure_spreadsheet_title(spreadsheet) -> None:
     metadata = spreadsheet.fetch_sheet_metadata({"fields": "properties.title"})
     title = metadata.get("properties", {}).get("title", "")
     if title == TARGET_SPREADSHEET_TITLE:
         return
-    spreadsheet.batch_update(
+    batch_update_with_retry(
+        spreadsheet,
         {
             "requests": [
                 {
@@ -170,7 +207,8 @@ def ensure_spreadsheet_title(spreadsheet) -> None:
                     }
                 }
             ]
-        }
+        },
+        "個別面談データのシート名更新",
     )
 
 
@@ -178,18 +216,32 @@ def ensure_tabs(spreadsheet):
     tabs = {ws.title: ws for ws in spreadsheet.worksheets()}
 
     if "シート1" in tabs and len(tabs) == 1:
-        tabs["シート1"].update_title(COUNT_TAB_NAME)
+        worksheet_write_with_retry(
+            "個別面談データの初期タブ名変更",
+            lambda: tabs["シート1"].update_title(COUNT_TAB_NAME),
+        )
         tabs[COUNT_TAB_NAME] = tabs.pop("シート1")
 
     for name, (rows, cols) in TAB_SPECS.items():
         if name in tabs:
             ws = tabs[name]
             if ws.row_count < rows:
-                ws.add_rows(rows - ws.row_count)
+                worksheet_write_with_retry(
+                    f"{name} の行数拡張",
+                    lambda ws=ws, rows=rows: ws.add_rows(rows - ws.row_count),
+                )
             if ws.col_count < cols:
-                ws.add_cols(cols - ws.col_count)
+                worksheet_write_with_retry(
+                    f"{name} の列数拡張",
+                    lambda ws=ws, cols=cols: ws.add_cols(cols - ws.col_count),
+                )
             continue
-        tabs[name] = spreadsheet.add_worksheet(title=name, rows=rows, cols=cols)
+        tabs[name] = run_write_with_retry(
+            f"{name} タブの作成",
+            lambda name=name, rows=rows, cols=cols: spreadsheet.add_worksheet(
+                title=name, rows=rows, cols=cols
+            ),
+        )
 
     return tabs
 
@@ -198,7 +250,8 @@ def write_rows(spreadsheet, ws, rows: List[List[str]]) -> None:
     max_cols = max((len(row) for row in rows), default=1)
     padded = pad_rows(rows, len(rows), max_cols)
     end_cell = f"{col_letter(max_cols)}{len(padded)}"
-    spreadsheet.batch_update(
+    batch_update_with_retry(
+        spreadsheet,
         {
             "requests": [
                 {
@@ -213,10 +266,14 @@ def write_rows(spreadsheet, ws, rows: List[List[str]]) -> None:
                     }
                 }
             ]
-        }
+        },
+        f"{ws.title} の結合解除",
     )
-    ws.clear()
-    ws.update(range_name=f"A1:{end_cell}", values=padded, value_input_option="USER_ENTERED")
+    worksheet_write_with_retry(f"{ws.title} の既存データ削除", ws.clear)
+    worksheet_write_with_retry(
+        f"{ws.title} の書き込み",
+        lambda: ws.update(range_name=f"A1:{end_cell}", values=padded, value_input_option="USER_ENTERED"),
+    )
 
 
 def apply_table_style(spreadsheet, ws, row_count: int, col_count: int, widths: Iterable[int]) -> None:
@@ -299,13 +356,17 @@ def apply_table_style(spreadsheet, ws, row_count: int, col_count: int, widths: I
             }
         )
 
-    spreadsheet.batch_update({"requests": requests})
-    ws.freeze(rows=1)
+    batch_update_with_retry(spreadsheet, {"requests": requests}, f"{ws.title} の表スタイル適用")
+    worksheet_write_with_retry(f"{ws.title} のヘッダー固定", lambda: ws.freeze(rows=1))
 
 
 def apply_number_formats(spreadsheet, requests: Sequence[dict]) -> None:
     if requests:
-        spreadsheet.batch_update({"requests": list(requests)})
+        batch_update_with_retry(
+            spreadsheet,
+            {"requests": list(requests)},
+            "個別面談データの数値書式適用",
+        )
 
 
 def apply_status_cell_colors(spreadsheet, ws, rows: Sequence[Sequence[str]], status_col_index: int) -> None:
@@ -332,7 +393,11 @@ def apply_status_cell_colors(spreadsheet, ws, rows: Sequence[Sequence[str]], sta
             )
         )
     if requests:
-        spreadsheet.batch_update({"requests": requests})
+        batch_update_with_retry(
+            spreadsheet,
+            {"requests": requests},
+            f"{ws.title} のステータス色適用",
+        )
 
 
 def apply_protections(spreadsheet, tabs) -> None:
@@ -378,7 +443,11 @@ def apply_protections(spreadsheet, tabs) -> None:
         )
 
     if requests:
-        spreadsheet.batch_update({"requests": requests})
+        batch_update_with_retry(
+            spreadsheet,
+            {"requests": requests},
+            "個別面談データの保護設定",
+        )
 
 
 def load_booking_rows() -> List[BookingRecord]:
@@ -469,8 +538,8 @@ def build_summary_rows(stats: Dict[str, object]) -> List[List[str]]:
     return [
         ["項目", "数値", "定義"],
         ["更新日時", f"'{stats['updated_at']}", "このシートを作り直した時刻"],
-        ["個別予約数", f"{int(stats['total_booking_count']):,}", "キャンセルを除いた個別予約イベント数"],
-        ["個別予約数（UU）", "", "将来接続。第1版ではまだ持たない"],
+        ["個別予約数", f"{int(stats['total_booking_count']):,}", "現行は個別予約集計botログのうち、キャンセルを除いた個別予約イベント数"],
+        ["個別予約数（UU）", "", "将来接続。LSTEP通知ログとLINE統合後の同一人物判定で持つ"],
         ["キャンセル数", f"{int(stats['total_cancel_count']):,}", "個別予約集計botログでキャンセル=TRUE の件数"],
         ["集計開始日", f"'{stats['start_date']}", "日別個別予約数の最初の日付"],
         ["最新集計日", f"'{stats['latest_date']}", "日別個別予約数の最新の日付"],
@@ -482,14 +551,16 @@ def build_summary_rows(stats: Dict[str, object]) -> List[List[str]]:
 def build_tag_rows() -> List[List[str]]:
     return [
         ["項目", "状態", "内容"],
-        ["検証対象タグ", "確認待ち", "★【個別予約完了】★"],
-        ["タグの役割", "確認待ち", "個別予約完了ユーザーの累積確認。日別件数の正本には使わない"],
-        ["現在の確認状況", "確認待ち", "顧客管理シート上では予約完了タグを直接確認できないため、Lステップ側で実確認する"],
+        ["対象タグ", "確認済み", "★【個別予約完了】★"],
+        ["付与条件1", "確認済み", "ユーザーがカレンダー予約で指定コースを予約した時に付与される"],
+        ["付与条件2", "確認済み", "ユーザーがLステップのイベント予約で予約した時に付与される"],
+        ["タグの性質1", "確認済み", "一度付いたら外さない"],
+        ["タグの性質2", "確認済み", "再予約してもタグ数は増えない"],
+        ["今の役割", "確認済み", "個別予約を一度でもしたユーザーの累積確認"],
+        ["今の限界", "確認済み", "タグ単体では日別の予約イベント数を正確に取れない"],
+        ["将来の役割", "確認待ち", "タグ付与の通知を1イベント1行で蓄積し、個別予約イベントの正本候補にする"],
+        ["通知で取りたい項目", "確認待ち", "タグ付与日時 / LINE名 / Lステップアカウント名 / 予約導線種別"],
         ["確認対象アカウント", "確認待ち", "スキルプラス@企画専用 / 【スキルプラス】フリープラン / みかみ@個別専用 / みかみ@AI_個別専用 / 【みかみ】アドネス株式会社"],
-        ["アカウント補足", "確認待ち", "ローカル資産上の候補。実画面で個別予約導線に本当に使っているかを後で確認する"],
-        ["確認したいこと1", "確認待ち", "予約完了時だけタグが付くか"],
-        ["確認したいこと2", "確認待ち", "再予約してもタグ件数は増えないか"],
-        ["確認したいこと3", "確認待ち", "候補アカウント以外に予約導線が無いか"],
     ]
 
 
@@ -510,7 +581,7 @@ def build_source_rows(stats: Dict[str, object]) -> List[List[str]]:
             str(stats["updated_at"]),
             f"{int(stats['total_booking_count']):,}",
             "0",
-            "第1版の正本候補。Lステップタグは別で検証する",
+            "現行の計上元。将来は個別予約完了タグの通知ログへ切替候補",
         ],
         [
             "個別予約数（UU）",
@@ -526,7 +597,23 @@ def build_source_rows(stats: Dict[str, object]) -> List[List[str]]:
             "",
             "",
             "",
-            "同一人物判定が未確定のため空欄",
+            "LINE統合前は同一人物判定が弱いため未接続",
+        ],
+        [
+            "個別予約通知ログ",
+            "個別予約",
+            "Lステップ通知機能",
+            "2",
+            "",
+            "通知機能",
+            "通知本文",
+            "タグ付与ごとに1イベント1行で記録",
+            "★【個別予約完了】★ が付いた時に通知",
+            "確認待ち",
+            "",
+            "",
+            "",
+            "Slack または Chatwork の専用通知先へ送り、高精度の個別予約イベントログにする",
         ],
         [
             "タグ検証",
@@ -550,9 +637,10 @@ def build_source_rows(stats: Dict[str, object]) -> List[List[str]]:
 def build_rule_rows() -> List[List[str]]:
     return [
         ["項目", "ルール", "補足"],
-        ["個別予約数", "【アドネス】顧客管理シート / 個別予約集計botログ を正本候補にする", "日付あり and キャンセル=FALSE の行だけを数える"],
+        ["個別予約数", "現行は【アドネス】顧客管理シート / 個別予約集計botログ を使う", "日付あり and キャンセル=FALSE の行だけを数える"],
+        ["個別予約通知ログ", "将来は Lステップ の通知機能で ★【個別予約完了】★ の付与を1イベント1行で溜める", "Slack または Chatwork の専用通知先に集約する"],
         ["個別予約数（UU）", "第1版ではまだ接続しない", "LINE統合や名寄せ方針が固まってから入れる"],
-        ["タグ", "★【個別予約完了】★ は検証用に使う", "日別件数の正本には使わない"],
+        ["タグ", "★【個別予約完了】★ は今は検証用、将来は通知ログのトリガーに使う", "タグ単体は累積状態なので日別件数の正本には使わない"],
         ["手編集", "このシートの自動生成タブは手編集しない", "更新はスクリプトから行う"],
         ["異常検知", "最新集計日が古い時は未同期として扱う", "今は source 側の最新日を見て判定する"],
     ]

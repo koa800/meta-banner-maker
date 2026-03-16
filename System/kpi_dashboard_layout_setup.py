@@ -12,8 +12,10 @@
 from __future__ import annotations
 
 from datetime import datetime
+import time
 from typing import Dict, Iterable, List, Sequence
 
+from gspread.exceptions import APIError
 from sheets_manager import get_client
 
 
@@ -65,10 +67,13 @@ TAB_COLORS = {
 STATUS_FORMATS = {
     "正常": {"backgroundColor": {"red": 0.851, "green": 0.918, "blue": 0.827}},
     "接続中": {"backgroundColor": {"red": 0.851, "green": 0.918, "blue": 0.827}},
+    "一部接続": {"backgroundColor": {"red": 1, "green": 0.949, "blue": 0.8}},
+    "確認待ち": {"backgroundColor": {"red": 0.925, "green": 0.89, "blue": 0.992}},
     "未同期": {"backgroundColor": {"red": 1, "green": 0.949, "blue": 0.8}},
     "未接続": {"backgroundColor": {"red": 1, "green": 0.949, "blue": 0.8}},
     "停止": {"backgroundColor": {"red": 0.957, "green": 0.8, "blue": 0.8}},
 }
+WRITE_RETRY_SECONDS = (5, 10, 20, 40)
 
 
 def col_letter(col_num: int) -> str:
@@ -233,6 +238,39 @@ def normalize_date(raw: str) -> str:
     return ""
 
 
+def is_quota_error(exc: APIError) -> bool:
+    status_code = getattr(getattr(exc, "response", None), "status_code", None)
+    return status_code == 429 or "Quota exceeded" in str(exc)
+
+
+def run_write_with_retry(description: str, func):
+    last_error = None
+    waits = (0, *WRITE_RETRY_SECONDS)
+    for attempt, wait_seconds in enumerate(waits, start=1):
+        if wait_seconds:
+            time.sleep(wait_seconds)
+        try:
+            return func()
+        except APIError as exc:
+            if not is_quota_error(exc) or attempt == len(waits):
+                raise
+            last_error = exc
+            print(
+                f"{description}: Sheets の書き込み回数制限に当たったため "
+                f"{wait_seconds or 0}秒後に再試行します。"
+            )
+    if last_error:
+        raise last_error
+
+
+def batch_update_with_retry(spreadsheet, body: dict, description: str) -> None:
+    run_write_with_retry(description, lambda: spreadsheet.batch_update(body))
+
+
+def worksheet_write_with_retry(description: str, func) -> None:
+    run_write_with_retry(description, func)
+
+
 def parse_int(raw: str) -> int:
     value = str(raw or "").replace(",", "").strip()
     if not value:
@@ -336,24 +374,39 @@ def ensure_target_tabs(spreadsheet) -> Dict[str, object]:
 
     for old_name, new_name in RENAME_TABS.items():
         if old_name in worksheets and new_name not in worksheets:
-            worksheets[old_name].update_title(new_name)
+            worksheet_write_with_retry(
+                f"{old_name} タブ名の変更",
+                lambda old_name=old_name, new_name=new_name: worksheets[old_name].update_title(new_name),
+            )
             worksheets[new_name] = worksheets.pop(old_name)
 
     target_tabs: Dict[str, object] = {}
     for index, (title, rows, cols) in enumerate(TAB_SPECS):
         ws = worksheets.get(title)
         if ws is not None and title in REBUILD_TABS:
-            spreadsheet.del_worksheet(ws)
+            worksheet_write_with_retry(
+                f"{title} タブの再作成前削除",
+                lambda ws=ws: spreadsheet.del_worksheet(ws),
+            )
             worksheets.pop(title, None)
             ws = None
         if ws is None:
-            ws = spreadsheet.add_worksheet(title=title, rows=rows, cols=cols)
+            ws = run_write_with_retry(
+                f"{title} タブの作成",
+                lambda title=title, rows=rows, cols=cols: spreadsheet.add_worksheet(
+                    title=title, rows=rows, cols=cols
+                ),
+            )
         if ws.row_count != rows or ws.col_count != cols:
-            ws.resize(rows=rows, cols=cols)
+            worksheet_write_with_retry(
+                f"{title} タブのサイズ調整",
+                lambda ws=ws, rows=rows, cols=cols: ws.resize(rows=rows, cols=cols),
+            )
         target_tabs[title] = ws
         worksheets[title] = ws
 
-        spreadsheet.batch_update(
+        batch_update_with_retry(
+            spreadsheet,
             {
                 "requests": [
                     set_sheet_properties_request(
@@ -362,18 +415,21 @@ def ensure_target_tabs(spreadsheet) -> Dict[str, object]:
                         "index,hidden",
                     )
                 ]
-            }
+            },
+            f"{title} タブの表示順更新",
         )
 
     for hidden_title in HIDDEN_TABS:
         ws = worksheets.get(hidden_title)
         if ws is not None:
-            spreadsheet.batch_update(
+            batch_update_with_retry(
+                spreadsheet,
                 {
                     "requests": [
                         set_sheet_properties_request(ws.id, {"hidden": True}, "hidden")
                     ]
-                }
+                },
+                f"{hidden_title} タブの非表示設定",
             )
 
     return target_tabs
@@ -383,7 +439,8 @@ def write_rows(spreadsheet, ws, rows: Sequence[Sequence[str]]) -> None:
     max_cols = max(len(row) for row in rows)
     padded = [list(row) + [""] * (max_cols - len(row)) for row in rows]
     end_cell = f"{col_letter(max_cols)}{len(padded)}"
-    spreadsheet.batch_update(
+    batch_update_with_retry(
+        spreadsheet,
         {
             "requests": [
                 {
@@ -398,10 +455,14 @@ def write_rows(spreadsheet, ws, rows: Sequence[Sequence[str]]) -> None:
                     }
                 }
             ]
-        }
+        },
+        f"{ws.title} の結合解除",
     )
-    ws.clear()
-    ws.update(range_name=f"A1:{end_cell}", values=padded, value_input_option="USER_ENTERED")
+    worksheet_write_with_retry(f"{ws.title} の既存データ削除", ws.clear)
+    worksheet_write_with_retry(
+        f"{ws.title} の書き込み",
+        lambda: ws.update(range_name=f"A1:{end_cell}", values=padded, value_input_option="USER_ENTERED"),
+    )
 
 
 def apply_table_style(spreadsheet, ws, row_count: int, col_count: int, widths: Iterable[int]) -> None:
@@ -462,14 +523,18 @@ def apply_table_style(spreadsheet, ws, row_count: int, col_count: int, widths: I
     for index, width in enumerate(widths):
         requests.append(set_column_width_request(ws.id, index, index + 1, width))
 
-    spreadsheet.batch_update({"requests": requests})
-    ws.freeze(rows=1)
+    batch_update_with_retry(spreadsheet, {"requests": requests}, f"{ws.title} の表スタイル適用")
+    worksheet_write_with_retry(f"{ws.title} のヘッダー固定", lambda: ws.freeze(rows=1))
 
 
 def apply_number_formats(spreadsheet, ws, requests: Sequence[dict]) -> None:
     if not requests:
         return
-    spreadsheet.batch_update({"requests": list(requests)})
+    batch_update_with_retry(
+        spreadsheet,
+        {"requests": list(requests)},
+        f"{ws.title} の数値書式適用",
+    )
 
 
 def apply_status_cell_colors(spreadsheet, ws, rows: Sequence[Sequence[str]], status_col_index: int) -> None:
@@ -496,7 +561,11 @@ def apply_status_cell_colors(spreadsheet, ws, rows: Sequence[Sequence[str]], sta
             )
         )
     if requests:
-        spreadsheet.batch_update({"requests": requests})
+        batch_update_with_retry(
+            spreadsheet,
+            {"requests": requests},
+            f"{ws.title} のステータス色適用",
+        )
 
 
 def build_definition_rows() -> List[List[str]]:
@@ -507,8 +576,8 @@ def build_definition_rows() -> List[List[str]]:
         ["集客数（UU）", "ユーザーがメールアドレス登録もしくはLINE登録をしたユニークユーザー数"],
         ["オプトイン数", "メールアドレス登録人数"],
         ["リストイン数", "LINE登録数"],
-        ["個別予約数", "Lステップの個別予約導線から予約が入り、【アドネス】顧客管理シート / 個別予約集計botログ にキャンセルではない1行として記録された予約イベント数。再予約は別件数"],
-        ["個別予約数（UU）", "将来接続。同一人物の重複を除いた個別予約ユーザー数"],
+        ["個別予約数", "現行の計上値は、【アドネス】顧客管理シート / 個別予約集計botログ にキャンセルではない1行として記録された予約イベント数。将来は、Lステップで ★【個別予約完了】★ が付与された瞬間の通知ログを1イベント1行で蓄積した数に切り替える"],
+        ["個別予約数（UU）", "現時点では未接続。将来、個別予約完了タグの通知ログとLINE統合後の同一人物判定で算出するユニークユーザー数"],
         ["個別実施数", "将来接続。オンライン面談でZoomに接続したユーザー数"],
         ["着金売上", "ユーザーの申込金額のうち、銀行口座に入金することが確定した金額"],
         ["広告費", "対象媒体の消化金額"],
@@ -531,8 +600,8 @@ def build_summary_rows(booking_status: Dict[str, str]) -> List[List[str]]:
         ["最終更新日", '=IFERROR(MAX(FILTER(\'日別数値\'!A:A,\'日別数値\'!A:A<>"")),"")', "【アドネス株式会社】KPIダッシュボード / 日別数値", "接続中", ""],
         ["集客数", '=IF(OR($B$2="",$B$3=""),"",SUMIFS(\'日別数値\'!B:B,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3))', "【アドネス株式会社】集客データ（メール集計） / 日別メール登録件数", "一部接続", "現状はメールのみ。LINE未接続"],
         ["集客数（UU）", '=IF(OR($B$2="",$B$3=""),"",SUMIFS(\'日別数値\'!C:C,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3))', "【アドネス株式会社】集客データ（メール集計） / 日別メール登録件数（UU）", "一部接続", "現状はメールのみ。LINE未接続"],
-        ["個別予約数", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3,\'日別数値\'!D:D,"<>")=0,"",SUMIFS(\'日別数値\'!D:D,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "【アドネス株式会社】個別面談データ / 日別個別予約数", booking_state, "期間内合計"],
-        ["個別予約数（UU）", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3,\'日別数値\'!E:E,"<>")=0,"",SUMIFS(\'日別数値\'!E:E,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "【アドネス株式会社】個別面談データ / 日別個別予約数（UU）", "確認待ち", "タブは用意済み。ユニーク判定ルールが未確定"],
+        ["個別予約数", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3,\'日別数値\'!D:D,"<>")=0,"",SUMIFS(\'日別数値\'!D:D,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "【アドネス株式会社】個別面談データ / 日別個別予約数", booking_state, "現行は botログ。将来は個別予約完了タグの通知ログへ切替候補"],
+        ["個別予約数（UU）", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3,\'日別数値\'!E:E,"<>")=0,"",SUMIFS(\'日別数値\'!E:E,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "【アドネス株式会社】個別面談データ / 日別個別予約数（UU）", "確認待ち", "個別予約完了タグの通知ログとLINE統合後に接続"],
         ["個別実施数", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3,\'日別数値\'!F:F,"<>")=0,"",SUMIFS(\'日別数値\'!F:F,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "Zoom接続ログ または 面談ダッシュボード", "確認待ち", "正本未確定。今は未接続"],
         ["着金売上", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!G:G,"<>",\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)=0,"",SUMIFS(\'日別数値\'!G:G,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "決済履歴シート + CS管理シート", "確認待ち", "着金の正本を日別で固める必要あり"],
         ["広告費", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!H:H,"<>",\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)=0,"",SUMIFS(\'日別数値\'!H:H,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "媒体原本（Meta / Google / TikTok / X）", "確認待ち", "legacy の Looker 依存から切り替える"],
@@ -617,7 +686,7 @@ def build_data_source_rows(status: Dict[str, str], daily_row_count: int, booking
     updated_at = status.get("更新日時", "")
     booking_updated_at = booking_status.get("最終同期日") or booking_status.get("更新日時", "")
     booking_state = booking_status.get("ステータス", "未接続")
-    booking_memo = booking_status.get("メモ", "第1版は個別予約イベント数だけ接続")
+    booking_memo = booking_status.get("メモ", "現行は botログ。将来は個別予約完了タグの通知ログへ切替候補")
     booking_updates = booking_status.get("更新数", str(booking_daily_row_count))
     booking_errors = booking_status.get("エラー数", "0")
     rows = [
@@ -625,7 +694,7 @@ def build_data_source_rows(status: Dict[str, str], daily_row_count: int, booking
         ["集客数", "集客", "加工データ", "1", f"https://docs.google.com/spreadsheets/d/{EMAIL_METRICS_SHEET_ID}/edit", "日別メール登録件数", "B列", "重複あり件数", "2025/01/01以降", "一部接続", updated_at, str(daily_row_count), "0", "現状はメールのみ。LINE未接続"],
         ["集客数（UU）", "集客", "加工データ", "1", f"https://docs.google.com/spreadsheets/d/{EMAIL_METRICS_SHEET_ID}/edit", "日別メール登録件数（UU）", "B列", "最初に確認された日にだけ1件", "2025/01/01以降", "一部接続", updated_at, str(daily_row_count), "0", "現状はメールのみ。LINE未接続"],
         ["個別予約数", "個別予約", "加工データ", "1", f"https://docs.google.com/spreadsheets/d/{BOOKING_METRICS_SHEET_ID}/edit", "日別個別予約数", "B列", "キャンセルではない個別予約イベント数", "2025/01/01以降", booking_state, booking_updated_at, booking_updates, booking_errors, booking_memo],
-        ["個別予約数（UU）", "個別予約", "加工データ", "2", f"https://docs.google.com/spreadsheets/d/{BOOKING_METRICS_SHEET_ID}/edit", "日別個別予約数（UU）", "B列", "将来接続。ユニークユーザー数", "ユニーク判定ルールの確定後", "確認待ち", "", "", "", "LINE統合前は暫定キーが必要"],
+        ["個別予約数（UU）", "個別予約", "加工データ", "2", f"https://docs.google.com/spreadsheets/d/{BOOKING_METRICS_SHEET_ID}/edit", "日別個別予約数（UU）", "B列", "将来接続。ユニークユーザー数", "個別予約完了タグの通知ログとLINE統合後", "確認待ち", "", "", "", "現時点ではユニーク判定が弱いため未接続"],
         ["個別実施数", "個別予約", "収集データ候補", "2", "", "Zoom接続ログ または 面談ダッシュボード", "", "接続ユーザー数", "正本未確定", "確認待ち", "", "", "", "今は未接続"],
         ["着金売上", "売上", "収集データ候補", "1", "", "決済履歴シート + CS管理シート", "", "日別着金額", "着金日と返金処理の確定", "確認待ち", "", "", "", "日別正本の集計シートが未作成"],
         ["広告費", "広告費", "収集データ候補", "1", "", "媒体原本（Meta / Google / TikTok / X）", "", "対象媒体の消化額", "対象アカウントの確定", "確認待ち", "", "", "", "legacy の Looker 依存を外す必要あり"],
@@ -703,7 +772,8 @@ def main() -> None:
         summary_rows,
         3,
     )
-    spreadsheet.batch_update(
+    batch_update_with_retry(
+        spreadsheet,
         {
             "requests": [
                 set_column_hidden_request(tabs["スキルプラス事業サマリー"].id, 9, 23, True),
@@ -740,7 +810,8 @@ def main() -> None:
                     [20, 21, 22],
                 ),
             ]
-        }
+        },
+        "スキルプラス事業サマリーのグラフ更新",
     )
 
     daily_metrics = load_email_daily_metrics(gc)
