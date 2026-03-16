@@ -10,6 +10,8 @@ from typing import Any
 
 from playwright.async_api import async_playwright
 
+from utage_login_helper import ensure_login
+
 
 CDP_URL = "http://127.0.0.1:9224"
 LIST_URL = "https://school.addness.co.jp/action"
@@ -90,6 +92,8 @@ async def run_probe() -> dict[str, Any]:
 
 
 def main() -> None:
+    if ensure_login(LIST_URL) != 0:
+        raise SystemExit("UTAGE browser session is not ready. Complete login first.")
     result = asyncio.run(run_probe())
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

@@ -37,10 +37,10 @@
 ## 最新の厳しめ採点
 
 - Lステップ: `9.8 / 10`
-- UTAGE: `9.5 / 10`
+- UTAGE: `9.6 / 10`
 - Mailchimp: `9.4 / 10`
 - short.io: `9.6 / 10`
-- Zapier: `9.1 / 10`
+- Zapier: `9.2 / 10`
 
 ## live 開始前チェック
 
@@ -100,6 +100,7 @@
     - 導線作成の実務順は `Lステップ流入経路 -> short.io -> URL管理シート -> 共有` が最もズレにくい
     - LINE の共有で `メンション` が必要な時は `@名前` の文字列だけでは不十分。`group_id + user_id + 本物メンション送信` が必要
     - 秘書 bot は current で `/notify/mention` と `/api/group-members` を持つので、共有前に対象グループの member 解決が可能
+    - ただし 2026-03-17 時点では Render 側の `/notify/mention` と `/api/group-members` が `404`。コード実装と push は済みだが、本物メンション送信は deploy 反映待ち
 
 ### UTAGE
 
@@ -188,6 +189,35 @@
       - 最小値で `保存成功`
       - action 一覧に `1件追加` を確認
       - row dropdown 内の `form-delete` で `1件削除` を確認
+  - 2026-03-17 live probe の再確認
+    - `python3 System/scripts/utage_product_create_delete_probe.py`
+      - `before_count = 0`
+      - `after_create_count = 1`
+      - `after_delete_count = 0`
+      - `deleted = true`
+    - `python3 System/scripts/utage_detail_create_delete_probe.py`
+      - exploratory 商品を `create`
+      - `商品詳細管理 > 追加`
+      - `保存成功`
+      - detail 一覧 `1件追加`
+      - exploratory 商品 cleanup 後 `0件`
+    - `python3 System/scripts/utage_action_create_delete_probe.py`
+      - `種類 = webhook`
+      - 最小値で `保存成功`
+      - action 一覧 `1件追加`
+      - row dropdown 内の `削除` で cleanup
+    - `python3 System/scripts/utage_funnel_create_delete_probe.py`
+      - `before_count = 258`
+      - `after_create_count = 259`
+      - `created_id = 232420`
+      - `after_delete_count = 258`
+      - `deleted = true`
+  - helper の current 挙動
+    - `python3 System/scripts/utage_login_helper.py --target https://school.addness.co.jp/product`
+      - `LOGIN_SUCCESS`
+    - `python3 System/scripts/utage_login_helper.py --target https://school.addness.co.jp/action`
+      - `ALREADY_LOGGED_IN`
+    - つまり probe 側は `一覧 URL へ自動復帰 -> exploratory create/delete` を self-heal しながら回せる
 
 ### Mailchimp
 
@@ -227,6 +257,13 @@
   - `Action > Mailchimp > Add/Update Subscriber`
   - `assets 一覧 row action Delete -> Delete`
   まで exploratory に確認
+  - `python3 System/scripts/zapier_create_delete_probe.py --with-action`
+    - `Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap`
+    - まで current UI で完了
+  - `python3 System/scripts/zapier_create_delete_probe.py --with-action --with-second-action`
+    - cleanup は成功
+    - `second_action_selected = false`
+    - つまり `trigger 1 + action 2` は未完だが、1 action relay は live exact で通った
 - current family snapshot
   - `WebHookCLIAPI@1.1.1:hook_v2 -> MailchimpCLIAPI@1.15.1:memberCreate`
     - `21本`
@@ -249,7 +286,7 @@
 | Lステップ | リッチメニュー | 読解中心 | 2ボタン 1本 |
 | UTAGE | ページ | representative 読解済み、`ファネル -> 追加 -> 空白のファネル -> 詳細 -> このファネルを追加する -> 一覧確認 -> row delete` 済み、row action は `slug route` / delete は `numeric id form` と確認済み | 1変更 -> rollback |
 | UTAGE | 登録経路 | 読解中心 | 1追加 -> rollback |
-| UTAGE | 商品管理 / 商品詳細管理 / 購入後アクション | product create / rollback 1本済み、detail create/save/cleanup 1本済み、action create/save/delete 1本済み | representative を増やす |
+| UTAGE | 商品管理 / 商品詳細管理 / 購入後アクション | product create / rollback 再確認済み、detail create/save/cleanup 再確認済み、action create/save/delete 再確認済み | representative を増やす |
 | UTAGE | 会員サイト | representative 読解済み | 1変更 -> rollback |
 | UTAGE | 動画管理 / メディア管理 | representative 読解済み | small change -> smoke |
 | Mailchimp | Campaign | draft create / delete 済み | representative を増やす |
@@ -257,17 +294,19 @@
 | Mailchimp | tag / saved segment | saved segment の create / delete、tag-search、search-members、safe exploratory member で tag 1件 add -> rollback 済み | UI 側の tag 1件 create -> rollback |  
 | Mailchimp | report | representative 読解済み | actual case を増やす |
 | short.io | short link / create / resolve / update / delete / stats / sheet sync | live 実施済み | 実案件 end-to-end を増やす |
-| Zapier | representative relay 読解 | editor / step 読解済み、`Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap` まで exploratory 済み | 1本 create -> test -> delete |
+| Zapier | representative relay 読解 | editor / step 読解済み、`Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap` まで live 完了、cleanup も確認済み | `trigger 1 + action 2` を 1本 |
 
 ### current live blocker
 
 - Mailchimp
-  - `python3 System/scripts/mailchimp_journey_create_delete_probe.py` は current で `LOGIN_NEEDS_TFA`
+  - `python3 System/scripts/mailchimp_journey_create_delete_probe.py` は current で `ensure_login(AUTOMATIONS_URL)` を先に実行する
+  - それでも current は `LOGIN_NEEDS_TFA` で止まることがある
   - つまり browser 側の exact 化は、2段階認証を通した session がある時だけ進める
 - Zapier
   - `python3 System/scripts/zapier_create_delete_probe.py --with-action` は current で `Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap` まで通った
   - exploratory draft の cleanup は `python3 System/scripts/zapier_cleanup_untitled.py` で `after_count=0` まで戻せる
-  - つまり current の残差は `Publish 前提の smoke` と representative family の追加で、create/cleanup 自体はかなり exact になった
+  - `python3 System/scripts/zapier_create_delete_probe.py --with-action --with-second-action` は cleanup まで通るが、`second_action_selected = false`
+  - つまり current の残差は `trigger 1 + action 2` と representative family の追加で、1 action の create/cleanup 自体はかなり exact になった
 
 ## いま重要な残差
 
@@ -299,7 +338,8 @@
 - `Trigger > Webhooks by Zapier > Catch Hook` まで選ぶと assets 一覧に `Untitled Zap` が persisted するところまで確認済み
 - `Action > Mailchimp > Add/Update Subscriber` まで選ぶと `Test` stage まで進めるところも確認済み
 - persisted 済み draft は `assets 一覧 row action Delete -> Delete` か `python3 System/scripts/zapier_cleanup_untitled.py` で `0件` まで cleanup 済み
-- つまり残差は `downstream smoke` と representative family の追加
+- `Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap` の 1 action relay は live 完了
+- つまり残差は `trigger 1 + action 2` と representative family の追加
 - dominant family は `Webhook -> Mailchimp Add/Update Subscriber`
   なので、最初の live exact はこの family を優先する
 

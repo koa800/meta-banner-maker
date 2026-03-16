@@ -11,7 +11,7 @@ from typing import Any
 
 from playwright.async_api import async_playwright
 
-from mailchimp_login_helper import CDP_URL
+from mailchimp_login_helper import CDP_URL, ensure_login as ensure_mailchimp_login
 from mailchimp_tag_helper import get_member, update_tags
 
 
@@ -297,6 +297,8 @@ async def run_probe() -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Mailchimp Journey exploratory create/delete probe")
     parser.parse_args()
+    if ensure_mailchimp_login(AUTOMATIONS_URL) != 0:
+        raise SystemExit("Mailchimp browser session is not ready. Complete login/TFA first.")
     result = asyncio.run(run_probe())
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

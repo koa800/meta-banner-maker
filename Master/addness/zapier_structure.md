@@ -108,10 +108,13 @@
   - `Untitled Zap / Draft` の cleanup 観点
   - `Trigger -> Action` の最小 2 step 構造
   - `Action > Mailchimp > Add/Update Subscriber` で `Test` stage に進めること
+  - `Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap`
+    を 1 action relay で live exact に完了できること
 
 ## まだ live create / rollback を厚くすべき範囲
 
 - `Catch Hook -> Mailchimp Add/Update Subscriber -> Test` は exploratory で 1 本通った
+- `trigger 1 + action 2` の exploratory probe は cleanup まで通るが、current は `second_action_selected = false`
 - 残差は、同じ family の本数と `trigger 1 + action 2` の最小複雑 pattern を live で積むこと
 - `既存 relay 修正` と `新規 relay` の rollback 手順を、current UI でさらに exact 化すること
 

@@ -132,7 +132,30 @@
         - `PRM JV用`
         - `プライム会員限定`
         などが並ぶ
-  - `動画管理` の `サムネイル変更 / チャプター設定 / 分析`
+- `動画管理` の `サムネイル変更 / チャプター設定 / 分析`
+- 2026-03-17 live probe の再確認
+  - `python3 System/scripts/utage_product_create_delete_probe.py`
+    - `before_count = 0`
+    - `after_create_count = 1`
+    - `after_delete_count = 0`
+    - `deleted = true`
+  - `python3 System/scripts/utage_detail_create_delete_probe.py`
+    - exploratory 商品を `create`
+    - `商品詳細管理 > 追加`
+    - `保存成功`
+    - detail 一覧 `1件追加`
+    - exploratory 商品 cleanup 後 `0件`
+  - `python3 System/scripts/utage_action_create_delete_probe.py`
+    - `種類 = webhook`
+    - 最小値で `保存成功`
+    - action 一覧 `1件追加`
+    - row dropdown 内の `削除` で cleanup
+  - `python3 System/scripts/utage_funnel_create_delete_probe.py`
+    - `before_count = 258`
+    - `after_create_count = 259`
+    - `created_id = 232420`
+    - `after_delete_count = 258`
+    - `deleted = true`
 
 ## まだ live create / rollback を厚くすべき範囲
 
@@ -162,7 +185,13 @@
 
 - operator login URL は `System/credentials/utage.json` に保存している
 - 自動ログイン補助:
-  - `python3 System/scripts/utage_login_helper.py --target <開きたいURL>`
+- `python3 System/scripts/utage_login_helper.py --target <開きたいURL>`
+- current の self-heal 実績
+  - `python3 System/scripts/utage_login_helper.py --target https://school.addness.co.jp/product`
+    - `LOGIN_SUCCESS`
+  - `python3 System/scripts/utage_login_helper.py --target https://school.addness.co.jp/action`
+    - `ALREADY_LOGGED_IN`
+  - つまり create/delete probe は、一覧 URL へ自動復帰してから exploratory change を回せる
 - page runtime 抜き取り:
 - `python3 System/scripts/utage_page_runtime_snapshot.py <edit URL>`
 - helper が待機した時の current fallback:
