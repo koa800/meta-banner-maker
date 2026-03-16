@@ -115,6 +115,17 @@
     - LINE の共有で `メンション` が必要な時は `@名前` の文字列だけでは不十分。`group_id + user_id + 本物メンション送信` が必要
     - 秘書 bot は current で `/notify/mention` と `/api/group-members` を持つので、共有前に対象グループの member 解決が可能
     - ただし 2026-03-17 時点では Render 側の `/notify/mention` と `/api/group-members` が `404`。コード実装と push は済みだが、本物メンション送信は deploy 反映待ち
+  - `アクション管理` の current exact 挙動
+    - `新しいアクション` は別ページ遷移ではなく side drawer
+    - `タグ操作` はタグ名の直打ちでは保存できない
+    - current UI では `タグ選択` を通らないと
+      - `登録に失敗しました`
+      - `1.[タグ編集]タグは必須です。`
+      で止まる
+    - unsaved drawer を閉じる時は
+      - `保存されていない変更があります。本当に閉じますか？`
+      - `キャンセル / 閉じる`
+      の confirm が出る
 
 ### UTAGE
 
