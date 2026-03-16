@@ -39,6 +39,9 @@ schedule:
   email_collection_metrics_sheet_sync:
     cron: "38 */2 * * *"         # 2時間ごと  メール集計の統合シートを再生成
     enabled: true
+  booking_notification_log_sync:
+    cron: "43 */2 * * *"         # 2時間ごと  個別予約通知ログを更新
+    enabled: true
   booking_metrics_sheet_sync:
     cron: "48 */2 * * *"         # 2時間ごと  個別面談データの集計シートを再生成
     enabled: true

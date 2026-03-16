@@ -32,6 +32,7 @@ COUNT_TAB_NAME = "日別個別予約数"
 UU_TAB_NAME = "日別個別予約数（UU）"
 SUMMARY_TAB_NAME = "個別予約サマリー"
 TAG_TAB_NAME = "タグ検証"
+NOTIFICATION_LOG_TAB_NAME = "個別予約通知ログ"
 SOURCE_MANAGEMENT_TAB_NAME = "データソース管理"
 RULE_TAB_NAME = "データ追加ルール"
 
@@ -560,11 +561,55 @@ def build_tag_rows() -> List[List[str]]:
         ["今の限界", "確認済み", "タグ単体では日別の予約イベント数を正確に取れない"],
         ["将来の役割", "確認待ち", "タグ付与の通知を1イベント1行で蓄積し、個別予約イベントの正本候補にする"],
         ["通知で取りたい項目", "確認待ち", "タグ付与日時 / LINE名 / LSTEPメンバーID / Lステップアカウント名 / 予約導線種別"],
+        ["通知の送信先", "確認済み", "Slack #個別予約通知 を第1候補にする"],
         ["確認対象アカウント", "確認待ち", "スキルプラス@企画専用 / 【スキルプラス】フリープラン / みかみ@個別専用 / みかみ@AI_個別専用 / 【みかみ】アドネス株式会社"],
     ]
 
 
-def build_source_rows(stats: Dict[str, object]) -> List[List[str]]:
+def load_notification_log_stats(target) -> Dict[str, str]:
+    try:
+        ws = target.worksheet(NOTIFICATION_LOG_TAB_NAME)
+    except Exception:
+        return {
+            "ステータス": "未接続",
+            "最終同期日": "",
+            "更新数": "",
+            "エラー数": "",
+            "メモ": "通知ログタブ未作成",
+        }
+
+    values = ws.get_all_values()
+    if len(values) <= 1:
+        return {
+            "ステータス": "未接続",
+            "最終同期日": "",
+            "更新数": "0",
+            "エラー数": "0",
+            "メモ": "Slack通知の取込待ち",
+        }
+
+    latest_imported_at = ""
+    event_count = 0
+    for row in values[1:]:
+        row = row + [""] * max(0, 16 - len(row))
+        slack_ts = str(row[9]).strip()
+        if not slack_ts:
+            continue
+        event_count += 1
+        imported_at = str(row[10]).strip()
+        if imported_at:
+            latest_imported_at = imported_at
+
+    return {
+        "ステータス": "正常" if event_count else "未接続",
+        "最終同期日": latest_imported_at,
+        "更新数": f"{event_count:,}" if event_count else "0",
+        "エラー数": "0",
+        "メモ": "Slack #個別予約通知 から取り込んだ通知ログ",
+    }
+
+
+def build_source_rows(stats: Dict[str, object], notification_stats: Dict[str, str]) -> List[List[str]]:
     return [
         ["KPIカラム", "グループ", "ソース元", "優先度", "スプレッドシートURL", "タブ名", "参照先列", "正規化 / 計算", "入力条件", "ステータス", "最終同期日", "更新数", "エラー数", "メモ"],
         [
@@ -581,7 +626,7 @@ def build_source_rows(stats: Dict[str, object]) -> List[List[str]]:
             str(stats["updated_at"]),
             f"{int(stats['total_booking_count']):,}",
             "0",
-            "現行の計上元。将来は個別予約完了タグの通知ログへ切替候補",
+            "現行の計上元。継続体制では Slack #個別予約通知 から作る 個別予約通知ログへ移行する",
         ],
         [
             "個別予約数（UU）",
@@ -604,16 +649,16 @@ def build_source_rows(stats: Dict[str, object]) -> List[List[str]]:
             "個別予約",
             "Lステップ通知機能",
             "2",
-            "",
-            "通知機能",
-            "通知本文",
-            "タグ付与ごとに1イベント1行で記録",
+            f"https://docs.google.com/spreadsheets/d/{TARGET_SHEET_ID}/edit",
+            NOTIFICATION_LOG_TAB_NAME,
+            "A〜P列",
+            "Slack 通知を 1イベント1行で保存",
             "★【個別予約完了】★ が付いた時に通知",
-            "確認待ち",
-            "",
-            "",
-            "",
-            "まずは Slack の専用チャンネルへ送り、高精度の個別予約イベントログにする。難しい時だけ Chatwork を使う",
+            notification_stats["ステータス"],
+            notification_stats["最終同期日"],
+            notification_stats["更新数"],
+            notification_stats["エラー数"],
+            notification_stats["メモ"],
         ],
         [
             "タグ検証",
@@ -637,6 +682,10 @@ def build_source_rows(stats: Dict[str, object]) -> List[List[str]]:
 def build_rule_rows() -> List[List[str]]:
     return [
         ["項目", "ルール", "補足"],
+        ["変えないもの", "個別予約数は予約イベント数として数える", "同じ人が別日に再予約したら別件数で数える"],
+        ["変えないもの2", "★【個別予約完了】★ は予約完了の成立条件として扱う", "一度付いたら外れず、再予約でも増えない"],
+        ["変えるもの", "botログ固定ではなく、通知ログを本命の計上元へ段階移行する", "現行は botログ、将来は Slack 通知ログ"],
+        ["追加するもの", "個別予約通知ログを 1イベント1行で持つ", "Slack #個別予約通知 の bot 通知を取り込む"],
         ["個別予約数", "現行は【アドネス】顧客管理シート / 個別予約集計botログ を使う", "日付あり and キャンセル=FALSE の行だけを数える"],
         ["個別予約通知ログ", "将来は Lステップ の通知機能で ★【個別予約完了】★ の付与を1イベント1行で溜める", "まずは Slack の専用チャンネルに集約し、難しい時だけ Chatwork を使う"],
         ["個別予約数（UU）", "第1版ではまだ接続しない", "LINE統合や名寄せ方針が固まってから入れる"],
@@ -651,6 +700,7 @@ def write_target(daily_records: Sequence[DailyCountRecord], stats: Dict[str, obj
     target = gc.open_by_key(TARGET_SHEET_ID)
     ensure_spreadsheet_title(target)
     tabs = ensure_tabs(target)
+    notification_stats = load_notification_log_stats(target)
 
     count_rows = [["日付", "個別予約数", "累計個別予約数"]]
     count_rows.extend([[record.date, f"{record.count:,}", f"{record.cumulative_count:,}"] for record in daily_records])
@@ -661,7 +711,7 @@ def write_target(daily_records: Sequence[DailyCountRecord], stats: Dict[str, obj
 
     summary_rows = pad_rows(build_summary_rows(stats), 20, 3)
     tag_rows = pad_rows(build_tag_rows(), 20, 3)
-    source_rows = pad_rows(build_source_rows(stats), 20, 14)
+    source_rows = pad_rows(build_source_rows(stats, notification_stats), 20, 14)
     rule_rows = pad_rows(build_rule_rows(), 20, 3)
 
     write_rows(target, tabs[COUNT_TAB_NAME], count_rows)

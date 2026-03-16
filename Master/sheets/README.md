@@ -36,7 +36,7 @@
 | `1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk` | 【アドネス株式会社】顧客データ（複数イベント） | [リンク](https://docs.google.com/spreadsheets/d/1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk/edit) | CDP顧客マスタ。イベント発生者（セミナー予約・購入等）の統合データ | API経由で都度取得 |
 | `1iD3DGxNhZruyjYcA5n6oXRDk2ZGA3uMDOo0stQS9Y00` | 【アドネス株式会社】顧客データ（メールアドレスのみ） | [リンク](https://docs.google.com/spreadsheets/d/1iD3DGxNhZruyjYcA5n6oXRDk2ZGA3uMDOo0stQS9Y00/edit) | リードプール。メールアドレスのみのリード（イベント未発生）。`データソース管理` タブは `cdp_sync.py` が `正常 / 未同期 / 停止` と `最終同期日 / 更新数` を自動反映し、full sync の最後に `顧客マスタ` と重なるメールを毎回掃除する | API経由で都度取得 |
 | `13HS9KmlTdxQwMMaK45H3Ga1mMTUiJdhYKWnrExge_yY` | 【アドネス株式会社】集客データ（メール集計） | [リンク](https://docs.google.com/spreadsheets/d/13HS9KmlTdxQwMMaK45H3Ga1mMTUiJdhYKWnrExge_yY/edit) | 集客メールの統合加工シート。`日別メール登録件数 / 日別メール登録件数（UU） / 複数アドレスユーザー / メール集計サマリー / データソース管理 / データ追加ルール` を一箇所にまとめる。`2025/01/01 - 2026/03/06` はローカル固定スナップショット、`2026/03/07` 以降は `【アドネス株式会社】集客データ（メールアドレス）` を正にする。`メール登録ユーザー数` は `メール登録件数（UU） - 複数アドレスユーザー数` で持つ | `python3 System/email_collection_metrics_sheet_sync.py` で再生成 |
-| `1ip_RARDHmQvTjmaVavw1L71ltPrn4Kg6sa__njqyQZ8` | 【アドネス株式会社】個別面談データ | [リンク](https://docs.google.com/spreadsheets/d/1ip_RARDHmQvTjmaVavw1L71ltPrn4Kg6sa__njqyQZ8/edit) | 個別予約の第1版加工シート。`【アドネス】顧客管理シート / 個別予約集計botログ` を正本候補に、`日別個別予約数 / 日別個別予約数（UU） / 個別予約サマリー / タグ検証 / データソース管理 / データ追加ルール` を持つ。現時点で接続するのは `個別予約数` のみで、`個別予約数（UU）` と `個別実施数` は将来接続 | `python3 System/booking_metrics_sheet_sync.py` で再生成 |
+| `1ip_RARDHmQvTjmaVavw1L71ltPrn4Kg6sa__njqyQZ8` | 【アドネス株式会社】個別面談データ | [リンク](https://docs.google.com/spreadsheets/d/1ip_RARDHmQvTjmaVavw1L71ltPrn4Kg6sa__njqyQZ8/edit) | 個別予約の第1版加工シート。現行は `【アドネス】顧客管理シート / 個別予約集計botログ` を正本候補にしつつ、継続体制では `Slack #個別予約通知` から作る `個別予約通知ログ` へ段階移行する。`日別個別予約数 / 日別個別予約数（UU） / 個別予約サマリー / タグ検証 / 個別予約通知ログ / データソース管理 / データ追加ルール` を持つ。現時点で接続するのは `個別予約数` のみで、`個別予約数（UU）` と `個別実施数` は将来接続 | `python3 System/booking_metrics_sheet_sync.py` と `python3 System/booking_notification_log_sync.py` で更新 |
 | `1utCt9ex0puEi3-oxcjq9v37Jt-9X_dpSjPowZBsHeqA` | 【アドネス株式会社】KPIダッシュボード | [リンク](https://docs.google.com/spreadsheets/d/1utCt9ex0puEi3-oxcjq9v37Jt-9X_dpSjPowZBsHeqA/edit) | 事業全体の表示層。第1版は `定義 / スキルプラス事業サマリー / 日別数値 / データソース管理` の4タブだけを表に出す。`定義` は `日別数値` で使う項目の定義だけを持ち、将来用語として `オプトイン数 / リストイン数` も置く。`スキルプラス事業サマリー` は `日別数値` を期間指定で集計し、右側に `集客 / 予約・実施 / 売上・広告費 / 会員` の4グラフを置く。`日別数値` は `日付 / 集客数 / 集客数（UU） / 個別予約数 / 個別予約数（UU） / 個別実施数 / 着金売上 / 広告費 / CPA / 個別予約CPO / ROAS / 会員数 / 中途解約数 / クーリングオフ数` の14列を正本の受け口にし、現時点では `集客数 / 集客数（UU） / 個別予約数` まで接続済み | `python3 System/kpi_dashboard_layout_setup.py` で骨格更新 |
 | `1mtfvXN92_vtzwLhOiTcufdLJ6vkfn8oYjCiqC0ZK6j8` | 【アドネス株式会社】集客データ（UUメールアドレス） | [リンク](https://docs.google.com/spreadsheets/d/1mtfvXN92_vtzwLhOiTcufdLJ6vkfn8oYjCiqC0ZK6j8/edit) | `顧客マスター + メールのみ` を母集団にした `UUメールアドレス / 日別UUメールアドレス数 / 複数アドレスユーザー / メール集計サマリー / データソース管理 / データ追加ルール` の6タブ構成。登録日は `【アドネス株式会社】集客データ（メールアドレス）` の各流入経路タブ A列を最優先にし、過去UTAGE CSV と `メール集客データ` は日付が無いメールだけを補完する | `python3 System/unique_email_sheet_sync.py` で再生成 |
 | `1RsRkGaHCFsFc1nT1lMQFyNG-f13llH4UX9Bl_EYxNjU` | 【アドネス株式会社】集客データ（全メール登録数） | [リンク](https://docs.google.com/spreadsheets/d/1RsRkGaHCFsFc1nT1lMQFyNG-f13llH4UX9Bl_EYxNjU/edit) | `日別集客数シート / 2025年2月CSV / 集客データ（メールアドレス）` を役割分担して使う `日別メール登録件数 / メール登録件数サマリー / データソース管理 / データ追加ルール` の4タブ構成。`登録という事実` を重複ありで持つ | `python3 System/email_registration_count_sheet_sync.py` で再生成 |
@@ -244,12 +244,16 @@ python3 System/email_collection_metrics_sheet_sync.py --refresh-history-snapshot
 | 日別個別予約数（UU） | 将来接続用。第1版では空欄の枠だけを持つ |
 | 個別予約サマリー | `更新日時 / 個別予約数 / 個別予約数（UU） / キャンセル数 / 集計開始日 / 最新集計日 / 予約アカウント名あり件数 / 予約アカウント名空欄件数` |
 | タグ検証 | `★【個別予約完了】★` の意味と、Lステップで後から確認すべき論点を置く |
+| 個別予約通知ログ | `Slack投稿日時 / タグ付与日時 / LINE名 / LSTEPメンバーID / Lステップアカウント名 / 予約導線種別 / タグ名 / 通知リンク / Slackチャンネル名 / Slack ts / 取込日時 / 照合メールアドレス / 照合電話番号 / 顧客ID / 状態 / 通知本文`。`Slack #個別予約通知` の bot 通知を 1イベント1行で保存する |
 | データソース管理 | 個別予約数の参照元、最終同期日、更新数、ステータス、メモを持つ |
 | データ追加ルール | 第1版の正本、未接続項目、タグの扱い、異常検知、手編集禁止を固定する |
 
 ```bash
-# 6タブまとめて再生成
+# 個別面談データの加工タブを再生成
 python3 System/booking_metrics_sheet_sync.py
+
+# 個別予約通知ログを更新
+python3 System/booking_notification_log_sync.py
 
 # 書き込みなしで集計確認
 python3 System/booking_metrics_sheet_sync.py --dry-run
@@ -257,6 +261,7 @@ python3 System/booking_metrics_sheet_sync.py --dry-run
 
 - 定期更新: Orchestrator が `48 */2 * * *` で2時間ごとに再生成
 - 正本候補: `【アドネス】顧客管理シート / 個別予約集計botログ`
+- 継続体制: `Slack #個別予約通知` から `個別予約通知ログ` を作り、将来の本命計上元へ段階移行する
 - 保留: `個別予約数（UU）` `個別実施数`
 - 検証用: `★【個別予約完了】★` は日別件数の正本ではなく、Lステップ側の整合確認に使う
 

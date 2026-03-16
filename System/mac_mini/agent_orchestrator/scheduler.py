@@ -64,6 +64,7 @@ _EMAIL_COLLECTION_METRICS_SOURCE_TAB = "データソース管理"
 _BOOKING_METRICS_SHEET_ID = "1ip_RARDHmQvTjmaVavw1L71ltPrn4Kg6sa__njqyQZ8"
 _BOOKING_METRICS_SUMMARY_TAB = "個別予約サマリー"
 _BOOKING_METRICS_SOURCE_TAB = "データソース管理"
+_BOOKING_NOTIFICATION_LOG_TAB = "個別予約通知ログ"
 _TELEAPO_SHEET_ID = "12RGMUfU8Wj0CCdcRfY7kI56kdATV7wDXjvYmGdQb_Nk"
 _TELEAPO_TARGET_TAB = "架電一覧"
 _CLAUDE_CHROME_EXTENSION_ID = "fcoeoabgfenejglbffodgkkbkcdhcgfn"
@@ -493,6 +494,7 @@ class TaskScheduler:
             "unique_email_sheet_sync": self._run_unique_email_sheet_sync,
             "email_registration_count_sheet_sync": self._run_email_registration_count_sheet_sync,
             "email_collection_metrics_sheet_sync": self._run_email_collection_metrics_sheet_sync,
+            "booking_notification_log_sync": self._run_booking_notification_log_sync,
             "booking_metrics_sheet_sync": self._run_booking_metrics_sheet_sync,
             "teleapo_sync": self._run_teleapo_sync,
             "interview_insights_sync": self._run_interview_insights_sync,
@@ -793,7 +795,7 @@ class TaskScheduler:
         logger.info("Scheduler shut down")
 
     # タスク失敗通知を送らないタスク（自前でエラーハンドリングするもの）
-    _NO_FAILURE_NOTIFY = {"health_check", "oauth_health_check", "render_health_check", "anthropic_credit_check", "secretary_goal_progress", "interview_insights_sync", "interview_insights_backfill", "interview_insights_analysis", "unique_email_sheet_sync", "email_registration_count_sheet_sync", "email_collection_metrics_sheet_sync", "booking_metrics_sheet_sync"}
+    _NO_FAILURE_NOTIFY = {"health_check", "oauth_health_check", "render_health_check", "anthropic_credit_check", "secretary_goal_progress", "interview_insights_sync", "interview_insights_backfill", "interview_insights_analysis", "unique_email_sheet_sync", "email_registration_count_sheet_sync", "email_collection_metrics_sheet_sync", "booking_notification_log_sync", "booking_metrics_sheet_sync"}
     # git_pull_syncは独自の頻度制限付き通知を実装（_run_git_pull_sync参照）
 
     async def _execute_tool(self, task_name: str, tool_fn, **kwargs) -> tools.ToolResult:
@@ -4790,6 +4792,41 @@ head -3 "{csv_dir}/{csv_filename}"
                     (
                         "メール集計 / データソース管理",
                         _build_sheet_url(_EMAIL_COLLECTION_METRICS_SHEET_ID, _EMAIL_COLLECTION_METRICS_SOURCE_TAB),
+                    ),
+                ],
+            )
+        )
+
+    async def _run_booking_notification_log_sync(self):
+        """2時間ごと: 個別予約通知ログを更新する。"""
+        result = await self._execute_tool(
+            "booking_notification_log_sync",
+            tools.booking_notification_log_sync,
+        )
+        if result.success:
+            logger.info(f"Booking notification log sync completed: {(result.output or '')[-300:]}")
+            return
+
+        from .notifier import send_line_notify
+
+        send_line_notify(
+            _format_line_message(
+                "個別予約通知ログの更新が止まりました",
+                summary_lines=[
+                    (result.error or "詳細エラーを取得できませんでした")[:200],
+                ],
+                action_lines=[
+                    "まず 個別予約通知ログ を開いて、行が増えていないか確認してください",
+                    "次に データソース管理 を開いて、個別予約通知ログ のステータスと最終同期日を確認してください",
+                ],
+                links=[
+                    (
+                        "個別面談データ / 個別予約通知ログ",
+                        _build_sheet_url(_BOOKING_METRICS_SHEET_ID, _BOOKING_NOTIFICATION_LOG_TAB),
+                    ),
+                    (
+                        "個別面談データ / データソース管理",
+                        _build_sheet_url(_BOOKING_METRICS_SHEET_ID, _BOOKING_METRICS_SOURCE_TAB),
                     ),
                 ],
             )

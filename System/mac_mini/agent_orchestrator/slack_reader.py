@@ -83,6 +83,7 @@ def fetch_channel_messages(
     channel_id: str,
     oldest: Optional[str] = None,
     limit: int = 50,
+    include_bot_messages: bool = False,
 ) -> list[dict]:
     """Fetch recent messages from a Slack channel.
 
@@ -90,6 +91,7 @@ def fetch_channel_messages(
         channel_id: Slack channel ID (e.g. C0AGLRJ8N3G)
         oldest: Unix timestamp string — only messages after this time
         limit: Max messages to fetch (default 50)
+        include_bot_messages: True のとき Webhook / integration の bot 投稿も返す
 
     Returns:
         List of dicts: [{"user": "名前", "text": "...", "ts": "...", "datetime": "..."}]
@@ -104,10 +106,12 @@ def fetch_channel_messages(
 
     messages = []
     for msg in reversed(data["messages"]):  # oldest first
-        if msg.get("subtype") in ("channel_join", "channel_leave", "bot_add", "bot_message"):
+        if msg.get("subtype") in ("channel_join", "channel_leave", "bot_add"):
             continue  # skip system/bot messages (bot_message = Webhook投稿)
+        if not include_bot_messages and msg.get("subtype") == "bot_message":
+            continue
         # bot_id があるメッセージも除外（Webhook投稿でsubtypeが欠落するケース対策）
-        if msg.get("bot_id"):
+        if not include_bot_messages and msg.get("bot_id"):
             continue
 
         user_id = msg.get("user", "")
@@ -146,3 +150,15 @@ def list_channels() -> list[dict]:
                 })
 
     return channels
+
+
+def find_channel_by_name(channel_name: str) -> Optional[dict]:
+    """参加中チャンネルから名前一致の1件を返す。"""
+    normalized = (channel_name or "").strip().lstrip("#")
+    if not normalized:
+        return None
+
+    for channel in list_channels():
+        if channel.get("name") == normalized:
+            return channel
+    return None
