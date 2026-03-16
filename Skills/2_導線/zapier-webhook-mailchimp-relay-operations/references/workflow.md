@@ -69,6 +69,85 @@
 - email は webhook payload の email-like key から引く
 - Zap 名だけで family と event の意味が読める
 
+## 新規 relay の exact 順
+
+1. `Create`
+2. `Untitled Zap / Draft`
+3. `Trigger`
+4. `Webhooks by Zapier`
+5. `Catch Hook`
+6. `Action`
+7. `Mailchimp`
+8. `Add/Update Subscriber`
+9. `Audience*`
+10. `Subscriber Email*`
+11. `Tag(s)`
+12. `Status`
+13. `Update Existing`
+14. `Name`
+15. `Folder = 甲原`
+
+つまり、Zapier は step を埋める前に
+- 何 event を relay するか
+- どの tag に変換するか
+- どの email key を使うか
+を先に切る。
+
+### create builder で実際に見るラベル
+
+- 上部
+  - `Untitled Zap`
+  - `Draft`
+  - `Publish`
+- step 共通
+  - `Trigger`
+  - `Action`
+  - `Test`
+  - `Continue`
+- trigger 側
+  - `Choose app & event`
+  - `Webhooks by Zapier`
+  - `Catch Hook`
+  - `Test trigger`
+- action 側
+  - `Choose app & event`
+  - `Mailchimp`
+  - `Add/Update Subscriber`
+  - `Choose account`
+  - `Set up action`
+  - `Test step`
+- 右側詳細
+  - `Zap details`
+  - `Folder`
+  - `Timezone`
+
+### trigger / action の exact smoke 順
+
+1. `Trigger`
+2. `Webhooks by Zapier`
+3. `Catch Hook`
+4. `Continue`
+5. `Test trigger`
+6. `Action`
+7. `Mailchimp`
+8. `Add/Update Subscriber`
+9. `Choose account`
+10. `Set up action`
+11. `Audience*`
+12. `Subscriber Email*`
+13. `Tag(s)`
+14. `Test step`
+
+current の Addness では、`Test trigger` と `Test step` を飛ばして `Publish` しない。
+
+## `Test trigger` の sample で止まる条件
+
+- sample payload の `メールアドレス` 系 key が intended な field か言えない
+- 前回の別 event の sample を掴んでいる可能性がある
+- sample を見ても `何の event か` を 1 文で言えない
+
+このどれかなら `Publish` へ進まず止まる。
+
 ## 30秒レビューの順番
 
 1. `Name`
@@ -82,6 +161,19 @@
 9. `Tag(s)`
 10. その tag が downstream で何を起動するか
 
+## editor に入れない時の fallback順
+
+1. `Assets > Zaps`
+2. `Name`
+3. `Apps`
+4. `Location`
+5. `Status`
+6. `Folder`
+7. 既知の family と照合
+8. editor は最後に再試行
+
+つまり、`published editor` が閉じている時でも、まず一覧で `何系の relay か` を切る。step の exact 値が必要な変更だけを stop 条件にする。
+
 ## relay を読む最小チェック
 
 1. この Zap は何 event を relay しているか
@@ -89,6 +181,147 @@
 3. 付与される tag は何か
 4. その tag 名は business event と一致しているか
 5. duplicate や例外 relay になっていないか
+
+## `relay 不要` を先に切る時の問い
+
+1. Lステップ 単体で完結できないか
+2. UTAGE の `購入後アクション` や `バンドルコース` だけで閉じないか
+3. Mailchimp 側の既存 tag / saved segment だけで足りないか
+
+この 3 つが `yes` なら、まず Zapier を増やさない。
+
+## representative pattern を読む時の問い
+
+- この relay は何 event を受けているか
+- その event を downstream のどの state に変えているか
+- `Tag(s)` を見た時に business event が 1 文で言えるか
+- なぜ Mailchimp に渡しているのか
+- 同じ family の既存 Zap と何が違うのか
+
+## 10秒判断
+
+- 既存 relay 修正
+  - 同じ event meaning を持つ current Zap がすでにある
+  - 変えるのが `Tag(s)` や `Subscriber Email*` の参照先など局所差分
+- 新規 relay
+  - event meaning 自体が新しい
+  - 既存 Zap を直すと別 funnel の downstream を壊す
+- relay 不要
+  - front system だけで state と downstream を閉じられる
+
+この 10 秒判断が言えない時は、UI を触る前に stop する。
+
+## 保存前の最小チェック
+
+- `Trigger`
+  - `Webhooks by Zapier`
+  - `Catch Hook`
+  になっているか
+- `Action`
+  - `Mailchimp`
+  - `Add/Update Subscriber`
+  になっているか
+- `Audience*`
+  が意図どおりか
+- `Subscriber Email*`
+  が webhook payload の正しい key を指しているか
+- `Tag(s)`
+  が downstream の Journey / Campaign 条件と 1 meaning で対応しているか
+- この Zap を
+  - 新規作成すべきか
+  - 既存変更すべきか
+  を 1 文で説明できるか
+
+## 保存後の最小チェック
+
+- 一覧で
+  - `Name`
+  - `Apps`
+  - `Location`
+  - `Status`
+  が意図どおりか
+- `Folder`
+  が `甲原` か
+- `Name` を見て
+  - funnel / product family
+  - event
+  - relay 先の意味
+  が読めるか
+- downstream の Mailchimp 側で
+  - tag が current naming に乗っているか
+  - その tag を条件にした導線が説明できるか
+- relay を増やしたことで、front system 側の責務が逆に分散していないか
+
+## Publish 前の最終確認順
+
+1. `Name`
+2. `Folder`
+3. `Trigger`
+4. `Action`
+5. `Audience*`
+6. `Subscriber Email*`
+7. `Tag(s)`
+8. `Test trigger` の結果
+9. `Test step` の結果
+10. downstream の Mailchimp で、この tag が何を起動するか
+
+`Publish` は最後に押す。`Name / Folder / Test` が曖昧なまま publish しない。
+
+## 完成条件
+
+次を説明できた時だけ完成扱いにする。
+- この Zap が何 event を受け取るか
+- downstream で何 state を作るか
+- `Audience*`
+- `Subscriber Email*`
+- `Tag(s)`
+をなぜそうしたか
+- 既存変更ではなく新規作成にした理由、またはその逆
+- downstream の Mailchimp 側でどの Journey / Campaign 条件に効くか
+
+## current で迷いやすい差分
+
+- `Create` を開いただけでも `Untitled Zap / Draft` が残ることがある
+- `Folder` は step 設定ではなく `Zap details` 側
+- `Mailchimp / Add/Update Subscriber` の configure で `Tag(s)` まで入れないと relay の意味が読めない
+- `Google Sheets -> Webhooks POST` family は current main relay ではなく例外 family
+- visible 一覧だけでは分からない時も、まず `Name / Apps / Location / Status` で family を切る
+
+## 新規作成と既存変更の判断
+
+- 新規作成
+  - event の意味が既存 Zap と重ならない
+  - 新しい tag を切る理由が説明できる
+  - `1 event = 1 meaning` を保てる
+- 既存変更
+  - その Zap が current 本線と分かっている
+  - 変えるのが
+    - `Tag(s)`
+    - `Audience*`
+    - `Subscriber Email*`
+    - downstream の意味
+    のどこか説明できる
+  - 変更後も downstream の意味が変わらない
+- 迷ったら新規作成も既存変更も止めて確認する
+
+## 危険な新規 relay シグナル
+
+- `Tag(s)` の意味が 1 文で言えない
+- 既存 Zap と event meaning が重複して見える
+- downstream の `Journey / Campaign` 側で、その tag の役割が読めない
+- `Mailchimp / Add/Update Subscriber` 以外の family を使いたくなっている
+- `Paths / Filter / Formatter / Code` を足したくなっている
+
+この場合は、まず `relay 不要` か `既存修正` を再判定する。新規作成は最後に回す。
+
+## ここで止めて確認する条件
+
+- webhook payload の key 名が current 実装と違って見える
+- 既存 Zap を変えると複数の current funnel に波及しそう
+- 付けたい tag が current Mailchimp naming に乗っていない
+- `Webhooks by Zapier -> Mailchimp Add/Update Subscriber` 以外の family を新規で使いたい
+- relay 先が Mailchimp ではなく外部 API や Google Sheets で、本番影響が読みにくい
+- event の意味が 1 つに絞れず、Zap 名だけで説明できない
 
 ## cleanup の原則
 
@@ -98,3 +331,13 @@
   - `Status`
   - `Last modified`
   を見て、current published relay ではないことを確認する
+
+### current の exact draft cleanup
+
+1. builder 上部の `Untitled Zap / Draft`
+2. `...` または title menu
+3. `Delete`
+4. dialog `Delete Zap?`
+5. `Delete Zap`
+
+`Publish` を押していない draft だけを消す。published relay でこの導線を使わない。

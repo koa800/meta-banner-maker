@@ -45,6 +45,18 @@ Addness 固有の naming、current representative、CTA ルールは `Project/3_
 - どこへ送るか
 - evergreen でよいか
 
+## 依頼を受けたら最初に埋める項目
+
+- flow 名
+- `Audience`
+- trigger の種類
+- trigger に使う tag
+- `Filter who can enter` の有無
+- 1 通目で何の認識を変えるか
+- main CTA の short.io
+- `From name / From email address / Reply to email address`
+- exploratory draft にするか、そのまま実装へ進むか
+
 ## 実装前の最小チェック
 
 - この施策が evergreen で回るべきか決まっている
@@ -53,7 +65,33 @@ Addness 固有の naming、current representative、CTA ルールは `Project/3_
 - main CTA の short.io を先に用意している
 - `Journey` ではなく `Campaign` にすべき可能性を先に潰している
 
+## 入口選択の exact な問い
+
+- 今やりたいのは `同じ顧客体験を自動で繰り返し流す` か
+  - なら `Customer Journeys`
+- 今やりたいのは `今回だけ送る` か
+  - それはこの skill ではなく `Campaign`
+- 今やりたいのは `誰に送るかの条件だけ作る` か
+  - それはこの skill ではなく `tag / saved segment`
+- 今やりたいのは `結果を読む` か
+  - それはこの skill ではなく `report`
+
+つまり、この skill の入口は `evergreen の自動化かどうか` で決まる。
+
 ## 判断フレーム
+
+## 10秒判断
+
+- Journey
+  - 同じ認識変換を evergreen で回す
+  - 入口条件を tag で切れる
+- Campaign
+  - 今回だけの promotion や告知
+  - segment や exclude が主役
+- tag/segment 先行
+  - 先に state layer を確定しないと本文に入れない
+
+この 10 秒判断が言えない時は、`Build from scratch` を押さない。
 
 ### Journey を使う
 
@@ -83,6 +121,128 @@ Addness 固有の naming、current representative、CTA ルールは `Project/3_
 10. `Save and exit` 系で戻る前に検証する
 11. exploratory な draft を作っただけなら、同セッションで `Actions -> Delete -> Delete flow` まで戻す
 
+## 最小 live test
+
+最初の 1 本は `trigger まで作って cleanup` を優先する。
+
+1. `Automations`
+2. `Build from scratch`
+3. `Name flow`
+4. `Audience`
+5. `Continue`
+6. `Choose a trigger`
+7. `Tag added`
+8. `Set a tag`
+9. 必要なら `Filter who can enter`
+10. `Save Trigger`
+11. 一覧へ戻る
+12. exploratory なら `Actions -> Delete -> Delete flow`
+
+最初から複数 email step や branch を足さない。まず `Build from scratch -> trigger -> cleanup` が無迷いで閉じることを優先する。
+
+## 最小 email step live test
+
+trigger が無迷いで閉じるようになったら、次は `email step 1 本だけ` を足す最小 live test に進む。
+
+1. builder に戻る
+2. `Send email` を 1 step だけ追加
+3. `Subject line`
+4. `Preview text`
+5. `From name`
+6. `From email address`
+7. `Reply to email address`
+8. 本文は `main CTA 1 つ` だけで閉じる
+9. `Send Test Emails`
+10. actual hyperlink を click で確認
+11. exploratory なら `Actions -> Delete -> Delete flow`
+
+最初から 2 通目、delay、branch、goal を足さない。`trigger -> 1 email step -> cleanup` が無迷いで閉じることを優先する。
+
+### save を伴う最小 live test の条件
+
+次をすべて満たす時だけ、email step まで進める。
+- trigger tag の意味を 1 文で言える
+- evergreen で流す理由を 1 文で言える
+- main CTA の short.io を先に用意している
+- exploratory draft を自分で削除できる
+
+上の条件が欠ける時は、Journey の live test は `trigger まで` で止める。
+
+## email step 追加後の rollback
+
+exploratory に email step を足した時は、必ず同じ session で rollback 条件まで見る。
+
+1. builder 上で step が 1 本だけ増えていることを確認
+2. `Send Test Emails` の結果を確認
+3. 実 click で actual hyperlink を確認
+4. 使わない draft なら一覧へ戻る
+5. `Actions`
+6. `Delete`
+7. `Delete flow`
+
+`step を消したつもり` で終わらない。flow ごと削除して、一覧から消えたところまで確認する。
+
+## 最小 downstream smoke
+
+email step まで作ったら、builder 内だけで終わらせない。
+
+1. `Send Test Emails`
+2. `Subject line`
+3. `Preview text`
+4. main CTA の表示文言
+5. actual hyperlink
+6. short.io の最終遷移先
+7. downstream の `UTAGE / LINE / 外部ページ`
+
+actual hyperlink と最終遷移先が intended でない限り、builder 上で見た目が良くても完了にしない。
+
+## 最小 live change
+
+既存 current の Journey を触る時は、最初の 1 回を `1 field だけ変える` に制限する。
+
+1. 対象 `Customer Journeys > 行名`
+2. builder を開く
+3. 対象 step を 1 つ固定
+4. 変更対象を 1 つに固定
+   - `Subject line`
+   - `Preview text`
+   - main CTA の表示文言
+   のような downstream の切り分けがしやすい field を優先
+5. `Send Test Emails`
+6. actual hyperlink を確認
+7. 一覧へ戻る
+8. `View Report` で intended な flow を開いていることを再確認
+
+最初から trigger tag、filter、複数 email step、branch を同時に変えない。最初は `1 step 1 field` で change-safe な edit を通す。
+
+## 複雑パターンを足す順
+
+複雑化は、次の順で 1 つずつ足す。
+
+1. `Tag added`
+2. `Filter who can enter`
+3. `Send email` 1 本
+4. 2 通目
+5. `Delay`
+6. `Branch`
+7. `Goal`
+
+最初に `入口条件`, 次に `本文`, その後に `時間差` と `分岐` を足す。`trigger / filter / 複数 email / branch` を同時に触ると、どこで evergreen の意味が崩れたか切れなくなる。
+
+## Journey state を汚さない current rule
+
+- `Journey` の入口条件は `trigger` と `Filter who can enter` で閉じる
+- `Campaign` で使う `saved segment` や単発配信の絞り込み発想を、そのまま `Journey` の入口条件に持ち込まない
+- `Journey` で新規 tag を作る時は、その tag が
+  - 何の event か
+  - downstream で何を起動するか
+  を 1 文で言えない限り作らない
+- `Build from scratch` を押す前に
+  - `evergreen で回す理由`
+  - `trigger tag の意味`
+  - `Filter who can enter の役割`
+  を 1 本で言えないなら止まる
+
 ## current の exact route
 
 - create 入口:
@@ -91,6 +251,16 @@ Addness 固有の naming、current representative、CTA ルールは `Project/3_
   - `/customer-journey/builder?id={journey_id}`
 
 current では、`Build from scratch` を押して trigger 選択に入り始めた時点で draft が作られる前提で扱う。
+
+## 認証フロー
+
+current の Addness では、Mailchimp ログイン時に 2 段階認証が入ることがある。
+
+1. `Send code via SMS`
+2. `Mailchimp認証` の LINE グループでコード確認
+3. `verify` 画面へ入力
+
+`login` を抜けたように見えても `verify` が残っている時は、`Customer Journeys` や builder へ進まない。
 
 ## exact 手順
 
@@ -137,6 +307,32 @@ journey 名クリックで current の builder に入る。
 
 current の builder は step を足し始めると情報量が一気に増える。したがって、先に `trigger / filter / email順` を 1 行で言える状態にしてから本文へ入る。
 
+### `Send Test Emails` を使う exact 順
+
+1. builder 上部の `Send Test Emails`
+2. 対象 step を確認
+3. `Subject line`
+4. `Preview text`
+5. 本文冒頭
+6. main CTA の表示文言
+7. actual hyperlink
+8. short.io の最終遷移先
+
+`Send Test Emails` は、件名や本文を読む前に `actual hyperlink` を潰すために使う。表示文言だけ見て完了にしない。
+
+### email editor で最初に見るラベル
+
+email step に入ったら、まず次のラベルを固定する。
+
+- `Subject line`
+- `Preview text`
+- `From name`
+- `From email address`
+- `Reply to email address`
+- `Send Test Emails`
+
+この 6 つが曖昧なまま本文へ入らない。current では、ここが曖昧だと「本文は作れたが配信として成立しない」事故になりやすい。
+
 ### cleanup
 
 探索目的で draft flow を作っただけなら、一覧へ戻って次で後片付けする。
@@ -152,6 +348,21 @@ current の builder は step を足し始めると情報量が一気に増える
 - journey status が `sending`
 - step status が `active`
 - `queue_count > 0`
+
+## Campaign 的な条件が混ざっていないかを見る順
+
+1. `trigger` が event 起点になっているか
+2. `Filter who can enter` が入口後の絞り込みだけになっているか
+3. `saved segment` 前提の発想で audience を切っていないか
+4. 各 email step の役割が
+   - `本線ストーリー型`
+   - `直オファー型`
+   - `横展開型`
+   - `個別3日間型`
+   のどれかに寄っているか
+5. `Journey` 全体が evergreen の説明になっているか
+
+`今回だけこの人たちに送りたい` が主語に出た時点で、まず `Campaign` を疑う。
 
 ## content を読む時の基本順
 
@@ -227,6 +438,36 @@ current の evergreen は、少なくとも次の 4 型で読む。
 - main CTA はその step の結論になっているか
 - 次の接点へ滑らかに渡っているか
 
+## 最初の複雑パターン
+
+最初に live で詰める複雑パターンは、`trigger + filter + email step 1本` だけで閉じる。
+
+1. `Automations`
+2. `Build from scratch`
+3. `Name flow`
+4. `Audience`
+5. `Choose a trigger`
+6. `Tag added`
+7. `Set a tag`
+8. `Filter who can enter`
+9. `Save Trigger`
+10. `Send email` を 1 本だけ追加
+11. `Subject line`
+12. `Preview text`
+13. `From name`
+14. `From email address`
+15. `Reply to email address`
+16. `Send Test Emails`
+17. actual hyperlink を確認
+18. exploratory なら `Actions -> Delete -> Delete flow`
+
+最初から
+- 2通目
+- `Delay`
+- `Branch`
+- `Goal`
+を同時に足さない。
+
 ## ベストな活用場面
 
 - 同じ教育導線を evergreen で繰り返し流したい時
@@ -249,6 +490,16 @@ current の evergreen は、少なくとも次の 4 型で読む。
 4. trigger tag の意味と downstream の役割を確認する
 5. main CTA の actual hyperlink と final destination を確認する
 
+## current で起きやすいエラー
+
+- `Journey` なのに `Campaign` の発想で `saved segment` を持ち込む
+- trigger tag の意味が曖昧なまま `Tag added` を選ぶ
+- `Send Test Emails` をせずに本文だけ見て完了にする
+- 表示文字列だけ見て、actual hyperlink を click で確認しない
+- exploratory draft を一覧に残す
+
+この 5 つは、current の exact 性を下げる代表エラーとして扱う。
+
 ## 30秒レビューの順番
 
 1. `Automations`
@@ -258,6 +509,18 @@ current の evergreen は、少なくとも次の 4 型で読む。
 5. `Filter who can enter`
 6. email step の順番
 7. main CTA
+
+## sample quality のチェック
+
+`Journey` の live test では、sample や test data の質も見る。
+
+1. trigger に使う tag が intended event を表しているか
+2. audience が current の母集団と一致しているか
+3. `Send Test Emails` の対象で intended な本文と CTA が見えるか
+4. actual hyperlink が intended short.io か
+5. cleanup まで戻せるか
+
+sample が intended event を表していない時は、本文に入らず stop する。
 
 ## 検証
 
@@ -319,12 +582,36 @@ current の evergreen は、少なくとも次の 4 型で読む。
 - trigger tag を新規作成すべきか既存流用すべきか説明できない
 - `copy` 付き flow を current と legacy のどちらで読むか判断できない
 - main CTA を short.io にできない事情がある
+- `Filter who can enter` に単発 campaign の配信条件みたいな発想が入り始めた
 
 ## hyperlink 検証
 
 - 表示文字列ではなく、実際に CTA を押した時の遷移先で判定する
 - Addness の current 標準は `main CTA = short.io`
 - 例外を除き、新規作成時は direct LIFF を標準にしない
+
+## 症状から最初に疑う場所
+
+- flow は作れたが evergreen に見えない
+  - まず trigger tag の意味
+  - 次に `Filter who can enter`
+  - その後に `Journey` ではなく `Campaign` にすべき可能性
+- `open` は出るのに `click` が弱い
+  - まず main CTA の数
+  - 次に actual hyperlink
+  - その後に 1 通目で変えたい認識と CTA の自然さ
+- `click` はあるのに downstream が弱い
+  - まず short.io の最終遷移先
+  - 次に `UTAGE / LINE / 外部ページ` の着地体験
+  - その後に email 本文の約束と landing の一致
+- `copy` 付き flow を見て current か迷う
+  - まず `queue_count`
+  - 次に `sent / open / click`
+  - 名前だけで legacy と決めない
+- trigger は作れたが email step に進むのが不安
+  - まず `main CTA の short.io`
+  - 次に `Subject line / Preview text`
+  - その後に `Send Test Emails` までで閉じる最小構成を疑う
 
 ## NG
 

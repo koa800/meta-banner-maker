@@ -87,6 +87,12 @@ UTAGE の code 領域は、builder だけでは吸収しきれない
 
 通常の見た目調整では、まず `デザイン` と `カスタムCSS` を優先し、`first_view_css` は最後に回す。
 
+## 実装前の最小チェック
+
+- 直したいものが `計測 / redirect / 演出 / page 全体補正 / FV 補正` のどれかに落ちている
+- 対象 page を `LP / thanks / content page / ユーザー登録 page` のどれかに切れている
+- まず visible settings で吸収できない理由を説明できる
+
 ## Workflow
 
 1. 対象 page を `LP / thanks / content page / ユーザー登録` に切る
@@ -201,14 +207,14 @@ UTAGE の code 領域は、builder だけでは吸収しきれない
   を使い分けられる
 - public page で intended な挙動になる
 
-## 保存前後の最小チェックリスト
+## 保存前の最小チェック
 
-保存前
 - 直したいものが `計測 / redirect / 演出 / page全体補正 / FV補正` のどれかに落ちている
 - `LP / thanks / content page / ユーザー登録 page` のどれかを先に固定している
 - `デザイン` と `カスタムCSS` で吸収できない理由を説明できる
 
-保存後
+## 保存後の最小チェック
+
 - 公開ページで実挙動を確認した
 - `runtime snapshot` で intended な field が反映されている
 - `bodyタグの最初に挿入するjs` を触った時は、初回表示で挙動を確認した
@@ -220,6 +226,12 @@ UTAGE の code 領域は、builder だけでは吸収しきれない
 - `js_head` と `js_body_top` のどちらに入れるべきか説明できない
 - 高速表示モードの ON/OFF を変えないと直らないのか、code 修正で直るのか判断できない
 - visible CTA と code による redirect が両方あり、どちらを正にするか決め切れていない
+
+## 完成条件
+
+- 直したい目的から code 領域を先に切れる
+- `js_head / js_body_top / js_body / css / first_view_css` を使い分けられる
+- visible settings と runtime と公開挙動の 3 点で検証できる
 
 ## NG
 
