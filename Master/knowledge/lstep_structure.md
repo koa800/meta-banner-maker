@@ -195,6 +195,35 @@ Lステップでは、次の別パターンも起きる。
 
 Lステップの live exact 作業では、`一覧が見える = 保存もできる` と扱わない。
 
+### template exact 分解 helper
+
+high-quality template を exact に読む時は、一覧を眺めるだけで終わらせない。
+
+- 一覧を取る
+  - `python3 System/scripts/lstep_template_catalog.py list --limit 30`
+- 名前で絞る
+  - `python3 System/scripts/lstep_template_catalog.py list --search "<keyword>" --limit 20`
+- 1件を深掘る
+  - `python3 System/scripts/lstep_template_catalog.py inspect --id <template_id>`
+- 編集画面の visible UI を取る
+  - `python3 System/scripts/lstep_template_snapshot.py --url "<edit_url>"`
+
+最初に見る順は次です。
+
+1. `type`
+2. `name`
+3. `edit_url`
+4. `flex_summary / carousel_summary / pack_summary / content_summary`
+5. `action_type / action_description / action_url`
+
+つまり、`見た目が良い` で止めず、
+
+- 何型か
+- 何を主役にしているか
+- 押した後に何が起きるか
+
+まで 1 本で切る。
+
 ### リッチメニューの 10秒判断
 
 - `リッチメニュー`

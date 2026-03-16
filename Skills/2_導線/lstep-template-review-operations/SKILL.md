@@ -278,6 +278,24 @@ Addness 固有の account、命名規則、current representative は `Master/kn
   - `再現すべき点`
   - `変えるならどこか`
 
+### helper を使う時の順番
+
+live 画面だけでは分解しにくい時は、helper を併用する。
+
+1. `python3 System/scripts/lstep_template_catalog.py list --limit 30`
+2. 対象の `id` と `type` を決める
+3. `python3 System/scripts/lstep_template_catalog.py inspect --id <template_id>`
+4. 必要なら `python3 System/scripts/lstep_template_snapshot.py --url "<edit_url>"`
+
+この順なら、
+
+- 一覧上の種別
+- 中身の block 構成
+- action の実体
+- 編集画面の visible UI
+
+を分けて読める。
+
 ## 症状から最初に疑う場所
 
 - 見た目は整っているのに押されない
