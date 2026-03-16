@@ -364,6 +364,12 @@ UTAGE は `URL を知っている` だけで編集を続けない。login に戻
 current の exploratory probe では、`このファネルを追加する` は UI click より `button.btn-add の form.submit()` が安定した。
 live exact は `python3 System/scripts/utage_funnel_create_delete_probe.py` を正にする。
 
+current の route 読みで重要なのはこれ。
+- `ページ一覧 / 共通設定 / マップ / 数値 / トラッキング` は `funnel_slug`
+- `削除` だけは `numeric_id` の `form.form-delete`
+
+つまり `ページ一覧` を numeric id で決め打ちしない。
+
 ### 役割別の見方
 
 #### `LP`

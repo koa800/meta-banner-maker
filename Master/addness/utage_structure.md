@@ -195,12 +195,14 @@
 ### 構造
 
 - 一覧: `/funnel`
-- ファネル共通設定: `/funnel/{funnel_id}/edit`
-- ページ一覧: `/funnel/{funnel_id}/page`
-- ページ編集: `/funnel/{funnel_id}/page/{page_id}/edit`
-- マップ: `/funnel/{funnel_id}/map`
-- 数値: `/funnel/{funnel_id}/data`, `/data/daily`
-- トラッキング: `/funnel/{funnel_id}/tracking`
+- row action の current route は `slug` を使う
+  - ファネル共通設定: `/funnel/{funnel_slug}/edit`
+  - ページ一覧: `/funnel/{funnel_slug}/page`
+  - ページ編集: `/funnel/{funnel_slug}/page/{page_id}/edit`
+  - マップ: `/funnel/{funnel_slug}/map`
+  - 数値: `/funnel/{funnel_slug}/data`, `/data/daily`
+  - トラッキング: `/funnel/{funnel_slug}/tracking`
+- `削除` だけは row 内 `form.form-delete[action$="/funnel/{numeric_id}"]` の numeric id を使う
 - 登録経路: ページ設定内の `登録経路`
 - `追加` の current 導線:
   - `ファネル -> 追加 -> 空白のファネル -> 詳細 -> このファネルを追加する`
@@ -213,6 +215,10 @@
     - `created_id = 232380`
     - `after_delete_count = 257`
     - `deleted = true`
+  - 追加後の row action 実例:
+    - `ページ一覧`: `https://school.addness.co.jp/funnel/nRZJZcLjW0k6/page`
+    - `共通設定`: `https://school.addness.co.jp/funnel/nRZJZcLjW0k6/edit`
+    - `削除`: `/funnel/232383` の `form.form-delete`
 
 ### current の target group と代表ファネル
 
