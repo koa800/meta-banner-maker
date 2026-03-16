@@ -2,6 +2,13 @@
 
 最終更新: 2026-03-12
 
+## 情報ラベル
+
+- 所有元: internal
+- 開示レベル: task-limited
+- 承認必須: conditional
+- 共有先: 僕 / 上司 / 並列 / 直下
+
 ## 概要
 
 アドネスの集客〜成約までのファネルは、**入口の広告/集客経路**によって複数の導線に分かれるが、最終的には「個別相談 → 成約」に合流する。
@@ -718,6 +725,32 @@ AI Facebookのサンキューメール系 Zap:
   - current main セミナー本線は `l-cast` に直接送り、`@230vpgmc` へ送るのは少なくとも今回確認できた範囲では `アーカイブ企画LINE遷移` 側
   - `UTAGE Meta サンクスページの lp=i0nQbh` と `@230vpgmc` の direct bridge はまだ未確定
   - 少なくとも現在は `main account path` と `企画専用 path` が parallel に存在する
+
+### 2026-03-17追加確認: スキルプラス公式TV 概要欄導線
+
+- YouTube `スキルプラス公式TV` の概要欄用に current 本番導線を追加
+- CTA は `スキルプラスの無料体験会に今すぐ参加する`
+- route 名
+  - `（スキルプラス公式TV）YouTube _スキルプラス_直リストイン`
+- route は `スキルプラス (@496sircr)` に作成
+  - `follow_url`: `https://liff.line.me/2006618892-P3oWzoBb/landing?follow=%40496sircr&lp=GnsXlA&liff_id=2006618892-P3oWzoBb`
+- route action
+  - route tag 追加
+  - `【新規】（スキルプラス公式TV）YouTube _スキルプラス_直リストイン` 追加
+  - 必須 tag 追加
+  - `友だち情報 [新規流入] / [最終流入]` 更新
+  - `メインリッチメニュー（企画専用LINE遷移）に変更`
+  - `無料体験会訴求シナリオ` 開始
+- short.io
+  - folder: `SNS(YT)`
+  - path: `sp013`
+  - title: `（スキルプラス公式TV）YouTube _スキルプラス_直リストイン`
+  - short URL: `https://skill.addness.co.jp/sp013`
+- 管理シート
+  - `01_全体台帳` row `453`
+  - `YouTube` row `20`
+- 既知の差分
+  - 既存 family にある `友だち情報 [新規流入日] = action_date` 更新は current API で 422 になり、今回の route には未設定
 
 ### 2026-03-09追加確認: Mailchimp active queue 基準の現役主線
 

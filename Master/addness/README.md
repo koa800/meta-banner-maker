@@ -1,9 +1,33 @@
 # addness レイヤー
 
-最終更新: 2026-03-16
+最終更新: 2026-03-17
+
+## 情報ラベル
+
+- 所有元: internal
+- 開示レベル: task-limited
+- 承認必須: conditional
+- 共有先: 僕 / 上司 / 並列 / 直下
 
 `Master/addness/` は、Addness の current な導線運用を揃えるための正本です。
 ここでは `構造理解` ではなく、`迷わず実装できるか` を基準に扱います。
+
+## 情報ラベルの既定値
+
+- `構造 / UI操作 / 運用手順` 系
+  - 例: `utage_structure.md`, `funnel_structure.md`, `ui_operations.md`, `zapier_structure.md`
+  - 所有元: `internal`
+  - 開示レベル: `task-limited`
+  - 承認必須: `conditional`
+  - 共有先: `僕 / 上司 / 並列 / 直下`
+- `ダッシュボード / ゴール / 実行タスク / 分析` 系
+  - 例: `goal-tree.md`, `actionable-tasks.md`, `meta_ads_cr_dashboard.md`, `market_trends.md`
+  - 所有元: `internal`
+  - 開示レベル: `role-limited`
+  - 承認必須: `conditional`
+  - 共有先: `僕 / 上司 / 並列`
+
+ファイルに個別ラベルがある場合は、上の既定値より個別ラベルを優先する。
 
 ## 目的
 
@@ -51,6 +75,21 @@
   - `作成 -> テスト送信 -> 削除`
 - `テスト送信先`
   - 常に `甲原 海人`
+- 実案件
+  - `スキルプラス公式TV` 概要欄用に
+    - `（スキルプラス公式TV）YouTube _スキルプラス_直リストイン`
+    - `https://skill.addness.co.jp/sp013`
+    を current 本番として作成済み
+  - route では
+    - route tag
+    - `【新規】...`
+    - 必須 tag
+    - `友だち情報 [新規流入] / [最終流入]`
+    - `メインリッチメニュー（企画専用LINE遷移）`
+    - `無料体験会訴求シナリオ`
+    を設定
+  - 既知の差分
+    - 既存 family にある `友だち情報 [新規流入日] = action_date` は current API で 422 になり、今回の route には未設定
 
 ### UTAGE
 
