@@ -14,8 +14,8 @@
 
 - Lステップ: `9.8 / 10`
 - UTAGE: `9.5 / 10`
-- Mailchimp: `9.6 / 10`
-- short.io: `9.8 / 10`
+- Mailchimp: `9.4 / 10`
+- short.io: `9.5 / 10`
 - Zapier: `9.1 / 10`
 
 ## live 開始前チェック
@@ -31,13 +31,13 @@
 
 ## 最新 readiness snapshot
 
-- CDP: `false`
+- CDP: `true`
 - Lステップ auth: `true`
 - Lステップ account: `koa800sea`
 - Mailchimp API: `true`
 - short.io API: `true`
-- UTAGE live browser: `false`
-- Zapier live browser: `false`
+- UTAGE live browser: `true`
+- Zapier live browser: `true`
 
 ## 実際に触って確認できている範囲
 
@@ -72,6 +72,8 @@
   - draft 作成 / 削除
 - `Journey`
   - `Build from scratch -> Name flow -> Audience -> trigger`
+  - `python3 System/scripts/mailchimp_journey_snapshot.py --list-current --count 20`
+    で current email step matrix を再取得できる
 - `report`
   - `Recipients -> Open rate -> Click rate -> click-details -> downstream`
 - `saved segment 1件`
@@ -95,6 +97,16 @@
 - representative relay の editor / step 読解
 - `Webhooks by Zapier / Catch Hook -> Mailchimp / Add/Update Subscriber`
   family の exact 読解
+- current family snapshot
+  - `WebHookCLIAPI@1.1.1:hook_v2 -> MailchimpCLIAPI@1.15.1:memberCreate`
+    - `21本`
+    - current の主 family
+  - `GoogleSheetsV2CLIAPI@2.9.1:updated_row_notify_hook -> WebHookCLIAPI@1.1.1:post`
+    - `3本`
+    - SMS relay family
+  - `WebHookCLIAPI@1.0.29:hook_v2 -> MailchimpCLIAPI@1.15.1:memberCreate`
+    - `1本`
+    - old webhook family
 
 ## live coverage matrix
 
@@ -142,6 +154,8 @@
 ### Zapier
 
 - `Create Zap -> Test -> Publish or Delete Zap` の実作成本数を増やす
+- dominant family は `Webhook -> Mailchimp Add/Update Subscriber`
+  なので、最初の live exact はこの family を優先する
 
 ## 10点までの最短ルート
 
