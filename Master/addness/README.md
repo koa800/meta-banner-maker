@@ -15,7 +15,7 @@
 - Lステップ: `9.8 / 10`
 - UTAGE: `9.5 / 10`
 - Mailchimp: `9.6 / 10`
-- short.io: `9.5 / 10`
+- short.io: `9.8 / 10`
 - Zapier: `9.1 / 10`
 
 ## live 開始前チェック
@@ -86,7 +86,8 @@
 
 ### short.io
 
-- テスト短縮URLの作成 / 編集 / 統計確認 / API確認 / URL管理シート同期
+- テスト短縮URLの作成 / resolve / 編集 / resolve / 削除
+- API確認 / URL管理シート同期
 
 ### Zapier
 
@@ -112,7 +113,7 @@
 | Mailchimp | Journey | trigger 入口まで済み | 1本 create -> Send Test Emails -> cleanup |
 | Mailchimp | tag / saved segment | saved segment の create / delete、tag-search、search-members、safe exploratory member で tag 1件 add -> rollback 済み | UI 側の tag 1件 create -> rollback |
 | Mailchimp | report | representative 読解済み | actual case を増やす |
-| short.io | short link / edit / stats / sheet sync | live 実施済み | 実案件 end-to-end を増やす |
+| short.io | short link / create / resolve / update / delete / stats / sheet sync | live 実施済み | 実案件 end-to-end を増やす |
 | Zapier | representative relay 読解 | editor / step 読解済み | 1本 create -> test -> delete |
 
 ## いま重要な残差

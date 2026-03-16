@@ -151,13 +151,20 @@ def load_api_key(path: Path) -> str:
     return api_key
 
 
-def request_json(url: str, api_key: str) -> dict:
+def request_json(url: str, api_key: str, method: str = "GET", payload: dict | None = None) -> dict:
+    data = None
+    headers = {
+        "Authorization": api_key,
+        "Accept": "application/json",
+    }
+    if payload is not None:
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json"
     req = urllib.request.Request(
         url,
-        headers={
-            "Authorization": api_key,
-            "Accept": "application/json",
-        },
+        headers=headers,
+        method=method,
+        data=data,
     )
     ctx = ssl.create_default_context()
     with urllib.request.urlopen(req, context=ctx, timeout=30) as response:
@@ -305,6 +312,42 @@ def cmd_link_stats(args: argparse.Namespace) -> None:
         f"?{urllib.parse.urlencode(params)}"
     )
     print_json(request_json(url, api_key))
+
+
+def cmd_create_link(args: argparse.Namespace) -> None:
+    api_key = load_api_key(Path(args.credentials))
+    payload = {
+        "domain": args.domain,
+        "originalURL": args.original_url,
+    }
+    if args.path:
+        payload["path"] = args.path
+    if args.title:
+        payload["title"] = args.title
+    if args.folder_id:
+        payload["folderId"] = args.folder_id
+    print_json(request_json("https://api.short.io/links", api_key, method="POST", payload=payload))
+
+
+def cmd_update_link(args: argparse.Namespace) -> None:
+    api_key = load_api_key(Path(args.credentials))
+    payload: dict[str, object] = {}
+    if args.original_url:
+        payload["originalURL"] = args.original_url
+    if args.path:
+        payload["path"] = args.path
+    if args.title:
+        payload["title"] = args.title
+    if args.folder_id:
+        payload["folderId"] = args.folder_id
+    if not payload:
+        raise SystemExit("update する項目が必要です")
+    print_json(request_json(f"https://api.short.io/links/{args.link_id}", api_key, method="POST", payload=payload))
+
+
+def cmd_delete_link(args: argparse.Namespace) -> None:
+    api_key = load_api_key(Path(args.credentials))
+    print_json(request_json(f"https://api.short.io/links/{args.link_id}", api_key, method="DELETE"))
 
 
 def cmd_resolve(args: argparse.Namespace) -> None:
@@ -1025,6 +1068,26 @@ def build_parser() -> argparse.ArgumentParser:
     link_stats.add_argument("--period", default="last30", help="last30 / total など")
     link_stats.add_argument("--tz-offset", type=int, default=DEFAULT_TZ_OFFSET)
     link_stats.set_defaults(func=cmd_link_stats)
+
+    create_link = subparsers.add_parser("create-link", help="短縮リンクを1本作成する")
+    create_link.add_argument("--domain", default="skill.addness.co.jp")
+    create_link.add_argument("--original-url", required=True)
+    create_link.add_argument("--path")
+    create_link.add_argument("--title")
+    create_link.add_argument("--folder-id")
+    create_link.set_defaults(func=cmd_create_link)
+
+    update_link = subparsers.add_parser("update-link", help="既存短縮リンクを更新する")
+    update_link.add_argument("link_id", help="lnk_... の link id")
+    update_link.add_argument("--original-url")
+    update_link.add_argument("--path")
+    update_link.add_argument("--title")
+    update_link.add_argument("--folder-id")
+    update_link.set_defaults(func=cmd_update_link)
+
+    delete_link = subparsers.add_parser("delete-link", help="既存短縮リンクを削除する")
+    delete_link.add_argument("link_id", help="lnk_... の link id")
+    delete_link.set_defaults(func=cmd_delete_link)
 
     resolve = subparsers.add_parser("resolve", help="shortURL から exact な実体を引く")
     resolve.add_argument("short_url", help="https://skill.addness.co.jp/... の短縮URL")

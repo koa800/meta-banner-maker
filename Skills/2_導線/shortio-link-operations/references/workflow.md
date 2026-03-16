@@ -262,6 +262,30 @@ dashboard の current 実例として、次が見えている。
 - 後で分けて見たくなる要件がない
 - 誰が見ても同じ意味に解釈できる
 
+## live exact 補助経路
+
+- create:
+  - `python3 System/scripts/shortio_api_client.py create-link --original-url "<url>" --path "<slug>" --title "<title>"`
+- resolve:
+  - `python3 System/scripts/shortio_api_client.py resolve "https://skill.addness.co.jp/<slug>"`
+- update:
+  - `python3 System/scripts/shortio_api_client.py update-link "<link_id>" --original-url "<url>" --title "<title>"`
+- delete:
+  - `python3 System/scripts/shortio_api_client.py delete-link "<link_id>"`
+
+### 2026-03-16 の live exact
+
+- exploratory link:
+  - `https://skill.addness.co.jp/zz-test-20260316-shortio`
+- 通した順:
+  - create
+  - resolve
+  - update
+  - resolve
+  - delete
+- cleanup:
+  - resolve で一致 link が見つからないことまで確認済み
+
 ## 動画から固定するルール
 
 ### 1. 作成前
