@@ -276,6 +276,7 @@ Addness 固有の current 例、代表 tag、配信実績のある segment は `
 - helper: `python3 System/scripts/mailchimp_segment_helper.py create-static-empty --name ZZ_TEST_SEGMENT_...`
 - rollback: `python3 System/scripts/mailchimp_segment_helper.py delete --id <segment_id>`
 - これは API 側の create / delete exact 性を確認する補助経路で、UI 上の `Campaign Manager -> Segment or Tag -> Create segment` を置き換えるものではない
+- 2026-03-16 は `zz_test_segment_20260316_exact` を create し、`id=4641613` を delete して `status_code=204` まで確認済み
 
 #### `tag` の補助経路
 
@@ -288,7 +289,7 @@ Addness 固有の current 例、代表 tag、配信実績のある segment は `
   - `koa800sea.nifs+1006@gmail.com`
   - `status=pending`
   - `tags_count=0`
-  - この member で `add-tag -> member確認 -> remove-tag -> member確認` まで通した
+  - この member で `zz_test_tag_20260316_exact` を `add-tag -> member確認(tags_count=1) -> remove-tag -> member確認(tags_count=0)` まで通した
 - safe test member がある時だけ:
   - add:
     - `python3 System/scripts/mailchimp_tag_helper.py add-tag --email <safe_test_member> --tag zz_test_xxx`

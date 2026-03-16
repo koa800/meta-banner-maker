@@ -134,6 +134,8 @@
 - 数値: `/funnel/{funnel_id}/data`, `/data/daily`
 - トラッキング: `/funnel/{funnel_id}/tracking`
 - 登録経路: ページ設定内の `登録経路`
+- `追加` の current 導線:
+  - `ファネル -> 追加 -> 空白のファネル -> 詳細 -> このファネルを追加する`
 
 ### current の target group と代表ファネル
 
