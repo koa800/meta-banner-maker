@@ -5,16 +5,19 @@ import argparse
 import html
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
 import browser_cookie3
 import requests
 from bs4 import BeautifulSoup
+from requests.cookies import RequestsCookieJar, create_cookie
 
 BASE_URL = "https://manager.linestep.net"
 LOGIN_URL = f"{BASE_URL}/account/login"
 DEFAULT_PROBE_URL = f"{BASE_URL}/api/actions?page=1"
+DEFAULT_CDP_HTTP_URL = "http://127.0.0.1:9224"
 DEFAULT_CDP_URL = "http://127.0.0.1:9224/json/version"
 
 
@@ -26,6 +29,11 @@ def normalize_text(value: str, limit: int = 160) -> str:
 def cookie_sources() -> list[dict[str, Any]]:
     home = Path.home()
     return [
+        {
+            "label": "chrome_cdp_live",
+            "kind": "cdp",
+            "cdp_url": DEFAULT_CDP_HTTP_URL,
+        },
         {
             "label": "chrome_auto",
             "kind": "auto",
@@ -48,7 +56,75 @@ def cookie_sources() -> list[dict[str, Any]]:
     ]
 
 
+def load_cdp_cookie_jar(cdp_url: str) -> RequestsCookieJar:
+    node_script = r"""
+const http = require('http');
+const cdpUrl = process.argv[1];
+async function fetchVersion(url) {
+  return await new Promise((resolve, reject) => {
+    http.get(url.replace(/\/$/, '') + '/json/version', (res) => {
+      let data = '';
+      res.on('data', (chunk) => data += chunk);
+      res.on('end', () => resolve(JSON.parse(data)));
+    }).on('error', reject);
+  });
+}
+(async () => {
+  const version = await fetchVersion(cdpUrl);
+  const ws = new WebSocket(version.webSocketDebuggerUrl);
+  ws.onopen = () => ws.send(JSON.stringify({id: 1, method: 'Storage.getCookies'}));
+  ws.onmessage = (event) => {
+    const payload = JSON.parse(event.data);
+    if (payload.id !== 1) return;
+    process.stdout.write(JSON.stringify(payload.result.cookies || []));
+    ws.close();
+  };
+  ws.onerror = (event) => {
+    const message = event && event.message ? event.message : 'CDP websocket error';
+    console.error(message);
+    process.exit(1);
+  };
+  ws.onclose = () => process.exit(0);
+})().catch((error) => {
+  console.error(String(error && error.message ? error.message : error));
+  process.exit(1);
+});
+"""
+    try:
+        result = subprocess.run(
+            ["node", "-e", node_script, cdp_url],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=20,
+        )
+        raw_cookies = json.loads(result.stdout or "[]")
+    except Exception as exc:
+        raise RuntimeError(f"CDP cookie 取得に失敗しました: {exc}") from exc
+
+    jar = RequestsCookieJar()
+    for item in raw_cookies:
+        domain = str(item.get("domain") or "")
+        if "manager.linestep.net" not in domain:
+            continue
+        cookie = create_cookie(
+            name=str(item.get("name") or ""),
+            value=str(item.get("value") or ""),
+            domain=domain,
+            path=str(item.get("path") or "/"),
+            secure=bool(item.get("secure")),
+            expires=item.get("expires"),
+        )
+        jar.set_cookie(cookie)
+
+    if not jar:
+        raise RuntimeError("CDP cookie 取得結果が空でした")
+    return jar
+
+
 def load_cookie_jar(source: dict[str, Any]):
+    if source.get("kind") == "cdp":
+        return load_cdp_cookie_jar(str(source.get("cdp_url") or DEFAULT_CDP_HTTP_URL))
     if source.get("kind") == "auto":
         return browser_cookie3.chrome(domain_name="manager.linestep.net")
     path = source.get("path")

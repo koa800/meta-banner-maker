@@ -106,54 +106,59 @@ def ensure_login(target_url: str) -> int:
         browser = p.chromium.connect_over_cdp(CDP_URL)
         context = browser.contexts[0]
         page = context.new_page()
+        try:
+            page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
+            time.sleep(2)
+            if is_logged_in(page):
+                print("ALREADY_LOGGED_IN", flush=True)
+                print(page.url, flush=True)
+                return 0
 
-        page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
-        time.sleep(2)
-        if is_logged_in(page):
-            print("ALREADY_LOGGED_IN")
-            print(page.url)
-            return 0
+            page.goto(creds["login_url"], wait_until="domcontentloaded", timeout=60000)
+            time.sleep(2)
 
-        page.goto(creds["login_url"], wait_until="domcontentloaded", timeout=60000)
-        time.sleep(2)
+            user_filled = fill_first(
+                page,
+                ['input[name="name"]', 'input[name="account_name"]', '#input_name', 'input[type="text"]'],
+                creds["user_id"],
+            )
+            password_filled = fill_first(
+                page,
+                ['input[name="password"]', '#input_password', 'input[type="password"]'],
+                creds["password"],
+            )
+            print(f"USER_FILLED={user_filled}", flush=True)
+            print(f"PASSWORD_FILLED={password_filled}", flush=True)
 
-        user_filled = fill_first(
-            page,
-            ['input[name="name"]', 'input[name="account_name"]', '#input_name', 'input[type="text"]'],
-            creds["user_id"],
-        )
-        password_filled = fill_first(
-            page,
-            ['input[name="password"]', '#input_password', 'input[type="password"]'],
-            creds["password"],
-        )
-        print(f"USER_FILLED={user_filled}")
-        print(f"PASSWORD_FILLED={password_filled}")
-
-        activated = activate_and_place_chrome()
-        print(f"CHROME_ACTIVATED={activated}")
-        time.sleep(1)
-        clicked = try_click_checkbox(page)
-        print(f"CAPTCHA_CLICK_ATTEMPTED={clicked}")
-
-        for _ in range(12):
-            buttons = page.locator("button")
-            for i in range(buttons.count()):
-                text = (buttons.nth(i).inner_text() or "").strip()
-                if text == "ログイン" and buttons.nth(i).is_enabled():
-                    buttons.nth(i).click()
-                    time.sleep(5)
-                    page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
-                    time.sleep(2)
-                    if is_logged_in(page):
-                        print("LOGIN_SUCCESS")
-                        print(page.url)
-                        return 0
+            activated = activate_and_place_chrome()
+            print(f"CHROME_ACTIVATED={activated}", flush=True)
             time.sleep(1)
+            clicked = try_click_checkbox(page)
+            print(f"CAPTCHA_CLICK_ATTEMPTED={clicked}", flush=True)
 
-        print("LOGIN_NEEDS_MANUAL_CONFIRM")
-        print(page.url)
-        return 1
+            for _ in range(12):
+                buttons = page.locator("button")
+                for i in range(buttons.count()):
+                    text = (buttons.nth(i).inner_text() or "").strip()
+                    if text == "ログイン" and buttons.nth(i).is_enabled():
+                        buttons.nth(i).click()
+                        time.sleep(5)
+                        page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
+                        time.sleep(2)
+                        if is_logged_in(page):
+                            print("LOGIN_SUCCESS", flush=True)
+                            print(page.url, flush=True)
+                            return 0
+                time.sleep(1)
+
+            print("LOGIN_NEEDS_MANUAL_CONFIRM", flush=True)
+            print(page.url, flush=True)
+            return 1
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
 
 
 def main() -> int:
