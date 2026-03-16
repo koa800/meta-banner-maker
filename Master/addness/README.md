@@ -16,7 +16,7 @@
 - UTAGE: `9.7 / 10`
 - Mailchimp: `9.4 / 10`
 - short.io: `9.5 / 10`
-- Zapier: `9.3 / 10`
+- Zapier: `9.4 / 10`
 
 ## live 開始前チェック
 
@@ -156,7 +156,7 @@
 | Mailchimp | tag / saved segment | saved segment の create / delete、tag-search、search-members、safe exploratory member で tag 1件 add -> rollback 済み | UI 側の tag 1件 create -> rollback |  
 | Mailchimp | report | representative 読解済み | actual case を増やす |
 | short.io | short link / create / resolve / update / delete / stats / sheet sync | live 実施済み | 実案件 end-to-end を増やす |
-| Zapier | representative relay 読解 | editor / step 読解済み、`Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Mailchimp > Add/Update Subscriber -> Delete Zap` まで exploratory 済み | 1本 create -> test -> delete |
+| Zapier | representative relay 読解 | editor / step 読解済み、`Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap` まで exploratory 済み | 1本 create -> test -> delete |
 
 ### current live blocker
 
@@ -164,8 +164,9 @@
   - `python3 System/scripts/mailchimp_journey_create_delete_probe.py` は current で `LOGIN_NEEDS_TFA`
   - つまり browser 側の exact 化は、2段階認証を通した session がある時だけ進める
 - Zapier
-  - `python3 System/scripts/zapier_create_delete_probe.py --with-action` は current で `persisted draft が assets 一覧に現れない` 回がある
-  - つまり `Create Zap` 後の persisted 判定は、timing と assets 一覧文脈に依存する前提で扱う
+  - `python3 System/scripts/zapier_create_delete_probe.py --with-action` は current で `Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap` まで通った
+  - exploratory draft の cleanup は `python3 System/scripts/zapier_cleanup_untitled.py` で `after_count=0` まで戻せる
+  - つまり current の残差は `Publish 前提の smoke` と representative family の追加で、create/cleanup 自体はかなり exact になった
 
 ## いま重要な残差
 
@@ -195,8 +196,9 @@
 - `Create Zap -> Test -> Publish or Delete Zap` の実作成本数を増やす
 - `Create Zap` を開いただけでは assets 一覧に `Untitled Zap` が出ない current 挙動を確認済み
 - `Trigger > Webhooks by Zapier > Catch Hook` まで選ぶと assets 一覧に `Untitled Zap` が persisted するところまで確認済み
-- persisted 済み draft は `assets 一覧 row action Delete -> Delete` で `0件` まで cleanup 済み
-- つまり残差は `trigger を 1 つ選んで draft を persisted 状態にする` ところからの `action test` と downstream smoke
+- `Action > Mailchimp > Add/Update Subscriber` まで選ぶと `Test` stage まで進めるところも確認済み
+- persisted 済み draft は `assets 一覧 row action Delete -> Delete` か `python3 System/scripts/zapier_cleanup_untitled.py` で `0件` まで cleanup 済み
+- つまり残差は `downstream smoke` と representative family の追加
 - dominant family は `Webhook -> Mailchimp Add/Update Subscriber`
   なので、最初の live exact はこの family を優先する
 
