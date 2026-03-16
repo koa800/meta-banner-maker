@@ -8,8 +8,6 @@ from pathlib import Path
 from typing import Any
 import warnings
 
-import requests
-
 try:
     from urllib3.exceptions import NotOpenSSLWarning
 except Exception:  # pragma: no cover
@@ -17,6 +15,8 @@ except Exception:  # pragma: no cover
 
 if NotOpenSSLWarning is not None:
     warnings.filterwarnings("ignore", category=NotOpenSSLWarning)
+
+import requests
 
 from lstep_auth import auth_probe as lstep_auth_probe
 from mailchimp_journey_snapshot import build_session as build_mailchimp_session
