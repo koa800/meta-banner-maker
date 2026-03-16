@@ -1,0 +1,4 @@
+interface:
+  display_name: "受講生質問回答"
+  short_description: "受講生の質問の裏目的を読み取り、次にやることが分かる返信へ落とす"
+  default_prompt: "受講生からの質問に対して、相手が次にやることが分かる回答案を作って"

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Metaアカウントエラー対応"
+  short_description: "Meta広告の却下・制限・停止時に原因を切り分けて次の一手を決める"
+  default_prompt: "Meta広告アカウントエラーの対応を整理して、相手が今やることが分かる回答を作って"

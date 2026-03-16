@@ -25,6 +25,20 @@ DOCS_TO_SYNC = [
 
 SKILLS_DIR = Path(__file__).parent.parent / "line_bot" / "skills"
 LOCAL_SKILLS_DIR = Path(__file__).parent.parent.parent / "Skills"
+STRUCTURED_SKILLS_TO_SYNC = [
+    {
+        "output_name": "受講生質問回答ルール",
+        "parts": [
+            Path("4_CS") / "student-question-answering" / "references" / "workflow.md",
+        ],
+    },
+    {
+        "output_name": "Meta広告アカウントエラー対応",
+        "parts": [
+            Path("1_広告") / "meta-ad-account-error-operations" / "references" / "workflow.md",
+        ],
+    },
+]
 # 状態ファイル（コードと分離 — rsync --delete でも消えない場所に配置）
 _STATE_DIR = Path.home() / "agents" / "data"
 _STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -149,13 +163,31 @@ def sync_local_skills():
     
     if not SKILLS_DIR.exists():
         SKILLS_DIR.mkdir(parents=True, exist_ok=True)
-    
+
+    synced_count = 0
     for skill_file in LOCAL_SKILLS_DIR.glob("*.md"):
         dest_file = SKILLS_DIR / skill_file.name
         content = skill_file.read_text(encoding="utf-8")
         dest_file.write_text(content, encoding="utf-8")
-    
-    print(f"📚 {len(list(LOCAL_SKILLS_DIR.glob('*.md')))} 件のSkillsを同期しました")
+        synced_count += 1
+
+    for skill_config in STRUCTURED_SKILLS_TO_SYNC:
+        parts = []
+        for relative_path in skill_config["parts"]:
+            source_file = LOCAL_SKILLS_DIR / relative_path
+            if not source_file.exists():
+                print(f"⚠️ structured skill が見つかりません: {relative_path}")
+                continue
+            parts.append(source_file.read_text(encoding="utf-8").strip())
+
+        if not parts:
+            continue
+
+        dest_file = SKILLS_DIR / f"{skill_config['output_name']}.md"
+        dest_file.write_text("\n\n".join(parts).strip() + "\n", encoding="utf-8")
+        synced_count += 1
+
+    print(f"📚 {synced_count} 件のSkillsを同期しました")
 
 
 if __name__ == "__main__":
