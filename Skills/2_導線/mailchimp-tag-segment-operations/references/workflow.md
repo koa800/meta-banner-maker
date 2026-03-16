@@ -36,6 +36,17 @@
 - `Campaign` は 1回きりの segment 配信用
 - したがって `tag` は state を持たせるため、`saved segment` は配信母集団を切るために使い分ける
 
+## 役割分離の最小型
+
+- `tag`
+  - evergreen の state
+  - `Journey` の入口や downstream state
+- `saved segment`
+  - 今回だけ送る母集団
+  - `Campaign` の対象条件
+
+`今回だけ送る母集団` を `tag` で残しそうになったら、一度止まる。
+
 ## 30秒レビューの順番
 
 1. `Journey` か `Campaign` かを切る
@@ -50,3 +61,44 @@
 - evergreen の入口条件なら、まず `tag`
 - 単発配信の対象条件なら、まず `saved segment`
 - `日本語でしか意味が保てない` と感じたら、その時点で名前の切り方を見直す
+
+## 保存前の最小チェック
+
+- `Journey` 用か `Campaign` 用か切れている
+- `tag` で持たせたい state を 1 文で言える
+- `saved segment` で切りたい母集団を 1 文で言える
+- 英語命名で意味が残るか確認している
+
+## 保存後の最小チェック
+
+- `tag` なら trigger 条件として読める
+- `saved segment` なら `誰に送るか / 誰を除外するか` が一覧で言える
+- current の `media_funnel_event` 命名から外れていない
+- `tag` と `saved segment` の役割が逆転していない
+
+## 補助 helper
+
+- saved segment create:
+  - `python3 System/scripts/mailchimp_segment_helper.py create-static-empty --name ZZ_TEST_SEGMENT_...`
+- saved segment delete:
+  - `python3 System/scripts/mailchimp_segment_helper.py delete --id <segment_id>`
+- tag list:
+  - `python3 System/scripts/mailchimp_tag_helper.py list-tags --limit 10`
+- safe test member がある時だけ tag add / remove:
+  - `python3 System/scripts/mailchimp_tag_helper.py add-tag --email <safe_test_member> --tag zz_test_xxx`
+  - `python3 System/scripts/mailchimp_tag_helper.py remove-tag --email <safe_test_member> --tag zz_test_xxx`
+
+## ここで止めて確認する条件
+
+- `tag` と `saved segment` のどちらで切るべきか曖昧
+- 日本語名の方が自然に見えるが、英語へ落とした時に意味が崩れる
+- 既存 current naming と衝突しそう
+- 一時的な配信条件を `tag` で恒久 state 化しそう
+
+## 完成条件
+
+- `Journey` 用か `Campaign` 用かを最初に切れている
+- `tag` で持たせたい state か、`saved segment` で切りたい母集団かを説明できる
+- 英語命名で意味が保たれている
+- 既存 current naming と衝突しない
+- 保存後に trigger 条件または配信母集団として正しく読める

@@ -88,7 +88,7 @@
 | UTAGE | 動画管理 / メディア管理 | representative 読解済み | small change -> smoke |
 | Mailchimp | Campaign | draft create / delete 済み | representative を増やす |
 | Mailchimp | Journey | trigger 入口まで済み | 1本 create -> Send Test Emails -> cleanup |
-| Mailchimp | tag / saved segment | saved segment の create / delete 済み | tag 1件 create -> rollback |
+| Mailchimp | tag / saved segment | saved segment の create / delete、tag-search の一覧読解 済み | safe test member で tag 1件 create -> rollback |
 | Mailchimp | report | representative 読解済み | actual case を増やす |
 | short.io | short link / edit / stats / sheet sync | live 実施済み | 実案件 end-to-end を増やす |
 | Zapier | representative relay 読解 | editor / step 読解済み | 1本 create -> test -> delete |
@@ -125,6 +125,7 @@
   - `Journey` の `Build from scratch -> Name flow -> Audience -> trigger`
   - `report` の漏斗確認
   - `saved segment 1件` の create / delete
+  - `tag-search` の一覧読解
 - `short.io`
   - テスト短縮URLの作成 / 編集 / 統計確認 / API 確認 / URL管理シート同期
 - `Zapier`
@@ -139,6 +140,7 @@
 - `Mailchimp`
   - `Journey 1本` の create -> test -> cleanup
   - `saved segment` の create / delete は実施済み
+  - `tag-search` の一覧読解は実施済み
   - `tag 1件` の create -> rollback
 - `Zapier`
   - `Create Zap -> Test -> Delete Zap` の live 実作成

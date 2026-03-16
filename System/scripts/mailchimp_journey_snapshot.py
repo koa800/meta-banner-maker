@@ -7,6 +7,15 @@ import argparse
 import json
 from pathlib import Path
 from typing import Any
+import warnings
+
+try:
+    from urllib3.exceptions import NotOpenSSLWarning
+except Exception:  # pragma: no cover
+    NotOpenSSLWarning = None
+
+if NotOpenSSLWarning is not None:
+    warnings.filterwarnings("ignore", category=NotOpenSSLWarning)
 
 import requests
 
