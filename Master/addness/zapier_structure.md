@@ -121,7 +121,9 @@
   - `Add account to continue`
   が visible
 - `zapier_create_delete_probe.py` は current で raw fallback を持つ
-- ただし raw fallback は `Trigger` 入口までは押せても、current の builder では `app search` を開けない回がある
+- 2026-03-17 の current では raw fallback で `step-node` の親要素を押す必要があることまで特定した
+- この修正で `Search apps` input が visible になるところまでは raw で再現できた
+- ただし persisted draft の判定は timing と assets 一覧文脈の影響を受ける回があり、raw fallback だけでは毎回 `Untitled Zap` row を拾い切れない
 - したがって current の create probe は `Playwright.connect_over_cdp` が通る回を優先し、raw fallback は補助とみなす
 - つまり second action の残差は、Mailchimp account を current Zapier account 文脈で選べないこと
 - current owner 表示は `【世捨人東大生】 ぜんT (Personal)`

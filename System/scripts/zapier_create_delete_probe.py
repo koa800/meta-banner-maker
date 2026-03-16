@@ -101,9 +101,23 @@ def _open_create_target_raw() -> str:
 
 
 def _choose_webhook_trigger_raw(target_id: str) -> None:
-    if not click_first(
+    opened = bool(
+        eval_target(
+            target_id,
+            """(() => {
+              const node =
+                document.querySelector('[data-testid="step-node-1"][role="button"]') ||
+                document.querySelector('[data-testid^="step-node-"][role="button"]');
+              if (!node) return false;
+              node.click();
+              node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+              return true;
+            })()""",
+        )
+    )
+    if not opened and not click_first(
         target_id,
-        selectors=["button", "div[role='button']", "[data-testid*='trigger']"],
+        selectors=["[data-testid='step-node-1'][role='button']", "[data-testid^='step-node-'][role='button']", "button", "div[role='button']", "[data-testid*='trigger']"],
         text_candidates=["Select the event that starts your Zap", "Trigger"],
     ):
         raise RuntimeError("raw fallback で Trigger 入口を押せませんでした")
@@ -150,10 +164,26 @@ def _try_choose_mailchimp_action_raw(target_id: str) -> dict[str, Any]:
         "action_selected": False,
         "post_action_stage": None,
     }
-    if not click_first(
+    opened = bool(
+        eval_target(
+            target_id,
+            """(() => {
+              const nodes = Array.from(document.querySelectorAll('[data-testid^="step-node-"][role="button"]'));
+              const node =
+                nodes.find((el) => (el.innerText || '').includes('Select the event for your Zap to run')) ||
+                nodes[1] ||
+                null;
+              if (!node) return false;
+              node.click();
+              node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+              return true;
+            })()""",
+        )
+    )
+    if not opened and not click_first(
         target_id,
-        selectors=["button", "div[role='button']", "div"],
-        text_candidates=["Add a step", "Action"],
+        selectors=["[data-testid^='step-node-'][role='button']", "button", "div[role='button']", "div"],
+        text_candidates=["Add a step", "Action", "Select the event for your Zap to run"],
     ):
         return result
     time.sleep(1.5)

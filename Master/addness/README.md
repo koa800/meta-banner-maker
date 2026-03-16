@@ -80,6 +80,8 @@
 - 2026-03-17 の current では browser 上で `Success! Your SMS verification code is on its way! Check your phone to catch it!` まで確認した
   - それでも helper は `found=false` だった
   - つまり current blocker は `SMS送信` ではなく `today の LINE group-log 取得`
+  - さらに `api/group-log?date=2026-03-17` を直接叩くと `groups=0` を返した
+  - つまり `Mailchimp認証` グループだけの問題ではなく、today の group-log 全体が空だった
 - `mailchimp_tfa_code_helper.py` は current で
   - `Mailchimp認証` グループ優先
   - known `group_id = Ce2900a5b8c1efb939b3778262f1a9808` も優先
@@ -382,7 +384,9 @@
   - `python3 System/scripts/zapier_create_delete_probe.py --with-action` は current で `Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap` まで通った
   - exploratory draft の cleanup は `python3 System/scripts/zapier_cleanup_untitled.py` で `after_count=0` まで戻せる
   - `zapier_create_delete_probe.py` は current で raw fallback を持つ
-  - ただし raw fallback は `Trigger` 入口までは押せても `app search` を開けない回がある
+  - 2026-03-17 の current では raw fallback で `step-node` の親要素を押す必要があることまで特定した
+  - この修正で `Search apps` input が visible になるところまでは raw で再現できた
+  - 一方で persisted draft の判定は timing と assets 一覧文脈の影響を受ける回があり、raw fallback だけでは毎回 `Untitled Zap` row を拾い切れない
   - つまり Zapier の create probe は current では `Playwright.connect_over_cdp が生きている回` を優先し、raw fallback は補助扱いにする
   - `python3 System/scripts/zapier_create_delete_probe.py --with-action --with-second-action` は cleanup まで通るが、`second_action_selected = false`
   - first action 後の current builder には
