@@ -28,6 +28,43 @@ def audience_id() -> str:
     return load_config()["audience_id"]
 
 
+def search_members(query: str, limit: int) -> dict[str, Any]:
+    session, base_url = build_session()
+    response = session.get(
+        f"{base_url}/search-members",
+        params={"query": query, "count": limit},
+        timeout=60,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    exact = payload.get("exact_matches", {}) or {}
+    members = payload.get("full_search", {}).get("members", []) or []
+    rows: list[dict[str, Any]] = []
+    for row in exact.get("members", []) or []:
+        rows.append(
+            {
+                "email_address": row.get("email_address"),
+                "status": row.get("status"),
+                "last_changed": row.get("last_changed"),
+                "source": "exact",
+            }
+        )
+    for row in members:
+        rows.append(
+            {
+                "email_address": row.get("email_address"),
+                "status": row.get("status"),
+                "last_changed": row.get("last_changed"),
+                "source": "full_search",
+            }
+        )
+    return {
+        "query": query,
+        "count": len(rows),
+        "rows": rows[:limit],
+    }
+
+
 def get_member(email: str) -> dict[str, Any]:
     session, base_url = build_session()
     response = session.get(
@@ -138,6 +175,10 @@ def main() -> None:
     list_parser.add_argument("--limit", type=int, default=20)
     list_parser.add_argument("--name")
 
+    search_parser = sub.add_parser("search-members", help="Search members by query")
+    search_parser.add_argument("--query", required=True)
+    search_parser.add_argument("--limit", type=int, default=20)
+
     member_parser = sub.add_parser("member", help="Get member summary")
     member_parser.add_argument("--email", required=True)
 
@@ -161,6 +202,8 @@ def main() -> None:
 
     if args.cmd == "list-tags":
         payload = list_tags(limit=args.limit, name=args.name)
+    elif args.cmd == "search-members":
+        payload = search_members(args.query, args.limit)
     elif args.cmd == "member":
         payload = get_member(args.email)
     elif args.cmd == "ensure-member":

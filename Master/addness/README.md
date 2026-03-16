@@ -14,7 +14,7 @@
 
 - Lステップ: `9.8 / 10`
 - UTAGE: `9.5 / 10`
-- Mailchimp: `9.5 / 10`
+- Mailchimp: `9.6 / 10`
 - short.io: `9.5 / 10`
 - Zapier: `9.1 / 10`
 
@@ -75,8 +75,12 @@
   - `Recipients -> Open rate -> Click rate -> click-details -> downstream`
 - `saved segment 1件`
   - create / delete
+- `tag 1件`
+  - safe exploratory member で `add -> rollback`
 - `tag-search`
   - 一覧読解
+- `search-members`
+  - safe exploratory member 探索
 - `journey snapshot`
   - current matrix 読解
 
@@ -106,7 +110,7 @@
 | UTAGE | 動画管理 / メディア管理 | representative 読解済み | small change -> smoke |
 | Mailchimp | Campaign | draft create / delete 済み | representative を増やす |
 | Mailchimp | Journey | trigger 入口まで済み | 1本 create -> Send Test Emails -> cleanup |
-| Mailchimp | tag / saved segment | saved segment の create / delete、tag-search の一覧読解 済み | safe test member で tag 1件 create -> rollback |
+| Mailchimp | tag / saved segment | saved segment の create / delete、tag-search、search-members、safe exploratory member で tag 1件 add -> rollback 済み | UI 側の tag 1件 create -> rollback |
 | Mailchimp | report | representative 読解済み | actual case を増やす |
 | short.io | short link / edit / stats / sheet sync | live 実施済み | 実案件 end-to-end を増やす |
 | Zapier | representative relay 読解 | editor / step 読解済み | 1本 create -> test -> delete |

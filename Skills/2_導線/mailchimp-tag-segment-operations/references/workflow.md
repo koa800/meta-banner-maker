@@ -84,9 +84,27 @@
   - `python3 System/scripts/mailchimp_segment_helper.py delete --id <segment_id>`
 - tag list:
   - `python3 System/scripts/mailchimp_tag_helper.py list-tags --limit 10`
+- safe test member 探索:
+  - `python3 System/scripts/mailchimp_tag_helper.py search-members --query "@team.addness.co.jp" --limit 10`
+  - `python3 System/scripts/mailchimp_tag_helper.py search-members --query "koa800" --limit 10`
 - safe test member がある時だけ tag add / remove:
   - `python3 System/scripts/mailchimp_tag_helper.py add-tag --email <safe_test_member> --tag zz_test_xxx`
   - `python3 System/scripts/mailchimp_tag_helper.py remove-tag --email <safe_test_member> --tag zz_test_xxx`
+
+### 2026-03-16 の live exact
+
+- safe exploratory member:
+  - `koa800sea.nifs+1006@gmail.com`
+  - `status=pending`
+  - `tags_count=0`
+- 通したこと:
+  - `add-tag --tag zz_test_mailchimp_tag_flow`
+  - `member` で `tags_count=1`
+  - `remove-tag --tag zz_test_mailchimp_tag_flow`
+  - `member` で `tags_count=0`
+- 意味:
+  - `tag add -> rollback` の exact 性は API helper で live 確認済み
+  - ただし future に status や tags_count が変わる可能性があるので、使用前に `member` を再確認する
 
 ## ここで止めて確認する条件
 
