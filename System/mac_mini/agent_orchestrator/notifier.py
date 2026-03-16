@@ -259,6 +259,85 @@ def send_line_notify(message: str, truncate: bool = True, group_id: str = "") ->
         return False
 
 
+def send_line_notify_with_mention(
+    message: str,
+    group_id: str,
+    user_id: str,
+    mention_name: str,
+    truncate: bool = True,
+) -> bool:
+    """LINEグループへ本物メンション付きで通知する。"""
+    server_url, agent_token, config_source = get_line_notify_config()
+    if not agent_token:
+        logger.warning(
+            "AGENT_TOKEN not set — cannot send LINE mention notification",
+            extra={"config_source": config_source},
+        )
+        return False
+
+    if truncate and len(message) > MAX_MESSAGE_LEN:
+        message = message[:MAX_MESSAGE_LEN] + "\n...(truncated)"
+
+    payload = {
+        "message": message,
+        "group_id": group_id,
+        "user_id": user_id,
+        "mention_name": mention_name,
+    }
+
+    try:
+        resp = requests.post(
+            f"{server_url}/notify/mention",
+            headers={"Authorization": f"Bearer {agent_token}"},
+            json=payload,
+            timeout=40,
+        )
+        if resp.status_code == 200:
+            logger.info(
+                "LINE mention notification sent",
+                extra={"group_id": group_id, "mention_name": mention_name},
+            )
+            return True
+        logger.error(
+            "LINE mention notification failed",
+            extra={"status": resp.status_code, "body": resp.text[:200]},
+        )
+        return False
+    except Exception as e:
+        logger.exception("LINE mention notification error", extra={"error": str(e)})
+        return False
+
+
+def get_line_group_members(group_id: str, name: str = "") -> list[dict]:
+    """Render 経由でグループメンバー一覧を取得する。"""
+    server_url, agent_token, config_source = get_line_notify_config()
+    if not agent_token:
+        logger.warning(
+            "AGENT_TOKEN not set — cannot fetch LINE group members",
+            extra={"config_source": config_source},
+        )
+        return []
+
+    try:
+        resp = requests.get(
+            f"{server_url}/api/group-members",
+            headers={"Authorization": f"Bearer {agent_token}"},
+            params={"group_id": group_id, "name": name},
+            timeout=40,
+        )
+        if resp.status_code != 200:
+            logger.error(
+                "LINE group members fetch failed",
+                extra={"status": resp.status_code, "body": resp.text[:200]},
+            )
+            return []
+        data = resp.json()
+        return data.get("members", []) if isinstance(data, dict) else []
+    except Exception as e:
+        logger.exception("LINE group members fetch error", extra={"error": str(e)})
+        return []
+
+
 def send_slack_ai_team(message: str, truncate: bool = True) -> bool:
     """Send a message to the Slack #ai-team channel via Incoming Webhook."""
     if not _SLACK_AI_TEAM_WEBHOOK:

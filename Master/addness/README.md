@@ -98,6 +98,8 @@
     - Lステップ は browser 上でログイン済みに見えても API セッションが切れていることがある
     - 既存 route を API でなぞっても、そのまま通らない action があるので `row の右側説明` と `実際の保存結果` の両方を確認する
     - 導線作成の実務順は `Lステップ流入経路 -> short.io -> URL管理シート -> 共有` が最もズレにくい
+    - LINE の共有で `メンション` が必要な時は `@名前` の文字列だけでは不十分。`group_id + user_id + 本物メンション送信` が必要
+    - 秘書 bot は current で `/notify/mention` と `/api/group-members` を持つので、共有前に対象グループの member 解決が可能
 
 ### UTAGE
 
