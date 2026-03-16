@@ -206,12 +206,29 @@
       - 最小値で `保存成功`
       - action 一覧 `1件追加`
       - row dropdown 内の `削除` で cleanup
-    - `python3 System/scripts/utage_funnel_create_delete_probe.py`
-      - `before_count = 258`
-      - `after_create_count = 259`
-      - `created_id = 232420`
-      - `after_delete_count = 258`
+  - `python3 System/scripts/utage_funnel_create_delete_probe.py`
+    - `before_count = 258`
+    - `after_create_count = 259`
+    - `created_id = 232420`
+    - `after_delete_count = 258`
+    - `deleted = true`
+  - `python3 System/scripts/utage_page_create_delete_probe.py`
+    - temporary funnel を `create`
+    - row action の `ページ一覧` から actual slug を取得
+    - `追加 -> 名称 -> 保存`
+    - page row 出現を確認
+    - temporary funnel `delete` で rollback
+    - current 実績
+      - `page_list_url = /funnel/4eAriUd6li3Z/page`
+      - `create_url = /funnel/4eAriUd6li3Z/create`
+      - `保存後 current_url = /funnel/4eAriUd6li3Z/page/ZKxXY8aywnwm`
+      - `row_link = /page/ZKxXY8aywnwm#list-ZKxXY8aywnwm`
+      - `edit_link = /page/0opi5kesOlJq/edit`
       - `deleted = true`
+    - 学習
+      - create template の slug と created funnel の slug は一致しない
+      - actual な `ページ一覧` URL は created row action から取る
+      - current では `row_link` の page id と `編集` route の page id が一致しないことがある
   - helper の current 挙動
     - `python3 System/scripts/utage_login_helper.py --target https://school.addness.co.jp/product`
       - `LOGIN_SUCCESS`
@@ -306,6 +323,13 @@
   - `python3 System/scripts/zapier_create_delete_probe.py --with-action` は current で `Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap` まで通った
   - exploratory draft の cleanup は `python3 System/scripts/zapier_cleanup_untitled.py` で `after_count=0` まで戻せる
   - `python3 System/scripts/zapier_create_delete_probe.py --with-action --with-second-action` は cleanup まで通るが、`second_action_selected = false`
+  - first action 後の current builder には
+    - `Choose an event`
+    - `Select`
+    - `Add account to continue`
+    が visible
+  - つまり second action の blocker は、Mailchimp account を current Zapier account 文脈で選べないこと
+  - current owner 表示は `【世捨人東大生】 ぜんT (Personal)`
   - つまり current の残差は `trigger 1 + action 2` と representative family の追加で、1 action の create/cleanup 自体はかなり exact になった
 
 ## いま重要な残差

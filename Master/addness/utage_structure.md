@@ -156,10 +156,29 @@
     - `created_id = 232420`
     - `after_delete_count = 258`
     - `deleted = true`
+  - `python3 System/scripts/utage_page_create_delete_probe.py`
+    - temporary funnel を `create`
+    - created row action の `ページ一覧` から actual slug を取得
+    - `追加 -> 名称 -> 保存`
+    - page row 出現を確認
+    - temporary funnel `delete` で rollback
+    - current 実績
+      - `page_list_url = /funnel/4eAriUd6li3Z/page`
+      - `create_url = /funnel/4eAriUd6li3Z/create`
+      - `保存後 current_url = /funnel/4eAriUd6li3Z/page/ZKxXY8aywnwm`
+      - `row_link = /page/ZKxXY8aywnwm#list-ZKxXY8aywnwm`
+      - `edit_link = /page/0opi5kesOlJq/edit`
+      - `deleted = true`
+    - 学習
+      - create template の slug と created funnel の slug は一致しない
+      - actual な `ページ一覧` URL は created row action から取る
+      - current では `row_link` の page id と `編集` route の page id が一致しないことがある
 
 ## まだ live create / rollback を厚くすべき範囲
 
 - `ページ 1変更 -> 保存 -> downstream 確認 -> rollback`
+- `ページ追加` 自体は 1 本 live で通った
+- 残差は `既存ページに 1変更` を入れた時の smoke と rollback
 - `登録経路 1追加 -> 計測確認 -> rollback`
 - `商品管理 / 商品詳細管理 / 購入後アクション 1本` の exploratory create -> rollback
   - `商品管理` は `create -> rollback` 1本済み
@@ -216,6 +235,9 @@
 - detail create/save probe:
   - `python3 System/scripts/utage_detail_create_delete_probe.py`
   - exploratory 商品配下で `商品詳細管理 > 追加` を最小値で `保存 -> detail一覧確認 -> cleanup`
+- page create/save probe:
+  - `python3 System/scripts/utage_page_create_delete_probe.py`
+  - temporary funnel 配下で `ページ一覧 -> 追加 -> 名称 -> 保存 -> row 確認 -> funnel delete rollback`
 - probe 後の exploratory 商品 cleanup:
   - `python3 System/scripts/utage_cleanup_test_products.py`
 

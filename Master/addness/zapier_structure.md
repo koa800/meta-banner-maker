@@ -115,6 +115,13 @@
 
 - `Catch Hook -> Mailchimp Add/Update Subscriber -> Test` は exploratory で 1 本通った
 - `trigger 1 + action 2` の exploratory probe は cleanup まで通るが、current は `second_action_selected = false`
+- current builder 上では first action 後に
+  - `Choose an event`
+  - `Select`
+  - `Add account to continue`
+  が visible
+- つまり second action の残差は、Mailchimp account を current Zapier account 文脈で選べないこと
+- current owner 表示は `【世捨人東大生】 ぜんT (Personal)`
 - 残差は、同じ family の本数と `trigger 1 + action 2` の最小複雑 pattern を live で積むこと
 - `既存 relay 修正` と `新規 relay` の rollback 手順を、current UI でさらに exact 化すること
 
