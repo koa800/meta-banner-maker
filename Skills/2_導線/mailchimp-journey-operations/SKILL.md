@@ -252,6 +252,24 @@ actual hyperlink と最終遷移先が intended でない限り、builder 上で
 
 current では、`Build from scratch` を押して trigger 選択に入り始めた時点で draft が作られる前提で扱う。
 
+## API 補助経路
+
+browser に入る前や current / legacy を切る時は、snapshot helper を先に使える。
+
+- current matrix:
+  - `python3 System/scripts/mailchimp_journey_snapshot.py --list-current --count 20`
+- journey 1本:
+  - `python3 System/scripts/mailchimp_journey_snapshot.py --query \"<journey_name_substring>\"`
+- journey id 指定:
+  - `python3 System/scripts/mailchimp_journey_snapshot.py --journey-id <journey_id>`
+
+これは UI の `Build from scratch` や builder を置き換えるものではないが、
+- `queue_count`
+- current email step
+- trigger step
+- current / paused_with_queue
+を先に切る補助として使える。
+
 ## 認証フロー
 
 current の Addness では、Mailchimp ログイン時に 2 段階認証が入ることがある。

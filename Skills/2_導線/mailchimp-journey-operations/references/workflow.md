@@ -157,6 +157,15 @@ Journey は 1 通単体より前後の文脈が重要なので、
   - current builder / step / queue の snapshot を読む時の補助に使う
   - UI 表示だけで current / legacy を切らず、`queue_count` や step 状態も合わせて見る
 
+### exact command
+
+- current matrix:
+  - `python3 System/scripts/mailchimp_journey_snapshot.py --list-current --count 20`
+- journey 名検索:
+  - `python3 System/scripts/mailchimp_journey_snapshot.py --query "<journey_name_substring>"`
+- journey id 指定:
+  - `python3 System/scripts/mailchimp_journey_snapshot.py --journey-id <journey_id>`
+
 ## representative report
 
 - `UTAGE_AIカレッジ_Facebook_7桁オプトイン2025-10-15`
