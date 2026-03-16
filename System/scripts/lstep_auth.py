@@ -318,6 +318,7 @@ def build_authenticated_session(
     probe_url: str = DEFAULT_PROBE_URL,
     expected_account_name: str | None = None,
 ) -> requests.Session:
+    seen_contexts: list[str] = []
     for source in cookie_sources():
         result = probe_source(source, referer=referer, probe_url=probe_url)
         if result.get("auth_alive"):
@@ -325,9 +326,16 @@ def build_authenticated_session(
             if expected_account_name:
                 context = result.get("authenticated_context") or fetch_authenticated_context(s, referer)
                 current_name = (context or {}).get("account_name")
+                if current_name:
+                    seen_contexts.append(str(current_name))
                 if current_name != expected_account_name:
                     continue
             return s
+    if expected_account_name and seen_contexts:
+        raise RuntimeError(
+            "Lステップ認証は生きていますが、対象 account 文脈が違います。"
+            f" expected={expected_account_name} current={', '.join(sorted(set(seen_contexts)))}"
+        )
     probe = parse_login_page()
     recaptcha = ((probe.get("server_data") or {}).get("recaptcha") or {}).get("enabled")
     message = (

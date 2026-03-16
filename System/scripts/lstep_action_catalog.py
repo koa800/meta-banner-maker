@@ -13,10 +13,11 @@ BASE_URL = "https://manager.linestep.net"
 LIST_URL = f"{BASE_URL}/api/actions"
 
 
-def session() -> requests.Session:
+def session(expected_account_name: str | None = None) -> requests.Session:
     return build_authenticated_session(
         referer=f"{BASE_URL}/line/action",
         probe_url=f"{BASE_URL}/api/actions?page=1",
+        expected_account_name=expected_account_name,
     )
 
 
@@ -77,13 +78,15 @@ def main() -> None:
     list_parser = sub.add_parser("list", help="List actions")
     list_parser.add_argument("--search", default="", help="Action name substring")
     list_parser.add_argument("--limit", type=int, default=50, help="Max rows")
+    list_parser.add_argument("--expected-account", help="Expected account name")
 
     inspect_parser = sub.add_parser("inspect", help="Inspect one action")
     inspect_parser.add_argument("--id", type=int, required=True, help="Action ID")
+    inspect_parser.add_argument("--expected-account", help="Expected account name")
 
     args = parser.parse_args()
     try:
-        s = session()
+        s = session(expected_account_name=getattr(args, "expected_account", None))
     except RuntimeError as exc:
         raise SystemExit(str(exc))
     if args.cmd == "list":

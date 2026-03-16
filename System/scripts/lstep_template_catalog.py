@@ -18,10 +18,11 @@ LIST_URL = f"{BASE_URL}/api/templates"
 CDP_URL = "http://127.0.0.1:9224"
 
 
-def session() -> requests.Session:
+def session(expected_account_name: str | None = None) -> requests.Session:
     return build_authenticated_session(
         referer=f"{BASE_URL}/line/template",
         probe_url=f"{BASE_URL}/api/templates?page=1",
+        expected_account_name=expected_account_name,
     )
 
 
@@ -433,13 +434,15 @@ def main() -> int:
     p_list = subparsers.add_parser("list")
     p_list.add_argument("--search", default="")
     p_list.add_argument("--limit", type=int, default=30)
+    p_list.add_argument("--expected-account")
 
     p_inspect = subparsers.add_parser("inspect")
     p_inspect.add_argument("--id", type=int, required=True)
+    p_inspect.add_argument("--expected-account")
 
     args = parser.parse_args()
     try:
-        s = session()
+        s = session(expected_account_name=getattr(args, "expected_account", None))
     except RuntimeError as exc:
         raise SystemExit(str(exc))
 
