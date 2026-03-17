@@ -174,6 +174,24 @@
     - current の probe は `名称` も受ける selector に直して `create -> delete` を再確認済み
     - `ページ一覧` の actual URL は created row action から取る
     - current では `row_link` の page id と `編集` route の page id が一致しないことがある
+  - `python3 System/scripts/utage_page_edit_rollback_probe.py`
+    - temporary funnel と temporary page を `create`
+    - `ページ一覧 > 編集`
+    - `ページ設定 > 基本情報`
+    - `管理名称` を 1 変更
+    - `#save-basic`
+    - 値の変更確認
+    - 元の値に rollback
+    - temporary funnel `delete`
+    - current 実績
+      - `created_id = 232609`
+      - `before_values["管理名称"] = 空白のページ`
+      - `after_values["管理名称"] = ZZ_TEST_UTAGE_page_edit_probe_UPDATED`
+      - `rollback_values["管理名称"] = ZZ_TEST_UTAGE_page_edit_probe`
+      - `deleted = true`
+    - 学習
+      - `ページ設定 > 基本情報` には `保存` ボタンが 2 つ見えることがある
+      - page top の保存ではなく `#save-basic` を押すのが current exact 手順
   - `python3 System/scripts/utage_bundle_create_delete_probe.py`
     - `バンドルコース一覧 > 追加` で `create -> delete` を再確認済み
     - 必須は `バンドルコース名` と `追加するコース` の最小選択
@@ -202,9 +220,6 @@
 
 ## まだ live create / rollback を厚くすべき範囲
 
-- `ページ 1変更 -> 保存 -> downstream 確認 -> rollback`
-- `ページ追加` 自体は 1 本 live で通った
-- 残差は `既存ページに 1変更` を入れた時の smoke と rollback
 - `登録経路 1追加 -> 計測確認 -> rollback`
 - `商品管理 / 商品詳細管理 / 購入後アクション 1本` の exploratory create -> rollback
   - `商品管理` は `create -> rollback` 1本済み

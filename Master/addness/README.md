@@ -37,7 +37,7 @@
 ## 最新の厳しめ採点
 
 - Lステップ: `9.8 / 10`
-- UTAGE: `9.7 / 10`
+- UTAGE: `9.8 / 10`
 - Mailchimp: `9.4 / 10`
 - short.io: `9.6 / 10`
 - Zapier: `9.3 / 10`
@@ -77,6 +77,11 @@
   - `名称` を正しく入れないと `名称は必ず指定してください。` で止まる
   - `ページ一覧` の actual URL は created row action から取る
   - `row_link` の page id と `編集` route の page id が一致しないことがある
+- 2026-03-17 の current では `ページ一覧 > 編集 > ページ設定 > 基本情報 > #save-basic` も live で再確認した
+  - `管理名称` を 1変更
+  - 値の変更確認
+  - 元の値に rollback
+  - temporary funnel cleanup まで完了
 - 2026-03-17 の current では `バンドルコース一覧 > 追加` も raw probe で `create -> delete` を再確認した
   - 必須は `バンドルコース名` と `追加するコース` の最小選択
   - `before_count = 0` `after_create_count = 1` `after_delete_count = 0`
@@ -477,7 +482,7 @@
   - `リッチメニュー 2ボタン`
   を live で `作成 -> テスト -> rollback / cleanup`
 - UTAGE
-  - `ページ 1変更`
+  - `登録経路 1追加`
   - `商品管理 / 商品詳細管理 / 購入後アクション 1本`
   - `会員サイト 1変更`
   を live で `保存 -> downstream 確認 -> rollback`
