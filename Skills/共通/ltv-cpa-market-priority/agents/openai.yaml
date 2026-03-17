@@ -1,0 +1,4 @@
+interface:
+  display_name: "市場選定の優先順位"
+  short_description: "LTVとCPAの2軸で狙う市場と配分順を決める判断基準"
+  default_prompt: "Use $ltv-cpa-market-priority to prioritize target markets for this offer."
