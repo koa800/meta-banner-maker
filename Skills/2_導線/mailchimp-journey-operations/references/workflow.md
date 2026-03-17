@@ -21,6 +21,8 @@
   - verify 画面へ入力
   の順
 - 補助取得が必要な時は `python3 System/scripts/mailchimp_tfa_code_helper.py --wait-seconds 90`
+- current では `group-log API` に当日の認証 message が出ない回がある
+- その時は helper で粘らず、秘書で使っている公式LINE側の `Mailchimp認証` グループを人が確認して code を入れる
 
 ## create の current UI
 
@@ -252,6 +254,9 @@ Journey は 1 通単体より前後の文脈が重要なので、
 - `Tag added` で作る state が downstream とつながっていない
 - current 既存 flow を直すか、新規 draft を作るか迷う
 - main CTA を `short.io` にしない例外判断が必要
+- 当日の 2段階認証 code を helper で取れない
+
+最後の条件では、helper 改修ではなく `Mailchimp認証` グループ確認へ切り替える。
 - `Filter who can enter` に単発 campaign の配信条件みたいな発想が入り始めた
 
 ## Addness 側で見るべき補足
