@@ -25,12 +25,13 @@ from gspread.exceptions import APIError
 from sheets_manager import get_client
 
 
-SOURCE_SHEET_ID = "1l2gHhdUMfRANEDmZNfgpjx8KZi0yVCEknckjtpvYwBo"
-SOURCE_TAB_NAME = "個別予約集計botログ"
 TARGET_SHEET_ID = "1ip_RARDHmQvTjmaVavw1L71ltPrn4Kg6sa__njqyQZ8"
 TARGET_SPREADSHEET_TITLE = "【アドネス株式会社】個別面談データ"
 NOTIFICATION_STATE_PATH = os.path.join(os.path.dirname(__file__), "data", "booking_notification_log_state.json")
-SLACK_FALLBACK_START_DATE = "2026/03/17"
+SOURCE_SHEET_ID = "1l2gHhdUMfRANEDmZNfgpjx8KZi0yVCEknckjtpvYwBo"
+SOURCE_TAB_NAME = "個別予約集計botログ"
+LEGACY_BOOKING_SHEET_ID = "1LAzT12KfHKDJTuI69DEdDmS7oD0T6Kz9V5D0mdJDPsQ"
+LEGACY_BOOKING_TAB_NAME = "シート1"
 
 COUNT_TAB_NAME = "日別個別予約数"
 UU_TAB_NAME = "日別個別予約数（UU）"
@@ -490,9 +491,12 @@ def apply_protections(spreadsheet, tabs) -> None:
 
 def load_booking_rows() -> List[BookingRecord]:
     gc = get_client()
-    source = gc.open_by_key(SOURCE_SHEET_ID)
-    ws = source.worksheet(SOURCE_TAB_NAME)
-    values = ws.get_all_values()
+    try:
+        source = gc.open_by_key(SOURCE_SHEET_ID)
+        ws = source.worksheet(SOURCE_TAB_NAME)
+        values = ws.get_all_values()
+    except Exception:
+        return []
 
     header_index = None
     for idx, row in enumerate(values[:20]):
@@ -571,8 +575,6 @@ def load_notification_events() -> List[NotificationEvent]:
 def build_notification_daily_counts(events: Sequence[NotificationEvent]) -> Counter:
     grouped: Dict[tuple[str, str], List[NotificationEvent]] = defaultdict(list)
     for event in events:
-        if event.tagged_at.strftime("%Y/%m/%d") < SLACK_FALLBACK_START_DATE:
-            continue
         grouped[(event.tagged_at.strftime("%Y/%m/%d"), notification_identity_key(event))].append(event)
 
     daily = Counter()
@@ -602,14 +604,12 @@ def build_daily_records(records: Sequence[BookingRecord], notification_daily: Co
 
     latest_botlog_date = max(botlog_daily, default="")
     latest_notification_date = max(notification_daily, default="")
-    merged_daily = Counter(botlog_daily)
-    notification_fallback_start = ""
-    for date in sorted(notification_daily):
-        if date < SLACK_FALLBACK_START_DATE:
-            continue
-        if not notification_fallback_start:
-            notification_fallback_start = date
-        merged_daily[date] = notification_daily[date]
+    if notification_daily:
+        merged_daily = Counter(notification_daily)
+        notification_fallback_start = min(notification_daily)
+    else:
+        merged_daily = Counter(botlog_daily)
+        notification_fallback_start = ""
 
     result: List[DailyCountRecord] = []
     cumulative = 0
@@ -670,13 +670,13 @@ def build_stats(
 
 
 def build_summary_rows(stats: Dict[str, object]) -> List[List[str]]:
-    booking_definition = "現行は個別予約集計botログのうち、キャンセルを除いた個別予約イベント数"
+    booking_definition = "個別予約通知ログを日別集計し、同一人物の同日10分以内連続通知を1件にまとめた個別予約イベント数"
     fallback_start = str(stats.get("notification_fallback_start") or "").strip()
     latest_botlog_date = str(stats.get("latest_botlog_date") or "").strip()
     if fallback_start:
         booking_definition = (
-            f"{latest_botlog_date or 'botログの最新日'} までは個別予約集計botログ、"
-            f"{fallback_start} 以降は個別予約通知ログで補完した個別予約イベント数"
+            f"{fallback_start} 以降の個別予約通知ログを正本にし、"
+            "同一人物の同日10分以内連続通知を1件にまとめた個別予約イベント数"
         )
     return [
         ["項目", "数値", "定義"],
@@ -759,33 +759,33 @@ def load_notification_log_stats(target) -> Dict[str, str]:
 def build_source_rows(stats: Dict[str, object], notification_stats: Dict[str, str]) -> List[List[str]]:
     latest_botlog_date = str(stats.get("latest_botlog_date") or "").strip()
     fallback_start = str(stats.get("notification_fallback_start") or "").strip()
-    booking_calc = "日付あり and キャンセル=FALSE"
+    booking_calc = "個別予約通知ログを日別集計し、同一人物の同日10分以内連続通知を1件にまとめる"
     booking_condition = "2025/01/01以降"
-    booking_memo = "現行の計上元。継続体制では Slack #個別予約通知 から作る 個別予約通知ログへ移行する"
+    booking_memo = "個別予約通知ログを個別予約数の正本にする。過去シートは一時的な補完入力元として扱う"
     if fallback_start:
         booking_calc = (
-            f"{SLACK_FALLBACK_START_DATE} より前は日付あり and キャンセル=FALSE、"
-            f"{fallback_start} 以降は個別予約通知ログの日別件数"
+            f"{fallback_start} 以降の個別予約通知ログを日別集計し、"
+            "同一人物の同日10分以内連続通知を1件にまとめる"
         )
-        booking_condition = f"2025/01/01以降（{SLACK_FALLBACK_START_DATE} から通知ログ補完）"
+        booking_condition = f"2025/01/01以降（{fallback_start} から通知ログ正本）"
         booking_memo = (
-            f"{SLACK_FALLBACK_START_DATE} より前は個別予約集計botログ、"
-            f"{fallback_start} 以降の直近期間は 個別予約通知ログ で補完する"
+            "個別予約通知ログを正本にする。"
+            "Slack通知と過去シートを一つのイベントログへ統合し、日別個別予約数を作る"
         )
     return [
         ["KPIカラム", "グループ", "ソース元", "優先度", "スプレッドシートURL", "タブ名", "参照先列", "正規化 / 計算", "入力条件", "ステータス", "最終同期日", "更新数", "エラー数", "メモ"],
         [
             "個別予約数",
             "個別予約",
-            "収集データ",
+            "加工データ",
             "1",
-            f"https://docs.google.com/spreadsheets/d/{SOURCE_SHEET_ID}/edit",
-            SOURCE_TAB_NAME,
-            "A列,D列,G列,I列,M列",
+            f"https://docs.google.com/spreadsheets/d/{TARGET_SHEET_ID}/edit",
+            NOTIFICATION_LOG_TAB_NAME,
+            "A〜G列",
             booking_calc,
             booking_condition,
-            str(stats["status"]),
-            str(stats["updated_at"]),
+            notification_stats["ステータス"] if notification_stats["ステータス"] else str(stats["status"]),
+            notification_stats["最終同期日"] if notification_stats["最終同期日"] else str(stats["updated_at"]),
             f"{int(stats['total_booking_count']):,}",
             "0",
             booking_memo,
@@ -815,12 +815,28 @@ def build_source_rows(stats: Dict[str, object], notification_stats: Dict[str, st
             NOTIFICATION_LOG_TAB_NAME,
             "A〜G列",
             "Slack通知と過去の個別予約データを 1イベント1行で統合",
-            "過去分 + ★【個別予約完了】★ 通知。直近の日別個別予約数補完にも利用",
+            "過去分 + ★【個別予約完了】★ 通知",
             notification_stats["ステータス"],
             notification_stats["最終同期日"],
             notification_stats["更新数"],
             notification_stats["エラー数"],
             notification_stats["メモ"],
+        ],
+        [
+            "過去補完データ",
+            "補完",
+            "過去データ",
+            "3",
+            f"https://docs.google.com/spreadsheets/d/{LEGACY_BOOKING_SHEET_ID}/edit",
+            LEGACY_BOOKING_TAB_NAME,
+            "A〜D列",
+            "個別予約通知ログへ一度だけ取り込む",
+            "過去分を埋める時だけ使う",
+            "確認待ち",
+            "",
+            "",
+            "",
+            "継続取得はしない。通知ログへ統合したら役割終了",
         ],
         [
             "タグ検証",
@@ -846,11 +862,12 @@ def build_rule_rows() -> List[List[str]]:
         ["項目", "ルール", "補足"],
         ["変えないもの", "個別予約数は予約イベント数として数える", "同じ人が別日に再予約したら別件数で数える"],
         ["変えないもの2", "★【個別予約完了】★ は予約完了の成立条件として扱う", "一度付いたら外れず、再予約でも増えない"],
-        ["変えるもの", "botログ固定ではなく、通知ログを本命の計上元へ段階移行する", f"現行は {SLACK_FALLBACK_START_DATE} より前を botログ、以降を通知ログで補完する"],
+        ["変えるもの", "botログ固定ではなく、通知ログを本命の計上元へ段階移行する", "過去シートは一時的な補完入力元であり、継続取得の正本にはしない"],
         ["追加するもの", "個別予約通知ログを 1イベント1行で持つ", "過去の個別予約データと Slack 通知を同じ正本へ統合する"],
-        ["個別予約数", f"{SLACK_FALLBACK_START_DATE} より前は個別予約集計botログ、以降は個別予約通知ログを使う", "botログ側は日付あり and キャンセル=FALSE を基本ルールにする"],
-        ["重複予約の扱い", "同一人物の通知が同じ日に10分以内で連続した時は1件にまとめる", "通知ログを使う期間だけ適用する。バグ由来の連続通知を吸収するため"],
-        ["個別予約通知ログ", "過去の個別予約データを引き継ぎつつ、Lステップ の予約イベント通知とタグ通知を1イベント1行で溜める", f"まずは Slack の専用チャンネルに集約し、個別予約完了タグ通知は検証用として残し、{SLACK_FALLBACK_START_DATE} 以降の件数補完にも使う"],
+        ["個別予約数", "個別予約通知ログを日別集計して使う", "同一人物の同日10分以内連続通知は1件にまとめる"],
+        ["重複予約の扱い", "同一人物の通知が同じ日に10分以内で連続した時は1件にまとめる", "全期間で適用する。バグ由来の連続通知を吸収するため"],
+        ["個別予約通知ログ", "過去の個別予約データを引き継ぎつつ、Lステップ の予約イベント通知とタグ通知を1イベント1行で溜める", "まずは Slack の専用チャンネルに集約し、個別予約完了タグ通知は検証用として残す"],
+        ["過去補完データ", "過去シートは通知ログへ一度だけ取り込む", "日別個別予約数の継続的な正本にはしない"],
         ["個別予約数（UU）", "第1版ではまだ接続しない", "LINE統合や名寄せ方針が固まってから入れる"],
         ["タグ", "★【個別予約完了】★ は今は検証用、将来も冗長系の確認軸として残す", "タグ単体は累積状態なので日別件数の正本には使わない"],
         ["予約イベント通知", "salon_reservation_reserved / reservation.reserved を本命候補として監査する", "Lステップ live 確認後に Slack 側の受け皿を増やす"],
