@@ -28,6 +28,10 @@ TARGET_SHEET_TITLE = "【アドネス株式会社】共通除外マスタ"
 
 HEADER_BG = {"red": 0.247, "green": 0.42, "blue": 0.878}
 HEADER_FG = {"red": 1.0, "green": 1.0, "blue": 1.0}
+EXCLUSION_COLUMN_WIDTHS = [220, 120, 150, 110, 90, 95, 180]
+UNCONDITIONAL_COLUMN_WIDTHS = [120, 170, 90, 80, 220]
+SOURCE_COLUMN_WIDTHS = [110, 150, 220, 120, 90, 90, 120, 80, 220]
+RULE_COLUMN_WIDTHS = [110, 340, 260]
 
 
 def ensure_worksheet(spreadsheet: gspread.Spreadsheet, title: str, rows: int, cols: int) -> gspread.Worksheet:
@@ -106,55 +110,147 @@ def set_basic_style(
 
     exclusion_ws.format(
         "A2:C1000",
-        {"horizontalAlignment": "LEFT", "textFormat": {"fontSize": 10}},
+        {"horizontalAlignment": "LEFT", "textFormat": {"fontSize": 10}, "wrapStrategy": "CLIP"},
     )
     exclusion_ws.format(
         "D2:E1000",
-        {"horizontalAlignment": "CENTER", "textFormat": {"fontSize": 10}},
+        {"horizontalAlignment": "CENTER", "textFormat": {"fontSize": 10}, "wrapStrategy": "CLIP"},
     )
     exclusion_ws.format(
         "F2:F1000",
-        {"horizontalAlignment": "RIGHT", "textFormat": {"fontSize": 10}},
+        {"horizontalAlignment": "RIGHT", "textFormat": {"fontSize": 10}, "wrapStrategy": "CLIP"},
     )
     exclusion_ws.format(
         "G2:G1000",
-        {"horizontalAlignment": "LEFT", "textFormat": {"fontSize": 10}},
+        {"horizontalAlignment": "LEFT", "textFormat": {"fontSize": 9}, "wrapStrategy": "CLIP"},
     )
     unconditional_ws.format(
         "A2:E100",
-        {"horizontalAlignment": "LEFT", "textFormat": {"fontSize": 10}},
+        {"horizontalAlignment": "LEFT", "textFormat": {"fontSize": 10}, "wrapStrategy": "CLIP"},
     )
     unconditional_ws.format(
         "D2:D100",
-        {"horizontalAlignment": "CENTER", "textFormat": {"fontSize": 10}},
+        {"horizontalAlignment": "CENTER", "textFormat": {"fontSize": 10}, "wrapStrategy": "CLIP"},
     )
 
     source_ws.format(
         "A2:E100",
-        {"horizontalAlignment": "LEFT", "textFormat": {"fontSize": 10}},
+        {"horizontalAlignment": "LEFT", "textFormat": {"fontSize": 10}, "wrapStrategy": "CLIP"},
     )
     source_ws.format(
         "F2:F100",
-        {"horizontalAlignment": "CENTER", "textFormat": {"fontSize": 10}},
+        {"horizontalAlignment": "CENTER", "textFormat": {"fontSize": 10}, "wrapStrategy": "CLIP"},
     )
     source_ws.format(
         "G2:H100",
-        {"horizontalAlignment": "RIGHT", "textFormat": {"fontSize": 10}},
+        {"horizontalAlignment": "RIGHT", "textFormat": {"fontSize": 10}, "wrapStrategy": "CLIP"},
     )
     source_ws.format(
         "I2:I100",
-        {"horizontalAlignment": "LEFT", "textFormat": {"fontSize": 10}},
+        {"horizontalAlignment": "LEFT", "textFormat": {"fontSize": 10}, "wrapStrategy": "CLIP"},
     )
 
     rule_ws.format(
         "A2:C100",
-        {"horizontalAlignment": "LEFT", "textFormat": {"fontSize": 10}},
+        {"horizontalAlignment": "LEFT", "textFormat": {"fontSize": 10}, "wrapStrategy": "CLIP"},
     )
 
-    exclusion_ws.columns_auto_resize(1, 7)
-    unconditional_ws.columns_auto_resize(1, 5)
-    source_ws.columns_auto_resize(1, 9)
-    rule_ws.columns_auto_resize(1, 3)
+
+def apply_layout(
+    exclusion_ws: gspread.Worksheet,
+    unconditional_ws: gspread.Worksheet,
+    source_ws: gspread.Worksheet,
+    rule_ws: gspread.Worksheet,
+) -> None:
+    requests = []
+
+    def add_column_widths(worksheet: gspread.Worksheet, widths: List[int]) -> None:
+        for idx, width in enumerate(widths):
+            requests.append(
+                {
+                    "updateDimensionProperties": {
+                        "range": {
+                            "sheetId": worksheet.id,
+                            "dimension": "COLUMNS",
+                            "startIndex": idx,
+                            "endIndex": idx + 1,
+                        },
+                        "properties": {"pixelSize": width},
+                        "fields": "pixelSize",
+                    }
+                }
+            )
+
+    def add_row_heights(worksheet: gspread.Worksheet, end_row: int) -> None:
+        requests.append(
+            {
+                "updateDimensionProperties": {
+                    "range": {
+                        "sheetId": worksheet.id,
+                        "dimension": "ROWS",
+                        "startIndex": 0,
+                        "endIndex": 1,
+                    },
+                    "properties": {"pixelSize": 34},
+                    "fields": "pixelSize",
+                }
+            }
+        )
+        requests.append(
+            {
+                "updateDimensionProperties": {
+                    "range": {
+                        "sheetId": worksheet.id,
+                        "dimension": "ROWS",
+                        "startIndex": 1,
+                        "endIndex": end_row,
+                    },
+                    "properties": {"pixelSize": 24},
+                    "fields": "pixelSize",
+                }
+            }
+        )
+
+    add_column_widths(exclusion_ws, EXCLUSION_COLUMN_WIDTHS)
+    add_column_widths(unconditional_ws, UNCONDITIONAL_COLUMN_WIDTHS)
+    add_column_widths(source_ws, SOURCE_COLUMN_WIDTHS)
+    add_column_widths(rule_ws, RULE_COLUMN_WIDTHS)
+
+    add_row_heights(exclusion_ws, 1000)
+    add_row_heights(unconditional_ws, 50)
+    add_row_heights(source_ws, 50)
+    add_row_heights(rule_ws, 50)
+
+    requests.extend(
+        [
+            {
+                "updateSheetProperties": {
+                    "properties": {"sheetId": exclusion_ws.id, "index": 0},
+                    "fields": "index",
+                }
+            },
+            {
+                "updateSheetProperties": {
+                    "properties": {"sheetId": unconditional_ws.id, "index": 1},
+                    "fields": "index",
+                }
+            },
+            {
+                "updateSheetProperties": {
+                    "properties": {"sheetId": source_ws.id, "index": 2},
+                    "fields": "index",
+                }
+            },
+            {
+                "updateSheetProperties": {
+                    "properties": {"sheetId": rule_ws.id, "index": 3},
+                    "fields": "index",
+                }
+            },
+        ]
+    )
+
+    exclusion_ws.spreadsheet.batch_update({"requests": requests})
 
 
 def set_tab_colors(
@@ -293,6 +389,7 @@ def main() -> None:
     rule_ws.update(range_name="A1:C{}".format(len(rule_values)), values=rule_values)
 
     set_basic_style(exclusion_ws, unconditional_ws, source_ws, rule_ws)
+    apply_layout(exclusion_ws, unconditional_ws, source_ws, rule_ws)
     set_tab_colors(exclusion_ws, unconditional_ws, source_ws, rule_ws)
     set_validations(exclusion_ws, unconditional_ws)
 
