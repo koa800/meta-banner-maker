@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from common_exclusion import CommonExclusionMaster
 from sheets_manager import get_client
 
 CDP_SHEET_ID = "1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk"
@@ -1005,6 +1006,7 @@ class CDPSync:
         self._exclusion_list = None
         self._exclusion_emails = set()
         self._exclusion_phones = set()
+        self._common_exclusion = None
         self._master_headers = None
         self._master_data = None
         self._sheets_service = None
@@ -1015,31 +1017,33 @@ class CDPSync:
     # ─── 除外リスト ─────────────────────────────────────
 
     def load_exclusion_list(self):
-        """除外リストを読み込む（メール・電話番号）"""
-        ws = self.ss.worksheet("除外リスト")
-        data = ws.get_all_values()
-        # ヘッダー: メールアドレス / 電話番号 / 対象者名 / 除外理由 / 追加日
-        self._exclusion_emails = set()
-        self._exclusion_phones = set()
-        for row in data[1:]:
-            if len(row) > 0 and row[0].strip():
-                self._exclusion_emails.add(row[0].strip().lower())
-            if len(row) > 1 and row[1].strip():
-                self._exclusion_phones.add(normalize_phone(row[1].strip()))
-        print(f"除外リスト: メール{len(self._exclusion_emails)}件, "
-              f"電話{len(self._exclusion_phones)}件")
+        """共通除外マスタを読み込む（メール・電話番号）"""
+        self._common_exclusion = CommonExclusionMaster.load()
+        self._exclusion_emails = {
+            entry.email for entry in self._common_exclusion.entries if entry.email
+        }
+        self._exclusion_phones = {
+            entry.phone for entry in self._common_exclusion.entries if entry.phone
+        }
+        print(
+            f"共通除外マスタ: メール{len(self._exclusion_emails)}件, "
+            f"電話{len(self._exclusion_phones)}件"
+        )
         self._exclusion_list = self._exclusion_emails  # 後方互換
         return self._exclusion_emails
 
-    def is_excluded(self, email=None, phone=None):
-        """メール・電話番号のいずれかが除外リストに含まれるか"""
+    def is_excluded(self, email=None, phone=None, name=None, scope="全体", event_date=""):
+        """共通除外マスタに該当するか"""
         if self._exclusion_list is None:
             self.load_exclusion_list()
-        if email and email.strip().lower() in self._exclusion_emails:
-            return True
-        if phone and normalize_phone(phone.strip()) in self._exclusion_phones:
-            return True
-        return False
+        decision = self._common_exclusion.decide(
+            email=email or "",
+            phone=phone or "",
+            name=name or "",
+            scope=scope,
+            event_date=event_date,
+        )
+        return decision.excluded
 
     # ─── 顧客マスタ ─────────────────────────────────────
 
@@ -2755,11 +2759,12 @@ class CDPSync:
             email2_from_source = all_emails[1] if len(all_emails) >= 2 else ""
             email_lower = email.lower() if email else ""
             phone = row[src_phone_idx].strip() if src_phone_idx and src_phone_idx < len(row) else ""
+            source_event_date = extract_date_only(row[0]) if row else ""
 
             # 除外チェック
-            if self.is_excluded(email, phone):
+            if self.is_excluded(email, phone, scope="全体", event_date=source_event_date):
                 stats["excluded"] += 1
-                self.logger.log("skip", email or phone, "", "", "", "除外リスト")
+                self.logger.log("skip", email or phone, "", "", "", "共通除外マスタ")
                 continue
 
             # スパム/テストメール検知
@@ -3568,8 +3573,8 @@ class CDPSync:
                 if lead_email_idx < len(row) and row[lead_email_idx].strip():
                     existing_lead_emails.add(row[lead_email_idx].strip().lower())
 
-        # 4. 除外リスト読み込み（CDPマスタの除外リストを共用）
-        if not hasattr(self, '_exclusion_emails') or self._exclusion_emails is None:
+        # 4. 共通除外マスタ読み込み
+        if self._common_exclusion is None or self._exclusion_list is None:
             self.load_exclusion_list()
 
         # 5. フィルタリング（除外リスト + スパム + マスタ除外 + 重複除外）
@@ -3581,7 +3586,7 @@ class CDPSync:
         seen = set()
         for date_val, email, route_name in all_entries:
             route_name = normalize_route_name(route_name)
-            if email in self._exclusion_emails:
+            if self.is_excluded(email=email, scope="集客", event_date=date_val):
                 skipped_excluded += 1
                 continue
             spam_reason = is_spam_email(email) if email else None

@@ -32,6 +32,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
+from common_exclusion import CommonExclusionMaster
 from sheets_manager import get_client
 
 
@@ -340,6 +341,7 @@ def build_history_snapshot_from_legacy() -> Dict[str, object]:
 def collect_future_current_data(historical_seed: set[str]) -> Tuple[Counter[str], Counter[str], Dict[str, int]]:
     gc = get_client()
     spreadsheet = gc.open_by_key(RAW_SOURCE_SHEET_ID)
+    exclusion_master = CommonExclusionMaster.load()
 
     registration_counter: Counter[str] = Counter()
     earliest_raw_by_email: Dict[str, str] = {}
@@ -347,6 +349,7 @@ def collect_future_current_data(historical_seed: set[str]) -> Tuple[Counter[str]
     rows_scanned = 0
     valid_rows = 0
     invalid_rows = 0
+    excluded_rows = 0
 
     for ws in spreadsheet.worksheets():
         tab_count += 1
@@ -359,6 +362,9 @@ def collect_future_current_data(historical_seed: set[str]) -> Tuple[Counter[str]
             email = normalize_email(row[1])
             if not date_str or not email:
                 invalid_rows += 1
+                continue
+            if exclusion_master.is_excluded(email=email, scope="集客", event_date=date_str):
+                excluded_rows += 1
                 continue
             valid_rows += 1
             current_earliest = earliest_raw_by_email.get(email, "")
@@ -379,6 +385,7 @@ def collect_future_current_data(historical_seed: set[str]) -> Tuple[Counter[str]
         "raw_rows_scanned": rows_scanned,
         "raw_valid_rows": valid_rows,
         "raw_invalid_rows": invalid_rows,
+        "raw_excluded_rows": excluded_rows,
         "raw_unique_emails": len(earliest_raw_by_email),
         "future_registration_days": len(registration_counter),
         "future_registration_total": sum(registration_counter.values()),
@@ -446,6 +453,13 @@ def build_source_management_rows() -> List[List[str]]:
             "2026/03/07 以降の登録件数と集客UUの正本",
         ],
         [
+            "共通除外",
+            "【アドネス株式会社】共通除外マスタ",
+            "除外リスト / 無条件除外ルール",
+            '=HYPERLINK("https://docs.google.com/spreadsheets/d/1dSIXBovs-c8wVnBWsOqbe2wdqmJQ10bOIWhKJbC1MPw/edit","シートを開く")',
+            "2026/03/07 以降の集客データで、新しく発生した除外対象だけを除外する",
+        ],
+        [
             "補助参照",
             "【アドネス株式会社】顧客データ（複数イベント）",
             "顧客マスタ",
@@ -473,6 +487,7 @@ def build_rule_rows() -> List[List[str]]:
         ["メール集計サマリー", "このタブは、重複あり件数・集客UU・メール登録ユーザー数を要約して見る場所", "全体像を一目で判断するため"],
         ["データソース管理", "このタブは、どのシートを正本とし、どこを補助参照にしているかを見る場所", "参照元の認識ズレを防ぐため"],
         ["データ追加ルール", "このタブは、このシートの数え方と運用ルールを見る場所", "仕組みが形骸化しないようにするため"],
+        ["共通除外", "【アドネス株式会社】共通除外マスタ の 除外リスト と 無条件除外ルール を参照する", "追加日以降に発生した集客データだけ除外するため"],
         ["媒体別分析", "今はソースを正本にし、媒体 × ファネルの集計は後段で作る", "後から LP や CR に切り戻せるようにするため"],
         ["手編集防止", "このシートの6タブは保護し、手編集しない", "再生成で上書きされるため"],
         ["異常検知", "開始日ずれ / 参照元タブ0件 / 当日側の件数欠損 / 件数急減を検知したら更新を止める", "壊れた値で上書きしないため"],

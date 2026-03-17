@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Dict, Iterable, List, Sequence
 
+from common_exclusion import CommonExclusionMaster
 from gspread.exceptions import APIError
 from sheets_manager import get_client
 
@@ -572,9 +573,21 @@ def load_notification_events() -> List[NotificationEvent]:
     return events
 
 
-def build_notification_daily_counts(events: Sequence[NotificationEvent]) -> Counter:
+def build_notification_daily_counts(events: Sequence[NotificationEvent]) -> tuple[Counter, int]:
+    exclusion_master = CommonExclusionMaster.load()
     grouped: Dict[tuple[str, str], List[NotificationEvent]] = defaultdict(list)
+    excluded_count = 0
     for event in events:
+        event_date = event.tagged_at.strftime("%Y/%m/%d")
+        if exclusion_master.is_excluded(
+            email=event.email,
+            phone=event.phone,
+            name=event.line_name,
+            scope="個別予約",
+            event_date=event_date,
+        ):
+            excluded_count += 1
+            continue
         grouped[(event.tagged_at.strftime("%Y/%m/%d"), notification_identity_key(event))].append(event)
 
     daily = Counter()
@@ -592,7 +605,7 @@ def build_notification_daily_counts(events: Sequence[NotificationEvent]) -> Coun
             cluster_start = item.tagged_at
             cluster_last = item.tagged_at
         daily[date] += count
-    return daily
+    return daily, excluded_count
 
 
 def build_daily_records(records: Sequence[BookingRecord], notification_daily: Counter) -> tuple[List[DailyCountRecord], Dict[str, str]]:
@@ -635,6 +648,7 @@ def build_stats(
     records: Sequence[BookingRecord],
     daily_records: Sequence[DailyCountRecord],
     daily_meta: Dict[str, str],
+    excluded_count: int,
 ) -> Dict[str, object]:
     non_cancelled = [record for record in records if not record.cancelled]
     account_counter = Counter(record.booking_account_name for record in non_cancelled if record.booking_account_name)
@@ -666,6 +680,7 @@ def build_stats(
         "latest_botlog_date": daily_meta.get("latest_botlog_date", ""),
         "latest_notification_date": daily_meta.get("latest_notification_date", ""),
         "notification_fallback_start": daily_meta.get("notification_fallback_start", ""),
+        "excluded_notification_count": excluded_count,
     }
 
 
@@ -684,6 +699,7 @@ def build_summary_rows(stats: Dict[str, object]) -> List[List[str]]:
         ["個別予約数", f"{int(stats['total_booking_count']):,}", booking_definition],
         ["個別予約数（UU）", "", "将来接続。LSTEP通知ログとLINE統合後の同一人物判定で持つ"],
         ["キャンセル数", f"{int(stats['total_cancel_count']):,}", "個別予約集計botログでキャンセル=TRUE の件数"],
+        ["除外件数", f"{int(stats['excluded_notification_count']):,}", "共通除外マスタで除外した個別予約通知ログの件数"],
         ["集計開始日", f"'{stats['start_date']}", "日別個別予約数の最初の日付"],
         ["最新集計日", f"'{stats['latest_date']}", "日別個別予約数の最新の日付"],
         ["予約アカウント名あり件数", f"{int(stats['booking_account_count']):,}", "予約アカウント名が入っているユニークアカウント数"],
@@ -820,7 +836,23 @@ def build_source_rows(stats: Dict[str, object], notification_stats: Dict[str, st
             notification_stats["最終同期日"],
             notification_stats["更新数"],
             notification_stats["エラー数"],
-            notification_stats["メモ"],
+            f"{notification_stats['メモ']}。日別個別予約数では共通除外マスタも参照する",
+        ],
+        [
+            "共通除外",
+            "個別予約",
+            "【アドネス株式会社】共通除外マスタ",
+            "2",
+            "https://docs.google.com/spreadsheets/d/1dSIXBovs-c8wVnBWsOqbe2wdqmJQ10bOIWhKJbC1MPw/edit",
+            "除外リスト / 無条件除外ルール",
+            "メールアドレス / 電話番号 / 対象者名",
+            "追加日以降に発生した個別予約だけ除外する",
+            "2025/01/01以降",
+            "正常",
+            f"'{stats['updated_at']}",
+            f"{int(stats['excluded_notification_count']):,}",
+            "0",
+            "通知ログは残し、日別個別予約数を作る時だけ除外を効かせる",
         ],
         [
             "過去補完データ",
@@ -865,6 +897,7 @@ def build_rule_rows() -> List[List[str]]:
         ["変えるもの", "botログ固定ではなく、通知ログを本命の計上元へ段階移行する", "過去シートは一時的な補完入力元であり、継続取得の正本にはしない"],
         ["追加するもの", "個別予約通知ログを 1イベント1行で持つ", "過去の個別予約データと Slack 通知を同じ正本へ統合する"],
         ["個別予約数", "個別予約通知ログを日別集計して使う", "同一人物の同日10分以内連続通知は1件にまとめる"],
+        ["共通除外", "【アドネス株式会社】共通除外マスタ を参照して、新しく発生した除外対象だけ日別集計から外す", "通知ログの生データ自体は消さない"],
         ["重複予約の扱い", "同一人物の通知が同じ日に10分以内で連続した時は1件にまとめる", "全期間で適用する。バグ由来の連続通知を吸収するため"],
         ["個別予約通知ログ", "過去の個別予約データを引き継ぎつつ、Lステップ の予約イベント通知とタグ通知を1イベント1行で溜める", "まずは Slack の専用チャンネルに集約し、個別予約完了タグ通知は検証用として残す"],
         ["過去補完データ", "過去シートは通知ログへ一度だけ取り込む", "日別個別予約数の継続的な正本にはしない"],
@@ -954,9 +987,9 @@ def main() -> None:
     args = parse_args()
     records = load_booking_rows()
     notification_events = load_notification_events()
-    notification_daily = build_notification_daily_counts(notification_events)
+    notification_daily, excluded_count = build_notification_daily_counts(notification_events)
     daily_records, daily_meta = build_daily_records(records, notification_daily)
-    stats = build_stats(records, daily_records, daily_meta)
+    stats = build_stats(records, daily_records, daily_meta, excluded_count)
     if args.dry_run:
         print(
             "dry-run: "
