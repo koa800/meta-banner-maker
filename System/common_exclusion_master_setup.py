@@ -94,7 +94,46 @@ def set_basic_style(exclusion_ws: gspread.Worksheet, source_ws: gspread.Workshee
     source_ws.set_basic_filter()
     rule_ws.set_basic_filter()
 
-    exclusion_ws.columns_auto_resize(1, 10)
+    exclusion_ws.format(
+        "A2:C1000",
+        {"horizontalAlignment": "LEFT", "textFormat": {"fontSize": 10}},
+    )
+    exclusion_ws.format(
+        "D2:E1000",
+        {"horizontalAlignment": "CENTER", "textFormat": {"fontSize": 10}},
+    )
+    exclusion_ws.format(
+        "F2:F1000",
+        {"horizontalAlignment": "RIGHT", "textFormat": {"fontSize": 10}},
+    )
+    exclusion_ws.format(
+        "G2:G1000",
+        {"horizontalAlignment": "LEFT", "textFormat": {"fontSize": 10}},
+    )
+
+    source_ws.format(
+        "A2:E100",
+        {"horizontalAlignment": "LEFT", "textFormat": {"fontSize": 10}},
+    )
+    source_ws.format(
+        "F2:F100",
+        {"horizontalAlignment": "CENTER", "textFormat": {"fontSize": 10}},
+    )
+    source_ws.format(
+        "G2:H100",
+        {"horizontalAlignment": "RIGHT", "textFormat": {"fontSize": 10}},
+    )
+    source_ws.format(
+        "I2:I100",
+        {"horizontalAlignment": "LEFT", "textFormat": {"fontSize": 10}},
+    )
+
+    rule_ws.format(
+        "A2:C100",
+        {"horizontalAlignment": "LEFT", "textFormat": {"fontSize": 10}},
+    )
+
+    exclusion_ws.columns_auto_resize(1, 7)
     source_ws.columns_auto_resize(1, 9)
     rule_ws.columns_auto_resize(1, 3)
 
@@ -175,7 +214,6 @@ def main() -> None:
         ["項目", "ソース元", "スプレッドシートURL", "タブ名", "参照先列", "ステータス", "最終更新", "更新数", "メモ"],
         ["候補元", REFERENCE_SHEET_NAME, f"https://docs.google.com/spreadsheets/d/{REFERENCE_SHEET_ID}/edit", REFERENCE_TAB_NAME, "A〜最終列", "参照候補", now_text, str(max(len(reference_rows) - 1, 0)), "全員を自動除外しない。除外候補の確認元として使う"],
         ["正本", "【アドネス株式会社】共通除外マスタ", f"https://docs.google.com/spreadsheets/d/{TARGET_SHEET_ID}/edit", "除外リスト", "A〜G列", "手動管理", now_text, str(row_count), "今後の除外追加はこのシートだけで行う"],
-        ["移行履歴", "【アドネス株式会社】顧客データ（複数イベント）", f"https://docs.google.com/spreadsheets/d/{SOURCE_SHEET_ID}/edit", "除外リスト", "A〜E列", "移行済み", now_text, str(row_count), "初回作成時に既存の除外リストを移行"],
     ]
     source_ws.clear()
     source_ws.update(range_name="A1:I{}".format(len(source_values)), values=source_values)
@@ -185,6 +223,7 @@ def main() -> None:
         ["役割", "このシートを全体の共通除外マスタとして使う", "集客 / 個別予約 / 決済 などで共通参照する前提"],
         ["候補元", "支払管理表 / 全メンバーリスト を除外候補の確認元にする", "全員を自動除外しない。必要な人だけ除外リストへ追加する"],
         ["除外判定", "メールアドレス または 電話番号 が一致した新規データを除外する", "名前だけでは除外判定しない"],
+        ["無条件除外", "対象者名やメールアドレスに test / テスト / sample / サンプル / dummy が入るものは除外対象とする", "人を特定せず明らかにテストと分かるものだけに限定する"],
         ["適用範囲", "全体 / 集客 / 個別予約 / 決済 / 会員 で管理する", "全体 はすべての集計で除外"],
         ["過去データ", "過去に確定済みの集計値は遡って除外しない", "新しく発生したデータだけ除外判定する"],
         ["初期データ", "【アドネス株式会社】顧客データ（複数イベント） / 除外リスト を移植", "初回整備の履歴として残す"],
