@@ -250,6 +250,10 @@ exploratory に新規 relay を開いた時は、rollback を exact に持つ。
 - create 入口
   - `https://zapier.com/app/assets/zaps/folders/019cdd75-b612-ec46-7e5b-bd8a9015a667`
   - `Assets > Zaps > 甲原 > Create Zap`
+- exact には、folder page を開くだけでは builder に入らない
+  - まず `甲原` folder page を開く
+  - その上で `Create Zap` を押す
+  - ここで初めて `Untitled Zap / Draft` builder に入る
 
 2026-03-16 live では、`Create Zap` を開いただけでは assets 一覧に `Untitled Zap` は出なかった。current では、draft が persisted する前に `trigger` 選択などもう 1 段階進む可能性が高い。探索だけなら、builder 側の `Untitled Zap / Draft` と assets 一覧の両方を見て cleanup 判断する。
 

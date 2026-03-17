@@ -134,12 +134,40 @@ def _wait_for_new_row_raw(before: list[dict[str, Any]], *, timeout_seconds: int 
 
 
 def _open_create_target_raw() -> str:
-    target = find_target(url_contains="/webintent/create-zap") or create_target(CREATE_URL)
+    target = find_target(url_contains="/app/assets/zaps/folders/019cdd75-b612-ec46-7e5b-bd8a9015a667") or create_target(CREATE_URL)
     target_id = str(target["id"])
     activate_target(target_id)
     navigate_target(target_id, CREATE_URL)
+    time.sleep(2.5)
+    if not click_first(
+        target_id,
+        selectors=["button", "a", "div[role='button']"],
+        text_candidates=["Create Zap"],
+    ):
+        raise RuntimeError("raw fallback で folder page の Create Zap を押せませんでした")
     time.sleep(3.0)
     return target_id
+
+
+async def _open_create_from_folder(page) -> None:
+    await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=120000)
+    await page.wait_for_timeout(2500)
+    create_candidates = [
+        page.get_by_role("button", name="Create Zap").first,
+        page.get_by_text("Create Zap", exact=False).first,
+    ]
+    clicked = False
+    for locator in create_candidates:
+        try:
+            if await locator.is_visible(timeout=1200):
+                await locator.click(timeout=5000)
+                clicked = True
+                break
+        except Exception:
+            continue
+    if not clicked:
+        raise RuntimeError("folder page の Create Zap を押せませんでした")
+    await page.wait_for_timeout(3000)
 
 
 def _choose_webhook_trigger_raw(target_id: str) -> None:
@@ -611,8 +639,7 @@ async def run_probe(
             try:
                 before = await _collect_untitled_rows(cleanup_page)
 
-                await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=120000)
-                await page.wait_for_timeout(3000)
+                await _open_create_from_folder(page)
                 created_title = await page.title()
                 header = ""
                 for selector in ("text=Untitled Zap", "text=Draft", "text=Trigger"):

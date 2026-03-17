@@ -9,6 +9,8 @@
 - create 入口
   - `https://zapier.com/app/assets/zaps/folders/019cdd75-b612-ec46-7e5b-bd8a9015a667`
   - `Assets > Zaps > 甲原 > Create Zap`
+- exact には、folder page を開いてから `Create Zap` を押す
+- folder page を開いただけでは builder に入らない
 - current の代表 family
   - `Webhooks by Zapier / Catch Hook`
   - `Mailchimp / Add/Update Subscriber`
