@@ -222,6 +222,11 @@ def build_report(expected_account_name: str | None = None) -> dict[str, Any]:
         expected_account_name=expected_account_name,
     )
     context = fetch_authenticated_context(session, NOTIFICATION_PAGE_URL) or {}
+    if not context:
+        raise RuntimeError(
+            "Lステップの認証文脈を取得できませんでした。"
+            " ログイン切れ、または対象アカウント以外の文脈で開いている可能性があります。"
+        )
     notifications = list_paginated(session, NOTIFICATION_API_URL, max_pages=20)
     booking_notifications = [
         normalize_notification(item)
