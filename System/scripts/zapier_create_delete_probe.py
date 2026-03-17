@@ -14,6 +14,7 @@ from playwright.async_api import async_playwright
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from chrome_raw_cdp import activate_target
+from chrome_raw_cdp import body_snapshot
 from chrome_raw_cdp import click_first
 from chrome_raw_cdp import create_target
 from chrome_raw_cdp import eval_target
@@ -26,6 +27,16 @@ from zapier_login_helper import ensure_login as ensure_zapier_login
 CDP_URL = "http://127.0.0.1:9224"
 ASSETS_URL = "https://zapier.com/app/assets/zaps"
 CREATE_URL = "https://zapier.com/webintent/create-zap?useCase=from-scratch"
+
+
+def _extract_edit_path(url: str | None) -> str | None:
+    if not url:
+        return None
+    marker = "/webintent/edit-zap/"
+    if marker not in url:
+        return None
+    path = url.split("zapier.com", 1)[-1]
+    return path if path.startswith("/") else None
 
 ROWS_EXPRESSION = """
 () => {
@@ -75,6 +86,21 @@ async def _collect_untitled_rows(page) -> list[dict[str, str]]:
     return rows
 
 
+async def _wait_for_new_row(page, before: list[dict[str, Any]], *, timeout_ms: int = 20000, poll_ms: int = 1500) -> list[dict[str, Any]]:
+    before_paths = {str(item.get("href") or "") for item in before}
+    started = time.time()
+    while (time.time() - started) * 1000 <= timeout_ms:
+        rows = await _collect_untitled_rows(page)
+        created_rows = [
+            item for item in rows
+            if str(item.get("href") or "") not in before_paths
+        ]
+        if created_rows:
+            return created_rows
+        await page.wait_for_timeout(poll_ms)
+    return []
+
+
 def _find_assets_target_id() -> str:
     target = find_target(url_contains="/app/assets/zaps") or find_target(url_contains="zapier.com")
     if target is None:
@@ -89,6 +115,21 @@ def _collect_untitled_rows_raw() -> list[dict[str, Any]]:
     navigate_target(target_id, ASSETS_URL)
     time.sleep(2.5)
     return eval_target(target_id, f"({ROWS_EXPRESSION})()") or []
+
+
+def _wait_for_new_row_raw(before: list[dict[str, Any]], *, timeout_seconds: int = 20, poll_seconds: float = 1.5) -> list[dict[str, Any]]:
+    before_paths = {str(item.get("href") or "") for item in before}
+    started = time.time()
+    while time.time() - started <= timeout_seconds:
+        rows = _collect_untitled_rows_raw()
+        created_rows = [
+            item for item in rows
+            if str(item.get("href") or "") not in before_paths
+        ]
+        if created_rows:
+            return created_rows
+        time.sleep(poll_seconds)
+    return []
 
 
 def _open_create_target_raw() -> str:
@@ -237,12 +278,17 @@ def _try_choose_mailchimp_action_raw(target_id: str) -> dict[str, Any]:
     return result
 
 
-def _cleanup_untitled_via_script() -> dict[str, Any]:
+def _cleanup_exact_via_script(*, edit_path: str | None = None, name: str | None = None) -> dict[str, Any]:
+    command = [
+        "python3",
+        "/Users/koa800/Desktop/cursor/System/scripts/zapier_cleanup_untitled.py",
+    ]
+    if edit_path:
+        command.extend(["--edit-path", edit_path])
+    elif name:
+        command.extend(["--name", name])
     completed = subprocess.run(
-        [
-            "python3",
-            "/Users/koa800/Desktop/cursor/System/scripts/zapier_cleanup_untitled.py",
-        ],
+        command,
         capture_output=True,
         text=True,
         timeout=120,
@@ -266,6 +312,102 @@ async def _choose_webhook_trigger(page) -> None:
     await page.wait_for_timeout(3000)
 
 
+async def _open_action_picker(page) -> bool:
+    # current builder では text CTA だけでなく step node 自体が action picker 入口になる
+    try:
+        step_nodes = page.locator("[data-testid^='step-node-'][role='button']")
+        count = await step_nodes.count()
+        for index in range(count):
+            node = step_nodes.nth(index)
+            try:
+                text = (await node.inner_text(timeout=800)).strip()
+            except Exception:
+                text = ""
+            if "Select the event for your Zap to run" in text or "Action" in text:
+                await node.click(timeout=5000)
+                await page.wait_for_timeout(2500)
+                return True
+        if count >= 2:
+            await step_nodes.nth(1).click(timeout=5000)
+            await page.wait_for_timeout(2500)
+            return True
+    except Exception:
+        pass
+
+    action_cta_candidates = [
+        page.get_by_text("Add a step", exact=False).first,
+        page.get_by_text("Action", exact=False).first,
+        page.get_by_role("button", name="Action").first,
+    ]
+    for locator in action_cta_candidates:
+        try:
+            if await locator.is_visible(timeout=1000):
+                await locator.click(timeout=5000)
+                await page.wait_for_timeout(2500)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+async def _choose_action_app(page, app_name: str) -> bool:
+    query = app_name
+    if app_name == "Webhooks by Zapier":
+        query = "Webhooks"
+    try:
+        await page.get_by_role("textbox", name="Search apps").fill(query)
+    except Exception:
+        try:
+            await page.get_by_role("textbox").nth(0).fill(query)
+        except Exception:
+            return False
+    await page.wait_for_timeout(1500)
+    try:
+        if app_name == "Webhooks by Zapier":
+            await page.get_by_text("Webhooks", exact=False).last.click(timeout=10000)
+        else:
+            await page.get_by_text(app_name, exact=False).first.click(timeout=10000)
+        await page.wait_for_timeout(2500)
+        return True
+    except Exception:
+        return False
+
+
+async def _choose_event(page, event_name: str) -> bool:
+    choose_event_candidates = [
+        page.get_by_text("Choose an event", exact=False).first,
+        page.get_by_text("Event", exact=False).first,
+    ]
+    opened = False
+    for locator in choose_event_candidates:
+        try:
+            if await locator.is_visible(timeout=1000):
+                await locator.click(timeout=5000)
+                opened = True
+                break
+        except Exception:
+            continue
+    if not opened:
+        return False
+    await page.wait_for_timeout(1500)
+    try:
+        await page.get_by_text(event_name, exact=False).first.click(timeout=10000)
+        await page.wait_for_timeout(2500)
+        return True
+    except Exception:
+        return False
+
+
+async def _detect_post_action_stage(page) -> str | None:
+    if await page.locator("text=Choose account").first.is_visible(timeout=1200):
+        return "Choose account"
+    if await page.locator("text=Set up action").first.is_visible(timeout=1200):
+        return "Set up action"
+    if await page.locator("text=Test").first.is_visible(timeout=1200):
+        return "Test"
+    return None
+
+
 async def _try_choose_mailchimp_action(page) -> dict[str, Any]:
     result: dict[str, Any] = {
         "action_app": None,
@@ -274,56 +416,41 @@ async def _try_choose_mailchimp_action(page) -> dict[str, Any]:
         "post_action_stage": None,
     }
     try:
-        action_cta_candidates = [
-            page.get_by_text("Add a step", exact=False).first,
-            page.get_by_text("Action", exact=False).first,
-            page.get_by_role("button", name="Action").first,
-        ]
-        clicked = False
-        for locator in action_cta_candidates:
-            try:
-                if await locator.is_visible(timeout=1000):
-                    await locator.click(timeout=5000)
-                    clicked = True
-                    break
-            except Exception:
-                continue
-        if not clicked:
+        if not await _open_action_picker(page):
             return result
 
-        await page.wait_for_timeout(2500)
-        try:
-            await page.get_by_role("textbox", name="Search apps").fill("Mailchimp")
-        except Exception:
-            await page.get_by_role("textbox").nth(0).fill("Mailchimp")
-        await page.wait_for_timeout(1500)
-        await page.get_by_text("Mailchimp", exact=False).first.click(timeout=10000)
-        await page.wait_for_timeout(2500)
-
-        choose_event_candidates = [
-            page.get_by_text("Choose an event", exact=False).first,
-            page.get_by_text("Event", exact=False).first,
-        ]
-        for locator in choose_event_candidates:
-            try:
-                if await locator.is_visible(timeout=1000):
-                    await locator.click(timeout=5000)
-                    break
-            except Exception:
-                continue
-        await page.wait_for_timeout(1500)
-        await page.get_by_text("Add/Update Subscriber", exact=False).first.click(timeout=10000)
-        await page.wait_for_timeout(2500)
+        if not await _choose_action_app(page, "Mailchimp"):
+            return result
+        if not await _choose_event(page, "Add/Update Subscriber"):
+            return result
 
         result["action_app"] = "Mailchimp"
         result["action_event"] = "Add/Update Subscriber"
         result["action_selected"] = True
-        if await page.locator("text=Choose account").first.is_visible(timeout=1500):
-            result["post_action_stage"] = "Choose account"
-        elif await page.locator("text=Set up action").first.is_visible(timeout=1500):
-            result["post_action_stage"] = "Set up action"
-        elif await page.locator("text=Test").first.is_visible(timeout=1500):
-            result["post_action_stage"] = "Test"
+        result["post_action_stage"] = await _detect_post_action_stage(page)
+        return result
+    except Exception:
+        return result
+
+
+async def _try_choose_webhook_post_first_action(page) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "action_app": None,
+        "action_event": None,
+        "action_selected": False,
+        "post_action_stage": None,
+    }
+    try:
+        if not await _open_action_picker(page):
+            return result
+        if not await _choose_action_app(page, "Webhooks by Zapier"):
+            return result
+        if not await _choose_event(page, "POST"):
+            return result
+        result["action_app"] = "Webhooks by Zapier"
+        result["action_event"] = "POST"
+        result["action_selected"] = True
+        result["post_action_stage"] = await _detect_post_action_stage(page)
         return result
     except Exception:
         return result
@@ -337,62 +464,28 @@ async def _try_choose_webhook_post_action(page) -> dict[str, Any]:
         "post_second_action_stage": None,
     }
     try:
-        action_cta_candidates = [
-            page.get_by_text("Add a step", exact=False).first,
-            page.get_by_text("Action", exact=False).first,
-            page.get_by_role("button", name="Action").first,
-        ]
-        clicked = False
-        for locator in action_cta_candidates:
-            try:
-                if await locator.is_visible(timeout=1000):
-                    await locator.click(timeout=5000)
-                    clicked = True
-                    break
-            except Exception:
-                continue
-        if not clicked:
+        if not await _open_action_picker(page):
             return result
 
-        await page.wait_for_timeout(2500)
-        try:
-            await page.get_by_role("textbox", name="Search apps").fill("Webhooks")
-        except Exception:
-            await page.get_by_role("textbox").nth(0).fill("Webhooks")
-        await page.wait_for_timeout(1500)
-        await page.get_by_text("Webhooks", exact=False).first.click(timeout=10000)
-        await page.wait_for_timeout(2500)
-
-        choose_event_candidates = [
-            page.get_by_text("Choose an event", exact=False).first,
-            page.get_by_text("Event", exact=False).first,
-        ]
-        for locator in choose_event_candidates:
-            try:
-                if await locator.is_visible(timeout=1000):
-                    await locator.click(timeout=5000)
-                    break
-            except Exception:
-                continue
-        await page.wait_for_timeout(1500)
-        await page.get_by_text("POST", exact=False).first.click(timeout=10000)
-        await page.wait_for_timeout(2500)
+        if not await _choose_action_app(page, "Webhooks by Zapier"):
+            return result
+        if not await _choose_event(page, "POST"):
+            return result
 
         result["second_action_app"] = "Webhooks by Zapier"
         result["second_action_event"] = "POST"
         result["second_action_selected"] = True
-        if await page.locator("text=Choose account").first.is_visible(timeout=1500):
-            result["post_second_action_stage"] = "Choose account"
-        elif await page.locator("text=Set up action").first.is_visible(timeout=1500):
-            result["post_second_action_stage"] = "Set up action"
-        elif await page.locator("text=Test").first.is_visible(timeout=1500):
-            result["post_second_action_stage"] = "Test"
+        result["post_second_action_stage"] = await _detect_post_action_stage(page)
         return result
     except Exception:
         return result
 
 
-async def run_probe(with_action: bool = False, with_second_action: bool = False) -> dict[str, Any]:
+async def run_probe(
+    with_action: bool = False,
+    with_second_action: bool = False,
+    action_app: str = "mailchimp",
+) -> dict[str, Any]:
     try:
         async with async_playwright() as p:
             try:
@@ -427,7 +520,10 @@ async def run_probe(with_action: bool = False, with_second_action: bool = False)
                     "action_selected": False,
                 }
                 if with_action:
-                    action_result = await _try_choose_mailchimp_action(page)
+                    if action_app == "webhook-post":
+                        action_result = await _try_choose_webhook_post_first_action(page)
+                    else:
+                        action_result = await _try_choose_mailchimp_action(page)
 
                 second_action_result = {
                     "second_action_app": None,
@@ -438,13 +534,20 @@ async def run_probe(with_action: bool = False, with_second_action: bool = False)
                 if with_action and with_second_action and action_result.get("action_selected"):
                     second_action_result = await _try_choose_webhook_post_action(page)
 
+                created_edit_path = _extract_edit_path(page.url)
+                created_row: dict[str, Any]
+                if created_edit_path:
+                    created_row = {"href": created_edit_path}
+                else:
+                    created_rows = await _wait_for_new_row(cleanup_page, before)
+                    if len(created_rows) != 1:
+                        raise RuntimeError("新規 draft の edit_path を一意に特定できませんでした")
+                    created_row = created_rows[0]
                 after_create = await _collect_untitled_rows(cleanup_page)
-                if len(after_create) <= len(before):
-                    raise RuntimeError("Catch Hook まで選択しても persisted draft が assets 一覧に現れませんでした")
 
                 await cleanup_page.goto(ASSETS_URL, wait_until="domcontentloaded", timeout=120000)
                 await cleanup_page.wait_for_timeout(3000)
-                row_link = cleanup_page.locator('a[href*="/webintent/edit-zap/"]', has_text="Untitled Zap").first
+                row_link = cleanup_page.locator(f'a[href="{created_row["href"]}"]').first
                 await row_link.scroll_into_view_if_needed()
                 row = row_link.locator("xpath=ancestor::tr[1]")
                 menu_button = row.get_by_role("button", name="Zap actions")
@@ -458,6 +561,7 @@ async def run_probe(with_action: bool = False, with_second_action: bool = False)
                     "mode": "playwright",
                     "created_title": created_title,
                     "builder_marker": header,
+                    "created_edit_path": created_row.get("href"),
                     "before_count": len(before),
                     "after_open_count": len(after_create),
                     "persisted_after_open": True,
@@ -495,21 +599,37 @@ async def run_probe(with_action: bool = False, with_second_action: bool = False)
             "post_action_stage": None,
         }
         if with_action:
-            action_result = _try_choose_mailchimp_action_raw(target_id)
+            if action_app == "webhook-post":
+                action_result = {
+                    "action_app": None,
+                    "action_event": None,
+                    "action_selected": False,
+                    "post_action_stage": None,
+                }
+            else:
+                action_result = _try_choose_mailchimp_action_raw(target_id)
         second_action_result = {
             "second_action_app": None,
             "second_action_event": None,
             "second_action_selected": False,
             "post_second_action_stage": None,
         }
+        current_snapshot = body_snapshot(target_id)
+        created_edit_path = _extract_edit_path(str(current_snapshot.get("url") or ""))
+        if created_edit_path:
+            created_row = {"href": created_edit_path}
+        else:
+            created_rows = _wait_for_new_row_raw(before)
+            if len(created_rows) != 1:
+                raise RuntimeError("raw fallback で新規 draft の edit_path を一意に特定できませんでした")
+            created_row = created_rows[0]
         after_create = _collect_untitled_rows_raw()
-        if len(after_create) <= len(before):
-            raise RuntimeError("raw fallback でも persisted draft が assets 一覧に現れませんでした")
-        cleanup = _cleanup_untitled_via_script()
+        cleanup = _cleanup_exact_via_script(edit_path=created_row.get("href"))
         return {
             "mode": "raw",
             "created_title": title,
             "builder_marker": marker,
+            "created_edit_path": created_row.get("href"),
             "before_count": len(before),
             "after_open_count": len(after_create),
             "persisted_after_open": True,
@@ -526,13 +646,25 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Zapier exploratory draft create/delete probe")
     parser.add_argument("--with-action", action="store_true", help="Mailchimp Add/Update Subscriber まで試す")
     parser.add_argument("--with-second-action", action="store_true", help="2つ目の action として Webhooks POST まで試す")
+    parser.add_argument(
+        "--action-app",
+        choices=["mailchimp", "webhook-post"],
+        default="mailchimp",
+        help="最初の action として選ぶ app/event",
+    )
     args = parser.parse_args()
     login_status = ensure_zapier_login(ASSETS_URL)
     if login_status == 2:
         raise SystemExit("Zapier browser session is not ready. CDP connection timed out.")
     if login_status != 0:
         raise SystemExit("Zapier browser session is not ready. Complete login first.")
-    result = asyncio.run(run_probe(with_action=args.with_action, with_second_action=args.with_second_action))
+    result = asyncio.run(
+        run_probe(
+            with_action=args.with_action,
+            with_second_action=args.with_second_action,
+            action_app=args.action_app,
+        )
+    )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

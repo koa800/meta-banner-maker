@@ -106,6 +106,11 @@
 - exact に読めているもの
   - `Create Zap` の入口
   - `Untitled Zap / Draft` の cleanup 観点
+  - current の Zapier assets には既存の `Untitled Zap` draft が複数残っている
+  - exploratory relay の cleanup を `Untitled Zap` 一括削除に寄せるのは危険
+  - 新規 relay の live probe では、作成直後に unique 名へ変えるか、`last modified` と `href` で対象 draft を特定してから削除する
+  - current の `zapier_cleanup_untitled.py` は `--edit-path` と `--name` 指定を受けられる
+  - current の `zapier_create_delete_probe.py` は `before/after` の diff で新規 draft の `edit_path` を特定し、その row だけ cleanup する
   - `Trigger -> Action` の最小 2 step 構造
   - `Action > Mailchimp > Add/Update Subscriber` で `Test` stage に進めること
   - `Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap`
@@ -114,6 +119,8 @@
 ## まだ live create / rollback を厚くすべき範囲
 
 - `Catch Hook -> Mailchimp Add/Update Subscriber -> Test` は exploratory で 1 本通った
+- `Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap`
+  は current UI で 1 action relay として live exact に通った
 - `trigger 1 + action 2` の exploratory probe は cleanup まで通るが、current は `second_action_selected = false`
 - current builder 上では first action 後に
   - `Choose an event`
