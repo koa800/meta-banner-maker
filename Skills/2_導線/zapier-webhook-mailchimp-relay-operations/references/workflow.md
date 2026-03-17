@@ -12,6 +12,11 @@
 - current の代表 family
   - `Webhooks by Zapier / Catch Hook`
   - `Mailchimp / Add/Update Subscriber`
+- `trigger 1 + action 2` の current 複雑パターンは live exact 済み
+  - `trigger = Webhooks by Zapier / Catch Hook`
+  - `action 1 = Mailchimp / Add/Update Subscriber`
+  - `action 2 = Webhooks by Zapier / POST`
+  - 逆順の `action 1 = Webhooks by Zapier / POST`, `action 2 = Mailchimp / Add/Update Subscriber` も live exact 済み
 
 ## representative pattern
 
@@ -292,6 +297,8 @@ current の Addness では、`Test trigger` と `Test step` を飛ばして `Pub
 - `Mailchimp / Add/Update Subscriber` の configure で `Tag(s)` まで入れないと relay の意味が読めない
 - `Google Sheets -> Webhooks POST` family は current main relay ではなく例外 family
 - visible 一覧だけでは分からない時も、まず `Name / Apps / Location / Status` で family を切る
+- `2つ目の action` は、既存 action の `Choose an event` を押し直しても開かない
+- current では `Add a step` の visible text を探すより、`aria-label=\"Add step\"` の button を使う方が exact
 
 ## 新規作成と既存変更の判断
 

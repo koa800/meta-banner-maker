@@ -402,6 +402,8 @@ representative family
 - 3 本目以降の action
 を同時に足さない。
 
+current の UI では、2 本目の action を足す入口は visible text の `Add a step` ではなく、`aria-label=\"Add step\"` の button として出る。既存 action の `Choose an event` を押し直すと、step 追加ではなくその action の fields に戻るので注意する。
+
 ## ベストな活用場面
 
 - front system の event を Mailchimp の state に安全に変換したい時
