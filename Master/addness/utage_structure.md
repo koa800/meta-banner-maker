@@ -200,6 +200,23 @@
     - `コース一覧 > 追加` で `create -> delete` を再確認済み
     - 必須は `コース名` `管理名称` `リンク先URL` の最小入力
     - current の probe では `before_count = 0` `after_create_count = 1` `after_delete_count = 0`
+  - `python3 System/scripts/utage_course_edit_rollback_probe.py`
+    - temporary course を `create`
+    - `コース一覧 > コース基本情報編集`
+    - `管理名称` を 1 変更
+    - `保存`
+    - 値の変更確認
+    - 元の値に rollback
+    - row delete
+    - current 実績
+      - `edit_url = /course/JgqTaLO5HQBy/edit`
+      - `before_values["管理名称"] = ..._mg`
+      - `after_values["管理名称"] = ZZ_TEST_UTAGE_course_edit_probe_UPDATED`
+      - `rollback_values["管理名称"] = ..._mg`
+      - `after_delete_count = 0`
+    - 学習
+      - `コース一覧` の row text は `管理名称` 側で読む方がズレにくい
+      - exact な edit 入口は `コース基本情報編集`
   - `python3 System/scripts/utage_lesson_create_delete_probe.py`
     - `レッスン一覧 > 追加` で `create -> delete` を再確認済み
     - 必須は `グループ` `レッスン名` `コンテンツ` の最小入力
@@ -237,6 +254,7 @@
     - action 一覧 `1件追加`
     - row dropdown 内の `削除` で cleanup
     まで済み
+  - 残差は `商品詳細管理 / 購入後アクション / 開放するバンドルコース` を 1 本で downstream までつなぐこと
   - `登録経路 > 追加` は
     - live create form snapshot
     - `管理名称 / ファネルステップ / ページ`

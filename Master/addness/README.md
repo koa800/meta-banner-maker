@@ -37,7 +37,7 @@
 ## 最新の厳しめ採点
 
 - Lステップ: `9.8 / 10`
-- UTAGE: `9.8 / 10`
+- UTAGE: `9.9 / 10`
 - Mailchimp: `9.4 / 10`
 - short.io: `9.6 / 10`
 - Zapier: `9.3 / 10`
@@ -91,6 +91,11 @@
 - 2026-03-17 の current では `レッスン一覧 > 追加` も raw probe で `create -> delete` を再確認した
   - 必須は `グループ` `レッスン名` `コンテンツ` の最小入力
   - save 後に一覧へ `1件` 出ることを確認し、その後 row delete で `0件` に戻るところまで確認済み
+- 2026-03-17 の current では `コース一覧 > コース基本情報編集 > 管理名称 > 保存` も live で再確認した
+  - `管理名称` を 1変更
+  - 値の変更確認
+  - 元の値に rollback
+  - row delete まで完了
 - Mailchimp は raw fallback で `https://us5.admin.mailchimp.com/login/tfa-post` の verify 画面到達まで確認できた
 - helper は hanging せず `LOGIN_NEEDS_TFA` で返るところまでは安定
 - `Resend code` 後に `mailchimp_tfa_code_helper.py --wait` を流した current 実行では `found=false`
@@ -482,9 +487,8 @@
   - `リッチメニュー 2ボタン`
   を live で `作成 -> テスト -> rollback / cleanup`
 - UTAGE
-  - `登録経路 1追加`
   - `商品管理 / 商品詳細管理 / 購入後アクション 1本`
-  - `会員サイト 1変更`
+  - `開放するバンドルコース` までの downstream smoke
   を live で `保存 -> downstream 確認 -> rollback`
 - Mailchimp
   - `Journey 1本`
