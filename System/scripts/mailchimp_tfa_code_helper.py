@@ -58,14 +58,40 @@ def fetch_group_log(date_str: str) -> dict[str, Any]:
     return response.json()
 
 
+def fetch_group_names(group_ids: list[str]) -> dict[str, str]:
+    if not group_ids:
+        return {}
+    config = load_line_bot_config()
+    base_url = str(config["server_url"]).rstrip("/")
+    headers = {"Authorization": f"Bearer {config['agent_token']}"}
+    response = requests.get(
+        f"{base_url}/api/group-names",
+        headers=headers,
+        params={"group_ids": ",".join(group_ids)},
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    return payload if isinstance(payload, dict) else {}
+
+
 def iter_mailchimp_codes(max_days: int = 7) -> list[MailchimpVerificationCode]:
     hits: list[MailchimpVerificationCode] = []
     today = datetime.now()
     for offset in range(max_days):
         date_str = (today - timedelta(days=offset)).strftime("%Y-%m-%d")
         payload = fetch_group_log(date_str)
-        for group_id, group_data in (payload.get("groups") or {}).items():
-            group_name = str(group_data.get("group_name") or "")
+        groups = payload.get("groups") or {}
+        missing_name_ids = [
+            str(group_id)
+            for group_id, group_data in groups.items()
+            if not str((group_data or {}).get("group_name") or "").strip()
+        ]
+        resolved_names = fetch_group_names(missing_name_ids)
+        for group_id, group_data in groups.items():
+            group_name = str(group_data.get("group_name") or "").strip()
+            if not group_name:
+                group_name = str(resolved_names.get(group_id) or "").strip()
             for message in group_data.get("messages") or []:
                 text = str(message.get("text") or "")
                 match = None

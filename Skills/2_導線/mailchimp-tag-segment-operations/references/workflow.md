@@ -114,15 +114,18 @@
   - `id=4641625`
   - delete `204`
 - member:
-  - `koa800sea.nifs+zzrouteprobe20260317@gmail.com`
+- `koa800sea.nifs+zzrouteprobe20260317@gmail.com`
 - 通したこと:
   - `ensure-member`
   - `add-tag --tag youtube_skillplus_routeprobe`
   - `remove-tag --tag youtube_skillplus_routeprobe`
-  - `archive-member`
+  - `archive-member` (`POST /actions/delete-permanent`)
 - current 学習:
   - `ensure-member` 直後の `add-tag` は、一時的に `404` になる回があった
   - current では `member` で対象が見えてから再試行すると成功した
+  - `members/{hash}` への `DELETE` は `405`
+  - cleanup は `POST /actions/delete-permanent`
+  - safe exploratory member は毎回 fresh alias を切る
 
 ## ここで止めて確認する条件
 

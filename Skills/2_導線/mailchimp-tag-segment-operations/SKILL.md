@@ -25,10 +25,12 @@ Addness 固有の current 例、代表 tag、配信実績のある segment は `
   - `create-static-empty -> delete`
   まで live exact 済み
 - `tag`
-  - `ensure-member -> add-tag -> remove-tag -> archive-member`
+  - `ensure-member -> add-tag -> remove-tag -> delete-permanent`
   まで live exact 済み
 - `ensure-member` 直後の `add-tag` は、一時的に `404` になる回がある
   - current では `member` で対象が見えてから再試行すると成功した
+- safe exploratory member は毎回 fresh alias を切る
+  - `delete-permanent` 後の同一 address を即再利用する前提で組まない
 
 ## 役割
 

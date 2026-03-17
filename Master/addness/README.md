@@ -37,7 +37,7 @@
 ## 最新の厳しめ採点
 
 - Lステップ: `9.8 / 10`
-- UTAGE: `9.9 / 10`
+- UTAGE: `9.95 / 10`
 - Mailchimp: `9.4 / 10`
 - short.io: `9.6 / 10`
 - Zapier: `9.3 / 10`
@@ -63,6 +63,11 @@
   - 新規 relay の live probe では、作成直後に unique 名へ変えるか、`last modified` と `href` で対象 draft を特定してから削除する
   - current の `zapier_cleanup_untitled.py` は `--edit-path` と `--name` 指定を受けられる
   - current の `zapier_create_delete_probe.py` は `before/after` の diff で新規 draft の `edit_path` を特定し、その row だけ cleanup する
+  - 2026-03-17 の current では `Untitled Zap / Draft` の rename も live で再確認した
+    - 左上 title button は exact text 一致ではなく、`Untitled Zap` を含む button として拾う必要がある
+    - rename 後は assets 一覧の row 名へ即反映される
+    - 一方で `Zap details > Folder = 甲原` は current の row `Location` に即反映されなかった
+    - したがって `Folder = 甲原` は Addness の運用ルールとして維持しつつ、current UI では exact-confirmed ではない
 - 2026-03-17 の current では、UTAGE と Zapier は raw fallback で `ALREADY_LOGGED_IN_RAW` まで確認できた
 - UTAGE は raw fallback で
   - `商品管理`
@@ -91,11 +96,27 @@
 - 2026-03-17 の current では `レッスン一覧 > 追加` も raw probe で `create -> delete` を再確認した
   - 必須は `グループ` `レッスン名` `コンテンツ` の最小入力
   - save 後に一覧へ `1件` 出ることを確認し、その後 row delete で `0件` に戻るところまで確認済み
+- 2026-03-17 の current では `レッスン一覧 > 編集` も live で再確認した
+  - `レッスン名` を 1変更
+  - 値の変更確認
+  - 元の値に rollback
+  - row delete まで完了
+  - `コンテンツ` は hidden textarea なので、Playwright の `fill()` ではなく JS で値を入れる必要がある
 - 2026-03-17 の current では `コース一覧 > コース基本情報編集 > 管理名称 > 保存` も live で再確認した
   - `管理名称` を 1変更
   - 値の変更確認
   - 元の値に rollback
   - row delete まで完了
+- 2026-03-17 の current では `商品詳細管理 > 追加` で `実行するアクション / 開放するバンドルコース` の chain save も live で再確認した
+  - probe: `python3 System/scripts/utage_detail_chain_probe.py`
+  - exploratory product 配下で detail を 1件追加
+  - `実行するアクション = 【スタンダード】事業構築コース　講義保管庫解放アクション`
+  - `開放するバンドルコース = スキルプラス講義保管庫全開放`
+  - save 後に detail row が `1件` 出ることを確認
+  - `detail edit` を再度開いて selected value を再読込
+    - `action_id = 1127`
+    - `bundle_id = 8403`
+  - product row delete で cleanup 済み
 - Mailchimp は raw fallback で `https://us5.admin.mailchimp.com/login/tfa-post` の verify 画面到達まで確認できた
 - helper は hanging せず `LOGIN_NEEDS_TFA` で返るところまでは安定
 - `Resend code` 後に `mailchimp_tfa_code_helper.py --wait` を流した current 実行では `found=false`
@@ -104,23 +125,39 @@
 - 2026-03-17 の current では browser 上で `Success! Your SMS verification code is on its way! Check your phone to catch it!` まで確認した
   - それでも helper は `found=false` だった
   - つまり current blocker は `SMS送信` ではなく `today の LINE group-log 取得`
-  - さらに `api/group-log?date=2026-03-17` を直接叩くと `groups=0` を返した
-  - つまり `Mailchimp認証` グループだけの問題ではなく、today の group-log 全体が空だった
+- その後の再確認では `api/group-log?date=2026-03-17` は `groups=4` を返した
+- つまり current blocker は `today の group-log 全体が空` ではなく、
+  - today の group-log 自体は取れている
+  - ただし `Mailchimp認証` の `group_id = Ce2900a5b8c1efb939b3778262f1a9808` が today payload に現れていない
+  こと
+- 2026-03-17 の current payload では、today の `groups` は 4 件とも `group_name=""`
+  - `C2978001e19bfd7ea9608a586f372173c`
+  - `C330ef524daef13701ef3bd1f8127207f`
+  - `C5d39c4fe007af6773f770eb991b77cac`
+  - `Ce2cd4420d4b7582a89c00a7294256f95`
+- 本文検索では `Mailchimp` / `認証コード` / `6桁コード` に一致する today message は取れなかった
+- つまり current blocker は helper の優先順ではなく、`today の group-log そのものに Mailchimp 認証 message が載っていない` こと
 - `mailchimp_tfa_code_helper.py` は current で
   - `Mailchimp認証` グループ優先
   - known `group_id = Ce2900a5b8c1efb939b3778262f1a9808` も優先
   - 複数の code pattern 許容
   - warning suppress
   に更新済み
+  - `group_id -> group_name` の逆引き fallback も追加済み
+  - `python3 System/scripts/mailchimp_tfa_code_helper.py --max-days 7 --max-age-minutes 10080`
+    で `2026-03-16T23:46:49 / code=506232 / group_id=Ce2900a5b8c1efb939b3778262f1a9808 / group_name=MailChimp認証`
+    を再取得できた
   - current の `group-log API` では、この group が `group_name=""` で返る回がある
   - 2026-03-16 の履歴ログでは、`group_name=""` でも `group_id = Ce2900a5b8c1efb939b3778262f1a9808` 優先で code を再取得できた
   - つまり helper 自体は `group_name 空文字` に耐えられる
 - それでも `found=false` の時は、helper ではなく server 側の group-log 取得経路を疑う
 - `mailchimp_login_helper.py` の Playwright 側 TFA は current で `wait_for_mailchimp_code(...)` を使う
 - したがって current の残差は helper の参照漏れではなく、本当に `today の LINE group-log 取得` 側
-- Mailchimp API では `saved segment create -> delete` と `ensure-member -> add-tag -> remove-tag -> archive-member` まで live exact 済み
+- Mailchimp API では `saved segment create -> delete` と `ensure-member -> add-tag -> remove-tag -> delete-permanent` まで live exact 済み
 - `ensure-member` 直後の `add-tag` は、一時的に `404` になる回がある
   - current では `member` で見えてから再試行すると成功した
+- `members/{hash}` への `DELETE` は current で `405`
+  - cleanup は `POST /actions/delete-permanent` が通る
 
 ## 最新 readiness snapshot
 
@@ -370,10 +407,38 @@
     - `Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Webhooks by Zapier > POST -> Test -> Delete Zap`
     - まで current UI で完了
     - つまり current では external account 不要の 1 action relay も live exact に通る
-  - `python3 System/scripts/zapier_create_delete_probe.py --with-action --with-second-action`
-    - cleanup は成功
-    - `second_action_selected = false`
-    - つまり `trigger 1 + action 2` は未完だが、1 action relay は live exact で通った
+- `python3 System/scripts/zapier_create_delete_probe.py --with-action --with-second-action`
+  - cleanup は成功
+  - `trigger_app = Webhooks by Zapier`
+  - `trigger_event = Catch Hook`
+  - `action_app = Mailchimp`
+  - `action_event = Add/Update Subscriber`
+  - `second_action_app = Webhooks by Zapier`
+  - `second_action_event = POST`
+  - `second_action_selected = true`
+  - `post_second_action_stage = Test`
+  - つまり `trigger 1 + action 2` も live exact に通った
+  - `python3 System/scripts/zapier_create_delete_probe.py --with-action --with-second-action --action-app webhook-post --second-action-app mailchimp`
+    でも live exact に通った
+    - `trigger_app = Webhooks by Zapier`
+    - `trigger_event = Catch Hook`
+    - `action_app = Webhooks by Zapier`
+    - `action_event = POST`
+    - `second_action_app = Mailchimp`
+    - `second_action_event = Add/Update Subscriber`
+    - `post_second_action_stage = Test`
+    - `deleted = true`
+  - `python3 System/scripts/zapier_second_action_probe.py`
+    - first action = `Webhooks by Zapier -> POST`
+    - before:
+      - URL = `.../draft/.../setup`
+      - step node = `1. Catch Hook / 2. POST`
+      - body marker = `Action / Test / Publish`
+    - second action 入口を開くと URL が `.../setup -> .../fields`
+    - after:
+      - step node は `1. Catch Hook / 2. POST` のまま
+      - `Add a step` は visible marker に出ていない
+    - つまり current は `2つ目の action picker` ではなく `既存 action の fields` を再度開く回がある
 - current family snapshot
   - `WebHookCLIAPI@1.1.1:hook_v2 -> MailchimpCLIAPI@1.15.1:memberCreate`
     - `21本`
@@ -404,7 +469,7 @@
 | Mailchimp | tag / saved segment | saved segment の create / delete、tag-search、search-members、safe exploratory member で tag 1件 add -> rollback 済み | UI 側の tag 1件 create -> rollback |  
 | Mailchimp | report | representative 読解済み | actual case を増やす |
 | short.io | short link / create / resolve / update / delete / stats / sheet sync | live 実施済み | 実案件 end-to-end を増やす |
-| Zapier | representative relay 読解 | editor / step 読解済み、`Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap` まで live 完了、cleanup も確認済み | `trigger 1 + action 2` を 1本 |
+| Zapier | representative relay 読解 | editor / step 読解済み、`Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap` と `Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Webhooks by Zapier > POST -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap` まで live 完了、cleanup も確認済み | representative family を増やす |
 
 ### current live blocker
 
@@ -420,15 +485,27 @@
   - この修正で `Search apps` input が visible になるところまでは raw で再現できた
   - 一方で persisted draft の判定は timing と assets 一覧文脈の影響を受ける回があり、raw fallback だけでは毎回 `Untitled Zap` row を拾い切れない
   - つまり Zapier の create probe は current では `Playwright.connect_over_cdp が生きている回` を優先し、raw fallback は補助扱いにする
-  - `python3 System/scripts/zapier_create_delete_probe.py --with-action --with-second-action` は cleanup まで通るが、`second_action_selected = false`
+  - `python3 System/scripts/zapier_create_delete_probe.py --with-action --with-second-action` は cleanup まで通る
+    - `second_action_app = Webhooks by Zapier`
+    - `second_action_event = POST`
+    - `post_second_action_stage = Test`
+  - `python3 System/scripts/zapier_create_delete_probe.py --with-action --with-second-action --action-app webhook-post --second-action-app mailchimp`
+    も cleanup まで通る
+    - `second_action_app = Mailchimp`
+    - `second_action_event = Add/Update Subscriber`
+    - `post_second_action_stage = Test`
   - first action 後の current builder には
     - `Choose an event`
     - `Select`
     - `Add account to continue`
     が visible
-  - つまり second action の blocker は、Mailchimp account を current Zapier account 文脈で選べないこと
+- 2026-03-17 の `zapier_second_action_probe.py` では、second action 入口を開くと `.../fields` に戻る回を確認した
+- current の実 UI では、`Add a step` は visible text ではなく `aria-label=\"Add step\"` の button として出る
+- `zapier_create_delete_probe.py` はこの selector を拾うよう更新済み
+- つまり second action の主 blocker は解消済み
+- 残差は representative family を増やすこと
   - current owner 表示は `【世捨人東大生】 ぜんT (Personal)`
-  - つまり current の残差は `trigger 1 + action 2` と representative family の追加で、1 action の create/cleanup 自体はかなり exact になった
+  - つまり current の残差は representative family の追加で、1 action / 2 action の create/cleanup 自体はかなり exact になった
 
 ## いま重要な残差
 

@@ -224,7 +224,14 @@ async def run_probe() -> dict[str, Any]:
             await page.get_by_label('レッスン名').fill(name)
             contents = page.locator('textarea[name="contents"]').first
             if await contents.count():
-                await contents.fill('<p>ZZ lesson probe</p>')
+                await contents.evaluate(
+                    """(el, value) => {
+                        el.value = value;
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    }""",
+                    "<p>ZZ lesson probe</p>",
+                )
             await page.get_by_role('button', name='保存').click()
             await page.wait_for_timeout(2500)
             error_texts = []

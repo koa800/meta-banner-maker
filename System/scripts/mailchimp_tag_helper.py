@@ -153,8 +153,8 @@ def update_tags(email: str, tag_name: str, active: bool, status_if_new: str | No
 def archive_member(email: str) -> dict[str, Any]:
     session, base_url = build_session()
     member_hash = subscriber_hash(email)
-    response = session.delete(
-        f"{base_url}/lists/{audience_id()}/members/{member_hash}",
+    response = session.post(
+        f"{base_url}/lists/{audience_id()}/members/{member_hash}/actions/delete-permanent",
         timeout=60,
     )
     response.raise_for_status()
@@ -162,7 +162,7 @@ def archive_member(email: str) -> dict[str, Any]:
         "audience_id": audience_id(),
         "email_address": email.strip().lower(),
         "member_hash": member_hash,
-        "archived": True,
+        "deleted_permanent": True,
         "status_code": response.status_code,
     }
 
@@ -195,7 +195,7 @@ def main() -> None:
     remove_parser.add_argument("--email", required=True)
     remove_parser.add_argument("--tag", required=True)
 
-    archive_parser = sub.add_parser("archive-member", help="Archive member")
+    archive_parser = sub.add_parser("archive-member", help="Cleanup member via delete-permanent")
     archive_parser.add_argument("--email", required=True)
 
     args = parser.parse_args()

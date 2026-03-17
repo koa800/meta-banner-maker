@@ -234,6 +234,23 @@
       - create template の slug と created funnel の slug は一致しない
       - actual な `ページ一覧` URL は created row action から取る
       - current では `row_link` の page id と `編集` route の page id が一致しないことがある
+  - `python3 System/scripts/utage_lesson_edit_rollback_probe.py`
+    - temporary lesson を `create`
+    - `レッスン一覧 > 編集`
+    - `レッスン名` を 1変更
+    - `保存`
+    - 値の変更確認
+    - 元の値に rollback
+    - row delete
+    - current 実績
+      - `edit_url = /site/BQys60HDeOWP/course/9cc2NZYZVTap/lesson/ikgrzdzdSb70/edit`
+      - `before_values["レッスン名"] = ZZ_TEST_20260317_160014_UTAGE_lesson_edit_probe`
+      - `after_values["レッスン名"] = ZZ_TEST_UTAGE_lesson_edit_probe_UPDATED`
+      - `rollback_values["レッスン名"] = ZZ_TEST_20260317_160014_UTAGE_lesson_edit_probe`
+      - `after_delete_count = 0`
+    - 学習
+      - `コンテンツ` は hidden textarea なので、Playwright の `fill()` ではなく JS で値を入れる必要がある
+      - lesson edit は `レッスン名` の exact rollback まで current UI で通る
 
 ## まだ live create / rollback を厚くすべき範囲
 
@@ -306,6 +323,16 @@
     - `detail_row_count = 1`
     - `save_result.error_texts = []`
     を確認済み
+- detail chain probe:
+  - `python3 System/scripts/utage_detail_chain_probe.py`
+  - exploratory 商品配下で `商品詳細管理 > 追加` の
+    - `実行するアクション`
+    - `開放するバンドルコース`
+    まで設定して `保存 -> detail edit 再読込 -> cleanup`
+  - current では
+    - `action_id = 1127`
+    - `bundle_id = 8403`
+    が edit 再読込でも保持されることを確認済み
 - page create/save probe:
   - `python3 System/scripts/utage_page_create_delete_probe.py`
   - temporary funnel 配下で `ページ一覧 -> 追加 -> 名称 -> 保存 -> row 確認 -> funnel delete rollback`
