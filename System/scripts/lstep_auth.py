@@ -210,6 +210,7 @@ def probe_source(source: dict[str, Any], referer: str, probe_url: str = DEFAULT_
                 payload = api.json()
                 json_ok = isinstance(payload, dict) and (
                     "data" in payload or "current_page" in payload or "last_page" in payload
+                    or "notifications" in payload
                 )
             except Exception:
                 json_ok = False

@@ -729,8 +729,8 @@ def load_notification_log_stats(target) -> Dict[str, str]:
     values = ws.get_all_values()
     event_count = 0
     for row in values[1:]:
-        row = row + [""] * max(0, 6 - len(row))
-        if any(str(cell).strip() for cell in row[:6]):
+        row = row + [""] * max(0, 7 - len(row))
+        if any(str(cell).strip() for cell in row[:7]):
             event_count += 1
     state = {}
     if os.path.exists(NOTIFICATION_STATE_PATH):
@@ -756,8 +756,8 @@ def load_notification_log_stats(target) -> Dict[str, str]:
         "最終同期日": latest_imported_at,
         "更新数": f"{event_count:,}" if event_count else "0",
         "エラー数": "0",
-            "メモ": "Slack #個別予約通知 と 過去の個別予約データ を統合。LSTEPメンバーIDで友だち一覧CSVに一致した時はメールアドレス / 電話番号も補完する",
-        }
+        "メモ": "Slack #個別予約通知 と 過去の個別予約データ を統合。Lステップリンクを保持し、旧CSVではなく将来の Lステップ live 取得でメールアドレス / 電話番号を補完する",
+    }
 
 
 def build_source_rows(stats: Dict[str, object], notification_stats: Dict[str, str]) -> List[List[str]]:

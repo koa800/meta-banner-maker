@@ -5,13 +5,12 @@
 役割:
 - Slack `#個別予約通知` に流れる Lステップ通知を 1イベント1行で保存する
 - `LSTEPメンバーID + Lステップアカウント名` をイベントキー候補として保持する
-- メールアドレスや顧客IDの照合は後から追記できる形にする
+- メールアドレスや電話番号は将来の Lステップ live 取得で補完できる形にする
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
 import html
 import json
 import os
@@ -84,20 +83,7 @@ TAB_SPECS = {
 ACCOUNT_RE = re.compile(r"^[\(（](.+?)[\)）]\s*タグ通知$")
 EVENT_AT_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
 LINE_NAME_RE = re.compile(r"^(.+?)にタグ[「\"]?★【個別予約完了】★[」\"]?が追加されました。?$")
-EMAIL_HEADER_RE = re.compile(r"メールアドレス|登録メールアドレス|占いメールアドレス")
-PHONE_HEADER_RE = re.compile(r"電話番号|お電話番号|携帯番号")
-
-ACCOUNT_SNAPSHOT_FILES = {
-    "みかみ＠AI_個別専用": "lstep_mikami_ai_kobetsu.csv",
-    "みかみ＠個別専用": "lstep_mikami_kobetsu.csv",
-    "スキルプラス＠企画専用": "lstep_skillplus.csv",
-    "【スキルプラス】フリープラン": "lstep_skillplus_freeplan.csv",
-    "フリープラン企画専用": "lstep_freeplan_kikaku.csv",
-    "【みかみ】アドネス株式会社": "lstep_mikami_addness.csv",
-    "スキルプラス【サポートLINE】": "lstep_skillplus_support.csv",
-}
-
-_snapshot_index_cache: Dict[str, Dict[str, Dict[str, str]]] = {}
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 @dataclass
@@ -124,29 +110,28 @@ class NotificationRecord:
 
     @property
     def dedupe_key(self) -> str:
-        parts = [
-            self.tagged_at,
-            self.account_name,
-            self.member_id,
-            self.line_name,
-            self.email,
-            self.phone,
-        ]
-        if not any(parts):
-            return ""
-        return " | ".join(parts).strip()
+        tagged_at = self.tagged_at.strip()
+        account_name = self.account_name.strip()
+        member_id = self.member_id.strip()
+        line_name = self.line_name.strip()
+        email = self.email.strip().lower()
+        phone = re.sub(r"\D", "", self.phone)
+
+        if tagged_at and account_name and member_id:
+            return " | ".join(["event", tagged_at, account_name, member_id]).strip()
+        if tagged_at and account_name and line_name:
+            return " | ".join(["event", tagged_at, account_name, line_name]).strip()
+        if tagged_at and line_name:
+            return " | ".join(["event", tagged_at, line_name]).strip()
+        if tagged_at and email:
+            return " | ".join(["event", tagged_at, email]).strip()
+        if tagged_at and phone:
+            return " | ".join(["event", tagged_at, phone]).strip()
+        return ""
 
     @property
     def legacy_key(self) -> str:
-        parts = [
-            self.tagged_at,
-            self.line_name,
-            self.email,
-            self.phone,
-        ]
-        if not any(parts):
-            return ""
-        return " | ".join(parts).strip()
+        return self.dedupe_key
 
 
 def col_letter(col_num: int) -> str:
@@ -188,70 +173,50 @@ def normalize_account_name(value: str) -> str:
     return str(value or "").strip().replace("@", "＠")
 
 
-def pick_best_value(row: List[str], indexes: List[int]) -> str:
-    for index in indexes:
-        if index < len(row):
-            value = str(row[index]).strip()
-            if value:
-                return value
+def is_email(value: str) -> bool:
+    return bool(EMAIL_RE.match(str(value or "").strip()))
+
+
+def normalize_phone(value: str) -> str:
+    raw = str(value or "").strip()
+    digits = re.sub(r"\D", "", raw)
+    if 10 <= len(digits) <= 11:
+        return digits
     return ""
 
 
-def load_snapshot_index(account_name: str) -> Dict[str, Dict[str, str]]:
-    normalized = normalize_account_name(account_name)
-    if normalized in _snapshot_index_cache:
-        return _snapshot_index_cache[normalized]
-
-    filename = ACCOUNT_SNAPSHOT_FILES.get(normalized)
-    if not filename:
-        _snapshot_index_cache[normalized] = {}
-        return {}
-
-    path = os.path.join(LSTEP_DATA_DIR, filename)
-    if not os.path.exists(path):
-        _snapshot_index_cache[normalized] = {}
-        return {}
-
-    with open(path, "r", encoding="utf-8-sig", newline="") as f:
-        rows = list(csv.reader(f))
-    if len(rows) < 2:
-        _snapshot_index_cache[normalized] = {}
-        return {}
-
-    header = rows[1]
-    email_indexes = [i for i, col in enumerate(header) if EMAIL_HEADER_RE.search(str(col))]
-    phone_indexes = [i for i, col in enumerate(header) if PHONE_HEADER_RE.search(str(col))]
-    index: Dict[str, Dict[str, str]] = {}
-    for row in rows[2:]:
-        if not row:
-            continue
-        member_id = str(row[0]).strip()
-        if not member_id:
-            continue
-        index[member_id] = {
-            "email": pick_best_value(row, email_indexes),
-            "phone": pick_best_value(row, phone_indexes),
-        }
-    _snapshot_index_cache[normalized] = index
-    return index
-
-
-def enrich_contact_fields(record: NotificationRecord) -> NotificationRecord:
-    if not record.account_name or not record.member_id:
-        return record
-    snapshot = load_snapshot_index(record.account_name)
-    if not snapshot:
-        return record
-    contact = snapshot.get(record.member_id) or {}
+def build_record(
+    tagged_at: str,
+    line_name: str,
+    member_id: str,
+    account_name: str,
+    notification_url: str,
+    slack_ts: str,
+    email: str,
+    phone: str,
+) -> NotificationRecord:
     return NotificationRecord(
-        tagged_at=record.tagged_at,
-        line_name=record.line_name,
-        member_id=record.member_id,
-        account_name=record.account_name,
-        notification_url=record.notification_url,
-        slack_ts=record.slack_ts,
-        email=record.email or str(contact.get("email") or "").strip(),
-        phone=record.phone or str(contact.get("phone") or "").strip(),
+        tagged_at=normalize_tagged_at(tagged_at),
+        line_name=str(line_name).strip(),
+        member_id=str(member_id).strip(),
+        account_name=str(account_name).strip(),
+        notification_url=str(notification_url).strip(),
+        slack_ts=str(slack_ts).strip(),
+        email=str(email).strip(),
+        phone=str(phone).strip(),
+    )
+
+
+def merge_record_pair(current: NotificationRecord, incoming: NotificationRecord) -> NotificationRecord:
+    return NotificationRecord(
+        tagged_at=current.tagged_at or incoming.tagged_at,
+        line_name=current.line_name or incoming.line_name,
+        member_id=current.member_id or incoming.member_id,
+        account_name=current.account_name or incoming.account_name,
+        notification_url=current.notification_url or incoming.notification_url,
+        slack_ts=current.slack_ts or incoming.slack_ts,
+        email=current.email or incoming.email,
+        phone=current.phone or incoming.phone,
     )
 
 
@@ -400,20 +365,21 @@ def load_existing_rows(ws) -> Dict[str, NotificationRecord]:
     phone_idx = header_index.get("電話番号")
     for row in values[1:]:
         row = row + [""] * max(0, len(COLUMNS) - len(row))
-        notification_url = str(row[notification_url_idx]).strip() if notification_url_idx is not None and notification_url_idx < len(row) else ""
-        if email_idx is None:
-            email = str(row[4]).strip() if len(row) > 4 else ""
-        else:
-            email = str(row[email_idx]).strip() if email_idx < len(row) else ""
-        if phone_idx is None:
-            phone = str(row[5]).strip() if len(row) > 5 else ""
-        else:
-            phone = str(row[phone_idx]).strip() if phone_idx < len(row) else ""
-        record = NotificationRecord(
-            tagged_at=normalize_tagged_at(row[tagged_at_idx] if tagged_at_idx < len(row) else ""),
-            line_name=str(row[line_name_idx]).strip() if line_name_idx < len(row) else "",
-            member_id=str(row[member_id_idx]).strip() if member_id_idx < len(row) else "",
-            account_name=str(row[account_name_idx]).strip() if account_name_idx < len(row) else "",
+        raw_notification_url = str(row[notification_url_idx]).strip() if notification_url_idx is not None and notification_url_idx < len(row) else ""
+        raw_email = str(row[email_idx]).strip() if email_idx is not None and email_idx < len(row) else ""
+        raw_phone = str(row[phone_idx]).strip() if phone_idx is not None and phone_idx < len(row) else ""
+
+        notification_url = raw_notification_url if raw_notification_url.startswith(("http://", "https://")) else ""
+        email_candidates = [value for value in (raw_notification_url, raw_email, raw_phone) if is_email(value)]
+        phone_candidates = [value for value in (raw_notification_url, raw_email, raw_phone) if normalize_phone(value)]
+        email = email_candidates[0] if email_candidates else ""
+        phone = normalize_phone(phone_candidates[0]) if phone_candidates else ""
+
+        record = build_record(
+            tagged_at=row[tagged_at_idx] if tagged_at_idx < len(row) else "",
+            line_name=row[line_name_idx] if line_name_idx < len(row) else "",
+            member_id=row[member_id_idx] if member_id_idx < len(row) else "",
+            account_name=row[account_name_idx] if account_name_idx < len(row) else "",
             notification_url=notification_url,
             slack_ts="",
             email=email,
@@ -421,7 +387,10 @@ def load_existing_rows(ws) -> Dict[str, NotificationRecord]:
         )
         if not record.dedupe_key:
             continue
-        existing[record.dedupe_key] = record
+        if record.dedupe_key in existing:
+            existing[record.dedupe_key] = merge_record_pair(existing[record.dedupe_key], record)
+        else:
+            existing[record.dedupe_key] = record
     return existing
 
 
@@ -480,8 +449,8 @@ def parse_notification_message(message: dict, channel_name: str) -> Optional[Not
     if not slack_ts:
         return None
 
-    return enrich_contact_fields(NotificationRecord(
-        tagged_at=normalize_tagged_at(tagged_at),
+    return build_record(
+        tagged_at=tagged_at,
         line_name=line_name,
         member_id=member_id,
         account_name=account_name,
@@ -489,7 +458,7 @@ def parse_notification_message(message: dict, channel_name: str) -> Optional[Not
         slack_ts=slack_ts,
         email="",
         phone="",
-    ))
+    )
 
 
 def load_legacy_records() -> List[NotificationRecord]:
@@ -519,7 +488,7 @@ def load_legacy_records() -> List[NotificationRecord]:
         phone = str(row[header_index["電話番号"]]).strip()
         if not tagged_at or not any((line_name, email, phone)):
             continue
-        records.append(NotificationRecord(
+        records.append(build_record(
             tagged_at=tagged_at,
             line_name=line_name,
             member_id="",
@@ -537,17 +506,7 @@ def merge_records(existing: Dict[str, NotificationRecord], parsed: Iterable[Noti
     for record in parsed:
         key = record.dedupe_key
         if key in merged:
-            current = merged[key]
-            merged[key] = NotificationRecord(
-                tagged_at=record.tagged_at or current.tagged_at,
-                line_name=record.line_name or current.line_name,
-                member_id=record.member_id or current.member_id,
-                account_name=record.account_name or current.account_name,
-                notification_url=record.notification_url or current.notification_url,
-                slack_ts=record.slack_ts or current.slack_ts,
-                email=current.email or record.email,
-                phone=current.phone or record.phone,
-            )
+            merged[key] = merge_record_pair(merged[key], record)
         else:
             merged[key] = record
 
@@ -555,17 +514,7 @@ def merge_records(existing: Dict[str, NotificationRecord], parsed: Iterable[Noti
     for record in merged.values():
         key = record.legacy_key or record.dedupe_key
         if key in collapsed:
-            current = collapsed[key]
-            collapsed[key] = NotificationRecord(
-                tagged_at=record.tagged_at or current.tagged_at,
-                line_name=record.line_name or current.line_name,
-                member_id=record.member_id or current.member_id,
-                account_name=record.account_name or current.account_name,
-                notification_url=record.notification_url or current.notification_url,
-                slack_ts=record.slack_ts or current.slack_ts,
-                email=current.email or record.email,
-                phone=current.phone or record.phone,
-            )
+            collapsed[key] = merge_record_pair(collapsed[key], record)
         else:
             collapsed[key] = record
 
@@ -726,7 +675,7 @@ def build_source_management_rows(imported_count: int, updated_at: str) -> List[L
             "",
             DEFAULT_CHANNEL_NAME,
             "メッセージ本文",
-            "★【個別予約完了】★ 通知を 1イベント1行で保存。LSTEPメンバーID でメールアドレス / 電話番号を補完できる時だけ追記",
+            "★【個別予約完了】★ 通知を 1イベント1行で保存。LSTEPリンクを保持し、旧CSVではなく将来の Lステップ live 取得でメールアドレス / 電話番号を補完する",
             "継続取得の正本",
             "正常" if imported_count > 0 and updated_at else "未同期",
             f"'{updated_at}" if updated_at else "",
@@ -742,6 +691,7 @@ def build_rule_rows() -> List[List[str]]:
         ["項目", "ルール", "補足"],
         ["役割", "このシートは収集データだけを持つ", "加工や集計は【アドネス株式会社】個別面談データで行う"],
         ["継続取得", "Slack #個別予約通知 を継続的な正本にする", "★【個別予約完了】★ の通知を 1イベント1行で保存する"],
+        ["友だち情報補完", "手元の友だち一覧CSVは今後使わない", "Lステップリンクから live 取得できる仕組みへ移行する"],
         ["初回移行", "過去の個別予約データは初回移行時に一度だけ取り込む", "継続運用では参照しない"],
         ["重複保存", "同じ通知は重複して保存しない", "日時 / アカウント / メンバーID / LINE名 / メール / 電話で吸収する"],
         ["手編集", "自動生成タブは手編集しない", "更新はスクリプトから行う"],
