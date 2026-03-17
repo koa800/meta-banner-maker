@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -41,6 +42,7 @@ STATUS_FORMATS = {
 TAB_COLOR_MAIN = "#1A73E8"
 TAB_COLOR_META = "#34A853"
 WRITE_RETRY_SECONDS = (5, 10, 20, 40)
+EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 TAB_SPECS = [
     ("会員イベント", 6000, 8),
@@ -236,11 +238,17 @@ def style_main_tab(spreadsheet, ws, widths: List[int]) -> None:
             0,
             len(widths),
             {
+                "backgroundColor": {"red": 1, "green": 1, "blue": 1},
                 "horizontalAlignment": "LEFT",
                 "verticalAlignment": "MIDDLE",
                 "wrapStrategy": "CLIP",
+                "textFormat": {
+                    "foregroundColor": {"red": 0, "green": 0, "blue": 0},
+                    "bold": False,
+                    "fontSize": 10,
+                },
             },
-            "userEnteredFormat(horizontalAlignment,verticalAlignment,wrapStrategy)",
+            "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,wrapStrategy,textFormat)",
         ),
         repeat_cell_request(
             ws.id,
@@ -280,9 +288,18 @@ def style_main_tab(spreadsheet, ws, widths: List[int]) -> None:
     batch_update_with_retry(spreadsheet, {"requests": requests}, f"{ws.title} の体裁適用")
 
 
-def style_meta_tab(spreadsheet, ws, widths: List[int], center_cols=None, date_cols=None, status_col=None) -> None:
+def style_meta_tab(
+    spreadsheet,
+    ws,
+    widths: List[int],
+    center_cols=None,
+    date_cols=None,
+    status_col=None,
+    number_cols=None,
+) -> None:
     center_cols = center_cols or []
     date_cols = date_cols or []
+    number_cols = number_cols or []
     requests = [
         repeat_cell_request(
             ws.id,
@@ -306,11 +323,17 @@ def style_meta_tab(spreadsheet, ws, widths: List[int], center_cols=None, date_co
             0,
             len(widths),
             {
+                "backgroundColor": {"red": 1, "green": 1, "blue": 1},
                 "horizontalAlignment": "LEFT",
                 "verticalAlignment": "MIDDLE",
                 "wrapStrategy": "CLIP",
+                "textFormat": {
+                    "foregroundColor": {"red": 0, "green": 0, "blue": 0},
+                    "bold": False,
+                    "fontSize": 10,
+                },
             },
-            "userEnteredFormat(horizontalAlignment,verticalAlignment,wrapStrategy)",
+            "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,wrapStrategy,textFormat)",
         ),
         set_row_height_request(ws.id, 0, 1, 34),
         set_row_height_request(ws.id, 1, ws.row_count, 24),
@@ -356,6 +379,21 @@ def style_meta_tab(spreadsheet, ws, widths: List[int], center_cols=None, date_co
                 idx + 1,
                 {"horizontalAlignment": "RIGHT"},
                 "userEnteredFormat.horizontalAlignment",
+            )
+        )
+    for idx in number_cols:
+        requests.append(
+            repeat_cell_request(
+                ws.id,
+                1,
+                ws.row_count,
+                idx,
+                idx + 1,
+                {
+                    "horizontalAlignment": "RIGHT",
+                    "numberFormat": {"type": "NUMBER", "pattern": "#,##0"},
+                },
+                "userEnteredFormat(horizontalAlignment,numberFormat)",
             )
         )
     for idx, width in enumerate(widths):
@@ -447,7 +485,15 @@ def normalize_optional_text(value: object) -> str:
 
 
 def normalize_email(value: object) -> str:
-    return normalize_optional_text(value).lower()
+    text = normalize_optional_text(value).lower()
+    if not text:
+        return ""
+    compact = text.replace(" ", "").replace("　", "")
+    if compact in {"なし", "無し", "メアドなし", "メールなし", "メールアドレスなし", "noemail", "未登録"}:
+        return ""
+    if not EMAIL_RE.match(compact):
+        return ""
+    return compact
 
 
 def normalize_phone(value: object) -> str:
@@ -606,6 +652,11 @@ def build_member_rows(interview_records: List[dict], cooling_records: List[dict]
             fill_counts,
             {"email": "2", "phone": "1", "name": "2", "line_name": "2"},
         )
+        contract_date = normalize_optional_text(get_row_value(row, "契約締結日"))
+        previous_contract_date = member.contract_date
+        member.contract_date = choose_earliest(member.contract_date, contract_date)
+        if member.contract_date and not previous_contract_date:
+            increment_fill_count(fill_counts, "契約締結日", "1")
         previous_cooling_off = member.cooling_off
         member.cooling_off = choose_earliest(member.cooling_off, get_row_value(row, "対応完了日"))
         if member.cooling_off and not previous_cooling_off:
@@ -625,13 +676,18 @@ def build_member_rows(interview_records: List[dict], cooling_records: List[dict]
             fill_counts,
             {"email": "3", "phone": "1", "name": "3", "line_name": "3"},
         )
+        contract_date = normalize_optional_text(get_row_value(row, "契約締結日"))
+        previous_contract_date = member.contract_date
+        member.contract_date = choose_earliest(member.contract_date, contract_date)
+        if member.contract_date and not previous_contract_date:
+            increment_fill_count(fill_counts, "契約締結日", "1")
         previous_mid_term_cancel = member.mid_term_cancel
         member.mid_term_cancel = choose_earliest(member.mid_term_cancel, get_row_value(row, "対応完了日"))
         if member.mid_term_cancel and not previous_mid_term_cancel:
             increment_fill_count(fill_counts, "中途解約", "1")
 
     rows = [["メールアドレス", "電話番号", "名前", "LINE名", "契約締結日", "入金前契約解除", "クーリングオフ", "中途解約"]]
-    data_rows = [member.to_row() for member in merged.values()]
+    data_rows = [member.to_row() for member in merged.values() if member.contract_date]
     data_rows.sort(key=lambda r: (r[4] or "9999/99/99", r[0], r[1], r[3], r[2]))
     rows.extend(data_rows)
     return rows, fill_counts
@@ -664,8 +720,8 @@ def build_data_source_rows(
             "契約締結日が入っている行、または結果が入金前契約解除の行",
             status_from_count(interview_count),
             checked_at,
-            str(fill_counts.get(("メールアドレス", "1"), 0)),
-            "0",
+            fill_counts.get(("メールアドレス", "1"), 0),
+            0,
             f"メールアドレスの第1優先 / 元ソース対象件数 {interview_count} / 会員イベント {event_count} 行",
         ],
         [
@@ -678,8 +734,8 @@ def build_data_source_rows(
             "クーリングオフ かつ 完了",
             status_from_count(cooling_count),
             checked_at,
-            str(fill_counts.get(("メールアドレス", "2"), 0)),
-            "0",
+            fill_counts.get(("メールアドレス", "2"), 0),
+            0,
             f"メールアドレスの補完元 / 元ソース対象件数 {cooling_count}",
         ],
         [
@@ -692,8 +748,8 @@ def build_data_source_rows(
             "中途解約 かつ 完了",
             status_from_count(cancel_count),
             checked_at,
-            str(fill_counts.get(("メールアドレス", "3"), 0)),
-            "0",
+            fill_counts.get(("メールアドレス", "3"), 0),
+            0,
             f"メールアドレスの補完元 / 元ソース対象件数 {cancel_count}",
         ],
         [
@@ -706,8 +762,8 @@ def build_data_source_rows(
             "契約締結日が入っている行、または結果が入金前契約解除の行",
             status_from_count(interview_count),
             checked_at,
-            str(fill_counts.get(("電話番号", "1"), 0)),
-            "0",
+            fill_counts.get(("電話番号", "1"), 0),
+            0,
             f"電話番号は現状ここを正本とする / 元ソース対象件数 {interview_count}",
         ],
         [
@@ -720,8 +776,8 @@ def build_data_source_rows(
             "契約締結日が入っている行、または結果が入金前契約解除の行",
             status_from_count(interview_count),
             checked_at,
-            str(fill_counts.get(("名前", "1"), 0)),
-            "0",
+            fill_counts.get(("名前", "1"), 0),
+            0,
             f"名前の第1優先 / 元ソース対象件数 {interview_count}",
         ],
         [
@@ -734,8 +790,8 @@ def build_data_source_rows(
             "クーリングオフ かつ 完了",
             status_from_count(cooling_count),
             checked_at,
-            str(fill_counts.get(("名前", "2"), 0)),
-            "0",
+            fill_counts.get(("名前", "2"), 0),
+            0,
             f"名前の補完元 / 元ソース対象件数 {cooling_count}",
         ],
         [
@@ -748,8 +804,8 @@ def build_data_source_rows(
             "中途解約 かつ 完了",
             status_from_count(cancel_count),
             checked_at,
-            str(fill_counts.get(("名前", "3"), 0)),
-            "0",
+            fill_counts.get(("名前", "3"), 0),
+            0,
             f"名前の補完元 / 元ソース対象件数 {cancel_count}",
         ],
         [
@@ -762,8 +818,8 @@ def build_data_source_rows(
             "契約締結日が入っている行、または結果が入金前契約解除の行",
             status_from_count(interview_count),
             checked_at,
-            str(fill_counts.get(("LINE名", "1"), 0)),
-            "0",
+            fill_counts.get(("LINE名", "1"), 0),
+            0,
             f"LINE名の第1優先 / 元ソース対象件数 {interview_count}",
         ],
         [
@@ -776,8 +832,8 @@ def build_data_source_rows(
             "クーリングオフ かつ 完了",
             status_from_count(cooling_count),
             checked_at,
-            str(fill_counts.get(("LINE名", "2"), 0)),
-            "0",
+            fill_counts.get(("LINE名", "2"), 0),
+            0,
             f"LINE名の補完元 / 元ソース対象件数 {cooling_count}",
         ],
         [
@@ -790,8 +846,8 @@ def build_data_source_rows(
             "中途解約 かつ 完了",
             status_from_count(cancel_count),
             checked_at,
-            str(fill_counts.get(("LINE名", "3"), 0)),
-            "0",
+            fill_counts.get(("LINE名", "3"), 0),
+            0,
             f"LINE名の補完元。名前列とは別ソースだが上流で同値のことがある / 元ソース対象件数 {cancel_count}",
         ],
         [
@@ -804,8 +860,8 @@ def build_data_source_rows(
             "契約締結日が入っている行",
             status_from_count(interview_count),
             checked_at,
-            str(fill_counts.get(("契約締結日", "1"), 0)),
-            "0",
+            fill_counts.get(("契約締結日", "1"), 0),
+            0,
             f"最も早い契約締結日を保持する / 元ソース対象件数 {interview_count}",
         ],
         [
@@ -818,8 +874,8 @@ def build_data_source_rows(
             "結果 = 入金前契約解除",
             status_from_count(interview_count),
             checked_at,
-            str(fill_counts.get(("入金前契約解除", "1"), 0)),
-            "0",
+            fill_counts.get(("入金前契約解除", "1"), 0),
+            0,
             f"該当時は ○ を入れる / 元ソース対象件数 {interview_count}",
         ],
         [
@@ -832,8 +888,8 @@ def build_data_source_rows(
             "クーリングオフ かつ 完了",
             status_from_count(cooling_count),
             checked_at,
-            str(fill_counts.get(("クーリングオフ", "1"), 0)),
-            "0",
+            fill_counts.get(("クーリングオフ", "1"), 0),
+            0,
             f"対応完了日を保持する / 元ソース対象件数 {cooling_count}",
         ],
         [
@@ -846,8 +902,8 @@ def build_data_source_rows(
             "中途解約 かつ 完了",
             status_from_count(cancel_count),
             checked_at,
-            str(fill_counts.get(("中途解約", "1"), 0)),
-            "0",
+            fill_counts.get(("中途解約", "1"), 0),
+            0,
             f"対応完了日を保持する / 元ソース対象件数 {cancel_count}",
         ],
     ]
@@ -857,6 +913,7 @@ def build_rule_rows() -> List[List[str]]:
     return [
         ["項目", "ルール", "補足"],
         ["会員イベント", "1行 = 1契約単位で保持する。面談IDがあるものは面談IDで統合し、無いものだけメールアドレス、電話番号、名前系で補助統合する", "同一人物でも複数契約がありえるため、人単位ではなく契約単位を優先する"],
+        ["保持対象", "契約締結日が入っている契約だけを保持する", "契約締結日が無いまま解除イベントだけある行は、収集シートには載せない"],
         ["契約締結日", "全面談合算の契約締結日をそのまま入れる", "複数候補がある場合は最も早い契約締結日を採用する"],
         ["入金前契約解除", "全面談合算で結果が入金前契約解除の行がある場合は ○ を入れる", "現状のソースに解除日が無いため、フラグとして保持する"],
         ["クーリングオフ", "お客様相談窓口_進捗管理シートのクーリングオフ完了日を入れる", "定義はマスタデータ / 定義一覧に従う"],
@@ -935,6 +992,7 @@ def main(dry_run: bool = False) -> None:
         center_cols=[2, 7, 9, 10],
         date_cols=[8],
         status_col=7,
+        number_cols=[9, 10],
     )
     apply_status_cell_colors(target_ss, tabs["データソース管理"], data_source_rows, 7)
 
