@@ -727,6 +727,7 @@ def load_collection_rows() -> List[Dict[str, str]]:
 
 def build_daily_rows(collection_rows: List[Dict[str, str]]) -> tuple[List[List[object]], Dict[str, int]]:
     exclusion_master = CommonExclusionMaster.load(force_refresh=True)
+    today_dt = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     contract_counts: Counter[str] = Counter()
     cooling_off_counts: Counter[str] = Counter()
     member_counts: Counter[str] = Counter()
@@ -745,7 +746,7 @@ def build_daily_rows(collection_rows: List[Dict[str, str]]) -> tuple[List[List[o
         if not contract_date:
             continue
         contract_dt = parse_date(contract_date)
-        if not contract_dt or contract_dt < METRICS_START_DATE:
+        if not contract_dt or contract_dt < METRICS_START_DATE or contract_dt > today_dt:
             continue
 
         email = normalize_email(row.get("メールアドレス", ""))
@@ -769,21 +770,22 @@ def build_daily_rows(collection_rows: List[Dict[str, str]]) -> tuple[List[List[o
             pre_payment_cancel_total += 1
 
         if cooling_off_date:
-            cooling_off_counts[cooling_off_date] += 1
             cooling_dt = parse_date(cooling_off_date)
-            if cooling_dt:
+            if cooling_dt and cooling_dt <= today_dt:
+                cooling_off_counts[cooling_off_date] += 1
                 all_dates.append(cooling_dt)
 
         member_date = ""
         if contract_dt and not pre_payment_cancel and not cooling_off_date:
             member_dt = contract_dt + timedelta(days=7)
-            member_date = member_dt.strftime("%Y/%m/%d")
-            member_counts[member_date] += 1
-            all_dates.append(member_dt)
+            if member_dt <= today_dt:
+                member_date = member_dt.strftime("%Y/%m/%d")
+                member_counts[member_date] += 1
+                all_dates.append(member_dt)
 
         if mid_term_cancel_date:
             cancel_dt = parse_date(mid_term_cancel_date)
-            if member_date and cancel_dt and cancel_dt >= datetime.strptime(member_date, "%Y/%m/%d"):
+            if member_date and cancel_dt and cancel_dt <= today_dt and cancel_dt >= datetime.strptime(member_date, "%Y/%m/%d"):
                 mid_term_counts[mid_term_cancel_date] += 1
                 all_dates.append(cancel_dt)
             elif member_date:
@@ -810,7 +812,7 @@ def build_daily_rows(collection_rows: List[Dict[str, str]]) -> tuple[List[List[o
         }
 
     start_dt = METRICS_START_DATE
-    end_dt = max(all_dates)
+    end_dt = min(max(all_dates), today_dt)
     rows: List[List[object]] = [["日付", "契約数", "クーリングオフ数", "会員数", "中途解約数", "アクティブ会員"]]
 
     current_active = 0
@@ -908,7 +910,7 @@ def build_source_management_rows(source_ws, checked_at: str, stats: Dict[str, in
             f'=HYPERLINK("{source_url}","{SOURCE_SPREADSHEET_TITLE}")',
             SOURCE_TAB_NAME,
             "契約締結日 / 入金前契約解除 / クーリングオフ",
-            f"{METRICS_START_DATE_TEXT} 以降の契約締結日 + 7日、かつ入金前契約解除とクーリングオフが無い行を会員化する",
+            f"{METRICS_START_DATE_TEXT} 以降の契約締結日 + 7日を会員化日とし、今日以前に会員化が確定した行だけを日別件数にする",
             status,
             checked_at_text,
             stats["member_total"],
@@ -952,7 +954,7 @@ def build_rule_rows() -> List[List[object]]:
         ["日別会員数値", "会員イベントを正本にして再生成する。手入力での修正はしない", "壊れた値で上書きしない"],
         ["契約数", f"{METRICS_START_DATE_TEXT} 以降で契約締結日がある件数をその日の日別契約数とする", "スキルプラスの契約書を締結したユーザー数"],
         ["クーリングオフ数", f"{METRICS_START_DATE_TEXT} 以降でクーリングオフ日がある件数をその日の日別クーリングオフ数とする", "入金あり契約から7日以内に契約解除を申し出たユーザー数。お客様相談窓口_進捗管理シートの収集結果をそのまま使う"],
-        ["会員数", f"{METRICS_START_DATE_TEXT} 以降の契約締結日 + 7日 を会員日とし、入金前契約解除とクーリングオフが無い契約だけを会員化する", "入会数と会員数は同義として扱う"],
+        ["会員数", f"{METRICS_START_DATE_TEXT} 以降の契約締結日 + 7日 を会員日とし、今日以前に会員化が確定したものだけを会員数へ入れる", "入会数と会員数は同義として扱う"],
         ["中途解約数", f"{METRICS_START_DATE_TEXT} 以降で中途解約日があり、会員化後のものだけをその日の日別中途解約数とする", "入金前契約解除またはクーリングオフ済みの行にある中途解約は無視する"],
         ["アクティブ会員", "会員数の累計から中途解約数の累計を引いた残高で持つ", "クーリングオフは会員化前に除外されるためここでは引かない"],
         ["入金前契約解除", "日別数値には持たず、会員化除外条件としてだけ使う", "会員サマリーでは累計を表示する"],
