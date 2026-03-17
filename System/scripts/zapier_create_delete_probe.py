@@ -26,7 +26,8 @@ from zapier_login_helper import ensure_login as ensure_zapier_login
 
 CDP_URL = "http://127.0.0.1:9224"
 ASSETS_URL = "https://zapier.com/app/assets/zaps"
-CREATE_URL = "https://zapier.com/webintent/create-zap?useCase=from-scratch"
+FOLDER_CREATE_URL = "https://zapier.com/app/assets/zaps/folders/019cdd75-b612-ec46-7e5b-bd8a9015a667"
+CREATE_URL = FOLDER_CREATE_URL
 
 
 def _extract_edit_path(url: str | None) -> str | None:
