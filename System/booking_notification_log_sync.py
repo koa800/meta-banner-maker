@@ -148,6 +148,17 @@ class LiveEnrichSummary:
     memo: str
 
 
+@dataclass
+class SlackIngestSummary:
+    status: str
+    checked_at: str
+    fetched_count: int
+    tagged_count: int
+    parsed_count: int
+    error_count: int
+    memo: str
+
+
 def col_letter(col_num: int) -> str:
     result = ""
     while col_num > 0:
@@ -778,6 +789,7 @@ def apply_protection(spreadsheet, ws) -> None:
 def build_source_management_rows(
     imported_count: int,
     updated_at: str,
+    slack_summary: SlackIngestSummary,
     live_summary: LiveEnrichSummary,
 ) -> List[List[str]]:
     return [
@@ -792,11 +804,15 @@ def build_source_management_rows(
             "メッセージ本文",
             "★【個別予約完了】★ 通知を 1イベント1行で保存。LSTEPリンクを保持し、旧CSVではなく将来の Lステップ live 取得でメールアドレス / 電話番号を補完する",
             "継続取得の正本",
-            "正常" if imported_count > 0 and updated_at else "未同期",
-            f"'{updated_at}" if updated_at else "",
+            slack_summary.status,
+            f"'{slack_summary.checked_at}" if slack_summary.checked_at else (f"'{updated_at}" if updated_at else ""),
             f"{imported_count:,}",
-            "0",
-            "収集データの正本。過去データは初回移行時のみ一度だけ追加し、継続取得の正本にはしない",
+            f"{slack_summary.error_count:,}",
+            (
+                f"{slack_summary.memo} / 取得={slack_summary.fetched_count:,} / "
+                f"対象通知={slack_summary.tagged_count:,} / 解析成功={slack_summary.parsed_count:,}。"
+                "収集データの正本。過去データは初回移行時のみ一度だけ追加し、継続取得の正本にはしない"
+            ),
         ],
         [
             TARGET_TAB_NAME,
@@ -829,10 +845,19 @@ def build_rule_rows() -> List[List[str]]:
     ]
 
 
-def fetch_parsed_records(channel_name: str, limit: int, oldest: str = "") -> List[NotificationRecord]:
+def fetch_parsed_records(channel_name: str, limit: int, oldest: str = "") -> tuple[List[NotificationRecord], SlackIngestSummary]:
+    checked_at = datetime.now().strftime("%Y/%m/%d %H:%M")
     channel = find_channel_by_name(channel_name)
     if channel is None:
-        return []
+        return [], SlackIngestSummary(
+            status="停止",
+            checked_at=checked_at,
+            fetched_count=0,
+            tagged_count=0,
+            parsed_count=0,
+            error_count=1,
+            memo="Slack チャンネルが見つからない",
+        )
 
     messages = fetch_channel_messages(
         channel["id"],
@@ -841,11 +866,42 @@ def fetch_parsed_records(channel_name: str, limit: int, oldest: str = "") -> Lis
         include_bot_messages=True,
     )
     parsed: List[NotificationRecord] = []
+    tagged_count = 0
+    parse_error_count = 0
     for message in messages:
+        text = str(message.get("text") or "").strip()
+        if MESSAGE_TAG not in text:
+            continue
+        tagged_count += 1
         record = parse_notification_message(message, channel["name"])
         if record is not None:
             parsed.append(record)
-    return parsed
+        else:
+            parse_error_count += 1
+
+    status = "正常"
+    memo = "Slack 通知を正常に解析した"
+    if tagged_count > 0 and len(parsed) == 0:
+        status = "停止"
+        memo = "対象通知は見つかったが解析に失敗した"
+    elif parse_error_count > 0:
+        status = "未同期"
+        memo = "対象通知の一部を解析できなかった"
+    elif not messages:
+        status = "未同期"
+        memo = "Slack メッセージを取得できなかった"
+    elif tagged_count == 0:
+        memo = "取得範囲内に対象通知は無かった"
+
+    return parsed, SlackIngestSummary(
+        status=status,
+        checked_at=checked_at,
+        fetched_count=len(messages),
+        tagged_count=tagged_count,
+        parsed_count=len(parsed),
+        error_count=parse_error_count,
+        memo=memo,
+    )
 
 
 def build_rows(records: List[NotificationRecord]) -> List[List[str]]:
@@ -866,13 +922,19 @@ def load_state() -> dict:
         return {}
 
 
-def save_state(last_ts: str, imported_count: int, channel_name: str) -> None:
+def save_state(last_ts: str, imported_count: int, channel_name: str, slack_summary: SlackIngestSummary) -> None:
     os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
     payload = {
         "last_ts": last_ts,
         "imported_count": imported_count,
         "channel_name": channel_name,
         "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M"),
+        "slack_status": slack_summary.status,
+        "slack_error_count": slack_summary.error_count,
+        "slack_memo": slack_summary.memo,
+        "slack_fetched_count": slack_summary.fetched_count,
+        "slack_tagged_count": slack_summary.tagged_count,
+        "slack_parsed_count": slack_summary.parsed_count,
     }
     with open(STATE_PATH, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -913,7 +975,7 @@ def main() -> None:
     oldest = resolve_fetch_oldest(state)
 
     legacy_records = load_legacy_records()
-    slack_records = fetch_parsed_records(args.channel_name, args.limit, oldest=oldest)
+    slack_records, slack_summary = fetch_parsed_records(args.channel_name, args.limit, oldest=oldest)
     merged = merge_records(existing, [*legacy_records, *slack_records])
     merged, live_summary = enrich_records_with_live_contacts(merged)
 
@@ -923,6 +985,7 @@ def main() -> None:
             f"既存={len(existing):,}, "
             f"過去取込={len(legacy_records):,}, "
             f"Slack新規候補={len(slack_records):,}, "
+            f"Slack解析失敗={slack_summary.error_count:,}, "
             f"保存後={len(merged):,}, "
             f"チャンネル={args.channel_name}"
         )
@@ -933,6 +996,7 @@ def main() -> None:
     source_rows = build_source_management_rows(
         len(merged),
         datetime.now().strftime("%Y/%m/%d %H:%M"),
+        slack_summary,
         live_summary,
     )
     rule_rows = build_rule_rows()
@@ -946,7 +1010,7 @@ def main() -> None:
     latest_ts = oldest
     if slack_records:
         latest_ts = max((record.slack_ts for record in slack_records if record.slack_ts), default=oldest)
-    save_state(latest_ts or "", len(merged), args.channel_name)
+    save_state(latest_ts or "", len(merged), args.channel_name, slack_summary)
 
     print(
         f"【アドネス株式会社】個別面談データ（収集） / {TARGET_TAB_NAME} を更新しました。"

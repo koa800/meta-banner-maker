@@ -741,22 +741,35 @@ def load_notification_log_stats(target) -> Dict[str, str]:
             state = {}
 
     latest_imported_at = str(state.get("updated_at") or "").strip()
+    slack_status = str(state.get("slack_status") or "").strip()
+    slack_error_count = str(state.get("slack_error_count") or "").strip()
+    slack_memo = str(state.get("slack_memo") or "").strip()
+    slack_fetched_count = str(state.get("slack_fetched_count") or "").strip()
+    slack_tagged_count = str(state.get("slack_tagged_count") or "").strip()
+    slack_parsed_count = str(state.get("slack_parsed_count") or "").strip()
 
     if event_count == 0:
         return {
-            "ステータス": "未同期",
+            "ステータス": slack_status or "未同期",
             "最終同期日": latest_imported_at,
             "更新数": "0",
-            "エラー数": "0",
-            "メモ": "Slack通知の取込待ち",
+            "エラー数": slack_error_count or "0",
+            "メモ": slack_memo or "Slack通知の取込待ち",
         }
 
+    default_memo = "Slack #個別予約通知 と 過去の個別予約データ を統合。Lステップリンクを保持し、旧CSVではなく将来の Lステップ live 取得でメールアドレス / 電話番号を補完する"
+    if slack_fetched_count or slack_tagged_count or slack_parsed_count:
+        default_memo = (
+            f"{slack_memo or 'Slack通知を取得'}。"
+            f" 取得={slack_fetched_count or '0'} / 対象通知={slack_tagged_count or '0'} / 解析成功={slack_parsed_count or '0'}"
+        )
+
     return {
-        "ステータス": "正常",
+        "ステータス": slack_status or "正常",
         "最終同期日": latest_imported_at,
         "更新数": f"{event_count:,}" if event_count else "0",
-        "エラー数": "0",
-        "メモ": "Slack #個別予約通知 と 過去の個別予約データ を統合。Lステップリンクを保持し、旧CSVではなく将来の Lステップ live 取得でメールアドレス / 電話番号を補完する",
+        "エラー数": slack_error_count or "0",
+        "メモ": default_memo,
     }
 
 
