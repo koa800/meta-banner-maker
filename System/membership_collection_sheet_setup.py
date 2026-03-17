@@ -15,7 +15,7 @@ import argparse
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from gspread.exceptions import APIError
 
@@ -362,6 +362,24 @@ def style_meta_tab(spreadsheet, ws, widths: List[int], center_cols=None, date_co
         requests.append(set_column_width_request(ws.id, idx, idx + 1, width))
     batch_update_with_retry(spreadsheet, {"requests": requests}, f"{ws.title} の体裁適用")
 
+    clear_validation_request = {
+        "setDataValidation": {
+            "range": {
+                "sheetId": ws.id,
+                "startRowIndex": 1,
+                "endRowIndex": ws.row_count,
+                "startColumnIndex": 0,
+                "endColumnIndex": len(widths),
+            },
+            "rule": None,
+        }
+    }
+    batch_update_with_retry(
+        spreadsheet,
+        {"requests": [clear_validation_request]},
+        f"{ws.title} の既存入力規則クリア",
+    )
+
     if status_col is not None:
         validation = {
             "condition": {"type": "ONE_OF_LIST", "values": [{"userEnteredValue": v} for v in STATUS_OPTIONS]},
@@ -522,7 +540,12 @@ def build_member_key(row: dict) -> str:
     return f"name:{line_name}|{name}"
 
 
-def merge_base_fields(member: MemberEventRow, row: dict) -> None:
+def increment_fill_count(fill_counts: Dict[Tuple[str, str], int], target_column: str, priority: str) -> None:
+    key = (target_column, priority)
+    fill_counts[key] = fill_counts.get(key, 0) + 1
+
+
+def merge_base_fields(member: MemberEventRow, row: dict, fill_counts: Dict[Tuple[str, str], int], priority_by_field: Dict[str, str]) -> None:
     email = normalize_email(row.get("メールアドレス") or row.get("アドレス"))
     phone = normalize_phone(row.get("電話番号"))
     name = normalize_optional_text(row.get("名前") or row.get("本名"))
@@ -530,16 +553,21 @@ def merge_base_fields(member: MemberEventRow, row: dict) -> None:
 
     if email and not member.email:
         member.email = email
+        increment_fill_count(fill_counts, "メールアドレス", priority_by_field["email"])
     if phone and not member.phone:
         member.phone = phone
+        increment_fill_count(fill_counts, "電話番号", priority_by_field["phone"])
     if name and not member.name:
         member.name = name
+        increment_fill_count(fill_counts, "名前", priority_by_field["name"])
     if line_name and not member.line_name:
         member.line_name = line_name
+        increment_fill_count(fill_counts, "LINE名", priority_by_field["line_name"])
 
 
-def build_member_rows(interview_records: List[dict], cooling_records: List[dict], cancel_records: List[dict]) -> List[List[str]]:
+def build_member_rows(interview_records: List[dict], cooling_records: List[dict], cancel_records: List[dict]) -> Tuple[List[List[str]], Dict[Tuple[str, str], int]]:
     merged: Dict[str, MemberEventRow] = {}
+    fill_counts: Dict[Tuple[str, str], int] = {}
 
     for row in interview_records:
         contract_date = normalize_optional_text(get_row_value(row, "契約締結日"))
@@ -549,10 +577,20 @@ def build_member_rows(interview_records: List[dict], cooling_records: List[dict]
 
         key = build_member_key(row)
         member = merged.setdefault(key, MemberEventRow())
-        merge_base_fields(member, row)
+        merge_base_fields(
+            member,
+            row,
+            fill_counts,
+            {"email": "1", "phone": "1", "name": "1", "line_name": "1"},
+        )
+        previous_contract_date = member.contract_date
         member.contract_date = choose_earliest(member.contract_date, contract_date)
+        if member.contract_date and not previous_contract_date:
+            increment_fill_count(fill_counts, "契約締結日", "1")
         if result == "入金前契約解除":
-            member.pre_payment_cancel = "○"
+            if not member.pre_payment_cancel:
+                member.pre_payment_cancel = "○"
+                increment_fill_count(fill_counts, "入金前契約解除", "1")
 
     for row in cooling_records:
         if get_row_value(row, "クーリングオフorその他", "中途解約orその他") != "クーリングオフ":
@@ -562,8 +600,16 @@ def build_member_rows(interview_records: List[dict], cooling_records: List[dict]
 
         key = build_member_key(row)
         member = merged.setdefault(key, MemberEventRow())
-        merge_base_fields(member, row)
+        merge_base_fields(
+            member,
+            row,
+            fill_counts,
+            {"email": "2", "phone": "1", "name": "2", "line_name": "2"},
+        )
+        previous_cooling_off = member.cooling_off
         member.cooling_off = choose_earliest(member.cooling_off, get_row_value(row, "対応完了日"))
+        if member.cooling_off and not previous_cooling_off:
+            increment_fill_count(fill_counts, "クーリングオフ", "1")
 
     for row in cancel_records:
         if get_row_value(row, "中途解約orその他", "クーリングオフorその他") != "中途解約":
@@ -573,14 +619,22 @@ def build_member_rows(interview_records: List[dict], cooling_records: List[dict]
 
         key = build_member_key(row)
         member = merged.setdefault(key, MemberEventRow())
-        merge_base_fields(member, row)
+        merge_base_fields(
+            member,
+            row,
+            fill_counts,
+            {"email": "3", "phone": "1", "name": "3", "line_name": "3"},
+        )
+        previous_mid_term_cancel = member.mid_term_cancel
         member.mid_term_cancel = choose_earliest(member.mid_term_cancel, get_row_value(row, "対応完了日"))
+        if member.mid_term_cancel and not previous_mid_term_cancel:
+            increment_fill_count(fill_counts, "中途解約", "1")
 
     rows = [["メールアドレス", "電話番号", "名前", "LINE名", "契約締結日", "入金前契約解除", "クーリングオフ", "中途解約"]]
     data_rows = [member.to_row() for member in merged.values()]
     data_rows.sort(key=lambda r: (r[4] or "9999/99/99", r[0], r[1], r[3], r[2]))
     rows.extend(data_rows)
-    return rows
+    return rows, fill_counts
 
 
 def build_data_source_rows(
@@ -593,6 +647,7 @@ def build_data_source_rows(
     cooling_count: int,
     cancel_count: int,
     event_count: int,
+    fill_counts: Dict[Tuple[str, str], int],
 ) -> List[List[str]]:
     def status_from_count(count: int) -> str:
         return "正常" if count > 0 else "停止"
@@ -609,9 +664,9 @@ def build_data_source_rows(
             "契約締結日が入っている行、または結果が入金前契約解除の行",
             status_from_count(interview_count),
             checked_at,
-            str(interview_count),
+            str(fill_counts.get(("メールアドレス", "1"), 0)),
             "0",
-            f"メールアドレスの第1優先 / 会員イベント {event_count} 行",
+            f"メールアドレスの第1優先 / 元ソース対象件数 {interview_count} / 会員イベント {event_count} 行",
         ],
         [
             "会員イベント",
@@ -623,9 +678,9 @@ def build_data_source_rows(
             "クーリングオフ かつ 完了",
             status_from_count(cooling_count),
             checked_at,
-            str(cooling_count),
+            str(fill_counts.get(("メールアドレス", "2"), 0)),
             "0",
-            "メールアドレスの補完元",
+            f"メールアドレスの補完元 / 元ソース対象件数 {cooling_count}",
         ],
         [
             "会員イベント",
@@ -637,9 +692,9 @@ def build_data_source_rows(
             "中途解約 かつ 完了",
             status_from_count(cancel_count),
             checked_at,
-            str(cancel_count),
+            str(fill_counts.get(("メールアドレス", "3"), 0)),
             "0",
-            "メールアドレスの補完元",
+            f"メールアドレスの補完元 / 元ソース対象件数 {cancel_count}",
         ],
         [
             "会員イベント",
@@ -651,9 +706,9 @@ def build_data_source_rows(
             "契約締結日が入っている行、または結果が入金前契約解除の行",
             status_from_count(interview_count),
             checked_at,
-            str(interview_count),
+            str(fill_counts.get(("電話番号", "1"), 0)),
             "0",
-            "電話番号は現状ここを正本とする",
+            f"電話番号は現状ここを正本とする / 元ソース対象件数 {interview_count}",
         ],
         [
             "会員イベント",
@@ -665,9 +720,9 @@ def build_data_source_rows(
             "契約締結日が入っている行、または結果が入金前契約解除の行",
             status_from_count(interview_count),
             checked_at,
-            str(interview_count),
+            str(fill_counts.get(("名前", "1"), 0)),
             "0",
-            "名前の第1優先",
+            f"名前の第1優先 / 元ソース対象件数 {interview_count}",
         ],
         [
             "会員イベント",
@@ -679,9 +734,9 @@ def build_data_source_rows(
             "クーリングオフ かつ 完了",
             status_from_count(cooling_count),
             checked_at,
-            str(cooling_count),
+            str(fill_counts.get(("名前", "2"), 0)),
             "0",
-            "名前の補完元",
+            f"名前の補完元 / 元ソース対象件数 {cooling_count}",
         ],
         [
             "会員イベント",
@@ -693,9 +748,9 @@ def build_data_source_rows(
             "中途解約 かつ 完了",
             status_from_count(cancel_count),
             checked_at,
-            str(cancel_count),
+            str(fill_counts.get(("名前", "3"), 0)),
             "0",
-            "名前の補完元",
+            f"名前の補完元 / 元ソース対象件数 {cancel_count}",
         ],
         [
             "会員イベント",
@@ -707,9 +762,9 @@ def build_data_source_rows(
             "契約締結日が入っている行、または結果が入金前契約解除の行",
             status_from_count(interview_count),
             checked_at,
-            str(interview_count),
+            str(fill_counts.get(("LINE名", "1"), 0)),
             "0",
-            "LINE名の第1優先",
+            f"LINE名の第1優先 / 元ソース対象件数 {interview_count}",
         ],
         [
             "会員イベント",
@@ -721,9 +776,9 @@ def build_data_source_rows(
             "クーリングオフ かつ 完了",
             status_from_count(cooling_count),
             checked_at,
-            str(cooling_count),
+            str(fill_counts.get(("LINE名", "2"), 0)),
             "0",
-            "LINE名の補完元",
+            f"LINE名の補完元 / 元ソース対象件数 {cooling_count}",
         ],
         [
             "会員イベント",
@@ -735,9 +790,9 @@ def build_data_source_rows(
             "中途解約 かつ 完了",
             status_from_count(cancel_count),
             checked_at,
-            str(cancel_count),
+            str(fill_counts.get(("LINE名", "3"), 0)),
             "0",
-            "LINE名の補完元。名前列とは別ソースだが上流で同値のことがある",
+            f"LINE名の補完元。名前列とは別ソースだが上流で同値のことがある / 元ソース対象件数 {cancel_count}",
         ],
         [
             "会員イベント",
@@ -749,9 +804,9 @@ def build_data_source_rows(
             "契約締結日が入っている行",
             status_from_count(interview_count),
             checked_at,
-            str(interview_count),
+            str(fill_counts.get(("契約締結日", "1"), 0)),
             "0",
-            "最も早い契約締結日を保持する",
+            f"最も早い契約締結日を保持する / 元ソース対象件数 {interview_count}",
         ],
         [
             "会員イベント",
@@ -763,9 +818,9 @@ def build_data_source_rows(
             "結果 = 入金前契約解除",
             status_from_count(interview_count),
             checked_at,
-            str(interview_count),
+            str(fill_counts.get(("入金前契約解除", "1"), 0)),
             "0",
-            "該当時は ○ を入れる",
+            f"該当時は ○ を入れる / 元ソース対象件数 {interview_count}",
         ],
         [
             "会員イベント",
@@ -777,9 +832,9 @@ def build_data_source_rows(
             "クーリングオフ かつ 完了",
             status_from_count(cooling_count),
             checked_at,
-            str(cooling_count),
+            str(fill_counts.get(("クーリングオフ", "1"), 0)),
             "0",
-            "対応完了日を保持する",
+            f"対応完了日を保持する / 元ソース対象件数 {cooling_count}",
         ],
         [
             "会員イベント",
@@ -791,9 +846,9 @@ def build_data_source_rows(
             "中途解約 かつ 完了",
             status_from_count(cancel_count),
             checked_at,
-            str(cancel_count),
+            str(fill_counts.get(("中途解約", "1"), 0)),
             "0",
-            "対応完了日を保持する",
+            f"対応完了日を保持する / 元ソース対象件数 {cancel_count}",
         ],
     ]
 
@@ -847,7 +902,7 @@ def main(dry_run: bool = False) -> None:
         and get_row_value(row, "ステータス") == "完了"
     )
 
-    member_rows = build_member_rows(interview_records, cooling_records, cancel_records)
+    member_rows, fill_counts = build_member_rows(interview_records, cooling_records, cancel_records)
     checked_at = datetime.now().strftime("%Y/%m/%d %H:%M")
     data_source_rows = build_data_source_rows(
         interview_tab,
@@ -858,6 +913,7 @@ def main(dry_run: bool = False) -> None:
         cooling_count=cooling_source_count,
         cancel_count=cancel_source_count,
         event_count=max(0, len(member_rows) - 1),
+        fill_counts=fill_counts,
     )
     rule_rows = build_rule_rows()
 
