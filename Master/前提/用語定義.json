@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-03-17T18:30:00",
+  "updated_at": "2026-03-17T19:20:00",
   "source_sheet_id": "1nkmeWcHmzxPJH1d5veXwTpDoZrsPFH4_3txevqj225Y",
   "defined_count": 136,
   "draft_count": 0,
@@ -924,7 +924,7 @@
     {
       "row": 133,
       "term": "契約数",
-      "definition": "契約書を締結したユーザー数。",
+      "definition": "スキルプラスの契約書を締結したユーザー数。",
       "note": "スキルプラス事業では `全面談合算` の `契約締結日` を入口にする。",
       "status": "defined"
     },
@@ -938,7 +938,7 @@
     {
       "row": 135,
       "term": "中途解約数",
-      "definition": "会員中にサポート期間が終了する前に契約解除が確定したユーザー数。",
+      "definition": "サポート期間が終了する前に契約解除が確定した会員数。",
       "note": "収集元は `お客様相談窓口_進捗管理シート / 管理用_20250125-中途解約`。",
       "status": "defined"
     },

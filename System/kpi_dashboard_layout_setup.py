@@ -4,7 +4,8 @@
 
 方針:
 - ダッシュボードは表示層に徹する
-- 第1版は `定義 / スキルプラス事業サマリー / 日別数値 / データソース管理` の4タブだけを表に出す
+- 第1版は `スキルプラス事業サマリー / 日別数値 / データソース管理` の3タブだけを表に出す
+- 定義は `マスタデータ / 定義一覧` に集約する
 - 保留中の詳細タブや派生タブは削除せず非表示にする
 - まだ接続できない数値は空欄のままにする
 """
@@ -20,6 +21,7 @@ from sheets_manager import get_client
 
 
 DASHBOARD_SHEET_ID = "1utCt9ex0puEi3-oxcjq9v37Jt-9X_dpSjPowZBsHeqA"
+MASTER_DATA_SHEET_ID = "1kxUbLqhnzLC1Pg0ASVgU135bnx4Rsv_jP0pqGC0R69w"
 EMAIL_METRICS_SHEET_ID = "13HS9KmlTdxQwMMaK45H3Ga1mMTUiJdhYKWnrExge_yY"
 EMAIL_COUNT_TAB = "日別メール登録件数"
 EMAIL_UU_TAB = "日別メール登録件数（UU）"
@@ -30,7 +32,6 @@ BOOKING_SUMMARY_TAB = "個別予約サマリー"
 BOOKING_SOURCE_TAB = "データソース管理"
 
 TAB_SPECS = [
-    ("定義", 80, 2),
     ("スキルプラス事業サマリー", 120, 23),
     ("日別数値", 600, 14),
     ("データソース管理", 80, 14),
@@ -51,6 +52,7 @@ HIDDEN_TABS = [
     "更新状況",
 ]
 REBUILD_TABS = {"スキルプラス事業サマリー"}
+DEPRECATED_DASHBOARD_TABS = ["定義"]
 
 HEADER_BG = {"red": 0.26, "green": 0.52, "blue": 0.96}
 HEADER_TEXT = {
@@ -59,7 +61,6 @@ HEADER_TEXT = {
     "fontSize": 12,
 }
 TAB_COLORS = {
-    "定義": "#9E9E9E",
     "スキルプラス事業サマリー": "#1A73E8",
     "日別数値": "#1A73E8",
     "データソース管理": "#34A853",
@@ -380,6 +381,15 @@ def ensure_target_tabs(spreadsheet) -> Dict[str, object]:
             )
             worksheets[new_name] = worksheets.pop(old_name)
 
+    for deprecated_title in DEPRECATED_DASHBOARD_TABS:
+        ws = worksheets.get(deprecated_title)
+        if ws is not None:
+            worksheet_write_with_retry(
+                f"{deprecated_title} タブの削除",
+                lambda ws=ws: spreadsheet.del_worksheet(ws),
+            )
+            worksheets.pop(deprecated_title, None)
+
     target_tabs: Dict[str, object] = {}
     for index, (title, rows, cols) in enumerate(TAB_SPECS):
         ws = worksheets.get(title)
@@ -568,26 +578,70 @@ def apply_status_cell_colors(spreadsheet, ws, rows: Sequence[Sequence[str]], sta
         )
 
 
-def build_definition_rows() -> List[List[str]]:
+def build_definition_master_rows() -> List[List[str]]:
     return [
-        ["項目", "定義"],
-        ["日付", "1日ごとの集計日。ダッシュボード全体の日次の基準になる日付"],
-        ["集客数", "ユーザーがメールアドレス登録もしくはLINE登録をした人数"],
-        ["集客数（UU）", "ユーザーがメールアドレス登録もしくはLINE登録をしたユニークユーザー数"],
-        ["オプトイン数", "メールアドレス登録人数"],
-        ["リストイン数", "LINE登録数"],
-        ["個別予約数", "ユーザーに ★【個別予約完了】★ が付与された予約イベント数。現行は【アドネス】顧客管理シート / 個別予約集計botログ を暫定正本にし、継続体制では Slack #個別予約通知 から作る 個別予約通知ログ へ切り替える"],
-        ["個別予約数（UU）", "現時点では未接続。将来、個別予約完了タグの通知ログとLINE統合後の同一人物判定で算出するユニークユーザー数"],
-        ["個別実施数", "将来接続。オンライン面談でZoomに接続したユーザー数"],
-        ["着金売上", "ユーザーの申込金額のうち、銀行口座に入金することが確定した金額"],
-        ["広告費", "対象媒体の消化金額"],
-        ["CPA", "広告費 / 集客数"],
-        ["個別予約CPO", "広告費 / 個別予約数"],
-        ["ROAS", "着金売上 / 広告費"],
-        ["会員数", "スキルプラスの契約締結日から7日間が経過したユーザー数"],
-        ["中途解約数", "会員中にサポート期間が終了する前に契約解除が確定したユーザー数"],
-        ["クーリングオフ数", "入金あり契約から7日以内に契約解除を申し出たユーザー数"],
+        ["項目", "定義", "完了基準", "計上日", "正本シート", "補足"],
+        ["日付", "1日ごとの集計日。ダッシュボード全体の日次の基準になる日付", "日別数値の1行が確定した時点", "日付", "【アドネス株式会社】KPIダッシュボード / 日別数値", "各項目の集計キー"],
+        ["集客数", "ユーザーがメールアドレス登録もしくはLINE登録をした人数", "メールまたはLINEの登録イベントが1件記録された時点", "登録日", "【アドネス株式会社】集客データ_メール集計（加工） / 日別メール登録件数", "現状はメール中心。LINE接続後に全体値へ拡張"],
+        ["集客数（UU）", "ユーザーがメールアドレス登録もしくはLINE登録をしたユニークユーザー数", "同一ユーザーの最初の登録イベントが記録された時点", "最初の登録日", "【アドネス株式会社】集客データ_メール集計（加工） / 日別メール登録件数（UU）", "現状はメール中心。LINE接続後に全体値へ拡張"],
+        ["オプトイン数", "メールアドレス登録人数", "メールアドレス登録が1件記録された時点", "登録日", "【アドネス株式会社】集客データ_メール集計（加工） / 日別メール登録件数", "重複ありの件数として扱う"],
+        ["リストイン数", "LINE登録数", "LINE登録が1件記録された時点", "登録日", "未接続", "LINE統合システム完成後に接続"],
+        ["個別予約数", "ユーザーが個別予約を完了した予約イベント数", "現行は個別予約通知ログに1件保存された時点", "予約イベント日時", "【アドネス株式会社】個別面談データ（加工） / 日別個別予約数", "同一人物の通知が同日10分以内で連続した場合は1件にまとめる"],
+        ["個別予約数（UU）", "ユーザーが個別予約を完了したユニークユーザー数", "同一人物の最初の個別予約イベントが確定した時点", "最初の予約イベント日時", "【アドネス株式会社】個別面談データ（加工） / 日別個別予約数（UU）", "統合キー未確定のため未接続"],
+        ["個別実施数", "オンライン面談でZoomに接続したユーザー数", "Zoom接続が確認できた時点", "面談実施日", "未接続", "正本候補はZoom接続ログまたは面談ダッシュボード"],
+        ["着金売上", "銀行口座に入金することが確定した金額", "着金が確定した時点", "着金日", "未接続", "今後は着金売上データ（加工）を正本にする"],
+        ["広告費", "対象媒体の消化金額", "媒体の消化額が確定した時点", "配信日", "未接続", "今後は広告費データ（加工）を正本にする"],
+        ["CPA", "広告費を集客数で割った数値", "広告費と集客数が両方そろった時点", "集計日", "【アドネス株式会社】KPIダッシュボード / 日別数値", "広告費 / 集客数"],
+        ["個別予約CPO", "広告費を個別予約数で割った数値", "広告費と個別予約数が両方そろった時点", "集計日", "【アドネス株式会社】KPIダッシュボード / 日別数値", "広告費 / 個別予約数"],
+        ["ROAS", "着金売上を広告費で割った数値", "着金売上と広告費が両方そろった時点", "集計日", "【アドネス株式会社】KPIダッシュボード / 日別数値", "着金売上 / 広告費"],
+        ["契約数", "スキルプラスの契約書を締結したユーザー数", "契約締結日が記録された時点", "契約締結日", "【アドネス株式会社】会員データ（収集） / 契約イベント", "全面談合算を入口にする"],
+        ["クーリングオフ数", "入金あり契約から7日以内に契約解除を申し出たユーザー数", "お客様相談窓口_進捗管理シートでクーリングオフ申出が記録された時点", "申出日または対応完了日", "【アドネス株式会社】会員データ（加工） / 日別会員数値", "お客様相談窓口_進捗管理シートの集計をそのまま使う"],
+        ["中途解約数", "サポート期間が終了する前に契約解除が確定した会員数", "お客様相談窓口_進捗管理シートで中途解約が完了した時点", "対応完了日", "【アドネス株式会社】会員データ（加工） / 日別会員数値", "会員状態のまま解約が確定した件数"],
+        ["入会", "会員になること", "会員条件を満たした時点", "会員化日", "【アドネス株式会社】会員データ（加工） / 日別会員数値", "会員条件は契約締結日から7日経過"],
+        ["会員", "スキルプラスの契約締結日から7日間が経過したユーザー", "契約締結日から7日が経過した時点", "会員化日", "【アドネス株式会社】会員データ（加工） / 日別会員数値", "ダッシュボードでは在籍残高として扱う"],
+        ["会員数", "その日時点で会員条件を満たしている人数", "日次残高が確定した時点", "日付", "【アドネス株式会社】会員データ（加工） / 日別会員数値", "今後は累計会員数とアクティブ会員数も別管理する"],
     ]
+
+
+def sync_master_definition_tab(gc) -> None:
+    spreadsheet = gc.open_by_key(MASTER_DATA_SHEET_ID)
+    worksheets = {ws.title: ws for ws in spreadsheet.worksheets()}
+    ws = worksheets.get("定義一覧")
+    if ws is None:
+        ws = run_write_with_retry(
+            "マスタデータ / 定義一覧 タブの作成",
+            lambda: spreadsheet.add_worksheet(title="定義一覧", rows=120, cols=6),
+        )
+    if ws.row_count != 120 or ws.col_count != 6:
+        worksheet_write_with_retry(
+            "マスタデータ / 定義一覧 のサイズ調整",
+            lambda: ws.resize(rows=120, cols=6),
+        )
+
+    batch_update_with_retry(
+        spreadsheet,
+        {
+            "requests": [
+                set_sheet_properties_request(
+                    ws.id,
+                    {"index": 0, "hidden": False},
+                    "index,hidden",
+                )
+            ]
+        },
+        "マスタデータ / 定義一覧 の表示順更新",
+    )
+
+    definition_rows = build_definition_master_rows()
+    write_rows(spreadsheet, ws, definition_rows)
+    apply_table_style(
+        spreadsheet,
+        ws,
+        len(definition_rows),
+        6,
+        widths=[170, 340, 320, 130, 280, 260],
+    )
+    set_tab_color(ws, "#9E9E9E")
 
 
 def build_summary_rows(booking_status: Dict[str, str]) -> List[List[str]]:
@@ -725,19 +779,10 @@ def set_tab_color(ws, color: str) -> None:
 
 def main() -> None:
     gc = get_client()
+    sync_master_definition_tab(gc)
     spreadsheet = gc.open_by_key(DASHBOARD_SHEET_ID)
     tabs = ensure_target_tabs(spreadsheet)
     booking_status = load_booking_status(gc)
-
-    definition_rows = build_definition_rows()
-    write_rows(spreadsheet, tabs["定義"], definition_rows)
-    apply_table_style(
-        spreadsheet,
-        tabs["定義"],
-        len(definition_rows),
-        2,
-        widths=[180, 620],
-    )
 
     summary_rows = build_summary_rows(booking_status)
     write_rows(spreadsheet, tabs["スキルプラス事業サマリー"], summary_rows)
@@ -890,7 +935,7 @@ def main() -> None:
     for title, _rows, _cols in TAB_SPECS:
         set_tab_color(tabs[title], TAB_COLORS[title])
 
-    print("【アドネス株式会社】KPIダッシュボードの最小構成を更新しました。")
+    print("マスタデータ / 定義一覧 と 【アドネス株式会社】KPIダッシュボード を更新しました。")
 
 
 if __name__ == "__main__":
