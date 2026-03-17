@@ -11,9 +11,13 @@
 
 from __future__ import annotations
 
+import argparse
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Optional
+
+from gspread.exceptions import APIError
 
 from sheets_manager import get_client
 
@@ -29,12 +33,18 @@ HEADER_TEXT = {
     "fontSize": 12,
 }
 STATUS_OPTIONS = ["正常", "未同期", "停止"]
+STATUS_FORMATS = {
+    "正常": {"backgroundColor": {"red": 0.851, "green": 0.918, "blue": 0.827}},
+    "未同期": {"backgroundColor": {"red": 0.957, "green": 0.8, "blue": 0.8}},
+    "停止": {"backgroundColor": {"red": 0.957, "green": 0.8, "blue": 0.8}},
+}
 TAB_COLOR_MAIN = "#1A73E8"
 TAB_COLOR_META = "#34A853"
+WRITE_RETRY_SECONDS = (5, 10, 20, 40)
 
 TAB_SPECS = [
     ("会員イベント", 6000, 8),
-    ("データソース管理", 50, 10),
+    ("データソース管理", 80, 12),
     ("データ追加ルール", 50, 3),
 ]
 
@@ -131,22 +141,58 @@ def get_tab_url(spreadsheet_id: str, ws) -> str:
     return f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit#gid={ws.id}"
 
 
+def is_quota_error(exc: APIError) -> bool:
+    status_code = getattr(getattr(exc, "response", None), "status_code", None)
+    return status_code == 429 or "Quota exceeded" in str(exc)
+
+
+def run_sheets_call_with_retry(description: str, func):
+    last_error = None
+    waits = (0, *WRITE_RETRY_SECONDS)
+    for attempt, wait_seconds in enumerate(waits, start=1):
+        if wait_seconds:
+            time.sleep(wait_seconds)
+        try:
+            return func()
+        except APIError as exc:
+            if not is_quota_error(exc) or attempt == len(waits):
+                raise
+            last_error = exc
+            print(f"{description}: Sheets の書き込み回数制限に当たったため再試行します。")
+    if last_error:
+        raise last_error
+
+
+def batch_update_with_retry(spreadsheet, body: dict, description: str) -> None:
+    run_sheets_call_with_retry(description, lambda: spreadsheet.batch_update(body))
+
+
+def worksheet_write_with_retry(description: str, func) -> None:
+    run_sheets_call_with_retry(description, func)
+
+
 def ensure_tabs(spreadsheet):
     existing = {ws.title: ws for ws in spreadsheet.worksheets()}
     ordered = []
     for title, rows, cols in TAB_SPECS:
         ws = existing.get(title)
         if ws is None:
-            ws = spreadsheet.add_worksheet(title=title, rows=rows, cols=cols)
+            ws = run_sheets_call_with_retry(f"{title} タブ作成", lambda: spreadsheet.add_worksheet(title=title, rows=rows, cols=cols))
         else:
             if ws.row_count != rows or ws.col_count != cols:
-                ws.resize(rows=rows, cols=cols)
+                worksheet_write_with_retry(
+                    f"{title} タブサイズ調整",
+                    lambda ws=ws, rows=rows, cols=cols: ws.resize(rows=rows, cols=cols),
+                )
         ordered.append(ws)
 
     target_titles = {spec[0] for spec in TAB_SPECS}
     for title in list(existing):
         if title not in target_titles:
-            spreadsheet.del_worksheet(existing[title])
+            worksheet_write_with_retry(
+                f"{title} タブ削除",
+                lambda ws=existing[title]: spreadsheet.del_worksheet(ws),
+            )
 
     requests = []
     for idx, ws in enumerate(ordered):
@@ -154,13 +200,16 @@ def ensure_tabs(spreadsheet):
         requests.append(set_sheet_properties_request(ws.id, {"index": idx, "hidden": False}, "index,hidden"))
         requests.append(set_sheet_properties_request(ws.id, {"tabColorStyle": {"rgbColor": hex_to_rgb(color)}}, "tabColorStyle"))
     if requests:
-        spreadsheet.batch_update({"requests": requests})
+        batch_update_with_retry(spreadsheet, {"requests": requests}, "会員データ（収集）のタブ整列")
     return {ws.title: ws for ws in spreadsheet.worksheets()}
 
 
 def write_rows(ws, rows: List[List[str]]) -> None:
-    ws.clear()
-    ws.update(range_name="A1", values=rows, value_input_option="USER_ENTERED")
+    worksheet_write_with_retry(f"{ws.title} クリア", lambda: ws.clear())
+    worksheet_write_with_retry(
+        f"{ws.title} 更新",
+        lambda: ws.update(range_name="A1", values=rows, value_input_option="USER_ENTERED"),
+    )
 
 
 def style_main_tab(spreadsheet, ws, widths: List[int]) -> None:
@@ -228,7 +277,7 @@ def style_main_tab(spreadsheet, ws, widths: List[int]) -> None:
     ]
     for idx, width in enumerate(widths):
         requests.append(set_column_width_request(ws.id, idx, idx + 1, width))
-    spreadsheet.batch_update({"requests": requests})
+    batch_update_with_retry(spreadsheet, {"requests": requests}, f"{ws.title} の体裁適用")
 
 
 def style_meta_tab(spreadsheet, ws, widths: List[int], center_cols=None, date_cols=None, status_col=None) -> None:
@@ -311,7 +360,7 @@ def style_meta_tab(spreadsheet, ws, widths: List[int], center_cols=None, date_co
         )
     for idx, width in enumerate(widths):
         requests.append(set_column_width_request(ws.id, idx, idx + 1, width))
-    spreadsheet.batch_update({"requests": requests})
+    batch_update_with_retry(spreadsheet, {"requests": requests}, f"{ws.title} の体裁適用")
 
     if status_col is not None:
         validation = {
@@ -319,7 +368,8 @@ def style_meta_tab(spreadsheet, ws, widths: List[int], center_cols=None, date_co
             "showCustomUi": True,
             "strict": True,
         }
-        spreadsheet.batch_update(
+        batch_update_with_retry(
+            spreadsheet,
             {
                 "requests": [
                     {
@@ -335,8 +385,36 @@ def style_meta_tab(spreadsheet, ws, widths: List[int], center_cols=None, date_co
                         }
                     }
                 ]
-            }
+            },
+            f"{ws.title} のステータス入力規則",
         )
+
+
+def apply_status_cell_colors(spreadsheet, ws, rows: List[List[str]], status_col_index: int) -> None:
+    requests = []
+    for row_index, row in enumerate(rows[1:], start=1):
+        status = str(row[status_col_index]).strip() if len(row) > status_col_index else ""
+        fmt = STATUS_FORMATS.get(status)
+        if not fmt:
+            continue
+        requests.append(
+            repeat_cell_request(
+                ws.id,
+                row_index,
+                row_index + 1,
+                status_col_index,
+                status_col_index + 1,
+                {
+                    **fmt,
+                    "horizontalAlignment": "CENTER",
+                    "verticalAlignment": "MIDDLE",
+                    "textFormat": {"bold": True},
+                },
+                "userEnteredFormat.backgroundColor,userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment,userEnteredFormat.textFormat.bold",
+            )
+        )
+    if requests:
+        batch_update_with_retry(spreadsheet, {"requests": requests}, f"{ws.title} のステータス色適用")
 
 
 def normalize_text(value: object) -> str:
@@ -364,8 +442,12 @@ def normalize_phone(value: object) -> str:
     )
 
 
+def compact_key(value: object) -> str:
+    return normalize_text(value).replace("\n", "").replace(" ", "").replace("　", "")
+
+
 def get_records(ws, header_row: int = 1) -> List[dict]:
-    values = ws.get_all_values()
+    values = run_sheets_call_with_retry(f"{ws.title} 読み取り", lambda: ws.get_all_values())
     if len(values) < header_row:
         return []
     headers = [normalize_text(v) for v in values[header_row - 1]]
@@ -377,9 +459,23 @@ def get_records(ws, header_row: int = 1) -> List[dict]:
         for idx, header in enumerate(headers):
             if not header:
                 continue
-            row[header] = raw[idx] if idx < len(raw) else ""
+            cell = raw[idx] if idx < len(raw) else ""
+            row[header] = cell
+            compact = compact_key(header)
+            if compact and compact != header:
+                row[compact] = cell
         records.append(row)
     return records
+
+
+def get_row_value(row: dict, *keys: str) -> str:
+    for key in keys:
+        if key in row and normalize_text(row.get(key)):
+            return normalize_text(row.get(key))
+        compact = compact_key(key)
+        if compact in row and normalize_text(row.get(compact)):
+            return normalize_text(row.get(compact))
+    return ""
 
 
 def parse_datetime_text(value: str) -> Optional[datetime]:
@@ -446,8 +542,8 @@ def build_member_rows(interview_records: List[dict], cooling_records: List[dict]
     merged: Dict[str, MemberEventRow] = {}
 
     for row in interview_records:
-        contract_date = normalize_optional_text(row.get("契約締結日"))
-        result = normalize_text(row.get("結果"))
+        contract_date = normalize_optional_text(get_row_value(row, "契約締結日"))
+        result = get_row_value(row, "結果")
         if not contract_date and result != "入金前契約解除":
             continue
 
@@ -459,26 +555,26 @@ def build_member_rows(interview_records: List[dict], cooling_records: List[dict]
             member.pre_payment_cancel = "○"
 
     for row in cooling_records:
-        if normalize_text(row.get("クーリングオフorその他")) != "クーリングオフ":
+        if get_row_value(row, "クーリングオフorその他", "中途解約orその他") != "クーリングオフ":
             continue
-        if normalize_text(row.get("ステータス")) != "完了":
+        if get_row_value(row, "ステータス") != "完了":
             continue
 
         key = build_member_key(row)
         member = merged.setdefault(key, MemberEventRow())
         merge_base_fields(member, row)
-        member.cooling_off = choose_earliest(member.cooling_off, normalize_text(row.get("対応完了日")))
+        member.cooling_off = choose_earliest(member.cooling_off, get_row_value(row, "対応完了日"))
 
     for row in cancel_records:
-        if normalize_text(row.get("中途解約orその他")) != "中途解約":
+        if get_row_value(row, "中途解約orその他", "クーリングオフorその他") != "中途解約":
             continue
-        if normalize_text(row.get("ステータス")) != "完了":
+        if get_row_value(row, "ステータス") != "完了":
             continue
 
         key = build_member_key(row)
         member = merged.setdefault(key, MemberEventRow())
         merge_base_fields(member, row)
-        member.mid_term_cancel = choose_earliest(member.mid_term_cancel, normalize_text(row.get("対応完了日")))
+        member.mid_term_cancel = choose_earliest(member.mid_term_cancel, get_row_value(row, "対応完了日"))
 
     rows = [["メールアドレス", "電話番号", "名前", "LINE名", "契約締結日", "入金前契約解除", "クーリングオフ", "中途解約"]]
     data_rows = [member.to_row() for member in merged.values()]
@@ -487,44 +583,217 @@ def build_member_rows(interview_records: List[dict], cooling_records: List[dict]
     return rows
 
 
-def build_data_source_rows(interview_tab, cooling_tab, cancel_tab) -> List[List[str]]:
+def build_data_source_rows(
+    interview_tab,
+    cooling_tab,
+    cancel_tab,
+    *,
+    checked_at: str,
+    interview_count: int,
+    cooling_count: int,
+    cancel_count: int,
+    event_count: int,
+) -> List[List[str]]:
+    def status_from_count(count: int) -> str:
+        return "正常" if count > 0 else "停止"
+
     return [
-        ["収集タブ", "ソース元", "参照タブ", "取得条件", "主な取得列", "ステータス", "最終同期日", "更新数", "エラー数", "備考"],
+        ["収集タブ", "対象カラム", "優先度", "ソース元", "参照タブ", "参照列", "取得条件", "ステータス", "最終同期日", "更新数", "エラー数", "備考"],
         [
             "会員イベント",
+            "メールアドレス",
+            "1",
             f'=HYPERLINK("{get_tab_url(INTERVIEW_ALL_SHEET_ID, interview_tab)}","面談記入_DB【全期間】")',
             "全面談合算",
+            "メールアドレス",
             "契約締結日が入っている行、または結果が入金前契約解除の行",
-            "面談ID / LINE名 / 名前 / 電話番号 / メールアドレス / 契約締結日 / 結果",
-            "未同期",
-            "",
-            "",
-            "",
-            "契約締結日は日付、入金前契約解除は現在フラグで保持する",
+            status_from_count(interview_count),
+            checked_at,
+            str(interview_count),
+            "0",
+            f"メールアドレスの第1優先 / 会員イベント {event_count} 行",
         ],
         [
             "会員イベント",
+            "メールアドレス",
+            "2",
             f'=HYPERLINK("{get_tab_url(SUPPORT_PROGRESS_SHEET_ID, cooling_tab)}","お客様相談窓口_進捗管理シート")',
             "管理用_2025.1.25-クーオフ",
+            "アドレス",
             "クーリングオフ かつ 完了",
-            "面談ID / LINE名 / 本名 / アドレス / 対応完了日 / ステータス",
-            "未同期",
-            "",
-            "",
-            "",
-            "クーリングオフ列には対応完了日を入れる",
+            status_from_count(cooling_count),
+            checked_at,
+            str(cooling_count),
+            "0",
+            "メールアドレスの補完元",
         ],
         [
             "会員イベント",
+            "メールアドレス",
+            "3",
             f'=HYPERLINK("{get_tab_url(SUPPORT_PROGRESS_SHEET_ID, cancel_tab)}","お客様相談窓口_進捗管理シート")',
             "管理用_20250125-中途解約",
+            "アドレス",
             "中途解約 かつ 完了",
-            "面談ID / LINE名 / 本名 / アドレス / 対応完了日 / ステータス",
-            "未同期",
-            "",
-            "",
-            "",
-            "中途解約列には対応完了日を入れる",
+            status_from_count(cancel_count),
+            checked_at,
+            str(cancel_count),
+            "0",
+            "メールアドレスの補完元",
+        ],
+        [
+            "会員イベント",
+            "電話番号",
+            "1",
+            f'=HYPERLINK("{get_tab_url(INTERVIEW_ALL_SHEET_ID, interview_tab)}","面談記入_DB【全期間】")',
+            "全面談合算",
+            "電話番号",
+            "契約締結日が入っている行、または結果が入金前契約解除の行",
+            status_from_count(interview_count),
+            checked_at,
+            str(interview_count),
+            "0",
+            "電話番号は現状ここを正本とする",
+        ],
+        [
+            "会員イベント",
+            "名前",
+            "1",
+            f'=HYPERLINK("{get_tab_url(INTERVIEW_ALL_SHEET_ID, interview_tab)}","面談記入_DB【全期間】")',
+            "全面談合算",
+            "名前",
+            "契約締結日が入っている行、または結果が入金前契約解除の行",
+            status_from_count(interview_count),
+            checked_at,
+            str(interview_count),
+            "0",
+            "名前の第1優先",
+        ],
+        [
+            "会員イベント",
+            "名前",
+            "2",
+            f'=HYPERLINK("{get_tab_url(SUPPORT_PROGRESS_SHEET_ID, cooling_tab)}","お客様相談窓口_進捗管理シート")',
+            "管理用_2025.1.25-クーオフ",
+            "本名",
+            "クーリングオフ かつ 完了",
+            status_from_count(cooling_count),
+            checked_at,
+            str(cooling_count),
+            "0",
+            "名前の補完元",
+        ],
+        [
+            "会員イベント",
+            "名前",
+            "3",
+            f'=HYPERLINK("{get_tab_url(SUPPORT_PROGRESS_SHEET_ID, cancel_tab)}","お客様相談窓口_進捗管理シート")',
+            "管理用_20250125-中途解約",
+            "本名",
+            "中途解約 かつ 完了",
+            status_from_count(cancel_count),
+            checked_at,
+            str(cancel_count),
+            "0",
+            "名前の補完元",
+        ],
+        [
+            "会員イベント",
+            "LINE名",
+            "1",
+            f'=HYPERLINK("{get_tab_url(INTERVIEW_ALL_SHEET_ID, interview_tab)}","面談記入_DB【全期間】")',
+            "全面談合算",
+            "LINE名",
+            "契約締結日が入っている行、または結果が入金前契約解除の行",
+            status_from_count(interview_count),
+            checked_at,
+            str(interview_count),
+            "0",
+            "LINE名の第1優先",
+        ],
+        [
+            "会員イベント",
+            "LINE名",
+            "2",
+            f'=HYPERLINK("{get_tab_url(SUPPORT_PROGRESS_SHEET_ID, cooling_tab)}","お客様相談窓口_進捗管理シート")',
+            "管理用_2025.1.25-クーオフ",
+            "LINE名",
+            "クーリングオフ かつ 完了",
+            status_from_count(cooling_count),
+            checked_at,
+            str(cooling_count),
+            "0",
+            "LINE名の補完元",
+        ],
+        [
+            "会員イベント",
+            "LINE名",
+            "3",
+            f'=HYPERLINK("{get_tab_url(SUPPORT_PROGRESS_SHEET_ID, cancel_tab)}","お客様相談窓口_進捗管理シート")',
+            "管理用_20250125-中途解約",
+            "LINE名",
+            "中途解約 かつ 完了",
+            status_from_count(cancel_count),
+            checked_at,
+            str(cancel_count),
+            "0",
+            "LINE名の補完元。名前列とは別ソースだが上流で同値のことがある",
+        ],
+        [
+            "会員イベント",
+            "契約締結日",
+            "1",
+            f'=HYPERLINK("{get_tab_url(INTERVIEW_ALL_SHEET_ID, interview_tab)}","面談記入_DB【全期間】")',
+            "全面談合算",
+            "契約締結日",
+            "契約締結日が入っている行",
+            status_from_count(interview_count),
+            checked_at,
+            str(interview_count),
+            "0",
+            "最も早い契約締結日を保持する",
+        ],
+        [
+            "会員イベント",
+            "入金前契約解除",
+            "1",
+            f'=HYPERLINK("{get_tab_url(INTERVIEW_ALL_SHEET_ID, interview_tab)}","面談記入_DB【全期間】")',
+            "全面談合算",
+            "結果",
+            "結果 = 入金前契約解除",
+            status_from_count(interview_count),
+            checked_at,
+            str(interview_count),
+            "0",
+            "該当時は ○ を入れる",
+        ],
+        [
+            "会員イベント",
+            "クーリングオフ",
+            "1",
+            f'=HYPERLINK("{get_tab_url(SUPPORT_PROGRESS_SHEET_ID, cooling_tab)}","お客様相談窓口_進捗管理シート")',
+            "管理用_2025.1.25-クーオフ",
+            "対応完了日",
+            "クーリングオフ かつ 完了",
+            status_from_count(cooling_count),
+            checked_at,
+            str(cooling_count),
+            "0",
+            "対応完了日を保持する",
+        ],
+        [
+            "会員イベント",
+            "中途解約",
+            "1",
+            f'=HYPERLINK("{get_tab_url(SUPPORT_PROGRESS_SHEET_ID, cancel_tab)}","お客様相談窓口_進捗管理シート")',
+            "管理用_20250125-中途解約",
+            "対応完了日",
+            "中途解約 かつ 完了",
+            status_from_count(cancel_count),
+            checked_at,
+            str(cancel_count),
+            "0",
+            "対応完了日を保持する",
         ],
     ]
 
@@ -537,51 +806,90 @@ def build_rule_rows() -> List[List[str]]:
         ["入金前契約解除", "全面談合算で結果が入金前契約解除の行がある場合は ○ を入れる", "現状のソースに解除日が無いため、フラグとして保持する"],
         ["クーリングオフ", "お客様相談窓口_進捗管理シートのクーリングオフ完了日を入れる", "定義はマスタデータ / 定義一覧に従う"],
         ["中途解約", "お客様相談窓口_進捗管理シートの中途解約完了日を入れる", "定義はマスタデータ / 定義一覧に従う"],
+        ["列の取得優先度", "データソース管理に書かれた優先度順に空欄補完する", "メールアドレス、名前、LINE名は複数ソースから補完する"],
+        ["名前とLINE名", "名前とLINE名は別列から取得する", "同じ値になる行があっても自動コピーではなく、上流値が同じだけとみなす"],
         ["共通除外", "【アドネス株式会社】共通除外マスタを参照し、追加日以降に発生した新規データだけ除外する", "過去データは遡って消さない"],
         ["無条件除外", "対象者名やメールアドレスに test / テスト / sample / サンプル / dummy が入るものは除外対象とする", "人を特定せず明らかにテストと分かるものだけに限定する"],
+        ["異常時の扱い", "主要ソースの取得件数が 0 の場合は停止として扱い、壊れた値で上書きしない", "データソース管理のステータスで確認する"],
     ]
 
 
-def main() -> None:
+def main(dry_run: bool = False) -> None:
     gc = get_client()
-    target_ss = gc.open_by_key(TARGET_SHEET_ID)
-    interview_ss = gc.open_by_key(INTERVIEW_ALL_SHEET_ID)
-    support_ss = gc.open_by_key(SUPPORT_PROGRESS_SHEET_ID)
+    target_ss = run_sheets_call_with_retry("会員データ（収集）シート取得", lambda: gc.open_by_key(TARGET_SHEET_ID))
+    interview_ss = run_sheets_call_with_retry("全面談合算シート取得", lambda: gc.open_by_key(INTERVIEW_ALL_SHEET_ID))
+    support_ss = run_sheets_call_with_retry("お客様相談窓口_進捗管理シート取得", lambda: gc.open_by_key(SUPPORT_PROGRESS_SHEET_ID))
     tabs = ensure_tabs(target_ss)
 
-    interview_tab = interview_ss.worksheet("全面談合算")
-    cooling_tab = support_ss.worksheet("管理用_2025.1.25-クーオフ")
-    cancel_tab = support_ss.worksheet("管理用_20250125-中途解約")
+    interview_tab = run_sheets_call_with_retry("全面談合算タブ取得", lambda: interview_ss.worksheet("全面談合算"))
+    cooling_tab = run_sheets_call_with_retry("クーリングオフタブ取得", lambda: support_ss.worksheet("管理用_2025.1.25-クーオフ"))
+    cancel_tab = run_sheets_call_with_retry("中途解約タブ取得", lambda: support_ss.worksheet("管理用_20250125-中途解約"))
 
     interview_records = get_records(interview_tab, header_row=1)
     cooling_records = get_records(cooling_tab, header_row=2)
     cancel_records = get_records(cancel_tab, header_row=2)
 
-    member_rows = build_member_rows(interview_records, cooling_records, cancel_records)
-    write_rows(tabs["会員イベント"], member_rows)
-    style_main_tab(target_ss, tabs["会員イベント"], widths=[200, 130, 130, 130, 120, 120, 130, 130])
+    interview_source_count = sum(
+        1
+        for row in interview_records
+        if get_row_value(row, "契約締結日") or get_row_value(row, "結果") == "入金前契約解除"
+    )
+    cooling_source_count = sum(
+        1
+        for row in cooling_records
+        if get_row_value(row, "クーリングオフorその他", "中途解約orその他") == "クーリングオフ"
+        and get_row_value(row, "ステータス") == "完了"
+    )
+    cancel_source_count = sum(
+        1
+        for row in cancel_records
+        if get_row_value(row, "中途解約orその他", "クーリングオフorその他") == "中途解約"
+        and get_row_value(row, "ステータス") == "完了"
+    )
 
-    data_source_rows = build_data_source_rows(interview_tab, cooling_tab, cancel_tab)
+    member_rows = build_member_rows(interview_records, cooling_records, cancel_records)
+    checked_at = datetime.now().strftime("%Y/%m/%d %H:%M")
+    data_source_rows = build_data_source_rows(
+        interview_tab,
+        cooling_tab,
+        cancel_tab,
+        checked_at=checked_at,
+        interview_count=interview_source_count,
+        cooling_count=cooling_source_count,
+        cancel_count=cancel_source_count,
+        event_count=max(0, len(member_rows) - 1),
+    )
+    rule_rows = build_rule_rows()
+
+    if dry_run:
+        print("【dry-run】会員イベント 行数:", max(0, len(member_rows) - 1))
+        print("【dry-run】全面談合算 対象行数:", interview_source_count)
+        print("【dry-run】クーリングオフ 対象行数:", cooling_source_count)
+        print("【dry-run】中途解約 対象行数:", cancel_source_count)
+        return
+
+    write_rows(tabs["会員イベント"], member_rows)
+    style_main_tab(target_ss, tabs["会員イベント"], widths=[220, 140, 140, 140, 140, 170, 150, 140])
+
     write_rows(tabs["データソース管理"], data_source_rows)
     style_meta_tab(
         target_ss,
         tabs["データソース管理"],
-        widths=[120, 220, 180, 210, 320, 90, 130, 90, 90, 230],
-        center_cols=[5, 7, 8],
-        date_cols=[6],
-        status_col=5,
+        widths=[110, 140, 70, 230, 190, 130, 240, 90, 140, 90, 90, 280],
+        center_cols=[2, 7, 9, 10],
+        date_cols=[8],
+        status_col=7,
     )
+    apply_status_cell_colors(target_ss, tabs["データソース管理"], data_source_rows, 7)
 
-    rule_rows = build_rule_rows()
     write_rows(tabs["データ追加ルール"], rule_rows)
-    style_meta_tab(
-        target_ss,
-        tabs["データ追加ルール"],
-        widths=[150, 470, 330],
-    )
+    style_meta_tab(target_ss, tabs["データ追加ルール"], widths=[150, 470, 330])
 
     print("【アドネス株式会社】会員データ（収集） を会員イベント中心の構成に更新しました。")
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="会員データ（収集）を更新する")
+    parser.add_argument("--dry-run", action="store_true", help="書き込みを行わず件数だけ確認する")
+    args = parser.parse_args()
+    main(dry_run=args.dry_run)
