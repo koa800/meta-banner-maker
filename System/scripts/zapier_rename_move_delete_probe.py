@@ -15,6 +15,7 @@ from zapier_create_delete_probe import CREATE_URL
 from zapier_create_delete_probe import _choose_webhook_trigger
 from zapier_create_delete_probe import _collect_untitled_rows
 from zapier_create_delete_probe import _extract_edit_path
+from zapier_create_delete_probe import _open_create_from_folder
 from zapier_create_delete_probe import _wait_for_new_row
 from zapier_login_helper import ensure_login as ensure_zapier_login
 
@@ -124,8 +125,7 @@ async def run_probe() -> dict[str, Any]:
         new_name = build_name()
         try:
             before = await _collect_untitled_rows(cleanup_page)
-            await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=120000)
-            await page.wait_for_timeout(3000)
+            await _open_create_from_folder(page)
             await _choose_webhook_trigger(page)
             created_edit_path = _extract_edit_path(page.url)
             if not created_edit_path:

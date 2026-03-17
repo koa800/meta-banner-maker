@@ -241,6 +241,8 @@ async def run_probe() -> dict[str, Any]:
                     error_texts.append(text)
 
             after_create = await count_rows(page, name)
+            if after_create == before and not error_texts:
+                return run_probe_raw()
             deleted = await delete_rows(page, name)
             after_delete = await count_rows(page, name)
 

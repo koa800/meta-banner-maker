@@ -84,6 +84,26 @@
 - 一覧カード footer
   - `埋め込み用URL`
 
+## 名称変更
+
+- modal で開く
+- visible form action
+  - `/video/name/update`
+- 入力
+  - `名称`
+  - `video_id`
+- current probe
+  - `test2_20260315.mp4`
+  - `raw form.submit()`
+  - 結果: row 名は変化せず no-op
+  - modal の `保存` ボタン `#button-name`
+  - 結果: `ZZ_TEST_UTAGE_video_probe_UPDATED.mp4` へ intended に変更
+  - rollback で `test2_20260315.mp4` へ復帰
+- 判断
+  - visible route が見えていても、そのまま submit して正としない
+  - 一次判定は `一覧 row 名が intended に変わったか`
+  - exact な save は `#button-name` click
+
 ## チャプター設定
 
 - modal で開く

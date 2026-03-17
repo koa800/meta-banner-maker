@@ -16,6 +16,7 @@ from zapier_create_delete_probe import _cleanup_exact_via_script
 from zapier_create_delete_probe import _collect_untitled_rows
 from zapier_create_delete_probe import _extract_edit_path
 from zapier_create_delete_probe import _open_action_picker
+from zapier_create_delete_probe import _open_create_from_folder
 from zapier_create_delete_probe import _try_choose_webhook_post_first_action
 from zapier_create_delete_probe import _wait_for_new_row
 
@@ -78,8 +79,7 @@ async def run_probe() -> dict[str, Any]:
         created_edit_path: str | None = None
         try:
             before = await _collect_untitled_rows(cleanup_page)
-            await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=120000)
-            await page.wait_for_timeout(3000)
+            await _open_create_from_folder(page)
 
             await _choose_webhook_trigger(page)
             first_action = await _try_choose_webhook_post_first_action(page)

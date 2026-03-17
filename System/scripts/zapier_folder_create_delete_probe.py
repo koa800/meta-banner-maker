@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Zapier の `甲原` フォルダ直下で Create Zap した時の Location を検証する。"""
+"""Zapier の current create から draft を作り、Location を検証する。"""
 
 from __future__ import annotations
 
@@ -43,22 +43,42 @@ def _cleanup_exact_via_script(*, edit_path: str | None = None) -> dict[str, Any]
 
 
 async def _open_folder_create(page) -> None:
-    await page.goto(FOLDER_URL, wait_until="domcontentloaded", timeout=120000)
+    await page.goto(ASSETS_URL, wait_until="domcontentloaded", timeout=120000)
     await page.wait_for_timeout(3000)
-    create_candidates = [
-        page.get_by_role("button", name="Create Zap"),
+    async def _click(candidates) -> bool:
+        for locator in candidates:
+            try:
+                if await locator.is_visible(timeout=1200):
+                    await locator.click(timeout=5000)
+                    return True
+            except Exception:
+                continue
+        return False
+
+    create_zap_candidates = [
+        page.get_by_role("button", name="Create Zap").first,
         page.locator("button:has-text('Create Zap')").first,
         page.locator("a:has-text('Create Zap')").first,
+        page.get_by_role("menuitem", name="Create Zap").first,
     ]
-    for locator in create_candidates:
-        try:
-            if await locator.is_visible(timeout=1200):
-                await locator.click(timeout=5000)
-                await page.wait_for_timeout(3000)
-                return
-        except Exception:
-            continue
-    raise RuntimeError("甲原フォルダ直下の `Create Zap` を押せませんでした")
+    create_entry_candidates = [
+        page.get_by_role("button", name="Create").first,
+        page.get_by_role("link", name="Create").first,
+        page.locator("button:has-text('Create')").first,
+    ]
+
+    clicked = await _click(create_zap_candidates)
+    if not clicked:
+        opened_menu = await _click(create_entry_candidates)
+        if opened_menu:
+            await page.wait_for_timeout(1200)
+            if "/editor" in page.url or "/webintent/edit-zap/" in page.url:
+                clicked = True
+            else:
+                clicked = await _click(create_zap_candidates)
+    if not clicked:
+        raise RuntimeError("assets page の `Create` から editor に入れませんでした")
+    await page.wait_for_timeout(3000)
 
 
 async def _asset_meta_for_path(page, edit_path: str) -> dict[str, Any]:

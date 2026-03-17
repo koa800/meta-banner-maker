@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import subprocess
 import time
 from typing import Any
@@ -27,7 +28,7 @@ from zapier_login_helper import ensure_login as ensure_zapier_login
 CDP_URL = "http://127.0.0.1:9224"
 ASSETS_URL = "https://zapier.com/app/assets/zaps"
 FOLDER_CREATE_URL = "https://zapier.com/app/assets/zaps/folders/019cdd75-b612-ec46-7e5b-bd8a9015a667"
-CREATE_URL = FOLDER_CREATE_URL
+CREATE_URL = ASSETS_URL
 
 
 def _extract_edit_path(url: str | None) -> str | None:
@@ -35,6 +36,9 @@ def _extract_edit_path(url: str | None) -> str | None:
         return None
     marker = "/webintent/edit-zap/"
     if marker not in url:
+        match = re.search(r"/editor/(\d+)(?:/|\\?|$)", url)
+        if match:
+            return f"/webintent/edit-zap/{match.group(1)}"
         return None
     path = url.split("zapier.com", 1)[-1]
     return path if path.startswith("/") else None
@@ -102,6 +106,18 @@ async def _wait_for_new_row(page, before: list[dict[str, Any]], *, timeout_ms: i
     return []
 
 
+async def _fill_first_visible(page, selectors: list[str], value: str) -> bool:
+    for selector in selectors:
+        try:
+            locator = page.locator(selector).first
+            if await locator.is_visible(timeout=1000):
+                await locator.fill(value, timeout=5000)
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _find_assets_target_id() -> str:
     target = find_target(url_contains="/app/assets/zaps") or find_target(url_contains="zapier.com")
     if target is None:
@@ -134,40 +150,84 @@ def _wait_for_new_row_raw(before: list[dict[str, Any]], *, timeout_seconds: int 
 
 
 def _open_create_target_raw() -> str:
-    target = find_target(url_contains="/app/assets/zaps/folders/019cdd75-b612-ec46-7e5b-bd8a9015a667") or create_target(CREATE_URL)
+    target = find_target(url_contains="/app/assets/zaps") or create_target(CREATE_URL)
     target_id = str(target["id"])
     activate_target(target_id)
     navigate_target(target_id, CREATE_URL)
     time.sleep(2.5)
-    if not click_first(
+    opened = click_first(
         target_id,
         selectors=["button", "a", "div[role='button']"],
         text_candidates=["Create Zap"],
-    ):
-        raise RuntimeError("raw fallback で folder page の Create Zap を押せませんでした")
+    )
+    if not opened:
+        opened = click_first(
+            target_id,
+            selectors=["button", "a", "div[role='button']"],
+            text_candidates=["Create"],
+        )
+        if opened:
+            time.sleep(1.2)
+            menu_opened = click_first(
+                target_id,
+                selectors=["button", "a", "div[role='button']", "[role='menuitem']"],
+                text_candidates=["Create Zap"],
+            )
+            if menu_opened:
+                opened = True
+            else:
+                current_url = str(eval_target(target_id, "window.location.href") or "")
+                opened = "/editor" in current_url or "/webintent/edit-zap/" in current_url
+    if not opened:
+        raise RuntimeError("raw fallback で assets page の `Create` から editor に入れませんでした")
     time.sleep(3.0)
     return target_id
 
 
 async def _open_create_from_folder(page) -> None:
     await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=120000)
-    await page.wait_for_timeout(2500)
-    create_candidates = [
+    await page.wait_for_timeout(3000)
+    if "/editor" in page.url or "/webintent/edit-zap/" in page.url:
+        return
+
+    async def _click_candidates(candidates) -> bool:
+        for locator in candidates:
+            try:
+                if await locator.is_visible(timeout=1800):
+                    await locator.click(timeout=5000)
+                    return True
+            except Exception:
+                continue
+        return False
+
+    direct_create_zap = [
         page.get_by_role("button", name="Create Zap").first,
         page.get_by_text("Create Zap", exact=False).first,
+        page.locator("a[href*='/webintent/create-zap']").first,
+        page.get_by_role("menuitem", name="Create Zap").first,
     ]
-    clicked = False
-    for locator in create_candidates:
-        try:
-            if await locator.is_visible(timeout=1200):
-                await locator.click(timeout=5000)
-                clicked = True
-                break
-        except Exception:
-            continue
+    create_entry = [
+        page.get_by_role("button", name="Create").first,
+        page.get_by_role("link", name="Create").first,
+        page.get_by_text("Create", exact=False).first,
+    ]
+
+    clicked = await _click_candidates(direct_create_zap)
     if not clicked:
-        raise RuntimeError("folder page の Create Zap を押せませんでした")
-    await page.wait_for_timeout(3000)
+        opened_menu = await _click_candidates(create_entry)
+        if opened_menu:
+            await page.wait_for_timeout(1200)
+            if "/editor" in page.url or "/webintent/edit-zap/" in page.url:
+                clicked = True
+            else:
+                clicked = await _click_candidates(direct_create_zap)
+    if not clicked:
+        raise RuntimeError("assets page の `Create` から editor に入れませんでした")
+
+    try:
+        await page.wait_for_url("**/editor**", timeout=15000)
+    except Exception:
+        await page.wait_for_timeout(4000)
 
 
 def _choose_webhook_trigger_raw(target_id: str) -> None:
@@ -329,20 +389,47 @@ def _cleanup_exact_via_script(*, edit_path: str | None = None, name: str | None 
 
 
 async def _choose_webhook_trigger(page) -> None:
+    try:
+        await page.wait_for_selector('[data-testid="step-node-1"]', timeout=15000)
+    except Exception:
+        await page.wait_for_timeout(4000)
+
     trigger_opened = False
     trigger_candidates = [
+        page.get_by_test_id("step-node-1"),
         page.get_by_text("Select the event that starts your Zap", exact=False).first,
         page.get_by_text("Trigger", exact=False).first,
         page.locator("[data-testid^='step-node-'][role='button']").first,
     ]
     for locator in trigger_candidates:
         try:
-            if await locator.is_visible(timeout=1200):
+            if await locator.is_visible(timeout=1800):
                 await locator.click(timeout=5000)
                 trigger_opened = True
                 break
         except Exception:
             continue
+    if not trigger_opened:
+        trigger_opened = await page.evaluate(
+            """() => {
+              const candidates = Array.from(document.querySelectorAll(
+                '[data-testid="step-node-1"], [data-testid^="step-node-"], button, [role="button"], div'
+              ));
+              const target = candidates.find((node) => {
+                const text = (node.innerText || node.textContent || '').trim();
+                return (
+                  text.includes('Select the event that starts your Zap') ||
+                  text.includes('Trigger 1.') ||
+                  text === 'Trigger'
+                );
+              });
+              if (!target) return false;
+              target.click();
+              return true;
+            }"""
+        )
+        if trigger_opened:
+            await page.wait_for_timeout(2500)
     if not trigger_opened:
         raise RuntimeError("Trigger 入口を開けませんでした")
 
@@ -512,15 +599,33 @@ async def _choose_action_app(page, app_name: str) -> bool:
         except Exception:
             return False
     await page.wait_for_timeout(1500)
-    try:
-        if app_name == "Webhooks by Zapier":
-            await page.get_by_text("Webhooks", exact=False).last.click(timeout=10000)
-        else:
-            await page.get_by_text(app_name, exact=False).first.click(timeout=10000)
-        await page.wait_for_timeout(2500)
-        return True
-    except Exception:
-        return False
+    candidates = []
+    if app_name == "Webhooks by Zapier":
+        candidates.extend(
+            [
+                page.get_by_test_id("app-item-option").filter(has_text="Webhooks").first,
+                page.get_by_role("button", name="Webhooks Premium").first,
+                page.get_by_text("Webhooks Premium", exact=False).first,
+                page.get_by_text("Webhooks", exact=False).last,
+            ]
+        )
+    else:
+        candidates.extend(
+            [
+                page.get_by_test_id("app-item-option").filter(has_text=app_name).first,
+                page.get_by_role("button", name=app_name).first,
+                page.get_by_text(app_name, exact=False).first,
+            ]
+        )
+    for locator in candidates:
+        try:
+            if await locator.is_visible(timeout=1500):
+                await locator.click(timeout=10000)
+                await page.wait_for_timeout(2500)
+                return True
+        except Exception:
+            continue
+    return False
 
 
 async def _choose_event(page, event_name: str) -> bool:
