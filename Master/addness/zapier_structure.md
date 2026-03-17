@@ -113,14 +113,20 @@
   - current の `zapier_create_delete_probe.py` は `before/after` の diff で新規 draft の `edit_path` を特定し、その row だけ cleanup する
   - `Trigger -> Action` の最小 2 step 構造
   - `Action > Mailchimp > Add/Update Subscriber` で `Test` stage に進めること
+  - `Action > Webhooks by Zapier > POST` でも `Test` stage に進めること
   - `Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap`
+    を 1 action relay で live exact に完了できること
+  - `Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Webhooks by Zapier > POST -> Test -> Delete Zap`
     を 1 action relay で live exact に完了できること
 
 ## まだ live create / rollback を厚くすべき範囲
 
 - `Catch Hook -> Mailchimp Add/Update Subscriber -> Test` は exploratory で 1 本通った
+- `Catch Hook -> Webhooks by Zapier POST -> Test` も exploratory で 1 本通った
 - `Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap`
   は current UI で 1 action relay として live exact に通った
+- `Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Webhooks by Zapier > POST -> Test -> Delete Zap`
+  も current UI で 1 action relay として live exact に通った
 - `trigger 1 + action 2` の exploratory probe は cleanup まで通るが、current は `second_action_selected = false`
 - current builder 上では first action 後に
   - `Choose an event`

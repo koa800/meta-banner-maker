@@ -356,6 +356,10 @@
   - `python3 System/scripts/zapier_create_delete_probe.py --with-action`
     - `Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap`
     - まで current UI で完了
+  - `python3 System/scripts/zapier_create_delete_probe.py --with-action --action-app webhook-post`
+    - `Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Webhooks by Zapier > POST -> Test -> Delete Zap`
+    - まで current UI で完了
+    - つまり current では external account 不要の 1 action relay も live exact に通る
   - `python3 System/scripts/zapier_create_delete_probe.py --with-action --with-second-action`
     - cleanup は成功
     - `second_action_selected = false`
