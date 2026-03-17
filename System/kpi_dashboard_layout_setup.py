@@ -626,6 +626,35 @@ def apply_status_cell_colors(spreadsheet, ws, rows: Sequence[Sequence[str]], sta
         )
 
 
+def apply_single_line_header(spreadsheet, ws, col_count: int, font_size: int = 11) -> None:
+    batch_update_with_retry(
+        spreadsheet,
+        {
+            "requests": [
+                repeat_cell_request(
+                    ws.id,
+                    0,
+                    1,
+                    0,
+                    col_count,
+                    {
+                        "textFormat": {
+                            "foregroundColor": {"red": 1, "green": 1, "blue": 1},
+                            "bold": True,
+                            "fontSize": font_size,
+                        },
+                        "horizontalAlignment": "CENTER",
+                        "verticalAlignment": "MIDDLE",
+                        "wrapStrategy": "CLIP",
+                    },
+                    "userEnteredFormat.textFormat,userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment,userEnteredFormat.wrapStrategy",
+                )
+            ]
+        },
+        f"{ws.title} のヘッダー1行化",
+    )
+
+
 def apply_protections(spreadsheet, tabs) -> None:
     protected_names = [title for title, _, _ in TAB_SPECS]
     target_sheet_ids = {tabs[name].id for name in protected_names}
@@ -1028,8 +1057,9 @@ def main() -> None:
         tabs["日別数値"],
         len(daily_rows),
         14,
-        widths=[110, 100, 120, 110, 120, 110, 120, 110, 90, 120, 90, 110, 100, 180],
+        widths=[120, 120, 145, 135, 150, 125, 125, 120, 110, 145, 105, 120, 120, 135],
     )
+    apply_single_line_header(spreadsheet, tabs["日別数値"], 14)
     apply_number_formats(
         spreadsheet,
         tabs["日別数値"],
@@ -1079,8 +1109,9 @@ def main() -> None:
         tabs["データソース管理"],
         len(data_source_rows),
         14,
-        widths=[140, 110, 110, 70, 230, 160, 100, 160, 140, 90, 140, 90, 80, 220],
+        widths=[170, 125, 125, 90, 280, 190, 125, 190, 160, 100, 155, 100, 90, 260],
     )
+    apply_single_line_header(spreadsheet, tabs["データソース管理"], 14)
     apply_status_cell_colors(
         spreadsheet,
         tabs["データソース管理"],
