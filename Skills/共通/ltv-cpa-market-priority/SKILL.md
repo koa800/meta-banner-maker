@@ -24,6 +24,7 @@ description: Prioritize target markets, customer segments, audiences, or message
 
 優先順位づけの前に、最低でも次を揃える。
 
+- `対象事業`
 - `対象商品`
 - `市場候補` または `セグメント候補`
 - 各候補の `LTV` の見立て
@@ -33,6 +34,12 @@ description: Prioritize target markets, customer segments, audiences, or message
 `LTV` は単価だけでなく、継続率、アップセル余地、返金率、紹介の出やすさまで含めて見る。
 
 `CPA` は広告入札の高さだけでなく、教育コスト、訴求難易度、競争環境、成約までに必要な説明量まで含めて見る。
+
+`高 / 中 / 低` の判定基準は事業ごとに変わるため、毎回先に定義する。
+
+同じ `高LTV` でも、別事業では基準値が全く違ってよい。事業をまたいで同じ閾値を流用しない。
+
+まず `この事業では何円以上を高LTVと置くか`、`この事業では何円以下を低CPAと置くか` を決め、その定義の中で市場同士を比較する。
 
 ## Ranking Rule
 
