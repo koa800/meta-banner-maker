@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-【アドネス株式会社】個別面談データ を再生成する。
+【アドネス株式会社】個別面談データ（加工） を再生成する。
 
 第1版の方針:
 - 現行の正本候補は `【アドネス】顧客管理シート / 個別予約集計botログ`
@@ -27,7 +27,7 @@ from sheets_manager import get_client
 
 
 TARGET_SHEET_ID = "1ip_RARDHmQvTjmaVavw1L71ltPrn4Kg6sa__njqyQZ8"
-TARGET_SPREADSHEET_TITLE = "【アドネス株式会社】個別面談データ"
+TARGET_SPREADSHEET_TITLE = "【アドネス株式会社】個別面談データ（加工）"
 COLLECTION_SHEET_ID = "12bYadR0cgi24t4tz8GeESlsKffmNkkTHprI4ray_Sq4"
 COLLECTION_SPREADSHEET_TITLE = "【アドネス株式会社】個別面談データ（収集）"
 COLLECTION_NOTIFICATION_LOG_TAB_NAME = "個別予約通知ログ"
@@ -795,7 +795,7 @@ def build_source_rows(stats: Dict[str, object], notification_stats: Dict[str, st
             "個別予約",
             "加工データ",
             "1",
-            f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{TARGET_SHEET_ID}/edit","【アドネス株式会社】個別面談データ")',
+            f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{TARGET_SHEET_ID}/edit","【アドネス株式会社】個別面談データ（加工）")',
             COUNT_TAB_NAME,
             "A〜C列",
             booking_calc,
@@ -934,7 +934,7 @@ def write_target(daily_records: Sequence[DailyCountRecord], stats: Dict[str, obj
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="【アドネス株式会社】個別面談データを再生成する")
+    parser = argparse.ArgumentParser(description="【アドネス株式会社】個別面談データ（加工）を再生成する")
     parser.add_argument("--dry-run", action="store_true", help="書き込みは行わず、集計結果だけ確認する")
     return parser.parse_args()
 
@@ -957,7 +957,7 @@ def main() -> None:
         )
         return
     write_target(daily_records, stats)
-    print("【アドネス株式会社】個別面談データの第1版を更新しました。")
+    print("【アドネス株式会社】個別面談データ（加工）の第1版を更新しました。")
 
 
 if __name__ == "__main__":
