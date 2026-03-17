@@ -99,9 +99,9 @@ Zapier は、あるシステムで起きた event を別のシステムへ渡し
 最初の 1 本は `webhook -> Mailchimp Add/Update Subscriber` の 2 step だけで閉じる。
 
 1. `Create`
-2. `Create Zap`
-3. `Untitled Zap`
-4. `Folder = 甲原`
+2. `Assets > Zaps > 甲原`
+3. `Create Zap`
+4. `Untitled Zap`
 5. `Trigger`
 6. `Webhooks by Zapier`
 7. `Catch Hook`
@@ -163,7 +163,7 @@ exploratory に新規 relay を開いた時は、rollback を exact に持つ。
 
 1. `Create Zap`
 2. `Untitled Zap`
-3. `Folder = 甲原`
+3. `Location = 甲原`
 4. `Trigger`
 5. `Action`
 6. 2 step が見えた時点で、使わないなら title menu
@@ -248,7 +248,8 @@ exploratory に新規 relay を開いた時は、rollback を exact に持つ。
 - editor
   - `https://zapier.com/editor/{zap_id}/published`
 - create 入口
-  - `https://zapier.com/webintent/create-zap?useCase=from-scratch`
+  - `https://zapier.com/app/assets/zaps/folders/019cdd75-b612-ec46-7e5b-bd8a9015a667`
+  - `Assets > Zaps > 甲原 > Create Zap`
 
 2026-03-16 live では、`Create Zap` を開いただけでは assets 一覧に `Untitled Zap` は出なかった。current では、draft が persisted する前に `trigger` 選択などもう 1 段階進む可能性が高い。探索だけなら、builder 側の `Untitled Zap / Draft` と assets 一覧の両方を見て cleanup 判断する。
 
@@ -265,11 +266,13 @@ exploratory に新規 relay を開いた時は、rollback を exact に持つ。
 - `Choose an event -> Add/Update Subscriber`
 
 つまり current の最小 exploratory relay は、
-- `Create Zap`
+- `Assets > Zaps > 甲原 > Create Zap`
 - `Trigger > Webhooks by Zapier > Catch Hook`
 - `Action > Mailchimp > Add/Update Subscriber`
 - `Delete Zap`
 まで exact に確認済み。
+
+2026-03-17 live では、`甲原` folder page から `Create Zap` した時、assets 一覧の `Location` が最初から `甲原` で入ることを確認した。current の Addness では、`Zap details > Folder` を後から変えるより、`甲原` folder page を主入口にする方が exact。
 
 ## exact 手順
 
@@ -488,9 +491,9 @@ folder は step ではなく `Zap details` 側で管理する。
 ### 新規 relay の exact 順
 
 1. `Create`
-2. `Create Zap`
-3. builder 上部で `Untitled Zap` を確認
-4. 右上または details 側で `Folder = 甲原`
+2. `Assets > Zaps > 甲原`
+3. `Create Zap`
+4. builder 上部で `Untitled Zap` を確認
 5. `Trigger`
 6. `Webhooks by Zapier`
 7. `Catch Hook`
@@ -504,7 +507,7 @@ folder は step ではなく `Zap details` 側で管理する。
 15. `Update Existing`
 16. Zap 名を business event が読める名前へ変更
 
-current の Addness では、`Trigger` より前に `Folder` と `Zap 名の意味` を固定しておくと、draft が増えても事故りにくい。
+current の Addness では、`甲原` folder page から入ることで `Location = 甲原` を先に固定する。`Zap details > Folder` を後から変えるより、create 入口を揃える方が事故りにくい。
 
 ### publish 前に UI 上で必ず見るラベル
 

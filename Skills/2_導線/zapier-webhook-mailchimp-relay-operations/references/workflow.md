@@ -6,6 +6,9 @@
   - `https://zapier.com/app/assets/zaps`
 - editor
   - `https://zapier.com/editor/{zap_id}/published`
+- create 入口
+  - `https://zapier.com/app/assets/zaps/folders/019cdd75-b612-ec46-7e5b-bd8a9015a667`
+  - `Assets > Zaps > 甲原 > Create Zap`
 - current の代表 family
   - `Webhooks by Zapier / Catch Hook`
   - `Mailchimp / Add/Update Subscriber`
@@ -72,26 +75,29 @@
 ## 新規 relay の exact 順
 
 1. `Create`
-2. `Untitled Zap / Draft`
-3. `Trigger`
-4. `Webhooks by Zapier`
-5. `Catch Hook`
-6. `Action`
-7. `Mailchimp`
-8. `Add/Update Subscriber`
-9. `Audience*`
-10. `Subscriber Email*`
-11. `Tag(s)`
-12. `Status`
-13. `Update Existing`
-14. `Name`
-15. `Folder = 甲原`
+2. `Assets > Zaps > 甲原`
+3. `Create Zap`
+4. `Untitled Zap / Draft`
+5. `Trigger`
+6. `Webhooks by Zapier`
+7. `Catch Hook`
+8. `Action`
+9. `Mailchimp`
+10. `Add/Update Subscriber`
+11. `Audience*`
+12. `Subscriber Email*`
+13. `Tag(s)`
+14. `Status`
+15. `Update Existing`
+16. `Name`
 
 つまり、Zapier は step を埋める前に
 - 何 event を relay するか
 - どの tag に変換するか
 - どの email key を使うか
 を先に切る。
+
+current の Addness では、`Zap details > Folder` を後から変えるより、最初から `甲原` folder page で `Create Zap` する方が exact。2026-03-17 live probe では、この入口で assets row の `Location = 甲原` を確認済み。
 
 ### create builder で実際に見るラベル
 
