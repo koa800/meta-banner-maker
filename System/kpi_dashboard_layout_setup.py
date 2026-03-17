@@ -697,19 +697,19 @@ def build_data_source_rows(status: Dict[str, str], daily_row_count: int, booking
     booking_errors = booking_status.get("エラー数", "0")
     rows = [
         ["KPIカラム", "グループ", "ソース元", "優先度", "スプレッドシートURL", "タブ名", "参照先列", "正規化 / 計算", "入力条件", "ステータス", "最終同期日", "更新数", "エラー数", "メモ"],
-        ["集客数", "集客", "加工データ", "1", f"https://docs.google.com/spreadsheets/d/{EMAIL_METRICS_SHEET_ID}/edit", "日別メール登録件数", "B列", "重複あり件数", "2025/01/01以降", "一部接続", updated_at, str(daily_row_count), "0", "現状はメールのみ。LINE未接続"],
-        ["集客数（UU）", "集客", "加工データ", "1", f"https://docs.google.com/spreadsheets/d/{EMAIL_METRICS_SHEET_ID}/edit", "日別メール登録件数（UU）", "B列", "最初に確認された日にだけ1件", "2025/01/01以降", "一部接続", updated_at, str(daily_row_count), "0", "現状はメールのみ。LINE未接続"],
-        ["個別予約数", "個別予約", "加工データ", "1", f"https://docs.google.com/spreadsheets/d/{BOOKING_METRICS_SHEET_ID}/edit", "日別個別予約数", "B列", "キャンセルではない個別予約イベント数", "2025/01/01以降", booking_state, booking_updated_at, booking_updates, booking_errors, booking_memo],
-        ["個別予約数（UU）", "個別予約", "加工データ", "2", f"https://docs.google.com/spreadsheets/d/{BOOKING_METRICS_SHEET_ID}/edit", "日別個別予約数（UU）", "B列", "将来接続。ユニークユーザー数", "個別予約完了タグの通知ログとLINE統合後", "確認待ち", "", "", "", "現時点ではユニーク判定が弱いため未接続"],
+        ["集客数", "集客", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{EMAIL_METRICS_SHEET_ID}/edit","【アドネス株式会社】集客データ（メール集計）")', "日別メール登録件数", "B列", "重複あり件数", "2025/01/01以降", "一部接続", updated_at, str(daily_row_count), "0", "現状はメールのみ。LINE未接続"],
+        ["集客数（UU）", "集客", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{EMAIL_METRICS_SHEET_ID}/edit","【アドネス株式会社】集客データ（メール集計）")', "日別メール登録件数（UU）", "B列", "最初に確認された日にだけ1件", "2025/01/01以降", "一部接続", updated_at, str(daily_row_count), "0", "現状はメールのみ。LINE未接続"],
+        ["個別予約数", "個別予約", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{BOOKING_METRICS_SHEET_ID}/edit","【アドネス株式会社】個別面談データ")', "日別個別予約数", "B列", "キャンセルではない個別予約イベント数", "2025/01/01以降", booking_state, booking_updated_at, booking_updates, booking_errors, booking_memo],
+        ["個別予約数（UU）", "個別予約", "加工データ", "2", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{BOOKING_METRICS_SHEET_ID}/edit","【アドネス株式会社】個別面談データ")', "日別個別予約数（UU）", "B列", "将来接続。ユニークユーザー数", "個別予約完了タグの通知ログとLINE統合後", "確認待ち", "", "", "", "現時点ではユニーク判定が弱いため未接続"],
         ["個別実施数", "個別予約", "収集データ候補", "2", "", "Zoom接続ログ または 面談ダッシュボード", "", "接続ユーザー数", "正本未確定", "確認待ち", "", "", "", "今は未接続"],
         ["着金売上", "売上", "収集データ候補", "1", "", "決済履歴シート + CS管理シート", "", "日別着金額", "着金日と返金処理の確定", "確認待ち", "", "", "", "日別正本の集計シートが未作成"],
         ["広告費", "広告費", "収集データ候補", "1", "", "媒体原本（Meta / Google / TikTok / X）", "", "対象媒体の消化額", "対象アカウントの確定", "確認待ち", "", "", "", "legacy の Looker 依存を外す必要あり"],
-        ["CPA", "計算値", "計算式", "1", "【アドネス株式会社】KPIダッシュボード", "日別数値", "I列", "広告費 / 集客数", "広告費と集客数が入力済み", "未接続", "", "", "", "自動計算予定"],
-        ["個別予約CPO", "計算値", "計算式", "1", "【アドネス株式会社】KPIダッシュボード", "日別数値", "J列", "広告費 / 個別予約数", "広告費と個別予約数が入力済み", "未接続", "", "", "", "自動計算予定"],
-        ["ROAS", "計算値", "計算式", "1", "【アドネス株式会社】KPIダッシュボード", "日別数値", "K列", "着金売上 / 広告費", "着金売上と広告費が入力済み", "未接続", "", "", "", "自動計算予定"],
-        ["会員数", "会員", "統合データ候補", "1", "https://docs.google.com/spreadsheets/d/1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk/edit", "顧客マスタ", "入会日 / クーリングオフ日 / 中途解約日", "日次残高", "会員イベントの定義確定後", "確認待ち", "", "", "", "日別残高シートが未作成"],
-        ["中途解約数", "会員", "統合データ候補", "1", "https://docs.google.com/spreadsheets/d/1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk/edit", "顧客マスタ", "中途解約日", "日別件数", "中途解約日の集計ルール確定後", "確認待ち", "", "", "", "顧客マスタを日別集計へ落とす"],
-        ["クーリングオフ数", "会員", "統合データ候補", "1", "https://docs.google.com/spreadsheets/d/1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk/edit", "顧客マスタ", "クーリングオフ日", "日別件数", "クーリングオフ日の集計ルール確定後", "確認待ち", "", "", "", "顧客マスタを日別集計へ落とす"],
+        ["CPA", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "I列", "広告費 / 集客数", "広告費と集客数が入力済み", "未接続", "", "", "", "自動計算予定"],
+        ["個別予約CPO", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "J列", "広告費 / 個別予約数", "広告費と個別予約数が入力済み", "未接続", "", "", "", "自動計算予定"],
+        ["ROAS", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "K列", "着金売上 / 広告費", "着金売上と広告費が入力済み", "未接続", "", "", "", "自動計算予定"],
+        ["会員数", "会員", "統合データ候補", "1", '=HYPERLINK("https://docs.google.com/spreadsheets/d/1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk/edit","【アドネス株式会社】顧客データ（複数イベント）")', "顧客マスタ", "入会日 / クーリングオフ日 / 中途解約日", "日次残高", "会員イベントの定義確定後", "確認待ち", "", "", "", "日別残高シートが未作成"],
+        ["中途解約数", "会員", "統合データ候補", "1", '=HYPERLINK("https://docs.google.com/spreadsheets/d/1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk/edit","【アドネス株式会社】顧客データ（複数イベント）")', "顧客マスタ", "中途解約日", "日別件数", "中途解約日の集計ルール確定後", "確認待ち", "", "", "", "顧客マスタを日別集計へ落とす"],
+        ["クーリングオフ数", "会員", "統合データ候補", "1", '=HYPERLINK("https://docs.google.com/spreadsheets/d/1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk/edit","【アドネス株式会社】顧客データ（複数イベント）")', "顧客マスタ", "クーリングオフ日", "日別件数", "クーリングオフ日の集計ルール確定後", "確認待ち", "", "", "", "顧客マスタを日別集計へ落とす"],
     ]
     while len(rows) < 30:
         rows.append([""] * 14)

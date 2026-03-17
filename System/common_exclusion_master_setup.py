@@ -366,9 +366,9 @@ def main() -> None:
 
     source_values = [
         ["項目", "ソース元", "スプレッドシートURL", "タブ名", "参照先列", "ステータス", "最終更新", "更新数", "メモ"],
-        ["候補元", REFERENCE_SHEET_NAME, f"https://docs.google.com/spreadsheets/d/{REFERENCE_SHEET_ID}/edit", REFERENCE_TAB_NAME, "A〜最終列", "参照候補", now_text, str(max(len(reference_rows) - 1, 0)), "全員を自動除外しない。除外候補の確認元として使う"],
-        ["正本", "【アドネス株式会社】共通除外マスタ", f"https://docs.google.com/spreadsheets/d/{TARGET_SHEET_ID}/edit", "除外リスト", "A〜G列", "手動管理", now_text, str(row_count), "今後の除外追加はこのシートだけで行う"],
-        ["共通ルール", "【アドネス株式会社】共通除外マスタ", f"https://docs.google.com/spreadsheets/d/{TARGET_SHEET_ID}/edit", "無条件除外ルール", "A〜E列", "手動管理", now_text, str(len(unconditional_values) - 1), "明らかなテストデータを機械的に除外する"],
+        ["候補元", REFERENCE_SHEET_NAME, f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{REFERENCE_SHEET_ID}/edit","支払管理表")', REFERENCE_TAB_NAME, "A〜最終列", "参照候補", now_text, str(max(len(reference_rows) - 1, 0)), "全員を自動除外しない。除外候補の確認元として使う"],
+        ["正本", "【アドネス株式会社】共通除外マスタ", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{TARGET_SHEET_ID}/edit","【アドネス株式会社】共通除外マスタ")', "除外リスト", "A〜G列", "手動管理", now_text, str(row_count), "今後の除外追加はこのシートだけで行う"],
+        ["共通ルール", "【アドネス株式会社】共通除外マスタ", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{TARGET_SHEET_ID}/edit","【アドネス株式会社】共通除外マスタ")', "無条件除外ルール", "A〜E列", "手動管理", now_text, str(len(unconditional_values) - 1), "明らかなテストデータを機械的に除外する"],
     ]
     source_ws.clear()
     source_ws.update(range_name="A1:I{}".format(len(source_values)), values=source_values)
