@@ -76,6 +76,8 @@ PROTECTED_EDITOR_EMAILS = [
 PROTECTION_PREFIX = "会員データ（加工）自動生成"
 WRITE_RETRY_SECONDS = (5, 10, 20, 40)
 DATE_RE = re.compile(r"(\d{4})[/-](\d{1,2})[/-](\d{1,2})")
+METRICS_START_DATE = datetime(2025, 1, 1)
+METRICS_START_DATE_TEXT = METRICS_START_DATE.strftime("%Y/%m/%d")
 
 
 @dataclass
@@ -371,7 +373,7 @@ def write_rows(spreadsheet, ws, rows: List[List[object]]) -> None:
 
 
 def style_daily_tab(spreadsheet, ws) -> None:
-    widths = [120, 90, 110, 90, 100, 110]
+    widths = [130, 110, 160, 110, 130, 150]
     requests = [
         repeat_cell_request(
             ws.id,
@@ -668,6 +670,7 @@ def load_run_state() -> Dict[str, int]:
 def save_run_state(stats: Dict[str, int]) -> None:
     payload = {
         "updated_at": stats["updated_at"],
+        "metrics_start_date": METRICS_START_DATE_TEXT,
         "source_row_count": stats["source_row_count"],
         "contract_total": stats["contract_total"],
         "cooling_off_total": stats["cooling_off_total"],
@@ -696,7 +699,8 @@ def detect_anomalies(stats: Dict[str, int], previous_state: Dict[str, int]) -> L
         anomalies.append(f"会員化日より前の中途解約が {stats['invalid_mid_term_count']:,} 件あります。")
 
     prev_member_total = int(previous_state.get("member_total", 0) or 0)
-    if prev_member_total:
+    prev_start_date = str(previous_state.get("metrics_start_date", "") or "")
+    if prev_member_total and prev_start_date == METRICS_START_DATE_TEXT:
         threshold = max(100, int(prev_member_total * 0.05))
         if prev_member_total - stats["member_total"] > threshold:
             anomalies.append(f"会員数の合計が前回より {prev_member_total - stats['member_total']:,} 件減っています。")
@@ -740,6 +744,9 @@ def build_daily_rows(collection_rows: List[Dict[str, str]]) -> tuple[List[List[o
         contract_date = normalize_date(row.get("契約締結日", ""))
         if not contract_date:
             continue
+        contract_dt = parse_date(contract_date)
+        if not contract_dt or contract_dt < METRICS_START_DATE:
+            continue
 
         email = normalize_email(row.get("メールアドレス", ""))
         phone = normalize_phone(row.get("電話番号", ""))
@@ -751,7 +758,6 @@ def build_daily_rows(collection_rows: List[Dict[str, str]]) -> tuple[List[List[o
 
         valid_source_rows += 1
         contract_counts[contract_date] += 1
-        contract_dt = parse_date(contract_date)
         if contract_dt:
             all_dates.append(contract_dt)
 
@@ -803,7 +809,7 @@ def build_daily_rows(collection_rows: List[Dict[str, str]]) -> tuple[List[List[o
             "daily_row_count": 0,
         }
 
-    start_dt = min(all_dates)
+    start_dt = METRICS_START_DATE
     end_dt = max(all_dates)
     rows: List[List[object]] = [["日付", "契約数", "クーリングオフ数", "会員数", "中途解約数", "アクティブ会員"]]
 
@@ -848,15 +854,15 @@ def build_daily_rows(collection_rows: List[Dict[str, str]]) -> tuple[List[List[o
 def build_summary_rows(stats: Dict[str, int], checked_at: str) -> List[List[object]]:
     return [
         ["項目", "数値", "補足"],
-        ["契約数累計", stats["contract_total"], "スキルプラスの契約書を締結したユーザー数の累計"],
-        ["クーリングオフ数累計", stats["cooling_off_total"], "入金あり契約から7日以内に契約解除を申し出たユーザー数の累計"],
-        ["会員数累計", stats["member_total"], "契約締結日 + 7日で会員化した件数の累計"],
-        ["中途解約数累計", stats["mid_term_total"], "サポート期間が終了する前に契約解除が確定した会員数の累計"],
+        ["契約数累計", stats["contract_total"], f"{METRICS_START_DATE_TEXT} 以降のスキルプラス契約書締結件数の累計"],
+        ["クーリングオフ数累計", stats["cooling_off_total"], f"{METRICS_START_DATE_TEXT} 以降のクーリングオフ件数の累計"],
+        ["会員数累計", stats["member_total"], f"{METRICS_START_DATE_TEXT} 以降に会員化した件数の累計"],
+        ["中途解約数累計", stats["mid_term_total"], f"{METRICS_START_DATE_TEXT} 以降の中途解約件数の累計"],
         ["アクティブ会員数", stats["active_latest"], "会員数累計 - 中途解約数累計"],
-        ["入金前契約解除数累計", stats["pre_payment_cancel_total"], "日別では持たず、会員化除外条件としてだけ使う"],
+        ["入金前契約解除数累計", stats["pre_payment_cancel_total"], f"{METRICS_START_DATE_TEXT} 以降の日別対象外件数の累計"],
         ["会員化前として無視した中途解約数", stats["ignored_mid_term_non_member_count"], "入金前契約解除またはクーリングオフ済みのため、中途解約数に入れていない件数"],
         ["除外件数", stats["excluded_row_count"], "共通除外マスタと無条件除外で除外した件数"],
-        ["最終同期日", checked_at, "データソース管理も同時更新"],
+        ["最終同期日", f"'{checked_at}", "データソース管理も同時更新"],
     ]
 
 
@@ -864,6 +870,7 @@ def build_source_management_rows(source_ws, checked_at: str, stats: Dict[str, in
     source_url = get_tab_url(SOURCE_SHEET_ID, source_ws)
     status = "停止" if anomalies else ("正常" if stats["source_row_count"] > 0 else "未同期")
     error_count = len(anomalies)
+    checked_at_text = f"'{checked_at}"
     return [
         ["加工タブ", "対象カラム", "優先度", "ソース元", "参照タブ", "参照列", "取得条件", "ステータス", "最終同期日", "更新数", "エラー数", "備考"],
         [
@@ -873,9 +880,9 @@ def build_source_management_rows(source_ws, checked_at: str, stats: Dict[str, in
             f'=HYPERLINK("{source_url}","{SOURCE_SPREADSHEET_TITLE}")',
             SOURCE_TAB_NAME,
             "契約締結日",
-            "契約締結日がある行を日別件数にする",
+            f"{METRICS_START_DATE_TEXT} 以降で契約締結日がある行を日別件数にする",
             status,
-            checked_at,
+            checked_at_text,
             stats["contract_total"],
             error_count,
             "スキルプラスの契約書を締結したユーザー数",
@@ -887,9 +894,9 @@ def build_source_management_rows(source_ws, checked_at: str, stats: Dict[str, in
             f'=HYPERLINK("{source_url}","{SOURCE_SPREADSHEET_TITLE}")',
             SOURCE_TAB_NAME,
             "クーリングオフ",
-            "クーリングオフ日がある行を日別件数にする",
+            f"{METRICS_START_DATE_TEXT} 以降でクーリングオフ日がある行を日別件数にする",
             status,
-            checked_at,
+            checked_at_text,
             stats["cooling_off_total"],
             error_count,
             "入金あり契約から7日以内に契約解除を申し出たユーザー数",
@@ -901,9 +908,9 @@ def build_source_management_rows(source_ws, checked_at: str, stats: Dict[str, in
             f'=HYPERLINK("{source_url}","{SOURCE_SPREADSHEET_TITLE}")',
             SOURCE_TAB_NAME,
             "契約締結日 / 入金前契約解除 / クーリングオフ",
-            "契約締結日 + 7日、かつ入金前契約解除とクーリングオフが無い行を会員化する",
+            f"{METRICS_START_DATE_TEXT} 以降の契約締結日 + 7日、かつ入金前契約解除とクーリングオフが無い行を会員化する",
             status,
-            checked_at,
+            checked_at_text,
             stats["member_total"],
             error_count,
             "会員数と入会数は同義として扱う",
@@ -915,9 +922,9 @@ def build_source_management_rows(source_ws, checked_at: str, stats: Dict[str, in
             f'=HYPERLINK("{source_url}","{SOURCE_SPREADSHEET_TITLE}")',
             SOURCE_TAB_NAME,
             "中途解約",
-            "中途解約日があり、会員化後のものだけを日別件数にする",
+            f"{METRICS_START_DATE_TEXT} 以降で中途解約日があり、会員化後のものだけを日別件数にする",
             status,
-            checked_at,
+            checked_at_text,
             stats["mid_term_total"],
             error_count,
             f"サポート期間が終了する前に契約解除が確定した会員数。入金前契約解除またはクーリングオフ済みの中途解約 {stats['ignored_mid_term_non_member_count']:,} 件は無視",
@@ -931,7 +938,7 @@ def build_source_management_rows(source_ws, checked_at: str, stats: Dict[str, in
             "会員数 / 中途解約",
             "会員数の累計から中途解約数の累計を引いた残高",
             status,
-            checked_at,
+            checked_at_text,
             stats["active_latest"],
             error_count,
             "負の値になった場合は停止する",
@@ -943,10 +950,10 @@ def build_rule_rows() -> List[List[object]]:
     return [
         ["項目", "ルール", "補足"],
         ["日別会員数値", "会員イベントを正本にして再生成する。手入力での修正はしない", "壊れた値で上書きしない"],
-        ["契約数", "契約締結日がある件数をその日の日別契約数とする", "スキルプラスの契約書を締結したユーザー数"],
-        ["クーリングオフ数", "クーリングオフ日がある件数をその日の日別クーリングオフ数とする", "入金あり契約から7日以内に契約解除を申し出たユーザー数。お客様相談窓口_進捗管理シートの収集結果をそのまま使う"],
-        ["会員数", "契約締結日 + 7日 を会員日とし、入金前契約解除とクーリングオフが無い契約だけを会員化する", "入会数と会員数は同義として扱う"],
-        ["中途解約数", "中途解約日があり、会員化後のものだけをその日の日別中途解約数とする", "入金前契約解除またはクーリングオフ済みの行にある中途解約は無視する"],
+        ["契約数", f"{METRICS_START_DATE_TEXT} 以降で契約締結日がある件数をその日の日別契約数とする", "スキルプラスの契約書を締結したユーザー数"],
+        ["クーリングオフ数", f"{METRICS_START_DATE_TEXT} 以降でクーリングオフ日がある件数をその日の日別クーリングオフ数とする", "入金あり契約から7日以内に契約解除を申し出たユーザー数。お客様相談窓口_進捗管理シートの収集結果をそのまま使う"],
+        ["会員数", f"{METRICS_START_DATE_TEXT} 以降の契約締結日 + 7日 を会員日とし、入金前契約解除とクーリングオフが無い契約だけを会員化する", "入会数と会員数は同義として扱う"],
+        ["中途解約数", f"{METRICS_START_DATE_TEXT} 以降で中途解約日があり、会員化後のものだけをその日の日別中途解約数とする", "入金前契約解除またはクーリングオフ済みの行にある中途解約は無視する"],
         ["アクティブ会員", "会員数の累計から中途解約数の累計を引いた残高で持つ", "クーリングオフは会員化前に除外されるためここでは引かない"],
         ["入金前契約解除", "日別数値には持たず、会員化除外条件としてだけ使う", "会員サマリーでは累計を表示する"],
         ["共通除外", "【アドネス株式会社】共通除外マスタ を参照し、追加日以降の新規イベントだけ除外する", "過去データは遡って消さない"],
@@ -1004,7 +1011,7 @@ def main(dry_run: bool = False) -> None:
         style_daily_tab(target, tabs[DAILY_TAB_NAME])
 
         write_rows(target, tabs[SUMMARY_TAB_NAME], summary_rows)
-        style_meta_tab(target, tabs[SUMMARY_TAB_NAME], widths=[180, 120, 340], date_cols=[1], number_cols=[1])
+        style_meta_tab(target, tabs[SUMMARY_TAB_NAME], widths=[180, 140, 360], number_cols=[1])
 
         write_rows(target, tabs[SOURCE_MANAGEMENT_TAB_NAME], source_rows)
         style_meta_tab(
