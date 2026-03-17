@@ -228,9 +228,9 @@ def save_run_state(stats: Dict[str, int]) -> None:
 def detect_anomalies(stats: Dict[str, int], previous_state: Dict[str, int]) -> List[str]:
     anomalies: List[str] = []
     if stats["raw_tab_count"] <= 0:
-        anomalies.append("【アドネス株式会社】集客データ（メールアドレス）の流入経路タブ数が 0 です。")
+        anomalies.append("【アドネス株式会社】集客データ_メールアドレス（収集）の流入経路タブ数が 0 です。")
     if stats["raw_valid_rows"] <= 0:
-        anomalies.append("【アドネス株式会社】集客データ（メールアドレス）から有効な行を読み取れていません。")
+        anomalies.append("【アドネス株式会社】集客データ_メールアドレス（収集）から有効な行を読み取れていません。")
     if stats["future_registration_days"] <= 0:
         anomalies.append("2026/03/07 以降の日別メール登録件数を作れていません。")
     if stats["future_uu_days"] <= 0:
@@ -447,7 +447,7 @@ def build_source_management_rows() -> List[List[str]]:
         ["区分", "シート名", "タブ / 場所", "参照先", "役割"],
         [
             "現行の正本",
-            "【アドネス株式会社】集客データ（メールアドレス）",
+            "【アドネス株式会社】集客データ_メールアドレス（収集）",
             "各流入経路タブ",
             '=HYPERLINK("https://docs.google.com/spreadsheets/d/1l5yD6xUL-1ZC73KrMtCCkDsfhx8D8C4vhylaX3VOoL4/edit","シートを開く")',
             "2026/03/07 以降の登録件数と集客UUの正本",
@@ -461,14 +461,14 @@ def build_source_management_rows() -> List[List[str]]:
         ],
         [
             "補助参照",
-            "【アドネス株式会社】顧客データ（複数イベント）",
+            "【アドネス株式会社】顧客データ_複数イベント（統合）",
             "顧客マスタ",
             '=HYPERLINK("https://docs.google.com/spreadsheets/d/1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk/edit","シートを開く")',
             "複数アドレスユーザーの確認に使う",
         ],
         [
             "出力",
-            "【アドネス株式会社】集客データ（メール集計）",
+            "【アドネス株式会社】集客データ_メール集計（加工）",
             "6タブ",
             '=HYPERLINK("https://docs.google.com/spreadsheets/d/13HS9KmlTdxQwMMaK45H3Ga1mMTUiJdhYKWnrExge_yY/edit","シートを開く")',
             "集客データの重複あり件数と集客UUを一箇所で見る",
@@ -480,7 +480,7 @@ def build_rule_rows() -> List[List[str]]:
     return [
         ["項目", "ルール", "目的"],
         ["シートの役割", "このシートはメール集客の加工データをまとめて見る統合版シート", "重複あり件数と集客UUを一箇所で判断するため"],
-        ["現行の正本", "2026/03/07 以降は 【アドネス株式会社】集客データ（メールアドレス） を正とする", "今後の運用を一本化するため"],
+        ["現行の正本", "2026/03/07 以降は 【アドネス株式会社】集客データ_メールアドレス（収集） を正とする", "今後の運用を一本化するため"],
         ["日別メール登録件数", "このタブは、重複ありのメール登録件数を見る場所", "登録という事実を日別で確認するため"],
         ["日別メール登録件数（UU）", "このタブは、集客で最初に確認されたメールだけを日別で見る場所", "新規メールの増え方を見るため"],
         ["複数アドレスユーザー", "このタブは、顧客マスタでメールアドレスを2件持つ顧客を見る場所", "名寄せの確認をするため"],

@@ -1,6 +1,6 @@
 {
   "id": "1iD3DGxNhZruyjYcA5n6oXRDk2ZGA3uMDOo0stQS9Y00",
-  "title": "【アドネス株式会社】顧客データ（メールアドレスのみ）",
+  "title": "【アドネス株式会社】顧客データ_メールアドレスのみ（統合）",
   "synced": false,
   "note": "データ量が大きいためCSVキャッシュは作成しない。APIで都度取得（cdp_sync.py）",
   "tabs": [
