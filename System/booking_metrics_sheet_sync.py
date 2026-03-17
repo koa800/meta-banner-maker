@@ -30,6 +30,7 @@ SOURCE_TAB_NAME = "個別予約集計botログ"
 TARGET_SHEET_ID = "1ip_RARDHmQvTjmaVavw1L71ltPrn4Kg6sa__njqyQZ8"
 TARGET_SPREADSHEET_TITLE = "【アドネス株式会社】個別面談データ"
 NOTIFICATION_STATE_PATH = os.path.join(os.path.dirname(__file__), "data", "booking_notification_log_state.json")
+SLACK_FALLBACK_START_DATE = "2026/03/17"
 
 COUNT_TAB_NAME = "日別個別予約数"
 UU_TAB_NAME = "日別個別予約数（UU）"
@@ -79,6 +80,7 @@ PROTECTED_EDITOR_EMAILS = [
 PROTECTION_PREFIX = "個別面談データ自動生成"
 
 DATE_RE = re.compile(r"^\d{4}/\d{2}/\d{2}$")
+DATE_PREFIX_RE = re.compile(r"^(\d{4}[/-]\d{2}[/-]\d{2})")
 WRITE_RETRY_SECONDS = (5, 10, 20, 40)
 
 
@@ -152,7 +154,17 @@ def set_column_width_request(sheet_id: int, start_col: int, end_col: int, width:
 
 def normalize_date(raw: str) -> str:
     value = str(raw or "").strip()
-    return value if DATE_RE.match(value) else ""
+    if DATE_RE.match(value):
+        return value
+    for fmt in ("%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(value, fmt).strftime("%Y/%m/%d")
+        except ValueError:
+            pass
+    match = DATE_PREFIX_RE.match(value)
+    if match:
+        return match.group(1).replace("-", "/")
+    return ""
 
 
 def pad_rows(rows: List[List[str]], min_rows: int, min_cols: int) -> List[List[str]]:
@@ -493,25 +505,66 @@ def load_booking_rows() -> List[BookingRecord]:
     return records
 
 
-def build_daily_records(records: Sequence[BookingRecord]) -> List[DailyCountRecord]:
+def load_notification_daily_counts() -> Counter:
+    gc = get_client()
+    target = gc.open_by_key(TARGET_SHEET_ID)
+    try:
+        ws = target.worksheet(NOTIFICATION_LOG_TAB_NAME)
+    except Exception:
+        return Counter()
+
     daily = Counter()
+    values = ws.get_all_values()
+    for raw in values[1:]:
+        row = raw + [""] * max(0, 7 - len(raw))
+        event_at = normalize_date(row[0])
+        if not event_at:
+            continue
+        if not any(str(cell).strip() for cell in row[:7]):
+            continue
+        daily[event_at] += 1
+    return daily
+
+
+def build_daily_records(records: Sequence[BookingRecord], notification_daily: Counter) -> tuple[List[DailyCountRecord], Dict[str, str]]:
+    botlog_daily = Counter()
     for record in records:
         if record.cancelled:
             continue
-        daily[record.booking_date] += 1
+        botlog_daily[record.booking_date] += 1
+
+    latest_botlog_date = max(botlog_daily, default="")
+    latest_notification_date = max(notification_daily, default="")
+    merged_daily = Counter(botlog_daily)
+    notification_fallback_start = ""
+    for date in sorted(notification_daily):
+        if date < SLACK_FALLBACK_START_DATE:
+            continue
+        if not notification_fallback_start:
+            notification_fallback_start = date
+        merged_daily[date] = notification_daily[date]
 
     result: List[DailyCountRecord] = []
     cumulative = 0
-    for date in sorted(daily):
-        cumulative += daily[date]
-        result.append(DailyCountRecord(date=date, count=daily[date], cumulative_count=cumulative))
-    return result
+    for date in sorted(merged_daily):
+        cumulative += merged_daily[date]
+        result.append(DailyCountRecord(date=date, count=merged_daily[date], cumulative_count=cumulative))
+    meta = {
+        "latest_botlog_date": latest_botlog_date,
+        "latest_notification_date": latest_notification_date,
+        "notification_fallback_start": notification_fallback_start,
+    }
+    return result, meta
 
 
-def build_stats(records: Sequence[BookingRecord], daily_records: Sequence[DailyCountRecord]) -> Dict[str, object]:
+def build_stats(
+    records: Sequence[BookingRecord],
+    daily_records: Sequence[DailyCountRecord],
+    daily_meta: Dict[str, str],
+) -> Dict[str, object]:
     non_cancelled = [record for record in records if not record.cancelled]
     account_counter = Counter(record.booking_account_name for record in non_cancelled if record.booking_account_name)
-    latest_date = max((record.booking_date for record in records), default="")
+    latest_date = daily_records[-1].date if daily_records else ""
     updated_at = datetime.now().strftime("%Y/%m/%d %H:%M")
 
     status = "正常"
@@ -527,22 +580,34 @@ def build_stats(records: Sequence[BookingRecord], daily_records: Sequence[DailyC
 
     return {
         "updated_at": updated_at,
-        "total_booking_count": len(non_cancelled),
+        "total_booking_count": sum(record.count for record in daily_records),
+        "botlog_booking_count": len(non_cancelled),
         "total_cancel_count": sum(1 for record in records if record.cancelled),
         "start_date": daily_records[0].date if daily_records else "",
-        "latest_date": daily_records[-1].date if daily_records else "",
+        "latest_date": latest_date,
         "daily_row_count": len(daily_records),
         "booking_account_count": len(account_counter),
         "blank_account_count": sum(1 for record in non_cancelled if not record.booking_account_name),
         "status": status,
+        "latest_botlog_date": daily_meta.get("latest_botlog_date", ""),
+        "latest_notification_date": daily_meta.get("latest_notification_date", ""),
+        "notification_fallback_start": daily_meta.get("notification_fallback_start", ""),
     }
 
 
 def build_summary_rows(stats: Dict[str, object]) -> List[List[str]]:
+    booking_definition = "現行は個別予約集計botログのうち、キャンセルを除いた個別予約イベント数"
+    fallback_start = str(stats.get("notification_fallback_start") or "").strip()
+    latest_botlog_date = str(stats.get("latest_botlog_date") or "").strip()
+    if fallback_start:
+        booking_definition = (
+            f"{latest_botlog_date or 'botログの最新日'} までは個別予約集計botログ、"
+            f"{fallback_start} 以降は個別予約通知ログで補完した個別予約イベント数"
+        )
     return [
         ["項目", "数値", "定義"],
         ["更新日時", f"'{stats['updated_at']}", "このシートを作り直した時刻"],
-        ["個別予約数", f"{int(stats['total_booking_count']):,}", "現行は個別予約集計botログのうち、キャンセルを除いた個別予約イベント数"],
+        ["個別予約数", f"{int(stats['total_booking_count']):,}", booking_definition],
         ["個別予約数（UU）", "", "将来接続。LSTEP通知ログとLINE統合後の同一人物判定で持つ"],
         ["キャンセル数", f"{int(stats['total_cancel_count']):,}", "個別予約集計botログでキャンセル=TRUE の件数"],
         ["集計開始日", f"'{stats['start_date']}", "日別個別予約数の最初の日付"],
@@ -618,6 +683,21 @@ def load_notification_log_stats(target) -> Dict[str, str]:
 
 
 def build_source_rows(stats: Dict[str, object], notification_stats: Dict[str, str]) -> List[List[str]]:
+    latest_botlog_date = str(stats.get("latest_botlog_date") or "").strip()
+    fallback_start = str(stats.get("notification_fallback_start") or "").strip()
+    booking_calc = "日付あり and キャンセル=FALSE"
+    booking_condition = "2025/01/01以降"
+    booking_memo = "現行の計上元。継続体制では Slack #個別予約通知 から作る 個別予約通知ログへ移行する"
+    if fallback_start:
+        booking_calc = (
+            f"{SLACK_FALLBACK_START_DATE} より前は日付あり and キャンセル=FALSE、"
+            f"{fallback_start} 以降は個別予約通知ログの日別件数"
+        )
+        booking_condition = f"2025/01/01以降（{SLACK_FALLBACK_START_DATE} から通知ログ補完）"
+        booking_memo = (
+            f"{SLACK_FALLBACK_START_DATE} より前は個別予約集計botログ、"
+            f"{fallback_start} 以降の直近期間は 個別予約通知ログ で補完する"
+        )
     return [
         ["KPIカラム", "グループ", "ソース元", "優先度", "スプレッドシートURL", "タブ名", "参照先列", "正規化 / 計算", "入力条件", "ステータス", "最終同期日", "更新数", "エラー数", "メモ"],
         [
@@ -628,13 +708,13 @@ def build_source_rows(stats: Dict[str, object], notification_stats: Dict[str, st
             f"https://docs.google.com/spreadsheets/d/{SOURCE_SHEET_ID}/edit",
             SOURCE_TAB_NAME,
             "A列,D列,G列,I列,M列",
-            "日付あり and キャンセル=FALSE",
-            "2025/01/01以降",
+            booking_calc,
+            booking_condition,
             str(stats["status"]),
             str(stats["updated_at"]),
             f"{int(stats['total_booking_count']):,}",
             "0",
-            "現行の計上元。継続体制では Slack #個別予約通知 から作る 個別予約通知ログへ移行する",
+            booking_memo,
         ],
         [
             "個別予約数（UU）",
@@ -661,7 +741,7 @@ def build_source_rows(stats: Dict[str, object], notification_stats: Dict[str, st
             NOTIFICATION_LOG_TAB_NAME,
             "A〜G列",
             "Slack通知と過去の個別予約データを 1イベント1行で統合",
-            "過去分 + ★【個別予約完了】★ 通知",
+            "過去分 + ★【個別予約完了】★ 通知。直近の日別個別予約数補完にも利用",
             notification_stats["ステータス"],
             notification_stats["最終同期日"],
             notification_stats["更新数"],
@@ -692,10 +772,10 @@ def build_rule_rows() -> List[List[str]]:
         ["項目", "ルール", "補足"],
         ["変えないもの", "個別予約数は予約イベント数として数える", "同じ人が別日に再予約したら別件数で数える"],
         ["変えないもの2", "★【個別予約完了】★ は予約完了の成立条件として扱う", "一度付いたら外れず、再予約でも増えない"],
-        ["変えるもの", "botログ固定ではなく、通知ログを本命の計上元へ段階移行する", "現行は botログ、将来は予約イベント通知ログ"],
+        ["変えるもの", "botログ固定ではなく、通知ログを本命の計上元へ段階移行する", f"現行は {SLACK_FALLBACK_START_DATE} より前を botログ、以降を通知ログで補完する"],
         ["追加するもの", "個別予約通知ログを 1イベント1行で持つ", "過去の個別予約データと Slack 通知を同じ正本へ統合する"],
-        ["個別予約数", "現行は【アドネス】顧客管理シート / 個別予約集計botログ を使う", "日付あり and キャンセル=FALSE の行だけを数える"],
-        ["個別予約通知ログ", "過去の個別予約データを引き継ぎつつ、Lステップ の予約イベント通知とタグ通知を1イベント1行で溜める", "まずは Slack の専用チャンネルに集約し、個別予約完了タグ通知は検証用として残す"],
+        ["個別予約数", f"{SLACK_FALLBACK_START_DATE} より前は個別予約集計botログ、以降は個別予約通知ログを使う", "botログ側は日付あり and キャンセル=FALSE を基本ルールにする"],
+        ["個別予約通知ログ", "過去の個別予約データを引き継ぎつつ、Lステップ の予約イベント通知とタグ通知を1イベント1行で溜める", f"まずは Slack の専用チャンネルに集約し、個別予約完了タグ通知は検証用として残し、{SLACK_FALLBACK_START_DATE} 以降の件数補完にも使う"],
         ["個別予約数（UU）", "第1版ではまだ接続しない", "LINE統合や名寄せ方針が固まってから入れる"],
         ["タグ", "★【個別予約完了】★ は今は検証用、将来も冗長系の確認軸として残す", "タグ単体は累積状態なので日別件数の正本には使わない"],
         ["予約イベント通知", "salon_reservation_reserved / reservation.reserved を本命候補として監査する", "Lステップ live 確認後に Slack 側の受け皿を増やす"],
@@ -781,8 +861,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     records = load_booking_rows()
-    daily_records = build_daily_records(records)
-    stats = build_stats(records, daily_records)
+    notification_daily = load_notification_daily_counts()
+    daily_records, daily_meta = build_daily_records(records, notification_daily)
+    stats = build_stats(records, daily_records, daily_meta)
     if args.dry_run:
         print(
             "dry-run: "
