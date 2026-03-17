@@ -4341,7 +4341,7 @@ class CDPSync:
         return result
 
     def _load_cs_refund_source_rows(self, cs_ss, tab_cfg):
-        """CS管理シートから返金同期対象行を抽出"""
+        """お客様相談窓口_進捗管理シートから返金同期対象行を抽出"""
         ws_src = cs_ss.worksheet(tab_cfg["tab"])
         src_data = ws_src.get_all_values()
         red_amount_map = {}
@@ -4439,9 +4439,9 @@ class CDPSync:
         row[ltv_idx] = expected_ltv
         return True
 
-    # ─── CS管理シートからの同期（クーリングオフ・中途解約） ──────
+    # ─── お客様相談窓口_進捗管理シートからの同期（クーリングオフ・中途解約） ──────
 
-    # CS管理シートのタブ→CDPカラム・フィルタ条件のマッピング
+    # お客様相談窓口_進捗管理シートのタブ→CDPカラム・フィルタ条件のマッピング
     _CS_TABS = [
         {
             "tab": "管理用_2025.1.25-クーオフ",
@@ -4487,7 +4487,7 @@ class CDPSync:
     ]
 
     def sync_cs_sheet(self, dry_run=False):
-        """CS管理シートからクーリングオフ日・中途解約日を同期する
+        """お客様相談窓口_進捗管理シートからクーリングオフ日・中途解約日を同期する
 
         ソースシート構造（共通）:
             行2がヘッダー、B列=対応完了日、F列=区分、G列=ステータス、K列=メールアドレス
@@ -4497,7 +4497,7 @@ class CDPSync:
         try:
             cs_ss = self.client.open_by_key(CS_SHEET_ID)
         except Exception as e:
-            print(f"CS管理シートの読み込み失敗: {e}")
+            print(f"お客様相談窓口_進捗管理シートの読み込み失敗: {e}")
             return {"error": str(e)}
 
         # CDPマスタのメールインデックスを構築
@@ -4605,11 +4605,11 @@ class CDPSync:
         return {"updated": total_updated}
 
     def sync_cs_refunds(self, dry_run=False):
-        """CS管理シートから返金額を同期する"""
+        """お客様相談窓口_進捗管理シートから返金額を同期する"""
         try:
             cs_ss = self.client.open_by_key(CS_SHEET_ID)
         except Exception as e:
-            print(f"CS管理シートの読み込み失敗（返金同期）: {e}")
+            print(f"お客様相談窓口_進捗管理シートの読み込み失敗（返金同期）: {e}")
             return {"error": str(e)}
 
         if self._master_data is None:
@@ -4907,7 +4907,7 @@ class CDPSync:
         return stats
 
     def _count_cs_special_source_rows(self, source_tab, ref_col, cs_ss=None):
-        """CS管理シートの特殊同期行の更新数を返す"""
+        """お客様相談窓口_進捗管理シートの特殊同期行の更新数を返す"""
         cs_ss = cs_ss or self.client.open_by_key(CS_SHEET_ID)
 
         if source_tab == "管理用_クーオフ・中途解約以外" and ref_col == "返金額":
@@ -5073,7 +5073,7 @@ class CDPSync:
                     except Exception:
                         pass
 
-        # CS管理シートからの同期（クーリングオフ日・中途解約日）
+        # お客様相談窓口_進捗管理シートからの同期（クーリングオフ日・中途解約日）
         try:
             cs_stats = self.sync_cs_sheet(dry_run=dry_run)
             cs_updated = cs_stats.get("updated", 0) if cs_stats else 0
@@ -5097,7 +5097,7 @@ class CDPSync:
                 except Exception:
                     pass
 
-        # CS管理シートからの返金額同期
+        # お客様相談窓口_進捗管理シートからの返金額同期
         try:
             refund_stats = self.sync_cs_refunds(dry_run=dry_run)
             refund_updated = refund_stats.get("updated", 0) if refund_stats else 0
