@@ -16,9 +16,9 @@ import json
 import os
 import re
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Iterable, List, Sequence
 
 from gspread.exceptions import APIError
@@ -105,6 +105,16 @@ class DailyCountRecord:
     cumulative_count: int
 
 
+@dataclass
+class NotificationEvent:
+    tagged_at: datetime
+    line_name: str
+    member_id: str
+    account_name: str
+    email: str
+    phone: str
+
+
 def col_letter(col_num: int) -> str:
     result = ""
     while col_num > 0:
@@ -165,6 +175,18 @@ def normalize_date(raw: str) -> str:
     if match:
         return match.group(1).replace("-", "/")
     return ""
+
+
+def normalize_datetime(raw: str) -> datetime | None:
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M"):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            pass
+    return None
 
 
 def pad_rows(rows: List[List[str]], min_rows: int, min_cols: int) -> List[List[str]]:
@@ -505,24 +527,69 @@ def load_booking_rows() -> List[BookingRecord]:
     return records
 
 
-def load_notification_daily_counts() -> Counter:
+def notification_identity_key(event: NotificationEvent) -> str:
+    if event.member_id and event.account_name:
+        return f"member:{event.account_name}|{event.member_id}"
+    if event.email:
+        return f"email:{event.email.lower()}"
+    if event.phone:
+        digits = re.sub(r"\D", "", event.phone)
+        return f"phone:{digits}" if digits else f"phone:{event.phone}"
+    return f"line:{event.account_name}|{event.line_name}"
+
+
+def load_notification_events() -> List[NotificationEvent]:
     gc = get_client()
     target = gc.open_by_key(TARGET_SHEET_ID)
     try:
         ws = target.worksheet(NOTIFICATION_LOG_TAB_NAME)
     except Exception:
-        return Counter()
+        return []
 
-    daily = Counter()
+    events: List[NotificationEvent] = []
     values = ws.get_all_values()
     for raw in values[1:]:
         row = raw + [""] * max(0, 7 - len(raw))
-        event_at = normalize_date(row[0])
+        event_at = normalize_datetime(row[0])
         if not event_at:
             continue
         if not any(str(cell).strip() for cell in row[:7]):
             continue
-        daily[event_at] += 1
+        events.append(
+            NotificationEvent(
+                tagged_at=event_at,
+                line_name=str(row[1]).strip(),
+                member_id=str(row[2]).strip(),
+                account_name=str(row[3]).strip(),
+                email=str(row[5]).strip(),
+                phone=str(row[6]).strip(),
+            )
+        )
+    return events
+
+
+def build_notification_daily_counts(events: Sequence[NotificationEvent]) -> Counter:
+    grouped: Dict[tuple[str, str], List[NotificationEvent]] = defaultdict(list)
+    for event in events:
+        if event.tagged_at.strftime("%Y/%m/%d") < SLACK_FALLBACK_START_DATE:
+            continue
+        grouped[(event.tagged_at.strftime("%Y/%m/%d"), notification_identity_key(event))].append(event)
+
+    daily = Counter()
+    for (date, _identity), items in grouped.items():
+        items = sorted(items, key=lambda x: x.tagged_at)
+        cluster_start = items[0].tagged_at
+        cluster_last = items[0].tagged_at
+        count = 1
+        for item in items[1:]:
+            gap_seconds = (item.tagged_at - cluster_last).total_seconds()
+            if gap_seconds <= 600:
+                cluster_last = item.tagged_at
+                continue
+            count += 1
+            cluster_start = item.tagged_at
+            cluster_last = item.tagged_at
+        daily[date] += count
     return daily
 
 
@@ -546,9 +613,16 @@ def build_daily_records(records: Sequence[BookingRecord], notification_daily: Co
 
     result: List[DailyCountRecord] = []
     cumulative = 0
-    for date in sorted(merged_daily):
-        cumulative += merged_daily[date]
-        result.append(DailyCountRecord(date=date, count=merged_daily[date], cumulative_count=cumulative))
+    if merged_daily:
+        start_date = datetime.strptime(min(merged_daily), "%Y/%m/%d").date()
+        end_date = datetime.strptime(max(merged_daily), "%Y/%m/%d").date()
+        current = start_date
+        while current <= end_date:
+            date = current.strftime("%Y/%m/%d")
+            count = merged_daily.get(date, 0)
+            cumulative += count
+            result.append(DailyCountRecord(date=date, count=count, cumulative_count=cumulative))
+            current += timedelta(days=1)
     meta = {
         "latest_botlog_date": latest_botlog_date,
         "latest_notification_date": latest_notification_date,
@@ -775,6 +849,7 @@ def build_rule_rows() -> List[List[str]]:
         ["変えるもの", "botログ固定ではなく、通知ログを本命の計上元へ段階移行する", f"現行は {SLACK_FALLBACK_START_DATE} より前を botログ、以降を通知ログで補完する"],
         ["追加するもの", "個別予約通知ログを 1イベント1行で持つ", "過去の個別予約データと Slack 通知を同じ正本へ統合する"],
         ["個別予約数", f"{SLACK_FALLBACK_START_DATE} より前は個別予約集計botログ、以降は個別予約通知ログを使う", "botログ側は日付あり and キャンセル=FALSE を基本ルールにする"],
+        ["重複予約の扱い", "同一人物の通知が同じ日に10分以内で連続した時は1件にまとめる", "通知ログを使う期間だけ適用する。バグ由来の連続通知を吸収するため"],
         ["個別予約通知ログ", "過去の個別予約データを引き継ぎつつ、Lステップ の予約イベント通知とタグ通知を1イベント1行で溜める", f"まずは Slack の専用チャンネルに集約し、個別予約完了タグ通知は検証用として残し、{SLACK_FALLBACK_START_DATE} 以降の件数補完にも使う"],
         ["個別予約数（UU）", "第1版ではまだ接続しない", "LINE統合や名寄せ方針が固まってから入れる"],
         ["タグ", "★【個別予約完了】★ は今は検証用、将来も冗長系の確認軸として残す", "タグ単体は累積状態なので日別件数の正本には使わない"],
@@ -792,7 +867,7 @@ def write_target(daily_records: Sequence[DailyCountRecord], stats: Dict[str, obj
     notification_stats = load_notification_log_stats(target)
 
     count_rows = [["日付", "個別予約数", "累計個別予約数"]]
-    count_rows.extend([[record.date, f"{record.count:,}", f"{record.cumulative_count:,}"] for record in daily_records])
+    count_rows.extend([[f"'{record.date}", f"{record.count:,}", f"{record.cumulative_count:,}"] for record in daily_records])
     count_rows = pad_rows(count_rows, 120, 3)
 
     uu_rows = [["日付", "個別予約数（UU）", "累計個別予約数（UU）"]]
@@ -861,7 +936,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     records = load_booking_rows()
-    notification_daily = load_notification_daily_counts()
+    notification_events = load_notification_events()
+    notification_daily = build_notification_daily_counts(notification_events)
     daily_records, daily_meta = build_daily_records(records, notification_daily)
     stats = build_stats(records, daily_records, daily_meta)
     if args.dry_run:
