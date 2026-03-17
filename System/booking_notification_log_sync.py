@@ -574,7 +574,7 @@ def merge_records(existing: Dict[str, NotificationRecord], parsed: Iterable[Noti
 
 def write_rows(ws, rows: List[List[str]]) -> None:
     end_cell = f"{col_letter(len(COLUMNS))}{len(rows)}"
-    target_rows = max(len(rows), 20)
+    target_rows = max(len(rows), 1)
     if ws.row_count != target_rows or ws.col_count != len(COLUMNS):
         worksheet_write_with_retry(
             f"{TARGET_TAB_NAME} タブのサイズ最適化",
@@ -589,6 +589,12 @@ def write_rows(ws, rows: List[List[str]]) -> None:
 
 def write_simple_rows(ws, rows: List[List[str]], col_count: int) -> None:
     end_cell = f"{col_letter(col_count)}{len(rows)}"
+    target_rows = max(len(rows), 1)
+    if ws.row_count != target_rows or ws.col_count != col_count:
+        worksheet_write_with_retry(
+            f"{ws.title} タブのサイズ最適化",
+            lambda: ws.resize(rows=target_rows, cols=col_count),
+        )
     worksheet_write_with_retry(f"{ws.title} の既存データ削除", ws.clear)
     worksheet_write_with_retry(
         f"{ws.title} の書き込み",
@@ -603,7 +609,7 @@ def apply_table_style(spreadsheet, ws, row_count: int, col_count: int, widths: L
             0,
             1,
             0,
-            len(COLUMNS),
+            col_count,
             {
                 "backgroundColor": HEADER_BG,
                 "textFormat": HEADER_TEXT,
@@ -618,7 +624,7 @@ def apply_table_style(spreadsheet, ws, row_count: int, col_count: int, widths: L
             1,
             row_count,
             0,
-            len(COLUMNS),
+            col_count,
             {
                 "verticalAlignment": "MIDDLE",
                 "wrapStrategy": wrap,
@@ -629,11 +635,11 @@ def apply_table_style(spreadsheet, ws, row_count: int, col_count: int, widths: L
             "setBasicFilter": {
                 "filter": {
                     "range": {
-                        "sheetId": ws.id,
-                        "startRowIndex": 0,
-                        "endRowIndex": row_count,
-                        "startColumnIndex": 0,
-                        "endColumnIndex": len(COLUMNS),
+                    "sheetId": ws.id,
+                    "startRowIndex": 0,
+                    "endRowIndex": row_count,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": col_count,
                     }
                 }
             }

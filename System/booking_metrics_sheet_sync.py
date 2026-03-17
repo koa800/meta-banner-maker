@@ -191,13 +191,6 @@ def normalize_datetime(raw: str) -> datetime | None:
     return None
 
 
-def pad_rows(rows: List[List[str]], min_rows: int, min_cols: int) -> List[List[str]]:
-    padded = [row + [""] * max(0, min_cols - len(row)) for row in rows]
-    while len(padded) < min_rows:
-        padded.append([""] * min_cols)
-    return padded
-
-
 def is_quota_error(exc: APIError) -> bool:
     status_code = getattr(getattr(exc, "response", None), "status_code", None)
     return status_code == 429 or "Quota exceeded" in str(exc)
@@ -270,10 +263,10 @@ def ensure_tabs(spreadsheet):
                     f"{name} の行数拡張",
                     lambda ws=ws, rows=rows: ws.add_rows(rows - ws.row_count),
                 )
-            if ws.col_count < cols:
+            if ws.col_count != cols:
                 worksheet_write_with_retry(
-                    f"{name} の列数拡張",
-                    lambda ws=ws, cols=cols: ws.add_cols(cols - ws.col_count),
+                    f"{name} の列数調整",
+                    lambda ws=ws, cols=cols: ws.resize(rows=ws.row_count, cols=cols),
                 )
             continue
         tabs[name] = run_write_with_retry(
@@ -301,8 +294,14 @@ def ensure_tabs(spreadsheet):
 
 def write_rows(spreadsheet, ws, rows: List[List[str]]) -> None:
     max_cols = max((len(row) for row in rows), default=1)
-    padded = pad_rows(rows, len(rows), max_cols)
+    padded = [row + [""] * max(0, max_cols - len(row)) for row in rows]
     end_cell = f"{col_letter(max_cols)}{len(padded)}"
+    target_rows = max(len(padded), 2)
+    if ws.row_count != target_rows or ws.col_count != max_cols:
+        worksheet_write_with_retry(
+            f"{ws.title} タブのサイズ最適化",
+            lambda: ws.resize(rows=target_rows, cols=max_cols),
+        )
     batch_update_with_retry(
         spreadsheet,
         {
@@ -329,7 +328,7 @@ def write_rows(spreadsheet, ws, rows: List[List[str]]) -> None:
     )
 
 
-def apply_table_style(spreadsheet, ws, row_count: int, col_count: int, widths: Iterable[int]) -> None:
+def apply_table_style(spreadsheet, ws, row_count: int, col_count: int, widths: Iterable[int], wrap: str = "CLIP") -> None:
     requests = [
         {
             "unmergeCells": {
@@ -365,7 +364,7 @@ def apply_table_style(spreadsheet, ws, row_count: int, col_count: int, widths: I
             col_count,
             {
                 "verticalAlignment": "MIDDLE",
-                "wrapStrategy": "WRAP",
+                "wrapStrategy": wrap,
             },
             "userEnteredFormat.verticalAlignment,userEnteredFormat.wrapStrategy",
         ),
@@ -869,14 +868,12 @@ def write_target(daily_records: Sequence[DailyCountRecord], stats: Dict[str, obj
 
     count_rows = [["日付", "個別予約数", "累計個別予約数"]]
     count_rows.extend([[f"'{record.date}", f"{record.count:,}", f"{record.cumulative_count:,}"] for record in daily_records])
-    count_rows = pad_rows(count_rows, 120, 3)
 
     uu_rows = [["日付", "個別予約数（UU）", "累計個別予約数（UU）"]]
-    uu_rows = pad_rows(uu_rows, 120, 3)
 
-    summary_rows = pad_rows(build_summary_rows(stats), 20, 3)
-    source_rows = pad_rows(build_source_rows(stats, notification_stats), 20, 14)
-    rule_rows = pad_rows(build_rule_rows(), 20, 3)
+    summary_rows = build_summary_rows(stats)
+    source_rows = build_source_rows(stats, notification_stats)
+    rule_rows = build_rule_rows()
 
     write_rows(target, tabs[COUNT_TAB_NAME], count_rows)
     write_rows(target, tabs[UU_TAB_NAME], uu_rows)
@@ -884,11 +881,11 @@ def write_target(daily_records: Sequence[DailyCountRecord], stats: Dict[str, obj
     write_rows(target, tabs[SOURCE_MANAGEMENT_TAB_NAME], source_rows)
     write_rows(target, tabs[RULE_TAB_NAME], rule_rows)
 
-    apply_table_style(target, tabs[COUNT_TAB_NAME], len(count_rows), 3, [140, 160, 180])
-    apply_table_style(target, tabs[UU_TAB_NAME], len(uu_rows), 3, [140, 180, 200])
-    apply_table_style(target, tabs[SUMMARY_TAB_NAME], len(summary_rows), 3, [220, 160, 420])
-    apply_table_style(target, tabs[SOURCE_MANAGEMENT_TAB_NAME], len(source_rows), 14, [180, 110, 110, 70, 260, 160, 130, 220, 140, 90, 140, 90, 80, 280])
-    apply_table_style(target, tabs[RULE_TAB_NAME], len(rule_rows), 3, [180, 360, 320])
+    apply_table_style(target, tabs[COUNT_TAB_NAME], len(count_rows), 3, [140, 160, 180], wrap="CLIP")
+    apply_table_style(target, tabs[UU_TAB_NAME], len(uu_rows), 3, [140, 180, 200], wrap="CLIP")
+    apply_table_style(target, tabs[SUMMARY_TAB_NAME], len(summary_rows), 3, [220, 160, 500], wrap="CLIP")
+    apply_table_style(target, tabs[SOURCE_MANAGEMENT_TAB_NAME], len(source_rows), 14, [180, 110, 110, 70, 260, 160, 130, 220, 140, 90, 140, 90, 80, 280], wrap="CLIP")
+    apply_table_style(target, tabs[RULE_TAB_NAME], len(rule_rows), 3, [180, 420, 360], wrap="WRAP")
 
     number_format_requests = [
         repeat_cell_request(
