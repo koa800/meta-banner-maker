@@ -45,6 +45,12 @@ schedule:
   booking_metrics_sheet_sync:
     cron: "48 */2 * * *"         # 2時間ごと  個別面談データの集計シートを再生成
     enabled: true
+  membership_collection_sheet_sync:
+    cron: "53 */2 * * *"         # 2時間ごと  会員データ（収集）を更新
+    enabled: true
+  membership_metrics_sheet_sync:
+    cron: "58 */2 * * *"         # 2時間ごと  会員データ（加工）を更新
+    enabled: true
   teleapo_sync:
     cron: "15 6 * * *"           # 06:15  AIテレアポ対象を顧客マスタから再生成
     enabled: true

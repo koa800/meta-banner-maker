@@ -67,6 +67,13 @@ _BOOKING_METRICS_SOURCE_TAB = "データソース管理"
 _BOOKING_COLLECTION_SHEET_ID = "12bYadR0cgi24t4tz8GeESlsKffmNkkTHprI4ray_Sq4"
 _BOOKING_COLLECTION_SOURCE_TAB = "データソース管理"
 _BOOKING_NOTIFICATION_LOG_TAB = "個別予約通知ログ"
+_MEMBERSHIP_COLLECTION_SHEET_ID = "1VwAO5rxib8pcR7KgGn-T3HKP7FaHqZmUhIBddo3okyw"
+_MEMBERSHIP_COLLECTION_MAIN_TAB = "会員イベント"
+_MEMBERSHIP_COLLECTION_SOURCE_TAB = "データソース管理"
+_MEMBERSHIP_METRICS_SHEET_ID = "1OFKvyQsydPmTqd9MwSMX53MXxG9ASfkFquyf4PV-M8E"
+_MEMBERSHIP_METRICS_MAIN_TAB = "日別会員数値"
+_MEMBERSHIP_METRICS_SUMMARY_TAB = "会員サマリー"
+_MEMBERSHIP_METRICS_SOURCE_TAB = "データソース管理"
 _TELEAPO_SHEET_ID = "12RGMUfU8Wj0CCdcRfY7kI56kdATV7wDXjvYmGdQb_Nk"
 _TELEAPO_TARGET_TAB = "架電一覧"
 _CLAUDE_CHROME_EXTENSION_ID = "fcoeoabgfenejglbffodgkkbkcdhcgfn"
@@ -498,6 +505,8 @@ class TaskScheduler:
             "email_collection_metrics_sheet_sync": self._run_email_collection_metrics_sheet_sync,
             "booking_notification_log_sync": self._run_booking_notification_log_sync,
             "booking_metrics_sheet_sync": self._run_booking_metrics_sheet_sync,
+            "membership_collection_sheet_sync": self._run_membership_collection_sheet_sync,
+            "membership_metrics_sheet_sync": self._run_membership_metrics_sheet_sync,
             "teleapo_sync": self._run_teleapo_sync,
             "interview_insights_sync": self._run_interview_insights_sync,
             "interview_insights_backfill": self._run_interview_insights_backfill,
@@ -797,7 +806,7 @@ class TaskScheduler:
         logger.info("Scheduler shut down")
 
     # タスク失敗通知を送らないタスク（自前でエラーハンドリングするもの）
-    _NO_FAILURE_NOTIFY = {"health_check", "oauth_health_check", "render_health_check", "anthropic_credit_check", "secretary_goal_progress", "interview_insights_sync", "interview_insights_backfill", "interview_insights_analysis", "unique_email_sheet_sync", "email_registration_count_sheet_sync", "email_collection_metrics_sheet_sync", "booking_notification_log_sync", "booking_metrics_sheet_sync"}
+    _NO_FAILURE_NOTIFY = {"health_check", "oauth_health_check", "render_health_check", "anthropic_credit_check", "secretary_goal_progress", "interview_insights_sync", "interview_insights_backfill", "interview_insights_analysis", "unique_email_sheet_sync", "email_registration_count_sheet_sync", "email_collection_metrics_sheet_sync", "booking_notification_log_sync", "booking_metrics_sheet_sync", "membership_collection_sheet_sync", "membership_metrics_sheet_sync"}
     # git_pull_syncは独自の頻度制限付き通知を実装（_run_git_pull_sync参照）
 
     async def _execute_tool(self, task_name: str, tool_fn, **kwargs) -> tools.ToolResult:
@@ -4864,6 +4873,80 @@ head -3 "{csv_dir}/{csv_filename}"
                     (
                         "個別面談データ / データソース管理",
                         _build_sheet_url(_BOOKING_METRICS_SHEET_ID, _BOOKING_METRICS_SOURCE_TAB),
+                    ),
+                ],
+            )
+        )
+
+    async def _run_membership_collection_sheet_sync(self):
+        """2時間ごと: 会員データ（収集）を更新する。"""
+        result = await self._execute_tool(
+            "membership_collection_sheet_sync",
+            tools.membership_collection_sheet_sync,
+        )
+        if result.success:
+            logger.info(f"Membership collection sheet sync completed: {(result.output or '')[-300:]}")
+            return
+
+        from .notifier import send_line_notify
+
+        send_line_notify(
+            _format_line_message(
+                "会員データ（収集）の更新が止まりました",
+                summary_lines=[
+                    (result.error or "詳細エラーを取得できませんでした")[:200],
+                ],
+                action_lines=[
+                    "まず 会員イベント を開いて、最新の契約や解除データが更新されていないか確認してください",
+                    "次に データソース管理 を開いて、各ソースのステータスと最終同期日を確認してください",
+                ],
+                links=[
+                    (
+                        "会員データ（収集） / 会員イベント",
+                        _build_sheet_url(_MEMBERSHIP_COLLECTION_SHEET_ID, _MEMBERSHIP_COLLECTION_MAIN_TAB),
+                    ),
+                    (
+                        "会員データ（収集） / データソース管理",
+                        _build_sheet_url(_MEMBERSHIP_COLLECTION_SHEET_ID, _MEMBERSHIP_COLLECTION_SOURCE_TAB),
+                    ),
+                ],
+            )
+        )
+
+    async def _run_membership_metrics_sheet_sync(self):
+        """2時間ごと: 会員データ（加工）を更新する。"""
+        result = await self._execute_tool(
+            "membership_metrics_sheet_sync",
+            tools.membership_metrics_sheet_sync,
+        )
+        if result.success:
+            logger.info(f"Membership metrics sheet sync completed: {(result.output or '')[-300:]}")
+            return
+
+        from .notifier import send_line_notify
+
+        send_line_notify(
+            _format_line_message(
+                "会員データ（加工）の更新が止まりました",
+                summary_lines=[
+                    (result.error or "詳細エラーを取得できませんでした")[:200],
+                ],
+                action_lines=[
+                    "まず 日別会員数値 を開いて、契約数や会員数が更新されていないか確認してください",
+                    "次に データソース管理 を開いて、各項目のステータスと最終同期日を確認してください",
+                ],
+                links=[
+                    (
+                        "会員データ（加工） / 日別会員数値",
+                        _build_sheet_url(_MEMBERSHIP_METRICS_SHEET_ID, _MEMBERSHIP_METRICS_MAIN_TAB),
+                    ),
+                    (
+                        "会員データ（加工） / 会員サマリー",
+                        _build_sheet_url(_MEMBERSHIP_METRICS_SHEET_ID, _MEMBERSHIP_METRICS_SUMMARY_TAB),
+                    ),
+                    (
+                        "会員データ（加工） / データソース管理",
+                        _build_sheet_url(_MEMBERSHIP_METRICS_SHEET_ID, _MEMBERSHIP_METRICS_SOURCE_TAB),
                     ),
                 ],
             )

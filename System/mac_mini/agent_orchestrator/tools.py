@@ -346,6 +346,30 @@ def booking_notification_log_sync(dry_run: bool = False) -> ToolResult:
     )
 
 
+def membership_collection_sheet_sync(dry_run: bool = False) -> ToolResult:
+    """会員データ（収集）を更新する"""
+    args = []
+    if dry_run:
+        args.append("--dry-run")
+    return _run_script(
+        os.path.join(SYSTEM_DIR, "membership_collection_sheet_setup.py"),
+        args,
+        timeout=1800,
+    )
+
+
+def membership_metrics_sheet_sync(dry_run: bool = False) -> ToolResult:
+    """会員データ（加工）を更新する"""
+    args = []
+    if dry_run:
+        args.append("--dry-run")
+    return _run_script(
+        os.path.join(SYSTEM_DIR, "membership_metrics_sheet_sync.py"),
+        args,
+        timeout=1800,
+    )
+
+
 # --------------- CDP Interviews ---------------
 
 def interview_insights_sync(limit: int = 10, force: bool = False, dry_run: bool = False, row: int = None) -> ToolResult:
@@ -934,6 +958,8 @@ TOOL_REGISTRY = {
     "email_collection_metrics_sheet_sync": {"fn": email_collection_metrics_sheet_sync, "description": "メール集計の統合シートを再生成"},
     "booking_metrics_sheet_sync": {"fn": booking_metrics_sheet_sync, "description": "個別面談データの集計シートを再生成"},
     "booking_notification_log_sync": {"fn": booking_notification_log_sync, "description": "個別予約通知ログを更新"},
+    "membership_collection_sheet_sync": {"fn": membership_collection_sheet_sync, "description": "会員データ（収集）を更新"},
+    "membership_metrics_sheet_sync": {"fn": membership_metrics_sheet_sync, "description": "会員データ（加工）を更新"},
     "interview_insights_sync": {"fn": interview_insights_sync, "description": "収録URL から CDP の定性欄を補完"},
     "interview_insights_backfill": {"fn": interview_insights_backfill, "description": "面談定性の backlog をまとめて補完"},
     "interview_insights_analyze": {"fn": interview_insights_analyze, "description": "LTV別の面談定性比較を更新"},

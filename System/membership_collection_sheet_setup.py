@@ -43,6 +43,13 @@ TAB_COLOR_MAIN = "#1A73E8"
 TAB_COLOR_META = "#34A853"
 WRITE_RETRY_SECONDS = (5, 10, 20, 40)
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+CONTRACT_RESULT_ALLOWLIST = {
+    "成約",
+    "クーリングオフ",
+    "入金前契約解除",
+    "入金前契約解除(信販否決)",
+    "契約済み(入金待ち)",
+}
 
 TAB_SPECS = [
     ("会員イベント", 6000, 8),
@@ -568,6 +575,11 @@ def choose_earliest(current: str, candidate: str) -> str:
     return current_text
 
 
+def is_contract_result(row: dict) -> bool:
+    result = get_row_value(row, "結果")
+    return result in CONTRACT_RESULT_ALLOWLIST
+
+
 def build_member_key(row: dict) -> str:
     interview_id = normalize_text(row.get("面談ID"))
     if interview_id:
@@ -618,6 +630,8 @@ def build_member_rows(interview_records: List[dict], cooling_records: List[dict]
     for row in interview_records:
         contract_date = normalize_optional_text(get_row_value(row, "契約締結日"))
         result = get_row_value(row, "結果")
+        if not is_contract_result(row):
+            continue
         if not contract_date and result != "入金前契約解除":
             continue
 
@@ -717,7 +731,7 @@ def build_data_source_rows(
             f'=HYPERLINK("{get_tab_url(INTERVIEW_ALL_SHEET_ID, interview_tab)}","面談記入_DB【全期間】")',
             "全面談合算",
             "メールアドレス",
-            "契約締結日が入っている行、または結果が入金前契約解除の行",
+            "結果が契約系（成約 / クーリングオフ / 入金前契約解除 / 入金前契約解除(信販否決) / 契約済み(入金待ち)）の行",
             status_from_count(interview_count),
             checked_at,
             fill_counts.get(("メールアドレス", "1"), 0),
@@ -759,7 +773,7 @@ def build_data_source_rows(
             f'=HYPERLINK("{get_tab_url(INTERVIEW_ALL_SHEET_ID, interview_tab)}","面談記入_DB【全期間】")',
             "全面談合算",
             "電話番号",
-            "契約締結日が入っている行、または結果が入金前契約解除の行",
+            "結果が契約系（成約 / クーリングオフ / 入金前契約解除 / 入金前契約解除(信販否決) / 契約済み(入金待ち)）の行",
             status_from_count(interview_count),
             checked_at,
             fill_counts.get(("電話番号", "1"), 0),
@@ -773,7 +787,7 @@ def build_data_source_rows(
             f'=HYPERLINK("{get_tab_url(INTERVIEW_ALL_SHEET_ID, interview_tab)}","面談記入_DB【全期間】")',
             "全面談合算",
             "名前",
-            "契約締結日が入っている行、または結果が入金前契約解除の行",
+            "結果が契約系（成約 / クーリングオフ / 入金前契約解除 / 入金前契約解除(信販否決) / 契約済み(入金待ち)）の行",
             status_from_count(interview_count),
             checked_at,
             fill_counts.get(("名前", "1"), 0),
@@ -815,7 +829,7 @@ def build_data_source_rows(
             f'=HYPERLINK("{get_tab_url(INTERVIEW_ALL_SHEET_ID, interview_tab)}","面談記入_DB【全期間】")',
             "全面談合算",
             "LINE名",
-            "契約締結日が入っている行、または結果が入金前契約解除の行",
+            "結果が契約系（成約 / クーリングオフ / 入金前契約解除 / 入金前契約解除(信販否決) / 契約済み(入金待ち)）の行",
             status_from_count(interview_count),
             checked_at,
             fill_counts.get(("LINE名", "1"), 0),
@@ -857,7 +871,7 @@ def build_data_source_rows(
             f'=HYPERLINK("{get_tab_url(INTERVIEW_ALL_SHEET_ID, interview_tab)}","面談記入_DB【全期間】")',
             "全面談合算",
             "契約締結日",
-            "契約締結日が入っている行",
+            "結果が契約系で、契約締結日が入っている行",
             status_from_count(interview_count),
             checked_at,
             fill_counts.get(("契約締結日", "1"), 0),
@@ -913,7 +927,7 @@ def build_rule_rows() -> List[List[str]]:
     return [
         ["項目", "ルール", "補足"],
         ["会員イベント", "1行 = 1契約単位で保持する。面談IDがあるものは面談IDで統合し、無いものだけメールアドレス、電話番号、名前系で補助統合する", "同一人物でも複数契約がありえるため、人単位ではなく契約単位を優先する"],
-        ["保持対象", "契約締結日が入っている契約だけを保持する", "契約締結日が無いまま解除イベントだけある行は、収集シートには載せない"],
+        ["保持対象", "全面談合算で結果が契約系の行だけを保持する", "契約締結日が無いまま解除イベントだけある行は、収集シートには載せない"],
         ["契約締結日", "全面談合算の契約締結日をそのまま入れる", "複数候補がある場合は最も早い契約締結日を採用する"],
         ["入金前契約解除", "全面談合算で結果が入金前契約解除の行がある場合は ○ を入れる", "現状のソースに解除日が無いため、フラグとして保持する"],
         ["クーリングオフ", "お客様相談窓口_進捗管理シートのクーリングオフ完了日を入れる", "定義はマスタデータ / 定義一覧に従う"],
@@ -944,7 +958,9 @@ def main(dry_run: bool = False) -> None:
     interview_source_count = sum(
         1
         for row in interview_records
-        if get_row_value(row, "契約締結日") or get_row_value(row, "結果") == "入金前契約解除"
+        if is_contract_result(row) and (
+            get_row_value(row, "契約締結日") or get_row_value(row, "結果") == "入金前契約解除"
+        )
     )
     cooling_source_count = sum(
         1
