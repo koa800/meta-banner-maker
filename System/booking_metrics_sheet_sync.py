@@ -5,7 +5,7 @@
 第1版の方針:
 - 現行の正本候補は `【アドネス】顧客管理シート / 個別予約集計botログ`
 - `個別予約数` だけを先に接続する
-- `個別予約数（UU）` は将来用の枠だけを作り、今は未接続にする
+- `個別予約数（UU）` は将来用の枠だけを作り、今は未同期にする
 - `★【個別予約完了】★` は現時点では日別件数の正本に使わず、将来の通知ログ正本候補として扱う
 """
 
@@ -68,9 +68,8 @@ TAB_COLORS = {
 
 STATUS_FORMATS = {
     "正常": {"backgroundColor": {"red": 0.851, "green": 0.918, "blue": 0.827}},
-    "一部接続": {"backgroundColor": {"red": 1, "green": 0.949, "blue": 0.8}},
-    "未接続": {"backgroundColor": {"red": 1, "green": 0.949, "blue": 0.8}},
     "未同期": {"backgroundColor": {"red": 0.957, "green": 0.8, "blue": 0.8}},
+    "停止": {"backgroundColor": {"red": 0.957, "green": 0.8, "blue": 0.8}},
     "確認待ち": {"backgroundColor": {"red": 0.925, "green": 0.89, "blue": 0.992}},
 }
 
@@ -675,7 +674,7 @@ def build_stats(
         except ValueError:
             status = "未同期"
     else:
-        status = "未接続"
+        status = "未同期"
 
     return {
         "updated_at": updated_at,
@@ -720,11 +719,11 @@ def load_notification_log_stats(target) -> Dict[str, str]:
         ws = collection.worksheet(COLLECTION_NOTIFICATION_LOG_TAB_NAME)
     except Exception:
         return {
-            "ステータス": "未接続",
+            "ステータス": "停止",
             "最終同期日": "",
             "更新数": "",
-            "エラー数": "",
-            "メモ": "収集シート未接続",
+            "エラー数": "1",
+            "メモ": "収集シートに接続できない",
         }
 
     values = ws.get_all_values()
@@ -745,7 +744,7 @@ def load_notification_log_stats(target) -> Dict[str, str]:
 
     if event_count == 0:
         return {
-            "ステータス": "未接続",
+            "ステータス": "未同期",
             "最終同期日": latest_imported_at,
             "更新数": "0",
             "エラー数": "0",
@@ -753,7 +752,7 @@ def load_notification_log_stats(target) -> Dict[str, str]:
         }
 
     return {
-        "ステータス": "正常" if event_count else "未接続",
+        "ステータス": "正常",
         "最終同期日": latest_imported_at,
         "更新数": f"{event_count:,}" if event_count else "0",
         "エラー数": "0",
@@ -804,11 +803,11 @@ def build_source_rows(stats: Dict[str, object], notification_stats: Dict[str, st
             "",
             "",
             "",
-            "未接続",
+            "未同期",
             "",
             "",
             "",
-            "LINE統合前は同一人物判定が弱いため未接続",
+            "LINE統合前は同一人物判定が弱いため未同期",
         ],
         [
             "個別予約通知ログ",

@@ -18,7 +18,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Iterable, List, Optional
 from urllib.parse import parse_qs, urlparse
 
@@ -37,6 +37,8 @@ TARGET_TAB_NAME = "個別予約通知ログ"
 SOURCE_MANAGEMENT_TAB_NAME = "データソース管理"
 RULE_TAB_NAME = "データ追加ルール"
 DEFAULT_CHANNEL_NAME = os.environ.get("BOOKING_NOTIFICATION_SLACK_CHANNEL_NAME", "個別予約通知")
+DEFAULT_FETCH_LIMIT = int(os.environ.get("BOOKING_NOTIFICATION_SLACK_FETCH_LIMIT", "1000"))
+BACKFILL_HOURS = int(os.environ.get("BOOKING_NOTIFICATION_SLACK_BACKFILL_HOURS", "168"))
 MESSAGE_TAG = "★【個別予約完了】★"
 STATE_PATH = os.path.join(os.path.dirname(__file__), "data", "booking_notification_log_state.json")
 LSTEP_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
@@ -721,7 +723,7 @@ def build_source_management_rows(imported_count: int, updated_at: str) -> List[L
             "メッセージ本文",
             "★【個別予約完了】★ 通知を 1イベント1行で保存。LSTEPメンバーID でメールアドレス / 電話番号を補完できる時だけ追記",
             "継続取得の正本",
-            "正常" if imported_count > 0 else "未接続",
+            "正常" if imported_count > 0 and updated_at else "未同期",
             f"'{updated_at}" if updated_at else "",
             f"{imported_count:,}",
             "0",
@@ -793,9 +795,21 @@ def save_state(last_ts: str, imported_count: int, channel_name: str) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="個別予約通知ログを更新する")
     parser.add_argument("--channel-name", default=DEFAULT_CHANNEL_NAME, help="Slack チャンネル名")
-    parser.add_argument("--limit", type=int, default=200, help="Slack から取得する最大件数")
+    parser.add_argument("--limit", type=int, default=DEFAULT_FETCH_LIMIT, help="Slack から取得する最大件数")
     parser.add_argument("--dry-run", action="store_true", help="書き込みせず件数だけ確認する")
     return parser.parse_args()
+
+
+def resolve_fetch_oldest(state: dict) -> str:
+    backfill_threshold = datetime.now() - timedelta(hours=BACKFILL_HOURS)
+    backfill_ts = f"{backfill_threshold.timestamp():.6f}"
+    state_ts = str(state.get("last_ts") or "").strip()
+    if not state_ts:
+        return backfill_ts
+    try:
+        return min(state_ts, backfill_ts, key=float)
+    except Exception:
+        return backfill_ts
 
 
 def main() -> None:
@@ -810,7 +824,7 @@ def main() -> None:
     if not existing:
         existing = load_old_metrics_rows(gc)
     state = load_state()
-    oldest = str(state.get("last_ts") or "").strip()
+    oldest = resolve_fetch_oldest(state)
 
     legacy_records = load_legacy_records()
     slack_records = fetch_parsed_records(args.channel_name, args.limit, oldest=oldest)
