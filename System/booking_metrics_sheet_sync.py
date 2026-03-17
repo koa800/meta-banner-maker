@@ -747,6 +747,9 @@ def load_notification_log_stats(target) -> Dict[str, str]:
     slack_fetched_count = str(state.get("slack_fetched_count") or "").strip()
     slack_tagged_count = str(state.get("slack_tagged_count") or "").strip()
     slack_parsed_count = str(state.get("slack_parsed_count") or "").strip()
+    slack_parse_failure_rate = str(state.get("slack_parse_failure_rate") or "").strip()
+    slack_latest_tagged_at = str(state.get("slack_latest_tagged_at") or "").strip()
+    slack_latest_parsed_at = str(state.get("slack_latest_parsed_at") or "").strip()
 
     if event_count == 0:
         return {
@@ -755,6 +758,9 @@ def load_notification_log_stats(target) -> Dict[str, str]:
             "更新数": "0",
             "エラー数": slack_error_count or "0",
             "メモ": slack_memo or "Slack通知の取込待ち",
+            "解析失敗率": slack_parse_failure_rate or "0",
+            "最新対象通知": slack_latest_tagged_at,
+            "最新保存通知": slack_latest_parsed_at,
         }
 
     default_memo = "Slack #個別予約通知 と 過去の個別予約データ を統合。Lステップリンクを保持し、旧CSVではなく将来の Lステップ live 取得でメールアドレス / 電話番号を補完する"
@@ -770,6 +776,9 @@ def load_notification_log_stats(target) -> Dict[str, str]:
         "更新数": f"{event_count:,}" if event_count else "0",
         "エラー数": slack_error_count or "0",
         "メモ": default_memo,
+        "解析失敗率": slack_parse_failure_rate or "0",
+        "最新対象通知": slack_latest_tagged_at,
+        "最新保存通知": slack_latest_parsed_at,
     }
 
 
@@ -803,8 +812,12 @@ def build_source_rows(stats: Dict[str, object], notification_stats: Dict[str, st
             notification_stats["ステータス"] if notification_stats["ステータス"] else str(stats["status"]),
             notification_stats["最終同期日"] if notification_stats["最終同期日"] else str(stats["updated_at"]),
             f"{int(stats['total_booking_count']):,}",
-            "0",
-            booking_memo,
+            notification_stats["エラー数"] if notification_stats["エラー数"] else "0",
+            (
+                f"{booking_memo} / 解析失敗率={notification_stats.get('解析失敗率', '0')} / "
+                f"最新対象通知={notification_stats.get('最新対象通知', '') or 'なし'} / "
+                f"最新保存通知={notification_stats.get('最新保存通知', '') or 'なし'}"
+            ),
         ],
         [
             "個別予約数（UU）",
@@ -836,7 +849,12 @@ def build_source_rows(stats: Dict[str, object], notification_stats: Dict[str, st
             notification_stats["最終同期日"],
             notification_stats["更新数"],
             notification_stats["エラー数"],
-            f"{notification_stats['メモ']}。日別個別予約数では共通除外マスタも参照する",
+            (
+                f"{notification_stats['メモ']}。日別個別予約数では共通除外マスタも参照する / "
+                f"解析失敗率={notification_stats.get('解析失敗率', '0')} / "
+                f"最新対象通知={notification_stats.get('最新対象通知', '') or 'なし'} / "
+                f"最新保存通知={notification_stats.get('最新保存通知', '') or 'なし'}"
+            ),
         ],
         [
             "共通除外",

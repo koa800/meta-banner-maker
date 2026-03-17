@@ -68,6 +68,8 @@ PROTECTED_EDITOR_EMAILS = [
 PROTECTION_PREFIX = "個別面談データ（収集）自動生成"
 WRITE_RETRY_SECONDS = (5, 10, 20, 40)
 LIVE_ENRICH_LIMIT = int(os.environ.get("BOOKING_NOTIFICATION_LIVE_ENRICH_LIMIT", "20"))
+SLACK_PARSE_WARN_RATIO = float(os.environ.get("BOOKING_NOTIFICATION_SLACK_PARSE_WARN_RATIO", "0.05"))
+SLACK_PARSE_STOP_RATIO = float(os.environ.get("BOOKING_NOTIFICATION_SLACK_PARSE_STOP_RATIO", "0.20"))
 
 COLUMNS = [
     "予約イベント日時",
@@ -156,6 +158,9 @@ class SlackIngestSummary:
     tagged_count: int
     parsed_count: int
     error_count: int
+    parse_failure_rate: float
+    latest_tagged_at: str
+    latest_parsed_at: str
     memo: str
 
 
@@ -487,10 +492,14 @@ def parse_notification_message(message: dict, channel_name: str) -> Optional[Not
 
 
 def load_legacy_records() -> List[NotificationRecord]:
-    gc = get_client()
-    spreadsheet = gc.open_by_key(LEGACY_BOOKING_SHEET_ID)
-    ws = spreadsheet.worksheet(LEGACY_BOOKING_TAB_NAME)
-    values = ws.get_all_values()
+    try:
+        gc = get_client()
+        spreadsheet = gc.open_by_key(LEGACY_BOOKING_SHEET_ID)
+        ws = spreadsheet.worksheet(LEGACY_BOOKING_TAB_NAME)
+        values = ws.get_all_values()
+    except Exception as exc:
+        print(f"過去の個別予約データの読み込みをスキップしました: {exc}")
+        return []
     if not values:
         return []
 
@@ -810,7 +819,10 @@ def build_source_management_rows(
             f"{slack_summary.error_count:,}",
             (
                 f"{slack_summary.memo} / 取得={slack_summary.fetched_count:,} / "
-                f"対象通知={slack_summary.tagged_count:,} / 解析成功={slack_summary.parsed_count:,}。"
+                f"対象通知={slack_summary.tagged_count:,} / 解析成功={slack_summary.parsed_count:,} / "
+                f"解析失敗率={slack_summary.parse_failure_rate:.1%} / "
+                f"最新対象通知={slack_summary.latest_tagged_at or 'なし'} / "
+                f"最新保存通知={slack_summary.latest_parsed_at or 'なし'}。"
                 "収集データの正本。過去データは初回移行時のみ一度だけ追加し、継続取得の正本にはしない"
             ),
         ],
@@ -847,7 +859,21 @@ def build_rule_rows() -> List[List[str]]:
 
 def fetch_parsed_records(channel_name: str, limit: int, oldest: str = "") -> tuple[List[NotificationRecord], SlackIngestSummary]:
     checked_at = datetime.now().strftime("%Y/%m/%d %H:%M")
-    channel = find_channel_by_name(channel_name)
+    try:
+        channel = find_channel_by_name(channel_name)
+    except Exception as exc:
+        return [], SlackIngestSummary(
+            status="停止",
+            checked_at=checked_at,
+            fetched_count=0,
+            tagged_count=0,
+            parsed_count=0,
+            error_count=1,
+            parse_failure_rate=0.0,
+            latest_tagged_at="",
+            latest_parsed_at="",
+            memo=f"Slack チャンネルの確認に失敗: {exc}",
+        )
     if channel is None:
         return [], SlackIngestSummary(
             status="停止",
@@ -856,35 +882,67 @@ def fetch_parsed_records(channel_name: str, limit: int, oldest: str = "") -> tup
             tagged_count=0,
             parsed_count=0,
             error_count=1,
+            parse_failure_rate=0.0,
+            latest_tagged_at="",
+            latest_parsed_at="",
             memo="Slack チャンネルが見つからない",
         )
 
-    messages = fetch_channel_messages(
-        channel["id"],
-        oldest=oldest or None,
-        limit=limit,
-        include_bot_messages=True,
-    )
+    try:
+        messages = fetch_channel_messages(
+            channel["id"],
+            oldest=oldest or None,
+            limit=limit,
+            include_bot_messages=True,
+        )
+    except Exception as exc:
+        return [], SlackIngestSummary(
+            status="停止",
+            checked_at=checked_at,
+            fetched_count=0,
+            tagged_count=0,
+            parsed_count=0,
+            error_count=1,
+            parse_failure_rate=0.0,
+            latest_tagged_at="",
+            latest_parsed_at="",
+            memo=f"Slack メッセージ取得に失敗: {exc}",
+        )
     parsed: List[NotificationRecord] = []
     tagged_count = 0
     parse_error_count = 0
+    latest_tagged_at = ""
+    latest_parsed_at = ""
     for message in messages:
         text = str(message.get("text") or "").strip()
         if MESSAGE_TAG not in text:
             continue
         tagged_count += 1
         record = parse_notification_message(message, channel["name"])
+        message_ts = str(message.get("ts") or "").strip()
+        if message_ts:
+            try:
+                latest_dt = datetime.fromtimestamp(float(message_ts))
+                latest_tagged_at = max(latest_tagged_at, latest_dt.strftime("%Y-%m-%d %H:%M:%S"))
+            except Exception:
+                pass
         if record is not None:
             parsed.append(record)
+            if record.tagged_at:
+                latest_parsed_at = max(latest_parsed_at, record.tagged_at)
         else:
             parse_error_count += 1
 
+    parse_failure_rate = (parse_error_count / tagged_count) if tagged_count else 0.0
     status = "正常"
     memo = "Slack 通知を正常に解析した"
     if tagged_count > 0 and len(parsed) == 0:
         status = "停止"
         memo = "対象通知は見つかったが解析に失敗した"
-    elif parse_error_count > 0:
+    elif parse_failure_rate >= SLACK_PARSE_STOP_RATIO:
+        status = "停止"
+        memo = "対象通知の解析失敗率が高い"
+    elif parse_failure_rate >= SLACK_PARSE_WARN_RATIO:
         status = "未同期"
         memo = "対象通知の一部を解析できなかった"
     elif not messages:
@@ -900,6 +958,9 @@ def fetch_parsed_records(channel_name: str, limit: int, oldest: str = "") -> tup
         tagged_count=tagged_count,
         parsed_count=len(parsed),
         error_count=parse_error_count,
+        parse_failure_rate=parse_failure_rate,
+        latest_tagged_at=latest_tagged_at,
+        latest_parsed_at=latest_parsed_at,
         memo=memo,
     )
 
@@ -935,6 +996,9 @@ def save_state(last_ts: str, imported_count: int, channel_name: str, slack_summa
         "slack_fetched_count": slack_summary.fetched_count,
         "slack_tagged_count": slack_summary.tagged_count,
         "slack_parsed_count": slack_summary.parsed_count,
+        "slack_parse_failure_rate": slack_summary.parse_failure_rate,
+        "slack_latest_tagged_at": slack_summary.latest_tagged_at,
+        "slack_latest_parsed_at": slack_summary.latest_parsed_at,
     }
     with open(STATE_PATH, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
