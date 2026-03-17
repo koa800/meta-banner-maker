@@ -28,6 +28,9 @@ from sheets_manager import get_client
 
 TARGET_SHEET_ID = "1ip_RARDHmQvTjmaVavw1L71ltPrn4Kg6sa__njqyQZ8"
 TARGET_SPREADSHEET_TITLE = "【アドネス株式会社】個別面談データ"
+COLLECTION_SHEET_ID = "12bYadR0cgi24t4tz8GeESlsKffmNkkTHprI4ray_Sq4"
+COLLECTION_SPREADSHEET_TITLE = "【アドネス株式会社】個別面談データ（収集）"
+COLLECTION_NOTIFICATION_LOG_TAB_NAME = "個別予約通知ログ"
 NOTIFICATION_STATE_PATH = os.path.join(os.path.dirname(__file__), "data", "booking_notification_log_state.json")
 SOURCE_SHEET_ID = "1l2gHhdUMfRANEDmZNfgpjx8KZi0yVCEknckjtpvYwBo"
 SOURCE_TAB_NAME = "個別予約集計botログ"
@@ -37,8 +40,6 @@ LEGACY_BOOKING_TAB_NAME = "シート1"
 COUNT_TAB_NAME = "日別個別予約数"
 UU_TAB_NAME = "日別個別予約数（UU）"
 SUMMARY_TAB_NAME = "個別予約サマリー"
-TAG_TAB_NAME = "タグ検証"
-NOTIFICATION_LOG_TAB_NAME = "個別予約通知ログ"
 SOURCE_MANAGEMENT_TAB_NAME = "データソース管理"
 RULE_TAB_NAME = "データ追加ルール"
 
@@ -46,7 +47,6 @@ TAB_SPECS = {
     COUNT_TAB_NAME: (500, 3),
     UU_TAB_NAME: (500, 3),
     SUMMARY_TAB_NAME: (60, 3),
-    TAG_TAB_NAME: (60, 3),
     SOURCE_MANAGEMENT_TAB_NAME: (60, 14),
     RULE_TAB_NAME: (60, 3),
 }
@@ -62,7 +62,6 @@ TAB_COLORS = {
     COUNT_TAB_NAME: "#1A73E8",
     UU_TAB_NAME: "#1A73E8",
     SUMMARY_TAB_NAME: "#FBBC04",
-    TAG_TAB_NAME: "#A142F4",
     SOURCE_MANAGEMENT_TAB_NAME: "#34A853",
     RULE_TAB_NAME: "#9E9E9E",
 }
@@ -80,6 +79,7 @@ PROTECTED_EDITOR_EMAILS = [
     "gwsadmin@team.addness.co.jp",
 ]
 PROTECTION_PREFIX = "個別面談データ自動生成"
+UNUSED_TAB_NAMES = {"タグ検証", "個別予約通知ログ"}
 
 DATE_RE = re.compile(r"^\d{4}/\d{2}/\d{2}$")
 DATE_PREFIX_RE = re.compile(r"^(\d{4}[/-]\d{2}[/-]\d{2})")
@@ -282,6 +282,19 @@ def ensure_tabs(spreadsheet):
                 title=name, rows=rows, cols=cols
             ),
         )
+
+    for name in UNUSED_TAB_NAMES:
+        ws = tabs.get(name)
+        if ws is None:
+            continue
+        if len(tabs) <= len(TAB_SPECS):
+            continue
+        batch_update_with_retry(
+            spreadsheet,
+            {"requests": [{"deleteSheet": {"sheetId": ws.id}}]},
+            f"{name} タブの削除",
+        )
+        tabs.pop(name, None)
 
     return tabs
 
@@ -545,20 +558,20 @@ def notification_identity_key(event: NotificationEvent) -> str:
 
 def load_notification_events() -> List[NotificationEvent]:
     gc = get_client()
-    target = gc.open_by_key(TARGET_SHEET_ID)
+    target = gc.open_by_key(COLLECTION_SHEET_ID)
     try:
-        ws = target.worksheet(NOTIFICATION_LOG_TAB_NAME)
+        ws = target.worksheet(COLLECTION_NOTIFICATION_LOG_TAB_NAME)
     except Exception:
         return []
 
     events: List[NotificationEvent] = []
     values = ws.get_all_values()
     for raw in values[1:]:
-        row = raw + [""] * max(0, 7 - len(raw))
+        row = raw + [""] * max(0, 6 - len(raw))
         event_at = normalize_datetime(row[0])
         if not event_at:
             continue
-        if not any(str(cell).strip() for cell in row[:7]):
+        if not any(str(cell).strip() for cell in row[:6]):
             continue
         events.append(
             NotificationEvent(
@@ -566,8 +579,8 @@ def load_notification_events() -> List[NotificationEvent]:
                 line_name=str(row[1]).strip(),
                 member_id=str(row[2]).strip(),
                 account_name=str(row[3]).strip(),
-                email=str(row[5]).strip(),
-                phone=str(row[6]).strip(),
+                email=str(row[4]).strip(),
+                phone=str(row[5]).strip(),
             )
         )
     return events
@@ -651,7 +664,6 @@ def build_stats(
     excluded_count: int,
 ) -> Dict[str, object]:
     non_cancelled = [record for record in records if not record.cancelled]
-    account_counter = Counter(record.booking_account_name for record in non_cancelled if record.booking_account_name)
     latest_date = daily_records[-1].date if daily_records else ""
     updated_at = datetime.now().strftime("%Y/%m/%d %H:%M")
 
@@ -674,8 +686,6 @@ def build_stats(
         "start_date": daily_records[0].date if daily_records else "",
         "latest_date": latest_date,
         "daily_row_count": len(daily_records),
-        "booking_account_count": len(account_counter),
-        "blank_account_count": sum(1 for record in non_cancelled if not record.booking_account_name),
         "status": status,
         "latest_botlog_date": daily_meta.get("latest_botlog_date", ""),
         "latest_notification_date": daily_meta.get("latest_notification_date", ""),
@@ -702,47 +712,27 @@ def build_summary_rows(stats: Dict[str, object]) -> List[List[str]]:
         ["除外件数", f"{int(stats['excluded_notification_count']):,}", "共通除外マスタで除外した個別予約通知ログの件数"],
         ["集計開始日", f"'{stats['start_date']}", "日別個別予約数の最初の日付"],
         ["最新集計日", f"'{stats['latest_date']}", "日別個別予約数の最新の日付"],
-        ["予約アカウント名あり件数", f"{int(stats['booking_account_count']):,}", "予約アカウント名が入っているユニークアカウント数"],
-        ["予約アカウント名空欄件数", f"{int(stats['blank_account_count']):,}", "キャンセル除外後も予約アカウント名が空欄の行数"],
-    ]
-
-
-def build_tag_rows() -> List[List[str]]:
-    return [
-        ["項目", "状態", "内容"],
-        ["対象タグ", "確認済み", "★【個別予約完了】★"],
-        ["付与条件1", "確認済み", "ユーザーがカレンダー予約で指定コースを予約した時に付与される"],
-        ["付与条件2", "確認済み", "ユーザーがLステップのイベント予約で予約した時に付与される"],
-        ["タグの性質1", "確認済み", "一度付いたら外さない"],
-        ["タグの性質2", "確認済み", "再予約してもタグ数は増えない"],
-        ["今の役割", "確認済み", "個別予約を一度でもしたユーザーの累積確認と、予約導線が正しく発火したかの検証"],
-        ["今の限界", "確認済み", "タグ単体では日別の予約イベント数を正確に取れない"],
-        ["本命の通知条件", "確認待ち", "salon_reservation_reserved / reservation.reserved の予約イベント通知を優先候補として監査する"],
-        ["将来の役割", "確認待ち", "予約イベント通知を1イベント1行で蓄積し、個別予約イベントの本命正本候補にする"],
-        ["タグ通知の役割", "確認済み", "★【個別予約完了】★ の通知は冗長系と検証用として残す"],
-        ["通知で取りたい項目", "確認待ち", "予約イベント日時 / LINE名 / LSTEPメンバーID / Lステップアカウント名 / 通知リンク"],
-        ["通知の送信先", "確認済み", "Slack #個別予約通知 を第1候補にし、必要なら予約イベント専用チャンネルを追加する"],
-        ["確認対象アカウント", "確認待ち", "スキルプラス@企画専用 / 【スキルプラス】フリープラン / みかみ@個別専用 / みかみ@AI_個別専用 / 【みかみ】アドネス株式会社"],
     ]
 
 
 def load_notification_log_stats(target) -> Dict[str, str]:
     try:
-        ws = target.worksheet(NOTIFICATION_LOG_TAB_NAME)
+        collection = get_client().open_by_key(COLLECTION_SHEET_ID)
+        ws = collection.worksheet(COLLECTION_NOTIFICATION_LOG_TAB_NAME)
     except Exception:
         return {
             "ステータス": "未接続",
             "最終同期日": "",
             "更新数": "",
             "エラー数": "",
-            "メモ": "通知ログタブ未作成",
+            "メモ": "収集シート未接続",
         }
 
     values = ws.get_all_values()
     event_count = 0
     for row in values[1:]:
-        row = row + [""] * max(0, 7 - len(row))
-        if any(str(cell).strip() for cell in row[:7]):
+        row = row + [""] * max(0, 6 - len(row))
+        if any(str(cell).strip() for cell in row[:6]):
             event_count += 1
     state = {}
     if os.path.exists(NOTIFICATION_STATE_PATH):
@@ -773,7 +763,6 @@ def load_notification_log_stats(target) -> Dict[str, str]:
 
 
 def build_source_rows(stats: Dict[str, object], notification_stats: Dict[str, str]) -> List[List[str]]:
-    latest_botlog_date = str(stats.get("latest_botlog_date") or "").strip()
     fallback_start = str(stats.get("notification_fallback_start") or "").strip()
     booking_calc = "個別予約通知ログを日別集計し、同一人物の同日10分以内連続通知を1件にまとめる"
     booking_condition = "2025/01/01以降"
@@ -796,8 +785,8 @@ def build_source_rows(stats: Dict[str, object], notification_stats: Dict[str, st
             "加工データ",
             "1",
             f"https://docs.google.com/spreadsheets/d/{TARGET_SHEET_ID}/edit",
-            NOTIFICATION_LOG_TAB_NAME,
-            "A〜G列",
+            COUNT_TAB_NAME,
+            "A〜C列",
             booking_calc,
             booking_condition,
             notification_stats["ステータス"] if notification_stats["ステータス"] else str(stats["status"]),
@@ -824,14 +813,14 @@ def build_source_rows(stats: Dict[str, object], notification_stats: Dict[str, st
         ],
         [
             "個別予約通知ログ",
-            "個別予約",
-            "Slack通知 + 過去データ",
-            "2",
-            f"https://docs.google.com/spreadsheets/d/{TARGET_SHEET_ID}/edit",
-            NOTIFICATION_LOG_TAB_NAME,
-            "A〜G列",
+            "収集データ",
+            "Slack通知",
+            "1",
+            f"https://docs.google.com/spreadsheets/d/{COLLECTION_SHEET_ID}/edit",
+            COLLECTION_NOTIFICATION_LOG_TAB_NAME,
+            "A〜F列",
             "Slack通知と過去の個別予約データを 1イベント1行で統合",
-            "過去分 + ★【個別予約完了】★ 通知",
+            "継続取得の正本",
             notification_stats["ステータス"],
             notification_stats["最終同期日"],
             notification_stats["更新数"],
@@ -854,56 +843,18 @@ def build_source_rows(stats: Dict[str, object], notification_stats: Dict[str, st
             "0",
             "通知ログは残し、日別個別予約数を作る時だけ除外を効かせる",
         ],
-        [
-            "過去補完データ",
-            "補完",
-            "過去データ",
-            "3",
-            f"https://docs.google.com/spreadsheets/d/{LEGACY_BOOKING_SHEET_ID}/edit",
-            LEGACY_BOOKING_TAB_NAME,
-            "A〜D列",
-            "個別予約通知ログへ一度だけ取り込む",
-            "過去分を埋める時だけ使う",
-            "確認待ち",
-            "",
-            "",
-            "",
-            "継続取得はしない。通知ログへ統合したら役割終了",
-        ],
-        [
-            "タグ検証",
-            "検証",
-            "Lステップ",
-            "1",
-            "",
-            "タグ管理",
-            "タグ名",
-            "★【個別予約完了】★ を確認",
-            "ブラウザ確認後に確定",
-            "確認待ち",
-            "",
-            "",
-            "",
-            "タグは正本ではなく検証用",
-        ],
     ]
 
 
 def build_rule_rows() -> List[List[str]]:
     return [
         ["項目", "ルール", "補足"],
-        ["変えないもの", "個別予約数は予約イベント数として数える", "同じ人が別日に再予約したら別件数で数える"],
-        ["変えないもの2", "★【個別予約完了】★ は予約完了の成立条件として扱う", "一度付いたら外れず、再予約でも増えない"],
-        ["変えるもの", "botログ固定ではなく、通知ログを本命の計上元へ段階移行する", "過去シートは一時的な補完入力元であり、継続取得の正本にはしない"],
-        ["追加するもの", "個別予約通知ログを 1イベント1行で持つ", "過去の個別予約データと Slack 通知を同じ正本へ統合する"],
         ["個別予約数", "個別予約通知ログを日別集計して使う", "同一人物の同日10分以内連続通知は1件にまとめる"],
         ["共通除外", "【アドネス株式会社】共通除外マスタ を参照して、新しく発生した除外対象だけ日別集計から外す", "通知ログの生データ自体は消さない"],
         ["重複予約の扱い", "同一人物の通知が同じ日に10分以内で連続した時は1件にまとめる", "全期間で適用する。バグ由来の連続通知を吸収するため"],
-        ["個別予約通知ログ", "過去の個別予約データを引き継ぎつつ、Lステップ の予約イベント通知とタグ通知を1イベント1行で溜める", "まずは Slack の専用チャンネルに集約し、個別予約完了タグ通知は検証用として残す"],
+        ["収集データ", "個別予約通知ログは別シートで継続取得する", "このシートには生データを持たない"],
         ["過去補完データ", "過去シートは通知ログへ一度だけ取り込む", "日別個別予約数の継続的な正本にはしない"],
         ["個別予約数（UU）", "第1版ではまだ接続しない", "LINE統合や名寄せ方針が固まってから入れる"],
-        ["タグ", "★【個別予約完了】★ は今は検証用、将来も冗長系の確認軸として残す", "タグ単体は累積状態なので日別件数の正本には使わない"],
-        ["予約イベント通知", "salon_reservation_reserved / reservation.reserved を本命候補として監査する", "Lステップ live 確認後に Slack 側の受け皿を増やす"],
         ["手編集", "このシートの自動生成タブは手編集しない", "更新はスクリプトから行う"],
         ["異常検知", "最新集計日が古い時は未同期として扱う", "今は source 側の最新日を見て判定する"],
     ]
@@ -924,22 +875,19 @@ def write_target(daily_records: Sequence[DailyCountRecord], stats: Dict[str, obj
     uu_rows = pad_rows(uu_rows, 120, 3)
 
     summary_rows = pad_rows(build_summary_rows(stats), 20, 3)
-    tag_rows = pad_rows(build_tag_rows(), 20, 3)
     source_rows = pad_rows(build_source_rows(stats, notification_stats), 20, 14)
     rule_rows = pad_rows(build_rule_rows(), 20, 3)
 
     write_rows(target, tabs[COUNT_TAB_NAME], count_rows)
     write_rows(target, tabs[UU_TAB_NAME], uu_rows)
     write_rows(target, tabs[SUMMARY_TAB_NAME], summary_rows)
-    write_rows(target, tabs[TAG_TAB_NAME], tag_rows)
     write_rows(target, tabs[SOURCE_MANAGEMENT_TAB_NAME], source_rows)
     write_rows(target, tabs[RULE_TAB_NAME], rule_rows)
 
     apply_table_style(target, tabs[COUNT_TAB_NAME], len(count_rows), 3, [140, 160, 180])
     apply_table_style(target, tabs[UU_TAB_NAME], len(uu_rows), 3, [140, 180, 200])
     apply_table_style(target, tabs[SUMMARY_TAB_NAME], len(summary_rows), 3, [220, 160, 420])
-    apply_table_style(target, tabs[TAG_TAB_NAME], len(tag_rows), 3, [180, 120, 520])
-    apply_table_style(target, tabs[SOURCE_MANAGEMENT_TAB_NAME], len(source_rows), 14, [150, 110, 110, 70, 260, 160, 150, 220, 140, 90, 140, 90, 80, 260])
+    apply_table_style(target, tabs[SOURCE_MANAGEMENT_TAB_NAME], len(source_rows), 14, [180, 110, 110, 70, 260, 160, 130, 220, 140, 90, 140, 90, 80, 280])
     apply_table_style(target, tabs[RULE_TAB_NAME], len(rule_rows), 3, [180, 360, 320])
 
     number_format_requests = [
@@ -972,7 +920,6 @@ def write_target(daily_records: Sequence[DailyCountRecord], stats: Dict[str, obj
         ),
     ]
     apply_number_formats(target, number_format_requests)
-    apply_status_cell_colors(target, tabs[TAG_TAB_NAME], tag_rows, 1)
     apply_status_cell_colors(target, tabs[SOURCE_MANAGEMENT_TAB_NAME], source_rows, 9)
     apply_protections(target, tabs)
 

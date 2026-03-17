@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-【アドネス株式会社】個別面談データ / 個別予約通知ログ を更新する。
+【アドネス株式会社】個別面談データ（収集） / 個別予約通知ログ を更新する。
 
 役割:
 - Slack `#個別予約通知` に流れる Lステップ通知を 1イベント1行で保存する
@@ -31,27 +31,36 @@ from mac_mini.agent_orchestrator.slack_reader import (
 )
 
 
-TARGET_SHEET_ID = "1ip_RARDHmQvTjmaVavw1L71ltPrn4Kg6sa__njqyQZ8"
+TARGET_SHEET_ID = "12bYadR0cgi24t4tz8GeESlsKffmNkkTHprI4ray_Sq4"
+TARGET_SPREADSHEET_TITLE = "【アドネス株式会社】個別面談データ（収集）"
 TARGET_TAB_NAME = "個別予約通知ログ"
+SOURCE_MANAGEMENT_TAB_NAME = "データソース管理"
+RULE_TAB_NAME = "データ追加ルール"
 DEFAULT_CHANNEL_NAME = os.environ.get("BOOKING_NOTIFICATION_SLACK_CHANNEL_NAME", "個別予約通知")
 MESSAGE_TAG = "★【個別予約完了】★"
 STATE_PATH = os.path.join(os.path.dirname(__file__), "data", "booking_notification_log_state.json")
 LSTEP_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 LEGACY_BOOKING_SHEET_ID = "1LAzT12KfHKDJTuI69DEdDmS7oD0T6Kz9V5D0mdJDPsQ"
 LEGACY_BOOKING_TAB_NAME = "シート1"
+OLD_METRICS_SHEET_ID = "1ip_RARDHmQvTjmaVavw1L71ltPrn4Kg6sa__njqyQZ8"
+OLD_NOTIFICATION_LOG_TAB_NAME = "個別予約通知ログ"
 
-TAB_COLOR = "#1A73E8"
 HEADER_BG = {"red": 0.26, "green": 0.52, "blue": 0.96}
 HEADER_TEXT = {
     "foregroundColor": {"red": 1, "green": 1, "blue": 1},
     "bold": True,
     "fontSize": 12,
 }
+TAB_COLORS = {
+    TARGET_TAB_NAME: "#1A73E8",
+    SOURCE_MANAGEMENT_TAB_NAME: "#34A853",
+    RULE_TAB_NAME: "#9E9E9E",
+}
 PROTECTED_EDITOR_EMAILS = [
     "kohara.kaito@team.addness.co.jp",
     "gwsadmin@team.addness.co.jp",
 ]
-PROTECTION_DESCRIPTION = "個別面談データ自動生成: 個別予約通知ログ"
+PROTECTION_PREFIX = "個別面談データ（収集）自動生成"
 WRITE_RETRY_SECONDS = (5, 10, 20, 40)
 
 COLUMNS = [
@@ -59,10 +68,15 @@ COLUMNS = [
     "LINE名",
     "LSTEPメンバーID",
     "Lステップアカウント名",
-    "通知リンク",
     "メールアドレス",
     "電話番号",
 ]
+
+TAB_SPECS = {
+    TARGET_TAB_NAME: (2000, len(COLUMNS)),
+    SOURCE_MANAGEMENT_TAB_NAME: (40, 14),
+    RULE_TAB_NAME: (40, 3),
+}
 
 ACCOUNT_RE = re.compile(r"^[\(（](.+?)[\)）]\s*タグ通知$")
 EVENT_AT_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
@@ -100,7 +114,6 @@ class NotificationRecord:
             self.line_name,
             self.member_id,
             self.account_name,
-            self.notification_url,
             self.email,
             self.phone,
         ]
@@ -310,20 +323,53 @@ def set_column_width_request(sheet_id: int, start_col: int, end_col: int, width:
     }
 
 
-def ensure_tab(spreadsheet):
-    worksheets = {ws.title: ws for ws in spreadsheet.worksheets()}
-    ws = worksheets.get(TARGET_TAB_NAME)
-    if ws is None:
-        ws = run_write_with_retry(
-            f"{TARGET_TAB_NAME} タブの作成",
-            lambda: spreadsheet.add_worksheet(title=TARGET_TAB_NAME, rows=1000, cols=len(COLUMNS)),
-        )
-    if ws.row_count < 1000 or ws.col_count != len(COLUMNS):
+def ensure_spreadsheet_title(spreadsheet) -> None:
+    metadata = spreadsheet.fetch_sheet_metadata({"fields": "properties.title"})
+    title = metadata.get("properties", {}).get("title", "")
+    if title == TARGET_SPREADSHEET_TITLE:
+        return
+    batch_update_with_retry(
+        spreadsheet,
+        {
+            "requests": [
+                {
+                    "updateSpreadsheetProperties": {
+                        "properties": {"title": TARGET_SPREADSHEET_TITLE},
+                        "fields": "title",
+                    }
+                }
+            ]
+        },
+        "個別面談データ（収集）のシート名更新",
+    )
+
+
+def ensure_tabs(spreadsheet):
+    tabs = {ws.title: ws for ws in spreadsheet.worksheets()}
+    if "シート1" in tabs and len(tabs) == 1:
         worksheet_write_with_retry(
-            f"{TARGET_TAB_NAME} タブのサイズ調整",
-            lambda: ws.resize(rows=max(ws.row_count, 1000), cols=len(COLUMNS)),
+            "個別面談データ（収集）の初期タブ名変更",
+            lambda: tabs["シート1"].update_title(TARGET_TAB_NAME),
         )
-    return ws
+        tabs[TARGET_TAB_NAME] = tabs.pop("シート1")
+
+    for name, (rows, cols) in TAB_SPECS.items():
+        if name in tabs:
+            ws = tabs[name]
+            if ws.row_count != rows or ws.col_count != cols:
+                worksheet_write_with_retry(
+                    f"{name} タブのサイズ調整",
+                    lambda ws=ws, rows=rows, cols=cols: ws.resize(rows=rows, cols=cols),
+                )
+            continue
+        tabs[name] = run_write_with_retry(
+            f"{name} タブの作成",
+            lambda name=name, rows=rows, cols=cols: spreadsheet.add_worksheet(
+                title=name, rows=rows, cols=cols
+            ),
+        )
+
+    return tabs
 
 
 def ensure_header(ws) -> None:
@@ -341,11 +387,21 @@ def load_existing_rows(ws) -> Dict[str, NotificationRecord]:
     existing: Dict[str, NotificationRecord] = {}
     header = values[0] if values else []
     is_old_format = len(header) >= 8 and str(header[4]).strip() == "予約導線種別"
+    has_notification_link = len(header) >= 7 and str(header[4]).strip() == "通知リンク"
     for row in values[1:]:
         row = row + [""] * max(0, 8 - len(row))
-        notification_url = str(row[5]).strip() if is_old_format else str(row[4]).strip()
-        email = str(row[6]).strip() if is_old_format else str(row[5]).strip()
-        phone = str(row[7]).strip() if is_old_format else str(row[6]).strip()
+        if is_old_format:
+            notification_url = str(row[5]).strip()
+            email = str(row[6]).strip()
+            phone = str(row[7]).strip()
+        elif has_notification_link:
+            notification_url = str(row[4]).strip()
+            email = str(row[5]).strip()
+            phone = str(row[6]).strip()
+        else:
+            notification_url = ""
+            email = str(row[4]).strip()
+            phone = str(row[5]).strip()
         record = NotificationRecord(
             tagged_at=normalize_tagged_at(row[0]),
             line_name=str(row[1]).strip(),
@@ -360,6 +416,15 @@ def load_existing_rows(ws) -> Dict[str, NotificationRecord]:
             continue
         existing[record.dedupe_key] = record
     return existing
+
+
+def load_old_metrics_rows(gc) -> Dict[str, NotificationRecord]:
+    try:
+        spreadsheet = gc.open_by_key(OLD_METRICS_SHEET_ID)
+        ws = spreadsheet.worksheet(OLD_NOTIFICATION_LOG_TAB_NAME)
+    except Exception:
+        return {}
+    return load_existing_rows(ws)
 
 
 def parse_member_id(url: str) -> str:
@@ -522,7 +587,16 @@ def write_rows(ws, rows: List[List[str]]) -> None:
     )
 
 
-def apply_style(spreadsheet, ws, row_count: int) -> None:
+def write_simple_rows(ws, rows: List[List[str]], col_count: int) -> None:
+    end_cell = f"{col_letter(col_count)}{len(rows)}"
+    worksheet_write_with_retry(f"{ws.title} の既存データ削除", ws.clear)
+    worksheet_write_with_retry(
+        f"{ws.title} の書き込み",
+        lambda: ws.update(range_name=f"A1:{end_cell}", values=rows, value_input_option="USER_ENTERED"),
+    )
+
+
+def apply_table_style(spreadsheet, ws, row_count: int, col_count: int, widths: List[int], wrap: str = "CLIP") -> None:
     requests = [
         repeat_cell_request(
             ws.id,
@@ -547,7 +621,7 @@ def apply_style(spreadsheet, ws, row_count: int) -> None:
             len(COLUMNS),
             {
                 "verticalAlignment": "MIDDLE",
-                "wrapStrategy": "WRAP",
+                "wrapStrategy": wrap,
             },
             "userEnteredFormat.verticalAlignment,userEnteredFormat.wrapStrategy",
         ),
@@ -569,9 +643,9 @@ def apply_style(spreadsheet, ws, row_count: int) -> None:
                 "properties": {
                     "sheetId": ws.id,
                     "tabColor": {
-                        "red": int(TAB_COLOR[1:3], 16) / 255.0,
-                        "green": int(TAB_COLOR[3:5], 16) / 255.0,
-                        "blue": int(TAB_COLOR[5:7], 16) / 255.0,
+                        "red": int(TAB_COLORS[ws.title][1:3], 16) / 255.0,
+                        "green": int(TAB_COLORS[ws.title][3:5], 16) / 255.0,
+                        "blue": int(TAB_COLORS[ws.title][5:7], 16) / 255.0,
                     },
                 },
                 "fields": "tabColor",
@@ -579,12 +653,11 @@ def apply_style(spreadsheet, ws, row_count: int) -> None:
         },
     ]
 
-    widths = [170, 180, 150, 180, 300, 220, 180]
     for index, width in enumerate(widths):
         requests.append(set_column_width_request(ws.id, index, index + 1, width))
 
-    batch_update_with_retry(spreadsheet, {"requests": requests}, f"{TARGET_TAB_NAME} の表スタイル適用")
-    worksheet_write_with_retry(f"{TARGET_TAB_NAME} のヘッダー固定", lambda: ws.freeze(rows=1))
+    batch_update_with_retry(spreadsheet, {"requests": requests}, f"{ws.title} の表スタイル適用")
+    worksheet_write_with_retry(f"{ws.title} のヘッダー固定", lambda: ws.freeze(rows=1))
 
 
 def apply_protection(spreadsheet, ws) -> None:
@@ -608,7 +681,7 @@ def apply_protection(spreadsheet, ws) -> None:
             has_col = any(key in range_info for key in ("startColumnIndex", "endColumnIndex"))
             if not has_row and not has_col:
                 existing_sheet_protection = True
-            if description == PROTECTION_DESCRIPTION:
+            if description == f"{PROTECTION_PREFIX}: {ws.title}":
                 requests.append({"deleteProtectedRange": {"protectedRangeId": protected_range["protectedRangeId"]}})
 
     if not existing_sheet_protection:
@@ -617,7 +690,7 @@ def apply_protection(spreadsheet, ws) -> None:
                 "addProtectedRange": {
                     "protectedRange": {
                         "range": {"sheetId": ws.id},
-                        "description": PROTECTION_DESCRIPTION,
+                        "description": f"{PROTECTION_PREFIX}: {ws.title}",
                         "warningOnly": False,
                         "editors": {"users": PROTECTED_EDITOR_EMAILS},
                     }
@@ -626,7 +699,40 @@ def apply_protection(spreadsheet, ws) -> None:
         )
 
     if requests:
-        batch_update_with_retry(spreadsheet, {"requests": requests}, f"{TARGET_TAB_NAME} の保護設定")
+        batch_update_with_retry(spreadsheet, {"requests": requests}, f"{ws.title} の保護設定")
+
+
+def build_source_management_rows(imported_count: int, updated_at: str) -> List[List[str]]:
+    return [
+        ["対象タブ", "グループ", "ソース元", "優先度", "スプレッドシートURL", "タブ名", "参照先列", "正規化 / 計算", "入力条件", "ステータス", "最終同期日", "更新数", "エラー数", "メモ"],
+        [
+            TARGET_TAB_NAME,
+            "個別予約",
+            "Slack #個別予約通知",
+            "1",
+            "",
+            DEFAULT_CHANNEL_NAME,
+            "メッセージ本文",
+            "★【個別予約完了】★ 通知を 1イベント1行で保存。LSTEPメンバーID でメールアドレス / 電話番号を補完できる時だけ追記",
+            "継続取得の正本",
+            "正常" if imported_count > 0 else "未接続",
+            f"'{updated_at}" if updated_at else "",
+            f"{imported_count:,}",
+            "0",
+            "収集データの正本。過去データは初回移行時のみ一度だけ追加し、継続取得の正本にはしない",
+        ],
+    ]
+
+
+def build_rule_rows() -> List[List[str]]:
+    return [
+        ["項目", "ルール", "補足"],
+        ["役割", "このシートは収集データだけを持つ", "加工や集計は【アドネス株式会社】個別面談データで行う"],
+        ["継続取得", "Slack #個別予約通知 を継続的な正本にする", "★【個別予約完了】★ の通知を 1イベント1行で保存する"],
+        ["初回移行", "過去の個別予約データは初回移行時に一度だけ取り込む", "継続運用では参照しない"],
+        ["重複保存", "同じ通知は重複して保存しない", "日時 / アカウント / メンバーID / LINE名 / メール / 電話で吸収する"],
+        ["手編集", "自動生成タブは手編集しない", "更新はスクリプトから行う"],
+    ]
 
 
 def fetch_parsed_records(channel_name: str, limit: int, oldest: str = "") -> List[NotificationRecord]:
@@ -690,9 +796,13 @@ def main() -> None:
     args = parse_args()
     gc = get_client()
     spreadsheet = gc.open_by_key(TARGET_SHEET_ID)
-    ws = ensure_tab(spreadsheet)
-    existing = load_existing_rows(ws)
+    ensure_spreadsheet_title(spreadsheet)
+    tabs = ensure_tabs(spreadsheet)
+    ws = tabs[TARGET_TAB_NAME]
     ensure_header(ws)
+    existing = load_existing_rows(ws)
+    if not existing:
+        existing = load_old_metrics_rows(gc)
     state = load_state()
     oldest = str(state.get("last_ts") or "").strip()
 
@@ -713,15 +823,22 @@ def main() -> None:
 
     rows = build_rows(merged)
     write_rows(ws, rows)
-    apply_style(spreadsheet, ws, len(rows))
-    apply_protection(spreadsheet, ws)
+    source_rows = build_source_management_rows(len(merged), datetime.now().strftime("%Y/%m/%d %H:%M"))
+    rule_rows = build_rule_rows()
+    write_simple_rows(tabs[SOURCE_MANAGEMENT_TAB_NAME], source_rows, 14)
+    write_simple_rows(tabs[RULE_TAB_NAME], rule_rows, 3)
+    apply_table_style(spreadsheet, ws, len(rows), len(COLUMNS), [180, 180, 150, 200, 240, 180], wrap="CLIP")
+    apply_table_style(spreadsheet, tabs[SOURCE_MANAGEMENT_TAB_NAME], len(source_rows), 14, [180, 110, 140, 70, 220, 160, 120, 280, 140, 90, 140, 90, 80, 280], wrap="CLIP")
+    apply_table_style(spreadsheet, tabs[RULE_TAB_NAME], len(rule_rows), 3, [150, 420, 360], wrap="WRAP")
+    for tab in tabs.values():
+        apply_protection(spreadsheet, tab)
     latest_ts = oldest
     if slack_records:
         latest_ts = max((record.slack_ts for record in slack_records if record.slack_ts), default=oldest)
     save_state(latest_ts or "", len(merged), args.channel_name)
 
     print(
-        f"【アドネス株式会社】個別面談データ / {TARGET_TAB_NAME} を更新しました。"
+        f"【アドネス株式会社】個別面談データ（収集） / {TARGET_TAB_NAME} を更新しました。"
         f"保存件数={len(merged):,}"
     )
 

@@ -64,6 +64,8 @@ _EMAIL_COLLECTION_METRICS_SOURCE_TAB = "データソース管理"
 _BOOKING_METRICS_SHEET_ID = "1ip_RARDHmQvTjmaVavw1L71ltPrn4Kg6sa__njqyQZ8"
 _BOOKING_METRICS_SUMMARY_TAB = "個別予約サマリー"
 _BOOKING_METRICS_SOURCE_TAB = "データソース管理"
+_BOOKING_COLLECTION_SHEET_ID = "12bYadR0cgi24t4tz8GeESlsKffmNkkTHprI4ray_Sq4"
+_BOOKING_COLLECTION_SOURCE_TAB = "データソース管理"
 _BOOKING_NOTIFICATION_LOG_TAB = "個別予約通知ログ"
 _TELEAPO_SHEET_ID = "12RGMUfU8Wj0CCdcRfY7kI56kdATV7wDXjvYmGdQb_Nk"
 _TELEAPO_TARGET_TAB = "架電一覧"
@@ -4821,12 +4823,12 @@ head -3 "{csv_dir}/{csv_filename}"
                 ],
                 links=[
                     (
-                        "個別面談データ / 個別予約通知ログ",
-                        _build_sheet_url(_BOOKING_METRICS_SHEET_ID, _BOOKING_NOTIFICATION_LOG_TAB),
+                        "個別面談データ（収集） / 個別予約通知ログ",
+                        _build_sheet_url(_BOOKING_COLLECTION_SHEET_ID, _BOOKING_NOTIFICATION_LOG_TAB),
                     ),
                     (
-                        "個別面談データ / データソース管理",
-                        _build_sheet_url(_BOOKING_METRICS_SHEET_ID, _BOOKING_METRICS_SOURCE_TAB),
+                        "個別面談データ（収集） / データソース管理",
+                        _build_sheet_url(_BOOKING_COLLECTION_SHEET_ID, _BOOKING_COLLECTION_SOURCE_TAB),
                     ),
                 ],
             )
