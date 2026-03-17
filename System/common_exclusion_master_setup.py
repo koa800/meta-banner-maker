@@ -4,7 +4,7 @@
 
 - 既存の `【アドネス株式会社】顧客データ（複数イベント） / 除外リスト` を初期データとして移行
 - `支払管理表 / 全メンバーリスト` を候補元として明示
-- `除外リスト / データソース管理 / データ追加ルール` の3タブを整備
+- `除外リスト / 無条件除外ルール / データソース管理 / データ追加ルール` を整備
 - ヘッダー体裁、フィルタ、入力規則も同時に設定
 """
 
@@ -33,21 +33,24 @@ HEADER_FG = {"red": 1.0, "green": 1.0, "blue": 1.0}
 def ensure_worksheet(spreadsheet: gspread.Spreadsheet, title: str, rows: int, cols: int) -> gspread.Worksheet:
     try:
         worksheet = spreadsheet.worksheet(title)
-        worksheet.resize(rows=max(rows, worksheet.row_count), cols=max(cols, worksheet.col_count))
+        worksheet.resize(rows=rows, cols=cols)
         return worksheet
     except gspread.WorksheetNotFound:
         return spreadsheet.add_worksheet(title=title, rows=rows, cols=cols)
 
 
-def rename_or_create_tabs(spreadsheet: gspread.Spreadsheet) -> tuple[gspread.Worksheet, gspread.Worksheet, gspread.Worksheet]:
+def rename_or_create_tabs(
+    spreadsheet: gspread.Spreadsheet,
+) -> tuple[gspread.Worksheet, gspread.Worksheet, gspread.Worksheet, gspread.Worksheet]:
     worksheets = spreadsheet.worksheets()
     if len(worksheets) == 1 and worksheets[0].title == "シート1":
         worksheets[0].update_title("除外リスト")
 
     exclusion_ws = ensure_worksheet(spreadsheet, "除外リスト", 1000, 7)
+    unconditional_ws = ensure_worksheet(spreadsheet, "無条件除外ルール", 50, 5)
     source_ws = ensure_worksheet(spreadsheet, "データソース管理", 50, 9)
     rule_ws = ensure_worksheet(spreadsheet, "データ追加ルール", 50, 3)
-    return exclusion_ws, source_ws, rule_ws
+    return exclusion_ws, unconditional_ws, source_ws, rule_ws
 
 
 def build_initial_rows(source_rows: List[List[str]]) -> List[List[str]]:
@@ -85,12 +88,19 @@ def set_header_style(worksheet: gspread.Worksheet, col_count: int) -> None:
     )
 
 
-def set_basic_style(exclusion_ws: gspread.Worksheet, source_ws: gspread.Worksheet, rule_ws: gspread.Worksheet) -> None:
+def set_basic_style(
+    exclusion_ws: gspread.Worksheet,
+    unconditional_ws: gspread.Worksheet,
+    source_ws: gspread.Worksheet,
+    rule_ws: gspread.Worksheet,
+) -> None:
     set_header_style(exclusion_ws, 7)
+    set_header_style(unconditional_ws, 5)
     set_header_style(source_ws, 9)
     set_header_style(rule_ws, 3)
 
     exclusion_ws.set_basic_filter()
+    unconditional_ws.set_basic_filter()
     source_ws.set_basic_filter()
     rule_ws.set_basic_filter()
 
@@ -109,6 +119,14 @@ def set_basic_style(exclusion_ws: gspread.Worksheet, source_ws: gspread.Workshee
     exclusion_ws.format(
         "G2:G1000",
         {"horizontalAlignment": "LEFT", "textFormat": {"fontSize": 10}},
+    )
+    unconditional_ws.format(
+        "A2:E100",
+        {"horizontalAlignment": "LEFT", "textFormat": {"fontSize": 10}},
+    )
+    unconditional_ws.format(
+        "D2:D100",
+        {"horizontalAlignment": "CENTER", "textFormat": {"fontSize": 10}},
     )
 
     source_ws.format(
@@ -134,19 +152,26 @@ def set_basic_style(exclusion_ws: gspread.Worksheet, source_ws: gspread.Workshee
     )
 
     exclusion_ws.columns_auto_resize(1, 7)
+    unconditional_ws.columns_auto_resize(1, 5)
     source_ws.columns_auto_resize(1, 9)
     rule_ws.columns_auto_resize(1, 3)
 
 
-def set_tab_colors(exclusion_ws: gspread.Worksheet, source_ws: gspread.Worksheet, rule_ws: gspread.Worksheet) -> None:
+def set_tab_colors(
+    exclusion_ws: gspread.Worksheet,
+    unconditional_ws: gspread.Worksheet,
+    source_ws: gspread.Worksheet,
+    rule_ws: gspread.Worksheet,
+) -> None:
     exclusion_ws.update_tab_color("#4F86F7")
+    unconditional_ws.update_tab_color("#9FD6B5")
     source_ws.update_tab_color("#8FB8FF")
     rule_ws.update_tab_color("#9FD6B5")
 
 
-def set_validations(exclusion_ws: gspread.Worksheet) -> None:
-    spreadsheet_id = exclusion_ws.spreadsheet.id
+def set_validations(exclusion_ws: gspread.Worksheet, unconditional_ws: gspread.Worksheet) -> None:
     sheet_id = exclusion_ws.id
+    unconditional_sheet_id = unconditional_ws.id
     requests = [
         {
             "setDataValidation": {
@@ -186,6 +211,25 @@ def set_validations(exclusion_ws: gspread.Worksheet) -> None:
                 },
             }
         },
+        {
+            "setDataValidation": {
+                "range": {
+                    "sheetId": unconditional_sheet_id,
+                    "startRowIndex": 1,
+                    "endRowIndex": unconditional_ws.row_count,
+                    "startColumnIndex": 3,
+                    "endColumnIndex": 4,
+                },
+                "rule": {
+                    "condition": {
+                        "type": "ONE_OF_LIST",
+                        "values": [{"userEnteredValue": v} for v in ["有効", "停止"]],
+                    },
+                    "showCustomUi": True,
+                    "strict": False,
+                },
+            }
+        },
     ]
     exclusion_ws.spreadsheet.batch_update({"requests": requests})
 
@@ -201,7 +245,7 @@ def main() -> None:
     if target_sheet.title != TARGET_SHEET_TITLE:
         target_sheet.update_title(TARGET_SHEET_TITLE)
 
-    exclusion_ws, source_ws, rule_ws = rename_or_create_tabs(target_sheet)
+    exclusion_ws, unconditional_ws, source_ws, rule_ws = rename_or_create_tabs(target_sheet)
 
     migrated_rows = build_initial_rows(source_rows)
     row_count = len(migrated_rows) - 1
@@ -210,10 +254,25 @@ def main() -> None:
     exclusion_ws.clear()
     exclusion_ws.update(range_name="A1:G{}".format(len(migrated_rows)), values=migrated_rows)
 
+    unconditional_values = [
+        ["判定対象", "一致条件", "適用範囲", "状態", "備考"],
+        ["対象者名", "test を含む", "全体", "有効", "大文字小文字を区別せず除外"],
+        ["対象者名", "テスト を含む", "全体", "有効", "日本語表記のテストを除外"],
+        ["対象者名", "sample を含む", "全体", "有効", "サンプル表記を除外"],
+        ["対象者名", "サンプル を含む", "全体", "有効", "日本語表記のサンプルを除外"],
+        ["対象者名", "dummy を含む", "全体", "有効", "ダミーデータを除外"],
+        ["メールアドレス", "test を含む", "全体", "有効", "メール内のテスト表記を除外"],
+        ["メールアドレス", "sample を含む", "全体", "有効", "メール内のサンプル表記を除外"],
+        ["メールアドレス", "dummy を含む", "全体", "有効", "メール内のダミー表記を除外"],
+    ]
+    unconditional_ws.clear()
+    unconditional_ws.update(range_name="A1:E{}".format(len(unconditional_values)), values=unconditional_values)
+
     source_values = [
         ["項目", "ソース元", "スプレッドシートURL", "タブ名", "参照先列", "ステータス", "最終更新", "更新数", "メモ"],
         ["候補元", REFERENCE_SHEET_NAME, f"https://docs.google.com/spreadsheets/d/{REFERENCE_SHEET_ID}/edit", REFERENCE_TAB_NAME, "A〜最終列", "参照候補", now_text, str(max(len(reference_rows) - 1, 0)), "全員を自動除外しない。除外候補の確認元として使う"],
         ["正本", "【アドネス株式会社】共通除外マスタ", f"https://docs.google.com/spreadsheets/d/{TARGET_SHEET_ID}/edit", "除外リスト", "A〜G列", "手動管理", now_text, str(row_count), "今後の除外追加はこのシートだけで行う"],
+        ["共通ルール", "【アドネス株式会社】共通除外マスタ", f"https://docs.google.com/spreadsheets/d/{TARGET_SHEET_ID}/edit", "無条件除外ルール", "A〜E列", "手動管理", now_text, str(len(unconditional_values) - 1), "明らかなテストデータを機械的に除外する"],
     ]
     source_ws.clear()
     source_ws.update(range_name="A1:I{}".format(len(source_values)), values=source_values)
@@ -223,7 +282,7 @@ def main() -> None:
         ["役割", "このシートを全体の共通除外マスタとして使う", "集客 / 個別予約 / 決済 などで共通参照する前提"],
         ["候補元", "支払管理表 / 全メンバーリスト を除外候補の確認元にする", "全員を自動除外しない。必要な人だけ除外リストへ追加する"],
         ["除外判定", "メールアドレス または 電話番号 が一致した新規データを除外する", "名前だけでは除外判定しない"],
-        ["無条件除外", "対象者名やメールアドレスに test / テスト / sample / サンプル / dummy が入るものは除外対象とする", "人を特定せず明らかにテストと分かるものだけに限定する"],
+        ["無条件除外", "明らかなテストデータは 無条件除外ルール タブを参照して除外する", "説明ではなく構造化ルールを正本にする"],
         ["適用範囲", "全体 / 集客 / 個別予約 / 決済 / 会員 で管理する", "全体 はすべての集計で除外"],
         ["過去データ", "過去に確定済みの集計値は遡って除外しない", "新しく発生したデータだけ除外判定する"],
         ["初期データ", "【アドネス株式会社】顧客データ（複数イベント） / 除外リスト を移植", "初回整備の履歴として残す"],
@@ -233,9 +292,9 @@ def main() -> None:
     rule_ws.clear()
     rule_ws.update(range_name="A1:C{}".format(len(rule_values)), values=rule_values)
 
-    set_basic_style(exclusion_ws, source_ws, rule_ws)
-    set_tab_colors(exclusion_ws, source_ws, rule_ws)
-    set_validations(exclusion_ws)
+    set_basic_style(exclusion_ws, unconditional_ws, source_ws, rule_ws)
+    set_tab_colors(exclusion_ws, unconditional_ws, source_ws, rule_ws)
+    set_validations(exclusion_ws, unconditional_ws)
 
     print(f"created {TARGET_SHEET_TITLE} rows={row_count}")
 
