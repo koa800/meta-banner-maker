@@ -32,10 +32,10 @@ schedule:
     enabled: true
   unique_email_sheet_sync:
     cron: "18 */2 * * *"         # 2時間ごと  UUメールアドレス管理シートを再生成
-    enabled: true
+    enabled: false
   email_registration_count_sheet_sync:
     cron: "28 */2 * * *"         # 2時間ごと  全メール登録件数管理シートを再生成
-    enabled: true
+    enabled: false
   email_collection_metrics_sheet_sync:
     cron: "38 */2 * * *"         # 2時間ごと  メール集計の統合シートを再生成
     enabled: true

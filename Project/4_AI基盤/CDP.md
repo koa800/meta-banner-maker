@@ -149,7 +149,7 @@
   - `UUメールアドレス` `日別UUメールアドレス数` `複数アドレスユーザー` `メール集計サマリー` は自動生成タブとして保護し、手編集しない
   - `主メール重複 > 0` や `UU件数の急減` を検知した場合は、更新を止めて異常扱いにする
 - 更新: `python3 System/unique_email_sheet_sync.py` で `顧客マスタ + メールのみ` を母集団にし、`UTAGE元データ + 過去UTAGE CSV + 旧メール集客データ` で登録日を補完して再生成する
-  - 定期更新: Orchestrator が `18 */2 * * *` で2時間ごとに再生成する
+  - 現在は legacy 扱いで、定期実行は停止。必要時のみ手動再生成する
 
 - 加工データ（登録件数）: [【アドネス株式会社】集客データ_全メール登録数（加工）](https://docs.google.com/spreadsheets/d/1RsRkGaHCFsFc1nT1lMQFyNG-f13llH4UX9Bl_EYxNjU/edit)
 - タブ構成:
@@ -169,7 +169,7 @@
   - 4タブとも自動生成タブとして保護し、手編集しない
   - `登録件数の急減` や `参照元タブ0件` を検知した場合は、更新を止めて異常扱いにする
 - 更新: `python3 System/email_registration_count_sheet_sync.py` で再生成する
-  - 定期更新: Orchestrator が `28 */2 * * *` で2時間ごとに再生成する
+  - 現在は legacy 扱いで、定期実行は停止。必要時のみ手動再生成する
 
 - 加工データ（統合版）: [【アドネス株式会社】集客データ_メール集計（加工）](https://docs.google.com/spreadsheets/d/13HS9KmlTdxQwMMaK45H3Ga1mMTUiJdhYKWnrExge_yY/edit)
 - タブ構成:
