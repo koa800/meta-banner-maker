@@ -30,6 +30,10 @@ BOOKING_METRICS_SHEET_ID = "1ip_RARDHmQvTjmaVavw1L71ltPrn4Kg6sa__njqyQZ8"
 BOOKING_COUNT_TAB = "日別個別予約数"
 BOOKING_SUMMARY_TAB = "個別予約サマリー"
 BOOKING_SOURCE_TAB = "データソース管理"
+MEMBERSHIP_METRICS_SHEET_ID = "1OFKvyQsydPmTqd9MwSMX53MXxG9ASfkFquyf4PV-M8E"
+MEMBERSHIP_DAILY_TAB = "日別会員数値"
+MEMBERSHIP_SUMMARY_TAB = "会員サマリー"
+MEMBERSHIP_SOURCE_TAB = "データソース管理"
 
 TAB_SPECS = [
     ("スキルプラス事業サマリー", 120, 23),
@@ -75,6 +79,11 @@ STATUS_FORMATS = {
     "停止": {"backgroundColor": {"red": 0.957, "green": 0.8, "blue": 0.8}},
 }
 WRITE_RETRY_SECONDS = (5, 10, 20, 40)
+PROTECTED_EDITOR_EMAILS = [
+    "kohara.kaito@team.addness.co.jp",
+    "gwsadmin@team.addness.co.jp",
+]
+PROTECTION_PREFIX = "KPIダッシュボード自動生成"
 
 
 def col_letter(col_num: int) -> str:
@@ -370,6 +379,45 @@ def load_booking_status(gc) -> Dict[str, str]:
     return result
 
 
+def load_membership_daily_metrics(gc) -> List[dict]:
+    spreadsheet = gc.open_by_key(MEMBERSHIP_METRICS_SHEET_ID)
+    rows = get_all_values_with_retry(spreadsheet.worksheet(MEMBERSHIP_DAILY_TAB))
+
+    metrics: List[dict] = []
+    for row in rows[1:]:
+        date = normalize_date(row[0] if len(row) > 0 else "")
+        if not date:
+            continue
+        metrics.append(
+            {
+                "date": date,
+                "member_count": parse_int(row[3] if len(row) > 3 else ""),
+                "mid_term_cancel_count": parse_int(row[4] if len(row) > 4 else ""),
+                "cooling_off_count": parse_int(row[2] if len(row) > 2 else ""),
+            }
+        )
+    return metrics
+
+
+def load_membership_status(gc) -> Dict[str, Dict[str, str]]:
+    spreadsheet = gc.open_by_key(MEMBERSHIP_METRICS_SHEET_ID)
+    rows = get_all_values_with_retry(spreadsheet.worksheet(MEMBERSHIP_SOURCE_TAB))
+
+    result: Dict[str, Dict[str, str]] = {}
+    for row in rows[1:]:
+        key = str(row[1]).strip() if len(row) > 1 else ""
+        if not key:
+            continue
+        result[key] = {
+            "ステータス": str(row[7]).strip() if len(row) > 7 else "",
+            "最終同期日": str(row[8]).strip().lstrip("'") if len(row) > 8 else "",
+            "更新数": str(row[9]).strip() if len(row) > 9 else "",
+            "エラー数": str(row[10]).strip() if len(row) > 10 else "",
+            "メモ": str(row[11]).strip() if len(row) > 11 else "",
+        }
+    return result
+
+
 def ensure_target_tabs(spreadsheet) -> Dict[str, object]:
     worksheets = {ws.title: ws for ws in spreadsheet.worksheets()}
 
@@ -578,6 +626,56 @@ def apply_status_cell_colors(spreadsheet, ws, rows: Sequence[Sequence[str]], sta
         )
 
 
+def apply_protections(spreadsheet, tabs) -> None:
+    protected_names = [title for title, _, _ in TAB_SPECS]
+    target_sheet_ids = {tabs[name].id for name in protected_names}
+    metadata = spreadsheet.fetch_sheet_metadata(
+        {
+            "includeGridData": False,
+            "fields": "sheets(properties.sheetId,protectedRanges(protectedRangeId,description,range(sheetId,startRowIndex,endRowIndex,startColumnIndex,endColumnIndex)))",
+        }
+    )
+
+    requests = []
+    existing_sheet_protection = set()
+    for sheet in metadata.get("sheets", []):
+        sheet_id = sheet.get("properties", {}).get("sheetId")
+        for protected_range in sheet.get("protectedRanges", []):
+            range_info = protected_range.get("range", {})
+            description = protected_range.get("description", "")
+            range_sheet_id = range_info.get("sheetId", sheet_id)
+            if range_sheet_id in target_sheet_ids:
+                has_row = any(key in range_info for key in ("startRowIndex", "endRowIndex"))
+                has_col = any(key in range_info for key in ("startColumnIndex", "endColumnIndex"))
+                if not has_row and not has_col:
+                    existing_sheet_protection.add(range_sheet_id)
+            if range_sheet_id in target_sheet_ids and str(description).startswith(PROTECTION_PREFIX):
+                requests.append({"deleteProtectedRange": {"protectedRangeId": protected_range["protectedRangeId"]}})
+
+    for name in protected_names:
+        if tabs[name].id in existing_sheet_protection:
+            continue
+        requests.append(
+            {
+                "addProtectedRange": {
+                    "protectedRange": {
+                        "range": {"sheetId": tabs[name].id},
+                        "description": f"{PROTECTION_PREFIX}: {name}",
+                        "warningOnly": False,
+                        "editors": {"users": PROTECTED_EDITOR_EMAILS},
+                    }
+                }
+            }
+        )
+
+    if requests:
+        batch_update_with_retry(
+            spreadsheet,
+            {"requests": requests},
+            "KPIダッシュボードの保護設定",
+        )
+
+
 def build_definition_master_rows() -> List[List[str]]:
     return [
         ["項目", "定義"],
@@ -642,8 +740,17 @@ def sync_master_definition_tab(gc) -> None:
     set_tab_color(ws, "#9E9E9E")
 
 
-def build_summary_rows(booking_status: Dict[str, str]) -> List[List[str]]:
+def build_summary_rows(
+    booking_status: Dict[str, str],
+    membership_status: Dict[str, Dict[str, str]],
+) -> List[List[str]]:
     booking_state = booking_status.get("ステータス", "接続中") or "接続中"
+    member_state = membership_status.get("会員数", {}).get("ステータス", "確認待ち") or "確認待ち"
+    member_note = membership_status.get("会員数", {}).get("メモ", "契約締結日から7日経過した会員の日次残高を使う")
+    mid_term_state = membership_status.get("中途解約数", {}).get("ステータス", "確認待ち") or "確認待ち"
+    mid_term_note = membership_status.get("中途解約数", {}).get("メモ", "お客様相談窓口_進捗管理シートの中途解約完了を日別件数へ集計する")
+    cooling_off_state = membership_status.get("クーリングオフ数", {}).get("ステータス", "確認待ち") or "確認待ち"
+    cooling_off_note = membership_status.get("クーリングオフ数", {}).get("メモ", "お客様相談窓口_進捗管理シートのクーリングオフ完了を日別件数へ集計する")
     rows = [[""] * 23 for _ in range(120)]
     visible_rows = [
         ["項目", "値", "正本シート", "状態", "メモ"],
@@ -660,9 +767,9 @@ def build_summary_rows(booking_status: Dict[str, str]) -> List[List[str]]:
         ["CPA", '=IF(OR(N(B11)=0,N(B5)=0),"",B11/B5)', "", "未接続", "広告費 / 集客数"],
         ["個別予約CPO", '=IF(OR(N(B11)=0,N(B7)=0),"",B11/B7)', "", "未接続", "広告費 / 個別予約数"],
         ["ROAS", '=IF(OR(N(B11)=0,N(B10)=0),"",B10/B11)', "", "未接続", "着金売上 / 広告費"],
-        ["会員数", '=IF(OR($B$2="",$B$3=""),"",IFERROR(INDEX(FILTER(\'日別数値\'!L:L,\'日別数値\'!A:A>=$B$2,\'日別数値\'!A:A<=$B$3,\'日別数値\'!L:L<>""),ROWS(FILTER(\'日別数値\'!L:L,\'日別数値\'!A:A>=$B$2,\'日別数値\'!A:A<=$B$3,\'日別数値\'!L:L<>""))),""))', "【アドネス株式会社】会員データ（加工） / 日別会員数値", "確認待ち", "契約締結日から7日経過した会員の日次残高を使う"],
-        ["中途解約数", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!M:M,"<>",\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)=0,"",SUMIFS(\'日別数値\'!M:M,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "【アドネス株式会社】会員データ（加工） / 日別会員数値", "確認待ち", "お客様相談窓口_進捗管理シートの中途解約完了を日別件数へ集計する"],
-        ["クーリングオフ数", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!N:N,"<>",\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)=0,"",SUMIFS(\'日別数値\'!N:N,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "【アドネス株式会社】会員データ（加工） / 日別会員数値", "確認待ち", "お客様相談窓口_進捗管理シートのクーリングオフ完了を日別件数へ集計する"],
+        ["会員数", '=IF(OR($B$2="",$B$3=""),"",IFERROR(INDEX(FILTER(\'日別数値\'!L:L,\'日別数値\'!A:A>=$B$2,\'日別数値\'!A:A<=$B$3,\'日別数値\'!L:L<>""),ROWS(FILTER(\'日別数値\'!L:L,\'日別数値\'!A:A>=$B$2,\'日別数値\'!A:A<=$B$3,\'日別数値\'!L:L<>""))),""))', "【アドネス株式会社】会員データ（加工） / 日別会員数値", member_state, member_note],
+        ["中途解約数", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!M:M,"<>",\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)=0,"",SUMIFS(\'日別数値\'!M:M,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "【アドネス株式会社】会員データ（加工） / 日別会員数値", mid_term_state, mid_term_note],
+        ["クーリングオフ数", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!N:N,"<>",\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)=0,"",SUMIFS(\'日別数値\'!N:N,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "【アドネス株式会社】会員データ（加工） / 日別会員数値", cooling_off_state, cooling_off_note],
     ]
     for row in visible_rows:
         if len(row) > 4 and "現行は botログ。将来は個別予約完了タグの通知ログへ切替候補" in str(row[4]):
@@ -689,11 +796,17 @@ def header_only_rows(headers: Sequence[str], min_rows: int) -> List[List[str]]:
     return rows
 
 
-def build_daily_rows(metrics: Sequence[dict], booking_metrics: Sequence[dict]) -> List[List[str]]:
+def build_daily_rows(
+    metrics: Sequence[dict],
+    booking_metrics: Sequence[dict],
+    membership_metrics: Sequence[dict],
+) -> List[List[str]]:
     email_map = {item["date"]: item for item in metrics}
     booking_map = {item["date"]: item for item in booking_metrics}
+    membership_map = {item["date"]: item for item in membership_metrics}
     booking_latest_date = max(booking_map.keys()) if booking_map else ""
-    all_dates = sorted(set(email_map.keys()) | set(booking_map.keys()))
+    membership_latest_date = max(membership_map.keys()) if membership_map else ""
+    all_dates = sorted(set(email_map.keys()) | set(booking_map.keys()) | set(membership_map.keys()))
 
     rows = [[
         "日付",
@@ -719,6 +832,19 @@ def build_daily_rows(metrics: Sequence[dict], booking_metrics: Sequence[dict]) -
             booking_count = 0
         else:
             booking_count = ""
+        if date in membership_map:
+            membership_item = membership_map[date]
+            member_count = membership_item["member_count"]
+            mid_term_cancel_count = membership_item["mid_term_cancel_count"]
+            cooling_off_count = membership_item["cooling_off_count"]
+        elif membership_latest_date and date <= membership_latest_date:
+            member_count = 0
+            mid_term_cancel_count = 0
+            cooling_off_count = 0
+        else:
+            member_count = ""
+            mid_term_cancel_count = ""
+            cooling_off_count = ""
         rows.append([
             date,
             email_item["count"],
@@ -731,22 +857,32 @@ def build_daily_rows(metrics: Sequence[dict], booking_metrics: Sequence[dict]) -
             "",
             "",
             "",
-            "",
-            "",
-            "",
+            member_count,
+            mid_term_cancel_count,
+            cooling_off_count,
         ])
     while len(rows) < 120:
         rows.append([""] * 14)
     return rows
 
 
-def build_data_source_rows(status: Dict[str, str], daily_row_count: int, booking_status: Dict[str, str], booking_daily_row_count: int) -> List[List[str]]:
+def build_data_source_rows(
+    status: Dict[str, str],
+    daily_row_count: int,
+    booking_status: Dict[str, str],
+    booking_daily_row_count: int,
+    membership_status: Dict[str, Dict[str, str]],
+    membership_daily_row_count: int,
+) -> List[List[str]]:
     updated_at = status.get("更新日時", "")
     booking_updated_at = booking_status.get("最終同期日") or booking_status.get("更新日時", "")
     booking_state = booking_status.get("ステータス", "未接続")
     booking_memo = booking_status.get("メモ", "現行は botログ。継続体制では Slack #個別予約通知 から作る 個別予約通知ログへ移行する")
     booking_updates = booking_status.get("更新数", str(booking_daily_row_count))
     booking_errors = booking_status.get("エラー数", "0")
+    membership_member = membership_status.get("会員数", {})
+    membership_mid_term = membership_status.get("中途解約数", {})
+    membership_cooling_off = membership_status.get("クーリングオフ数", {})
     rows = [
         ["KPIカラム", "グループ", "ソース元", "優先度", "スプレッドシートURL", "タブ名", "参照先列", "正規化 / 計算", "入力条件", "ステータス", "最終同期日", "更新数", "エラー数", "メモ"],
         ["集客数", "集客", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{EMAIL_METRICS_SHEET_ID}/edit","【アドネス株式会社】集客データ_メール集計（加工）")', "日別メール登録件数", "B列", "重複あり件数", "2025/01/01以降", "一部接続", updated_at, str(daily_row_count), "0", "現状はメールのみ。LINE未接続"],
@@ -759,9 +895,9 @@ def build_data_source_rows(status: Dict[str, str], daily_row_count: int, booking
         ["CPA", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "I列", "広告費 / 集客数", "広告費と集客数が入力済み", "未接続", "", "", "", "自動計算予定"],
         ["個別予約CPO", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "J列", "広告費 / 個別予約数", "広告費と個別予約数が入力済み", "未接続", "", "", "", "自動計算予定"],
         ["ROAS", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "K列", "着金売上 / 広告費", "着金売上と広告費が入力済み", "未接続", "", "", "", "自動計算予定"],
-        ["会員数", "会員", "収集データ候補", "1", "", "全面談合算 + お客様相談窓口_進捗管理シート", "契約締結日 / 入金前契約解除 / クーリングオフ / 中途解約", "契約締結日から7日経過した会員の日次残高", "会員イベントの定義確定後", "確認待ち", "", "", "", "会員データ（加工）の日別残高シートが未作成"],
-        ["中途解約数", "会員", "収集データ候補", "1", "", "お客様相談窓口_進捗管理シート", "管理用_20250125-中途解約 / 対応完了日", "日別件数", "中途解約日の集計ルール確定後", "確認待ち", "", "", "", "会員データ（加工）で日別件数へ集計する"],
-        ["クーリングオフ数", "会員", "収集データ候補", "1", "", "お客様相談窓口_進捗管理シート", "管理用_2025.1.25-クーオフ / 対応完了日", "日別件数", "クーリングオフ日の集計ルール確定後", "確認待ち", "", "", "", "お客様相談窓口_進捗管理シートの集計をそのまま使う"],
+        ["会員数", "会員", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{MEMBERSHIP_METRICS_SHEET_ID}/edit","【アドネス株式会社】会員データ（加工）")', MEMBERSHIP_DAILY_TAB, "D列", "契約締結日から7日経過した会員の日次残高", "2025/01/01以降", membership_member.get("ステータス", "確認待ち"), membership_member.get("最終同期日", ""), membership_member.get("更新数", str(membership_daily_row_count)), membership_member.get("エラー数", "0"), membership_member.get("メモ", "会員データ（加工）の日別会員数値を参照する")],
+        ["中途解約数", "会員", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{MEMBERSHIP_METRICS_SHEET_ID}/edit","【アドネス株式会社】会員データ（加工）")', MEMBERSHIP_DAILY_TAB, "E列", "日別件数", "2025/01/01以降", membership_mid_term.get("ステータス", "確認待ち"), membership_mid_term.get("最終同期日", ""), membership_mid_term.get("更新数", str(membership_daily_row_count)), membership_mid_term.get("エラー数", "0"), membership_mid_term.get("メモ", "会員データ（加工）の日別会員数値を参照する")],
+        ["クーリングオフ数", "会員", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{MEMBERSHIP_METRICS_SHEET_ID}/edit","【アドネス株式会社】会員データ（加工）")', MEMBERSHIP_DAILY_TAB, "C列", "日別件数", "2025/01/01以降", membership_cooling_off.get("ステータス", "確認待ち"), membership_cooling_off.get("最終同期日", ""), membership_cooling_off.get("更新数", str(membership_daily_row_count)), membership_cooling_off.get("エラー数", "0"), membership_cooling_off.get("メモ", "会員データ（加工）の日別会員数値を参照する")],
     ]
     while len(rows) < 30:
         rows.append([""] * 14)
@@ -781,8 +917,9 @@ def main() -> None:
     spreadsheet = gc.open_by_key(DASHBOARD_SHEET_ID)
     tabs = ensure_target_tabs(spreadsheet)
     booking_status = load_booking_status(gc)
+    membership_status = load_membership_status(gc)
 
-    summary_rows = build_summary_rows(booking_status)
+    summary_rows = build_summary_rows(booking_status, membership_status)
     write_rows(spreadsheet, tabs["スキルプラス事業サマリー"], summary_rows)
     apply_table_style(
         spreadsheet,
@@ -810,6 +947,24 @@ def main() -> None:
                 17,
                 1,
                 2,
+                {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}},
+                "userEnteredFormat.numberFormat",
+            ),
+            repeat_cell_request(
+                tabs["スキルプラス事業サマリー"].id,
+                1,
+                len(summary_rows),
+                9,
+                10,
+                {"numberFormat": {"type": "DATE", "pattern": "yyyy/mm/dd"}},
+                "userEnteredFormat.numberFormat",
+            ),
+            repeat_cell_request(
+                tabs["スキルプラス事業サマリー"].id,
+                1,
+                len(summary_rows),
+                10,
+                23,
                 {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}},
                 "userEnteredFormat.numberFormat",
             ),
@@ -865,7 +1020,8 @@ def main() -> None:
 
     daily_metrics = load_email_daily_metrics(gc)
     booking_metrics = load_booking_daily_metrics(gc)
-    daily_rows = build_daily_rows(daily_metrics, booking_metrics)
+    membership_metrics = load_membership_daily_metrics(gc)
+    daily_rows = build_daily_rows(daily_metrics, booking_metrics, membership_metrics)
     write_rows(spreadsheet, tabs["日別数値"], daily_rows)
     apply_table_style(
         spreadsheet,
@@ -914,6 +1070,8 @@ def main() -> None:
         max(len(daily_metrics), 0),
         booking_status,
         max(len(booking_metrics), 0),
+        membership_status,
+        max(len(membership_metrics), 0),
     )
     write_rows(spreadsheet, tabs["データソース管理"], data_source_rows)
     apply_table_style(
@@ -932,6 +1090,8 @@ def main() -> None:
 
     for title, _rows, _cols in TAB_SPECS:
         set_tab_color(tabs[title], TAB_COLORS[title])
+
+    apply_protections(spreadsheet, tabs)
 
     print("マスタデータ / 定義一覧 と 【アドネス株式会社】KPIダッシュボード を更新しました。")
 
