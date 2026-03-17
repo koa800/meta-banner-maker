@@ -70,6 +70,7 @@ COLUMNS = [
     "LINE名",
     "LSTEPメンバーID",
     "Lステップアカウント名",
+    "Lステップリンク",
     "メールアドレス",
     "電話番号",
 ]
@@ -116,6 +117,7 @@ class NotificationRecord:
             self.line_name,
             self.member_id,
             self.account_name,
+            self.notification_url,
             self.email,
             self.phone,
         ]
@@ -388,27 +390,30 @@ def load_existing_rows(ws) -> Dict[str, NotificationRecord]:
     values = ws.get_all_values()
     existing: Dict[str, NotificationRecord] = {}
     header = values[0] if values else []
-    is_old_format = len(header) >= 8 and str(header[4]).strip() == "予約導線種別"
-    has_notification_link = len(header) >= 7 and str(header[4]).strip() == "通知リンク"
+    header_index = {str(name).strip(): idx for idx, name in enumerate(header)}
+    tagged_at_idx = header_index.get("予約イベント日時", 0)
+    line_name_idx = header_index.get("LINE名", 1)
+    member_id_idx = header_index.get("LSTEPメンバーID", 2)
+    account_name_idx = header_index.get("Lステップアカウント名", 3)
+    notification_url_idx = header_index.get("Lステップリンク")
+    email_idx = header_index.get("メールアドレス")
+    phone_idx = header_index.get("電話番号")
     for row in values[1:]:
-        row = row + [""] * max(0, 8 - len(row))
-        if is_old_format:
-            notification_url = str(row[5]).strip()
-            email = str(row[6]).strip()
-            phone = str(row[7]).strip()
-        elif has_notification_link:
-            notification_url = str(row[4]).strip()
-            email = str(row[5]).strip()
-            phone = str(row[6]).strip()
+        row = row + [""] * max(0, len(COLUMNS) - len(row))
+        notification_url = str(row[notification_url_idx]).strip() if notification_url_idx is not None and notification_url_idx < len(row) else ""
+        if email_idx is None:
+            email = str(row[4]).strip() if len(row) > 4 else ""
         else:
-            notification_url = ""
-            email = str(row[4]).strip()
-            phone = str(row[5]).strip()
+            email = str(row[email_idx]).strip() if email_idx < len(row) else ""
+        if phone_idx is None:
+            phone = str(row[5]).strip() if len(row) > 5 else ""
+        else:
+            phone = str(row[phone_idx]).strip() if phone_idx < len(row) else ""
         record = NotificationRecord(
-            tagged_at=normalize_tagged_at(row[0]),
-            line_name=str(row[1]).strip(),
-            member_id=str(row[2]).strip(),
-            account_name=str(row[3]).strip(),
+            tagged_at=normalize_tagged_at(row[tagged_at_idx] if tagged_at_idx < len(row) else ""),
+            line_name=str(row[line_name_idx]).strip() if line_name_idx < len(row) else "",
+            member_id=str(row[member_id_idx]).strip() if member_id_idx < len(row) else "",
+            account_name=str(row[account_name_idx]).strip() if account_name_idx < len(row) else "",
             notification_url=notification_url,
             slack_ts="",
             email=email,
@@ -847,7 +852,7 @@ def main() -> None:
     rule_rows = build_rule_rows()
     write_simple_rows(tabs[SOURCE_MANAGEMENT_TAB_NAME], source_rows, 14)
     write_simple_rows(tabs[RULE_TAB_NAME], rule_rows, 3)
-    apply_table_style(spreadsheet, ws, len(rows), len(COLUMNS), [180, 180, 150, 200, 240, 180], wrap="CLIP")
+    apply_table_style(spreadsheet, ws, len(rows), len(COLUMNS), [180, 180, 150, 200, 260, 220, 180], wrap="CLIP")
     apply_table_style(spreadsheet, tabs[SOURCE_MANAGEMENT_TAB_NAME], len(source_rows), 14, [180, 110, 140, 70, 220, 160, 120, 280, 140, 90, 140, 90, 80, 280], wrap="CLIP")
     apply_table_style(spreadsheet, tabs[RULE_TAB_NAME], len(rule_rows), 3, [150, 420, 360], wrap="WRAP")
     for tab in tabs.values():

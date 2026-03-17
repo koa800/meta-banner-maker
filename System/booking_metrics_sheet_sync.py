@@ -565,11 +565,11 @@ def load_notification_events() -> List[NotificationEvent]:
     events: List[NotificationEvent] = []
     values = ws.get_all_values()
     for raw in values[1:]:
-        row = raw + [""] * max(0, 6 - len(raw))
+        row = raw + [""] * max(0, 7 - len(raw))
         event_at = normalize_datetime(row[0])
         if not event_at:
             continue
-        if not any(str(cell).strip() for cell in row[:6]):
+        if not any(str(cell).strip() for cell in row[:7]):
             continue
         events.append(
             NotificationEvent(
@@ -577,8 +577,8 @@ def load_notification_events() -> List[NotificationEvent]:
                 line_name=str(row[1]).strip(),
                 member_id=str(row[2]).strip(),
                 account_name=str(row[3]).strip(),
-                email=str(row[4]).strip(),
-                phone=str(row[5]).strip(),
+                email=str(row[5]).strip(),
+                phone=str(row[6]).strip(),
             )
         )
     return events
@@ -816,7 +816,7 @@ def build_source_rows(stats: Dict[str, object], notification_stats: Dict[str, st
             "1",
             f"https://docs.google.com/spreadsheets/d/{COLLECTION_SHEET_ID}/edit",
             COLLECTION_NOTIFICATION_LOG_TAB_NAME,
-            "A〜F列",
+            "A〜G列",
             "Slack通知と過去の個別予約データを 1イベント1行で統合",
             "継続取得の正本",
             notification_stats["ステータス"],
