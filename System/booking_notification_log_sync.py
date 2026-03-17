@@ -15,6 +15,7 @@ import html
 import json
 import os
 import re
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -23,7 +24,10 @@ from urllib.parse import parse_qs, urlparse
 
 from gspread.exceptions import APIError
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "scripts"))
+
 from sheets_manager import get_client
+from lstep_member_contact_live import lookup_contact
 from mac_mini.agent_orchestrator.slack_reader import (
     fetch_channel_messages,
     find_channel_by_name,
@@ -63,6 +67,7 @@ PROTECTED_EDITOR_EMAILS = [
 ]
 PROTECTION_PREFIX = "個別面談データ（収集）自動生成"
 WRITE_RETRY_SECONDS = (5, 10, 20, 40)
+LIVE_ENRICH_LIMIT = int(os.environ.get("BOOKING_NOTIFICATION_LIVE_ENRICH_LIMIT", "20"))
 
 COLUMNS = [
     "予約イベント日時",
@@ -132,6 +137,15 @@ class NotificationRecord:
     @property
     def legacy_key(self) -> str:
         return self.dedupe_key
+
+
+@dataclass
+class LiveEnrichSummary:
+    status: str
+    checked_at: str
+    updated_count: int
+    error_count: int
+    memo: str
 
 
 def col_letter(col_num: int) -> str:
@@ -528,6 +542,103 @@ def merge_records(existing: Dict[str, NotificationRecord], parsed: Iterable[Noti
     )
 
 
+def enrich_records_with_live_contacts(records: List[NotificationRecord]) -> tuple[List[NotificationRecord], LiveEnrichSummary]:
+    checked_at = datetime.now().strftime("%Y/%m/%d %H:%M")
+    if LIVE_ENRICH_LIMIT <= 0:
+        return records, LiveEnrichSummary(
+            status="未同期",
+            checked_at=checked_at,
+            updated_count=0,
+            error_count=0,
+            memo="live補完は停止中です",
+        )
+
+    def sort_key(record: NotificationRecord) -> tuple[str, str]:
+        return (record.tagged_at or "", record.slack_ts or "")
+
+    candidates = [
+        record
+        for record in sorted(records, key=sort_key, reverse=True)
+        if record.notification_url and (not record.email or not record.phone)
+    ][:LIVE_ENRICH_LIMIT]
+    if not candidates:
+        return records, LiveEnrichSummary(
+            status="正常",
+            checked_at=checked_at,
+            updated_count=0,
+            error_count=0,
+            memo="補完対象なし",
+        )
+
+    updates: Dict[str, NotificationRecord] = {}
+    error_count = 0
+    checked_count = 0
+    auth_blocked_message = ""
+    for record in candidates:
+        try:
+            result = lookup_contact(record.notification_url, expected_member_id=record.member_id)
+        except Exception as exc:
+            print(f"Lステップ live 補完に失敗しました: {record.notification_url} / {exc}")
+            error_count += 1
+            continue
+        checked_count += 1
+        if result.status != "ok":
+            print(f"Lステップ live 補完をスキップしました: {result.message}")
+            if result.status == "login_required":
+                auth_blocked_message = result.message
+                break
+            if result.status in {"cdp_unavailable", "member_mismatch"}:
+                error_count += 1
+            continue
+        updated = NotificationRecord(
+            tagged_at=record.tagged_at,
+            line_name=record.line_name,
+            member_id=record.member_id,
+            account_name=record.account_name,
+            notification_url=record.notification_url,
+            slack_ts=record.slack_ts,
+            email=result.email or record.email,
+            phone=result.phone or record.phone,
+        )
+        updates[record.dedupe_key] = updated
+
+    if not updates:
+        if auth_blocked_message:
+            return records, LiveEnrichSummary(
+                status="未同期",
+                checked_at=checked_at,
+                updated_count=0,
+                error_count=max(error_count, 1),
+                memo=auth_blocked_message,
+            )
+        if error_count > 0 and checked_count == 0:
+            return records, LiveEnrichSummary(
+                status="停止",
+                checked_at=checked_at,
+                updated_count=0,
+                error_count=error_count,
+                memo="live補完でエラーが発生",
+            )
+        return records, LiveEnrichSummary(
+            status="正常",
+            checked_at=checked_at,
+            updated_count=0,
+            error_count=error_count,
+            memo=f"補完対象 {len(candidates):,}件 / 補完なし",
+        )
+
+    merged_records: List[NotificationRecord] = []
+    for record in records:
+        merged_records.append(updates.get(record.dedupe_key, record))
+    return merged_records, LiveEnrichSummary(
+        status="正常",
+        checked_at=checked_at,
+        updated_count=len(updates),
+        error_count=error_count,
+        memo=f"補完対象 {len(candidates):,}件 / 補完成功 {len(updates):,}件",
+    )
+
+
 def write_rows(ws, rows: List[List[str]]) -> None:
     end_cell = f"{col_letter(len(COLUMNS))}{len(rows)}"
     target_rows = max(len(rows), 1)
@@ -664,7 +775,11 @@ def apply_protection(spreadsheet, ws) -> None:
         batch_update_with_retry(spreadsheet, {"requests": requests}, f"{ws.title} の保護設定")
 
 
-def build_source_management_rows(imported_count: int, updated_at: str) -> List[List[str]]:
+def build_source_management_rows(
+    imported_count: int,
+    updated_at: str,
+    live_summary: LiveEnrichSummary,
+) -> List[List[str]]:
     return [
         ["対象タブ", "グループ", "ソース元", "優先度", "スプレッドシートURL", "タブ名", "参照先列", "正規化 / 計算", "入力条件", "ステータス", "最終同期日", "更新数", "エラー数", "メモ"],
         [
@@ -682,6 +797,22 @@ def build_source_management_rows(imported_count: int, updated_at: str) -> List[L
             f"{imported_count:,}",
             "0",
             "収集データの正本。過去データは初回移行時のみ一度だけ追加し、継続取得の正本にはしない",
+        ],
+        [
+            TARGET_TAB_NAME,
+            "個別予約",
+            "Lステップ live 補完",
+            "2",
+            "",
+            "会員詳細",
+            "E:G列",
+            "Lステップリンクから会員詳細を開き、メールアドレスと電話番号を補完する",
+            "Lステップの認証が有効であること",
+            live_summary.status,
+            f"'{live_summary.checked_at}" if live_summary.checked_at else "",
+            f"{live_summary.updated_count:,}",
+            f"{live_summary.error_count:,}",
+            live_summary.memo,
         ],
     ]
 
@@ -784,6 +915,7 @@ def main() -> None:
     legacy_records = load_legacy_records()
     slack_records = fetch_parsed_records(args.channel_name, args.limit, oldest=oldest)
     merged = merge_records(existing, [*legacy_records, *slack_records])
+    merged, live_summary = enrich_records_with_live_contacts(merged)
 
     if args.dry_run:
         print(
@@ -798,11 +930,15 @@ def main() -> None:
 
     rows = build_rows(merged)
     write_rows(ws, rows)
-    source_rows = build_source_management_rows(len(merged), datetime.now().strftime("%Y/%m/%d %H:%M"))
+    source_rows = build_source_management_rows(
+        len(merged),
+        datetime.now().strftime("%Y/%m/%d %H:%M"),
+        live_summary,
+    )
     rule_rows = build_rule_rows()
     write_simple_rows(tabs[SOURCE_MANAGEMENT_TAB_NAME], source_rows, 14)
     write_simple_rows(tabs[RULE_TAB_NAME], rule_rows, 3)
-    apply_table_style(spreadsheet, ws, len(rows), len(COLUMNS), [180, 180, 150, 200, 260, 220, 180], wrap="CLIP")
+    apply_table_style(spreadsheet, ws, len(rows), len(COLUMNS), [180, 180, 150, 200, 320, 240, 180], wrap="CLIP")
     apply_table_style(spreadsheet, tabs[SOURCE_MANAGEMENT_TAB_NAME], len(source_rows), 14, [180, 110, 140, 70, 220, 160, 120, 280, 140, 90, 140, 90, 80, 280], wrap="CLIP")
     apply_table_style(spreadsheet, tabs[RULE_TAB_NAME], len(rule_rows), 3, [150, 420, 360], wrap="WRAP")
     for tab in tabs.values():

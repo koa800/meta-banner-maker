@@ -55,6 +55,15 @@ end tell
 
 
 def try_click_checkbox(page) -> bool:
+    for frame in page.frames:
+        if "recaptcha/api2/anchor" not in (frame.url or ""):
+            continue
+        try:
+            frame.locator("#recaptcha-anchor").click(timeout=5000)
+            return True
+        except Exception:
+            pass
+
     frames = page.locator("iframe")
     count = frames.count()
     for i in range(count):
@@ -135,8 +144,24 @@ def ensure_login(target_url: str) -> int:
             time.sleep(1)
             clicked = try_click_checkbox(page)
             print(f"CAPTCHA_CLICK_ATTEMPTED={clicked}", flush=True)
+            time.sleep(2)
+
+            login_button = page.get_by_role("button", name="ログイン")
+            for _ in range(5):
+                if login_button.count() and login_button.first.is_enabled():
+                    break
+                time.sleep(1)
 
             for _ in range(12):
+                if login_button.count() and login_button.first.is_enabled():
+                    login_button.first.click()
+                    time.sleep(5)
+                    page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
+                    time.sleep(2)
+                    if is_logged_in(page):
+                        print("LOGIN_SUCCESS", flush=True)
+                        print(page.url, flush=True)
+                        return 0
                 buttons = page.locator("button")
                 for i in range(buttons.count()):
                     text = (buttons.nth(i).inner_text() or "").strip()
