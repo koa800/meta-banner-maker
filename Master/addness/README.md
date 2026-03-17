@@ -40,7 +40,7 @@
 - UTAGE: `9.95 / 10`
 - Mailchimp: `9.4 / 10`
 - short.io: `9.6 / 10`
-- Zapier: `9.3 / 10`
+- Zapier: `9.5 / 10`
 
 ## live 開始前チェック
 
@@ -68,6 +68,11 @@
     - rename 後は assets 一覧の row 名へ即反映される
     - 一方で `Zap details > Folder = 甲原` は current の row `Location` に即反映されなかった
     - したがって `Folder = 甲原` は Addness の運用ルールとして維持しつつ、current UI では exact-confirmed ではない
+  - 2026-03-17 の current では `甲原` フォルダ直下 `Create Zap` からの新規 draft 作成も live で再確認した
+    - folder URL: `https://zapier.com/app/assets/zaps/folders/019cdd75-b612-ec46-7e5b-bd8a9015a667`
+    - `Create Zap` -> `Webhooks by Zapier` -> `Catch Hook` まで進めると assets 一覧に新規 draft が persisted する
+    - assets 一覧 row の `Location = 甲原` を確認できた
+    - つまり current では `Zap details > Folder` の即時反映は不安定でも、`甲原` フォルダ画面から作れば `Location = 甲原` を exact に満たせる
 - 2026-03-17 の current では、UTAGE と Zapier は raw fallback で `ALREADY_LOGGED_IN_RAW` まで確認できた
 - UTAGE は raw fallback で
   - `商品管理`
