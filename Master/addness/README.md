@@ -37,7 +37,7 @@
 ## 最新の厳しめ採点
 
 - Lステップ: `9.8 / 10`
-- UTAGE: `9.95 / 10`
+- UTAGE: `9.9 / 10`
 - Mailchimp: `9.4 / 10`
 - short.io: `9.6 / 10`
 - Zapier: `9.5 / 10`
@@ -475,7 +475,7 @@
 | Mailchimp | tag / saved segment | saved segment の create / delete、tag-search、search-members、safe exploratory member で tag 1件 add -> rollback 済み | UI 側の tag 1件 create -> rollback |  
 | Mailchimp | report | representative 読解済み | actual case を増やす |
 | short.io | short link / create / resolve / update / delete / stats / sheet sync | live 実施済み | 実案件 end-to-end を増やす |
-| Zapier | representative relay 読解 | editor / step 読解済み、`Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap` と `Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Webhooks by Zapier > POST -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap` まで live 完了、cleanup も確認済み | representative family を増やす |
+| Zapier | representative relay 読解 | editor / step 読解済み、`Assets > Zaps > 甲原 > Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap` と `Assets > Zaps > 甲原 > Create Zap -> Trigger > Webhooks by Zapier > Catch Hook -> Action > Webhooks by Zapier > POST -> Action > Mailchimp > Add/Update Subscriber -> Test -> Delete Zap` まで live 完了、cleanup も確認済み | representative family を増やす |
 
 ### current live blocker
 

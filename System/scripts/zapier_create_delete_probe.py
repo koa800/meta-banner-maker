@@ -369,18 +369,42 @@ async def _choose_webhook_trigger(page) -> None:
     await page.wait_for_timeout(1500)
 
     webhook_selected = False
-    webhook_candidates = [
-        page.get_by_text("Webhooks by Zapier", exact=False).first,
-        page.get_by_text("Webhooks", exact=False).first,
+    webhook_candidate_groups = [
+        [
+            page.get_by_role("option", name="Webhooks by Zapier").first,
+            page.get_by_role("button", name="Webhooks by Zapier").first,
+            page.get_by_text("Webhooks by Zapier", exact=False).first,
+            page.get_by_text("Webhooks", exact=False).first,
+        ],
+        [
+            page.get_by_role("option", name="Webhooks").first,
+            page.get_by_role("button", name="Webhooks").first,
+            page.get_by_text("Webhooks", exact=False).first,
+        ],
     ]
-    for locator in webhook_candidates:
-        try:
-            if await locator.is_visible(timeout=1200):
-                await locator.click(timeout=5000)
-                webhook_selected = True
-                break
-        except Exception:
-            continue
+    for candidate_group in webhook_candidate_groups:
+        for locator in candidate_group:
+            try:
+                if await locator.is_visible(timeout=1200):
+                    await locator.click(timeout=5000)
+                    webhook_selected = True
+                    break
+            except Exception:
+                continue
+        if webhook_selected:
+            break
+        search_refilled = await _fill_first_visible(
+            page,
+            [
+                "input[placeholder*='Search apps']",
+                "input[aria-label*='Search apps']",
+                "input[type='search']",
+                "input[type='text']",
+            ],
+            "Webhooks",
+        )
+        if search_refilled:
+            await page.wait_for_timeout(1200)
     if not webhook_selected:
         raise RuntimeError("Webhooks by Zapier を選べませんでした")
 
