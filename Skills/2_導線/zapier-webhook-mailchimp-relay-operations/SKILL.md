@@ -117,6 +117,13 @@ Zapier は、あるシステムで起きた event を別のシステムへ渡し
 
 最初から `Paths / Filter / Formatter / Code` を足さない。まず 2 step で event と downstream の意味が閉じるかを見る。
 
+## cleanup の current 注意点
+
+- current の Zapier assets には既存の `Untitled Zap` draft が複数残っていることがある
+- そのため exploratory relay の cleanup を `Untitled Zap` 一括削除に寄せるのは危険
+- live probe では、作成直後に unique 名へ変えるか、`last modified` と `href` で対象 draft を特定してから削除する
+- 対象 draft を特定できない時は `Delete Zap` で無理に cleanup せず stop する
+
 ## 最小 live change
 
 既存 current relay を触る時は、最初の 1 回を `1 field だけ変える` に制限する。

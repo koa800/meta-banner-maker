@@ -88,6 +88,16 @@
 - exact に読めているもの
   - representative な `ページ編集` の構造
   - `商品 -> detail -> action -> bundle` の接続
+  - `会員サイト -> バンドルコース -> コース -> レッスン` の create 入口
+    - `バンドルコース一覧 > 追加`
+      - route: `/site/{site_id}/bundle/create`
+      -主要ラベル: `バンドルコース名 必須` `追加するコース`
+    - `コース一覧 > 追加`
+      - route: `/site/{site_id}/course/create`
+      -主要ラベル: `コース名 必須` `管理名称` `種類` `リンク先URL 必須`
+    - `レッスン一覧 > 追加`
+      - route: `/site/{site_id}/course/{course_id}/lesson/create`
+      -主要ラベル: `グループ 必須` `レッスン名 必須` `種類 必須` `コンテンツ` `ステータス` `コメント機能` `受講対象者` `開放日(開始日)` `開放前の表示`
   - `商品一覧 row action`
     - `開く`
     - `編集`
@@ -164,6 +174,18 @@
     - current の probe は `名称` も受ける selector に直して `create -> delete` を再確認済み
     - `ページ一覧` の actual URL は created row action から取る
     - current では `row_link` の page id と `編集` route の page id が一致しないことがある
+  - `python3 System/scripts/utage_bundle_create_delete_probe.py`
+    - `バンドルコース一覧 > 追加` で `create -> delete` を再確認済み
+    - 必須は `バンドルコース名` と `追加するコース` の最小選択
+    - current の probe では `before_count = 0` `after_create_count = 1` `after_delete_count = 0`
+  - `python3 System/scripts/utage_course_create_delete_probe.py`
+    - `コース一覧 > 追加` で `create -> delete` を再確認済み
+    - 必須は `コース名` `管理名称` `リンク先URL` の最小入力
+    - current の probe では `before_count = 0` `after_create_count = 1` `after_delete_count = 0`
+  - `python3 System/scripts/utage_lesson_create_delete_probe.py`
+    - `レッスン一覧 > 追加` で `create -> delete` を再確認済み
+    - 必須は `グループ` `レッスン名` `コンテンツ` の最小入力
+    - current の probe では save 後に一覧へ 1 件出ることを確認し、その後 row delete で `0件` に戻ることを再確認済み
     - `create_url` に留まったまま `page_row_link` が出ない時は、まず `名称` の validation を疑う
     - temporary funnel `delete` で rollback
     - current 実績

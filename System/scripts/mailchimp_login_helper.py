@@ -110,6 +110,7 @@ def try_complete_tfa(page) -> bool:
     if "/login/verify/" not in page.url:
         return False
 
+    sent_at = datetime.now()
     click_first(
         page,
         [
@@ -120,7 +121,13 @@ def try_complete_tfa(page) -> bool:
     )
     page.wait_for_timeout(2500)
 
-    code_item = latest_mailchimp_code(max_days=7, max_age_minutes=30)
+    code_item = wait_for_mailchimp_code(
+        max_days=7,
+        max_age_minutes=10080,
+        not_before=sent_at - timedelta(minutes=1),
+        timeout_seconds=90,
+        poll_interval_seconds=5,
+    )
     if code_item is None:
         return False
 
