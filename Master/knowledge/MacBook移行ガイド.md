@@ -44,7 +44,7 @@ Mac Mini と Render は継続稼働するので、停止前提の作業は不要
 | `System/data/ai_router/batch_index.json` | batch queue 正本 |
 | `System/data/ai_router/skill_candidate_index.json` | skill 候補正本 |
 | `System/data/ai_router/handoffs/` | per-work handoff 正本 |
-| `.ai_handoff.md` | current work の mirror |
+| `System/data/ai_router/current_work.md` | current work の mirror |
 | `Master/output/session_aliases.json` | session 別名 |
 | `Master/output/session_restore_index.json` | session snapshot 要約 |
 
@@ -167,7 +167,7 @@ System/scripts/macbook_post_migration_check.sh
 System/scripts/ai restore <別名>
 ```
 
-6. もし home 配下や repo 状態の移行漏れがあれば、`System/data/migration_backup_*` の退避物で補う
+6. もし home 配下や repo 状態の移行漏れがあれば、`System/archive/migration_backups/*` の退避物で補う
 
 `移行アシスタント` で十分に移った場合は、以下の手動復元は不要。
 以降の節は、`移行アシスタントで不足した時の保険` として使う。

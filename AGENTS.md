@@ -601,7 +601,7 @@ ai                             # → デフォルトでCodex起動
 - `ai doctor` は work / batch / skill candidate index、post-commit、`~/.codex/config.toml`、latest session verify まで確認する
 - 通常の継続単位は `session` ではなく `current work` として扱う
 - `current work` の正本は `System/data/ai_router/work_index.json` と `System/data/ai_router/handoffs/<work_id>.md`
-- `.ai_handoff.md` は `current work` の mirror。案件全体の正本としては扱わない
+- `System/data/ai_router/current_work.md` は `current work` の mirror。案件全体の正本としては扱わない
 - batch queue の正本は `System/data/ai_router/batch_index.json`
 - skill 候補の正本は `System/data/ai_router/skill_candidate_index.json`
 - 別名の正本は `Master/output/session_aliases.json`、セッション要約の正本は `Master/output/session_restore_index.json` に置く
@@ -616,9 +616,9 @@ ai                             # → デフォルトでCodex起動
 
 ### セッション終了時の引き継ぎルール（必須）
 
-**セッションを終了する前に、必ず `.ai_handoff.md` を更新する。これは `current work` の mirror であり、終了後に per-work handoff へ同期される。**
+**セッションを終了する前に、必ず `System/data/ai_router/current_work.md` を更新する。これは `current work` の mirror であり、終了後に per-work handoff へ同期される。**
 
-**長いセッションで会話が重くなり始めた時も、終了を待たずに同じ `.ai_handoff.md` を更新する。`まとめますか？` と確認してから動かない。圧縮と同期は自動でやる。**
+**長いセッションで会話が重くなり始めた時も、終了を待たずに同じ `System/data/ai_router/current_work.md` を更新する。`まとめますか？` と確認してから動かない。圧縮と同期は自動でやる。**
 
 引き継ぎメモには以下を必ず含める:
 
@@ -652,7 +652,7 @@ ai                             # → デフォルトでCodex起動
 - 次にやるべきこと、注意点、前提条件
 ```
 
-**なぜこれが必須か:** 次のツール（Codex/Claude Code）は別プロセスで起動する。セッション内の会話履歴は引き継がれない。仕事の正本は `System/data/ai_router/handoffs/<work_id>.md` に保持し、`.ai_handoff.md` はその時点の current work を外から見える形で mirror する。
+**なぜこれが必須か:** 次のツール（Codex/Claude Code）は別プロセスで起動する。セッション内の会話履歴は引き継がれない。仕事の正本は `System/data/ai_router/handoffs/<work_id>.md` に保持し、`System/data/ai_router/current_work.md` はその時点の current work を外から見える形で mirror する。
 
 ### 長セッション時の自動コンテキスト圧縮ルール（必須）
 
@@ -668,18 +668,18 @@ ai                             # → デフォルトでCodex起動
 
 圧縮するときのルール:
 
-- `.ai_handoff.md` を上書きして、時系列ではなく「current work の最新状態」に書き換える
+- `System/data/ai_router/current_work.md` を上書きして、時系列ではなく「current work の最新状態」に書き換える
 - 残すのは `目的 / 確定事項 / 完了 / 未完了 / 判断と理由 / 参照先 / 変更したファイル / 次の担当へ` だけ
 - 事実は `確定 / 強い推定 / 仮説` を混ぜずに書く
 - 後続判断を変えない雑談、重複説明、生ログ、長い試行錯誤は残さない
 - 却下案は、同じ誤判断の再発防止に必要なものだけ、却下理由を 1-2 行で残す
 - パス、URL、ID は再開に必要な最小限だけ残す
 - 正本 handoff は `System/data/ai_router/handoffs/<work_id>.md` 側へ同期される前提で書く
-- session load が `medium` 以上で終了した後は、次回起動前に handoff compactor が自動実行される。そこで `.ai_handoff.md` の digest が変わると pending は自動解除され、compactor で解消できなかった時だけ追加の圧縮指示が prompt に残る
+- session load が `medium` 以上で終了した後は、次回起動前に handoff compactor が自動実行される。そこで `System/data/ai_router/current_work.md` の digest が変わると pending は自動解除され、compactor で解消できなかった時だけ追加の圧縮指示が prompt に残る
 
 圧縮後の運用:
 
-- 以後の作業は、古い会話全文ではなく `current work` の handoff 正本と最新の `.ai_handoff.md` mirror を基準に進める
+- 以後の作業は、古い会話全文ではなく `current work` の handoff 正本と最新の `System/data/ai_router/current_work.md` mirror を基準に進める
 - Codex と Claude Code を切り替える前にも、同じ mirror を最新化してから渡す
 - 会話では 3 行以内で「何を圧縮したか」「次に何をするか」だけを短く共有する
 - セッション終了時は、途中圧縮済みでも必ず最後にもう一度更新して終わる

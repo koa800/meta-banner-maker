@@ -63,8 +63,9 @@ resolve_command_path() {
 PROJECT_DIR="${AI_PROJECT_DIR:-$PROJECT_DIR_DEFAULT}"
 CODEX_CMD="$(resolve_command_path "${AI_CODEX_CMD:-}" "codex" "$HOME/.npm-global/bin/codex")"
 CLAUDE_CMD="$(resolve_command_path "${AI_CLAUDE_CMD:-}" "claude" "$HOME/.local/bin/claude")"
-ROOT_HANDOFF_FILE="$PROJECT_DIR/.ai_handoff.md"
-LEGACY_HANDOFF_FILE="$PROJECT_DIR/Master/output/ai_handoff.md"
+CURRENT_WORK_MIRROR_FILE="$PROJECT_DIR/System/data/ai_router/current_work.md"
+LEGACY_ROOT_HANDOFF_FILE="$PROJECT_DIR/.ai_handoff.md"
+LEGACY_OUTPUT_HANDOFF_FILE="$PROJECT_DIR/Master/output/ai_handoff.md"
 STATE_FILE="$PROJECT_DIR/System/data/ai_router/state.json"
 LEGACY_STATE_FILE="$HOME/.ai_state.json"
 WORK_STATE_HELPER="$PROJECT_DIR/System/scripts/ai_work_state.py"
@@ -206,7 +207,8 @@ doctor_runtime() {
     doctor_check_path "batch_index" "$PROJECT_DIR/System/data/ai_router/batch_index.json" file 1
     doctor_check_path "skill_candidate_index" "$PROJECT_DIR/System/data/ai_router/skill_candidate_index.json" file 1
     doctor_check_path "handoff_dir" "$PROJECT_DIR/System/data/ai_router/handoffs" dir 1
-    doctor_check_path "root_handoff" "$ROOT_HANDOFF_FILE" file 0
+    doctor_check_path "current_work_mirror" "$CURRENT_WORK_MIRROR_FILE" file 0
+    doctor_check_path "legacy_root_handoff" "$LEGACY_ROOT_HANDOFF_FILE" file 0
     doctor_check_path "session_aliases" "$SESSION_ALIAS_FILE" file 1
     doctor_check_path "session_index" "$SESSION_INDEX_FILE" file 1
     doctor_check_path "post_commit_hook" "$PROJECT_DIR/.git/hooks/post-commit" file 1
@@ -274,12 +276,14 @@ set_current_tool() {
 }
 
 get_handoff_file() {
-    if [ -f "$ROOT_HANDOFF_FILE" ]; then
-        echo "$ROOT_HANDOFF_FILE"
-    elif [ -f "$LEGACY_HANDOFF_FILE" ]; then
-        echo "$LEGACY_HANDOFF_FILE"
+    if [ -f "$CURRENT_WORK_MIRROR_FILE" ]; then
+        echo "$CURRENT_WORK_MIRROR_FILE"
+    elif [ -f "$LEGACY_ROOT_HANDOFF_FILE" ]; then
+        echo "$LEGACY_ROOT_HANDOFF_FILE"
+    elif [ -f "$LEGACY_OUTPUT_HANDOFF_FILE" ]; then
+        echo "$LEGACY_OUTPUT_HANDOFF_FILE"
     else
-        echo "$ROOT_HANDOFF_FILE"
+        echo "$CURRENT_WORK_MIRROR_FILE"
     fi
 }
 
@@ -1758,7 +1762,7 @@ load = record.get("session_load") or {}
 lines = []
 if load.get("should_compact"):
     lines.append("この案件は長セッション化しているため、古い会話全文ではなく current work handoff を正本として続けてください。")
-    lines.append("- 区切りごとに `.ai_handoff.md` を更新し、圧縮後の状態だけを残す")
+    lines.append("- 区切りごとに `System/data/ai_router/current_work.md` を更新し、圧縮後の状態だけを残す")
 if mode == "fork":
     lines.append("今回は fork 復元なので、前セッションの詳細を引きずらず current work の最新状態から再構成してください。")
 if mode == "rehydrate":
@@ -2097,7 +2101,7 @@ PY
 - 状態: pending
 - 理由: ${compaction_summary:-前回セッションが長く、current work handoff を再圧縮する必要があります}
 - 要求時刻: ${compaction_requested_at:-不明}
-- 方針: 古い会話全文ではなく \`.ai_handoff.md\` と current work handoff を最新状態だけに再圧縮してから続ける
+- 方針: 古い会話全文ではなく \`System/data/ai_router/current_work.md\` と current work handoff を最新状態だけに再圧縮してから続ける
 
 COMPACTION
     fi
@@ -2106,16 +2110,16 @@ COMPACTION
 
 ## あなたへの指示
 1. 上記のコンテキストを踏まえて作業を続けてください
-2. 作業を終了する前に、必ず以下を .ai_handoff.md に書き出してください:
+2. 作業を終了する前に、必ず以下を System/data/ai_router/current_work.md に書き出してください:
    - **目的**: 何のためにこの作業をしていたか
    - **完了したこと**: 具体的に何を終わらせたか
    - **未完了**: 残っているタスク
    - **判断とその理由**: なぜその選択をしたか（これが最重要）
    - **変更したファイル**: パスと変更内容の概要
    - **次の担当へ**: 次にやるべきこと、注意点
-3. .ai_handoff.md は current work の mirror として同期される。案件全体の正本は System/data/ai_router/handoffs/<work_id>.md 側に保持される前提で書いてください
+3. System/data/ai_router/current_work.md は current work の mirror として同期される。案件全体の正本は System/data/ai_router/handoffs/<work_id>.md 側に保持される前提で書いてください
 4. この引き継ぎメモなしにセッションを終了しないでください
-5. `handoff 圧縮要求: pending` がある場合は、実装や調査を続ける前に `.ai_handoff.md` を最新状態だけに再圧縮してください
+5. `handoff 圧縮要求: pending` がある場合は、実装や調査を続ける前に `System/data/ai_router/current_work.md` を最新状態だけに再圧縮してください
 6. 再圧縮では `目的 / 確定事項 / 完了 / 未完了 / 判断と理由 / 参照先 / 変更したファイル / 次の担当へ` 以外を残さないでください
 7. `current batch` がある場合は、その batch の active item を今回の処理単位として扱ってください
 8. active item を完了したら `ai batch done <item_id> --summary "<結果要約>"` を実行し、失敗したら `ai batch fail <item_id> --error "<理由>"` を実行してください
@@ -2287,7 +2291,7 @@ case "${1:-}" in
             # 自動でgit状態を収集するので、手動書き出し不要
             # ただし、前ツールが引き継ぎメモを書いてくれていれば最高
             if [ ! -f "$handoff_file" ]; then
-                echo "⚠️  引き継ぎメモ（.ai_handoff.md）がありません。"
+                echo "⚠️  引き継ぎメモ（System/data/ai_router/current_work.md）がありません。"
                 echo "   Codex セッションで「引き継ぎメモを書いて」と言ってから終了するのがベストです。"
                 echo "   ただし、git状態は自動で引き継がれます。"
                 echo ""
@@ -2302,7 +2306,7 @@ case "${1:-}" in
             echo "🔄 Claude Code → Codex に切り替えます"
             echo ""
             if [ ! -f "$handoff_file" ]; then
-                echo "⚠️  引き継ぎメモ（.ai_handoff.md）がありません。"
+                echo "⚠️  引き継ぎメモ（System/data/ai_router/current_work.md）がありません。"
                 echo "   Claude Code セッションで「引き継ぎメモを書いて」と言ってから終了するのがベストです。"
                 echo "   ただし、git状態は自動で引き継がれます。"
                 echo ""
@@ -2745,7 +2749,7 @@ ai - Claude Code / Codex CLI シームレス切り替え
 引き継ぎの仕組み:
   1. git状態（status/diff/最近のcommit）は自動で引き継がれる
   2. current work の正本は System/data/ai_router/ に保持される
-  3. .ai_handoff.md は current work の mirror として同期される
+  3. System/data/ai_router/current_work.md は current work の mirror として同期される
   4. ai works / ai work で current work の一覧と切り替えができる
   5. セッション終了時に、目的/完了/未完了を session_restore_index.json に自動保存する
   6. ai sessions / ai pins で目的や残タスクに加えて session load も見える

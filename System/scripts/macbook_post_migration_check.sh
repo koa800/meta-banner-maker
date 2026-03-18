@@ -97,12 +97,17 @@ printf "branch: %s\n" "$(git -C "$repo_root" branch --show-current 2>/dev/null |
 printf "HEAD: %s\n" "$(git -C "$repo_root" rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
 git -C "$repo_root" status --short || true
 
-latest_backup="$(ls -1dt "$repo_root"/System/data/migration_backup_* 2>/dev/null | head -n1 || true)"
+latest_backup="$(
+  {
+    ls -1dt "$repo_root"/System/archive/migration_backups/* 2>/dev/null
+    ls -1dt "$repo_root"/System/data/migration_backup_* 2>/dev/null
+  } | head -n1 || true
+)"
 print_section "Backup"
 if [ -n "$latest_backup" ]; then
   printf "[OK] latest backup %s\n" "$latest_backup"
 else
-  printf "[WARN] no migration backup directory found under System/data\n"
+  printf "[WARN] no migration backup directory found under System/archive/migration_backups or System/data\n"
   warn_count=$((warn_count + 1))
 fi
 

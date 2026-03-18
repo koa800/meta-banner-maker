@@ -30,6 +30,7 @@ System/addness_chrome_profile/
 System/data/
 System/addness_mcp_server/.venv/
 System/looker_browser_profile/
+System/archive/
 System/looker_debug/
 System/qa_sync/
 System/mac_mini/agent_orchestrator/logs/

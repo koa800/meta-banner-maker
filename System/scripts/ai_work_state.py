@@ -18,8 +18,9 @@ STATE_FILE = RUNTIME_DIR / "state.json"
 WORK_INDEX_FILE = RUNTIME_DIR / "work_index.json"
 SESSION_LINKS_FILE = RUNTIME_DIR / "session_links.json"
 EVENTS_FILE = RUNTIME_DIR / "events.jsonl"
-ROOT_HANDOFF_FILE = PROJECT_DIR / ".ai_handoff.md"
-LEGACY_HANDOFF_FILE = PROJECT_DIR / "Master" / "output" / "ai_handoff.md"
+CURRENT_WORK_MIRROR_FILE = RUNTIME_DIR / "current_work.md"
+LEGACY_ROOT_HANDOFF_FILE = PROJECT_DIR / ".ai_handoff.md"
+LEGACY_OUTPUT_HANDOFF_FILE = PROJECT_DIR / "Master" / "output" / "ai_handoff.md"
 LEGACY_HOME_STATE_FILE = Path.home() / ".ai_state.json"
 
 SECTION_KEYS = {
@@ -237,17 +238,18 @@ def handoff_template(title: str, work_id: str) -> str:
     )
 
 
-def mirror_text_to_root(text: str) -> None:
-    ROOT_HANDOFF_FILE.write_text(text)
-    if LEGACY_HANDOFF_FILE.exists():
-        LEGACY_HANDOFF_FILE.write_text(text)
+def mirror_text_to_current_work(text: str) -> None:
+    CURRENT_WORK_MIRROR_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CURRENT_WORK_MIRROR_FILE.write_text(text)
 
 
-def load_root_handoff_text() -> str:
-    if ROOT_HANDOFF_FILE.exists():
-        return ROOT_HANDOFF_FILE.read_text(errors="replace")
-    if LEGACY_HANDOFF_FILE.exists():
-        return LEGACY_HANDOFF_FILE.read_text(errors="replace")
+def load_current_work_mirror_text() -> str:
+    if CURRENT_WORK_MIRROR_FILE.exists():
+        return CURRENT_WORK_MIRROR_FILE.read_text(errors="replace")
+    if LEGACY_ROOT_HANDOFF_FILE.exists():
+        return LEGACY_ROOT_HANDOFF_FILE.read_text(errors="replace")
+    if LEGACY_OUTPUT_HANDOFF_FILE.exists():
+        return LEGACY_OUTPUT_HANDOFF_FILE.read_text(errors="replace")
     return ""
 
 
@@ -803,7 +805,7 @@ def create_work(prompt: str, selected_tool: str, capabilities: dict[str, bool]) 
     handoff_path = handoff_path_for(work_id)
     text = handoff_template(title, work_id)
     handoff_path.write_text(text)
-    mirror_text_to_root(text)
+    mirror_text_to_current_work(text)
     return {
         "work_id": work_id,
         "title": title,
@@ -850,7 +852,7 @@ def sync_work_to_root(work: dict[str, Any]) -> str:
     else:
         text = handoff_template(work.get("title", "未分類の仕事"), work["work_id"])
         path.write_text(text)
-    mirror_text_to_root(text)
+    mirror_text_to_current_work(text)
     return text
 
 
@@ -910,10 +912,10 @@ def sync_text_to_work(work: dict[str, Any], text: str) -> dict[str, Any]:
 
 
 def sync_root_to_work(work: dict[str, Any]) -> dict[str, Any]:
-    text = load_root_handoff_text()
+    text = load_current_work_mirror_text()
     if not text:
         text = handoff_template(work.get("title", "未分類の仕事"), work["work_id"])
-        mirror_text_to_root(text)
+        mirror_text_to_current_work(text)
     handoff_path = Path(work["handoff_path"])
     handoff_path.parent.mkdir(parents=True, exist_ok=True)
     handoff_path.write_text(text)
@@ -1139,7 +1141,13 @@ def cmd_record_session(args: argparse.Namespace) -> int:
     work["updated_at"] = now_iso()
     if args.preview:
         work["latest_preview"] = prompt_title(args.preview)
-    work = update_work_with_session_data(work, session_data if isinstance(session_data, dict) else {}, args.session_id, args.tool, load_root_handoff_text())
+    work = update_work_with_session_data(
+        work,
+        session_data if isinstance(session_data, dict) else {},
+        args.session_id,
+        args.tool,
+        load_current_work_mirror_text(),
+    )
     works[work["work_id"]] = work
     save_work_index(works)
 
@@ -1174,7 +1182,7 @@ def cmd_compact_handoff(args: argparse.Namespace) -> int:
 
     is_current = work_id == state.get("current_work_id", "")
     if is_current:
-        source_text = load_root_handoff_text()
+        source_text = load_current_work_mirror_text()
     else:
         handoff_path = Path(work.get("handoff_path", ""))
         source_text = handoff_path.read_text(errors="replace") if handoff_path.exists() else ""
@@ -1187,7 +1195,7 @@ def cmd_compact_handoff(args: argparse.Namespace) -> int:
     handoff_path.parent.mkdir(parents=True, exist_ok=True)
     handoff_path.write_text(compacted)
     if is_current:
-        mirror_text_to_root(compacted)
+        mirror_text_to_current_work(compacted)
     work = sync_text_to_work(work, compacted)
     works[work_id] = work
     save_work_index(works)
