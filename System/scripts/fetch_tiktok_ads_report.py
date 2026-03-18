@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -15,8 +16,8 @@ import requests
 
 
 ROOT = Path(__file__).resolve().parents[2]
-AUTH_PATH = ROOT / "System" / "credentials" / "tiktok_marketing_api.json"
-ACCOUNTS_PATH = ROOT / "System" / "credentials" / "tiktok_ads.json"
+DEFAULT_AUTH_PATH = ROOT / "System" / "credentials" / "tiktok_marketing_api.json"
+DEFAULT_ACCOUNTS_PATH = ROOT / "System" / "credentials" / "tiktok_ads.json"
 OUTPUT_DIR = ROOT / "System" / "data" / "tiktok_ads_export"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -36,8 +37,8 @@ def load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text())
 
 
-def load_auth() -> dict[str, Any]:
-    auth = load_json(AUTH_PATH)
+def load_auth(path: Path) -> dict[str, Any]:
+    auth = load_json(path)
     required = ["app_id", "app_secret", "access_token"]
     missing = [key for key in required if not str(auth.get(key) or "").strip()]
     if missing:
@@ -45,10 +46,10 @@ def load_auth() -> dict[str, Any]:
     return auth
 
 
-def load_account_names() -> dict[str, str]:
-    if not ACCOUNTS_PATH.exists():
+def load_account_names(path: Path) -> dict[str, str]:
+    if not path.exists():
         return {}
-    data = load_json(ACCOUNTS_PATH)
+    data = load_json(path)
     names: dict[str, str] = {}
     for account in data.get("ad_accounts", []):
         advertiser_id = str(account.get("advertiser_id") or "").strip()
@@ -280,11 +281,21 @@ def main() -> None:
         help="保存形式",
     )
     parser.add_argument("--output", help="出力先パス")
+    parser.add_argument(
+        "--auth-path",
+        default=os.environ.get("TIKTOK_MARKETING_AUTH_PATH", str(DEFAULT_AUTH_PATH)),
+        help="Marketing API 認証JSONのパス",
+    )
+    parser.add_argument(
+        "--accounts-path",
+        default=os.environ.get("TIKTOK_ADS_ACCOUNTS_PATH", str(DEFAULT_ACCOUNTS_PATH)),
+        help="広告アカウント一覧JSONのパス",
+    )
     parser.add_argument("--list-advertisers", action="store_true", help="認可済み advertiser 一覧を表示して終了")
     args = parser.parse_args()
 
-    auth = load_auth()
-    account_names = load_account_names()
+    auth = load_auth(Path(args.auth_path))
+    account_names = load_account_names(Path(args.accounts_path))
     session = build_session()
 
     if args.list_advertisers:
