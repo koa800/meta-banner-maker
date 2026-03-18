@@ -34,6 +34,10 @@ MEMBERSHIP_METRICS_SHEET_ID = "1OFKvyQsydPmTqd9MwSMX53MXxG9ASfkFquyf4PV-M8E"
 MEMBERSHIP_DAILY_TAB = "日別会員数値"
 MEMBERSHIP_SUMMARY_TAB = "会員サマリー"
 MEMBERSHIP_SOURCE_TAB = "データソース管理"
+AD_SPEND_METRICS_SHEET_ID = "1-dEYsY6KB0GF2XRf7PvoxVxhICCamdCBPKxHJRJdUOE"
+AD_SPEND_DAILY_TAB = "日別広告費"
+AD_SPEND_SUMMARY_TAB = "広告費サマリー"
+AD_SPEND_SOURCE_TAB = "データソース管理"
 
 TAB_SPECS = [
     ("スキルプラス事業サマリー", 120, 23),
@@ -397,6 +401,47 @@ def load_membership_daily_metrics(gc) -> List[dict]:
             }
         )
     return metrics
+
+
+def load_ad_spend_daily_metrics(gc) -> List[dict]:
+    spreadsheet = gc.open_by_key(AD_SPEND_METRICS_SHEET_ID)
+    rows = get_all_values_with_retry(spreadsheet.worksheet(AD_SPEND_DAILY_TAB))
+
+    metrics: List[dict] = []
+    for row in rows[1:]:
+        date = normalize_date(row[0] if len(row) > 0 else "")
+        if not date:
+            continue
+        metrics.append({"date": date, "spend": parse_int(row[1] if len(row) > 1 else "")})
+    return metrics
+
+
+def load_ad_spend_status(gc) -> Dict[str, str]:
+    spreadsheet = gc.open_by_key(AD_SPEND_METRICS_SHEET_ID)
+    source_rows = get_all_values_with_retry(spreadsheet.worksheet(AD_SPEND_SOURCE_TAB))
+
+    result: Dict[str, str] = {}
+    for row in source_rows[1:]:
+        if not row:
+            continue
+        key = str(row[0]).strip()
+        if key == "広告費":
+            result["ステータス"] = str(row[8]).strip() if len(row) > 8 else ""
+            result["最終同期日"] = str(row[9]).strip().lstrip("'") if len(row) > 9 else ""
+            result["更新数"] = str(row[10]).strip() if len(row) > 10 else ""
+            result["エラー数"] = str(row[11]).strip() if len(row) > 11 else ""
+            result["メモ"] = str(row[11]).strip() if len(row) > 11 else ""
+            break
+
+    summary_rows = get_all_values_with_retry(spreadsheet.worksheet(AD_SPEND_SUMMARY_TAB))
+    for row in summary_rows[1:]:
+        if len(row) < 2:
+            continue
+        key = str(row[0]).strip()
+        value = str(row[1]).strip()
+        if key:
+            result[key] = value
+    return result
 
 
 def load_membership_status(gc) -> Dict[str, Dict[str, str]]:
@@ -792,10 +837,10 @@ def build_summary_rows(
         ["個別予約数（UU）", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3,\'日別数値\'!E:E,"<>")=0,"",SUMIFS(\'日別数値\'!E:E,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "【アドネス株式会社】個別面談データ（加工） / 日別個別予約数（UU）", "確認待ち", "個別予約完了タグの通知ログとLINE統合後に接続"],
         ["個別実施数", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3,\'日別数値\'!F:F,"<>")=0,"",SUMIFS(\'日別数値\'!F:F,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "Zoom接続ログ または 面談ダッシュボード", "確認待ち", "正本未確定。今は未接続"],
         ["着金売上", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!G:G,"<>",\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)=0,"",SUMIFS(\'日別数値\'!G:G,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "決済履歴シート + お客様相談窓口_進捗管理シート", "確認待ち", "着金の正本を日別で固める必要あり"],
-        ["広告費", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!H:H,"<>",\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)=0,"",SUMIFS(\'日別数値\'!H:H,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "媒体原本（Meta / Google / TikTok / X）", "確認待ち", "legacy の Looker 依存から切り替える"],
-        ["CPA", '=IF(OR(N(B11)=0,N(B5)=0),"",B11/B5)', "", "未接続", "広告費 / 集客数"],
-        ["個別予約CPO", '=IF(OR(N(B11)=0,N(B7)=0),"",B11/B7)', "", "未接続", "広告費 / 個別予約数"],
-        ["ROAS", '=IF(OR(N(B11)=0,N(B10)=0),"",B10/B11)', "", "未接続", "着金売上 / 広告費"],
+        ["広告費", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!H:H,"<>",\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)=0,"",SUMIFS(\'日別数値\'!H:H,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "【アドネス株式会社】広告費データ（加工） / 日別広告費", "接続中", "数値管理シートのカテゴリ=広告の日別合計。2025/07/01以降"],
+        ["CPA", '=IF(OR(N(B11)=0,N(B5)=0),"",B11/B5)', "", "接続中", "広告費 / 集客数"],
+        ["個別予約CPO", '=IF(OR(N(B11)=0,N(B7)=0),"",B11/B7)', "", "接続中", "広告費 / 個別予約数"],
+        ["ROAS", '=IF(OR(N(B11)=0,N(B10)=0),"",B10/B11)', "", "未接続", "着金売上が未接続のため保留"],
         ["会員数", '=IF(OR($B$2="",$B$3=""),"",IFERROR(INDEX(FILTER(\'日別数値\'!L:L,\'日別数値\'!A:A>=$B$2,\'日別数値\'!A:A<=$B$3,\'日別数値\'!L:L<>""),ROWS(FILTER(\'日別数値\'!L:L,\'日別数値\'!A:A>=$B$2,\'日別数値\'!A:A<=$B$3,\'日別数値\'!L:L<>""))),""))', "【アドネス株式会社】会員データ（加工） / 日別会員数値", member_state, member_note],
         ["中途解約数", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!M:M,"<>",\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)=0,"",SUMIFS(\'日別数値\'!M:M,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "【アドネス株式会社】会員データ（加工） / 日別会員数値", mid_term_state, mid_term_note],
         ["クーリングオフ数", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!N:N,"<>",\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)=0,"",SUMIFS(\'日別数値\'!N:N,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "【アドネス株式会社】会員データ（加工） / 日別会員数値", cooling_off_state, cooling_off_note],
@@ -829,13 +874,16 @@ def build_daily_rows(
     metrics: Sequence[dict],
     booking_metrics: Sequence[dict],
     membership_metrics: Sequence[dict],
+    ad_spend_metrics: Sequence[dict] = (),
 ) -> List[List[str]]:
     email_map = {item["date"]: item for item in metrics}
     booking_map = {item["date"]: item for item in booking_metrics}
     membership_map = {item["date"]: item for item in membership_metrics}
+    ad_spend_map = {item["date"]: item for item in ad_spend_metrics}
     booking_latest_date = max(booking_map.keys()) if booking_map else ""
     membership_latest_date = max(membership_map.keys()) if membership_map else ""
-    all_dates = sorted(set(email_map.keys()) | set(booking_map.keys()) | set(membership_map.keys()))
+    ad_spend_latest_date = max(ad_spend_map.keys()) if ad_spend_map else ""
+    all_dates = sorted(set(email_map.keys()) | set(booking_map.keys()) | set(membership_map.keys()) | set(ad_spend_map.keys()))
 
     rows = [[
         "日付",
@@ -874,6 +922,26 @@ def build_daily_rows(
             member_count = ""
             mid_term_cancel_count = ""
             cooling_off_count = ""
+        if date in ad_spend_map:
+            ad_spend = ad_spend_map[date]["spend"]
+        elif ad_spend_latest_date and date <= ad_spend_latest_date:
+            ad_spend = 0
+        else:
+            ad_spend = ""
+        # CPA = 広告費 / 集客数
+        cpa = ""
+        if ad_spend != "" and email_item["count"] not in ("", 0, None):
+            try:
+                cpa = round(int(ad_spend) / int(email_item["count"]))
+            except (ZeroDivisionError, ValueError, TypeError):
+                cpa = ""
+        # 個別予約CPO = 広告費 / 個別予約数
+        cpo = ""
+        if ad_spend != "" and booking_count not in ("", 0, None):
+            try:
+                cpo = round(int(ad_spend) / int(booking_count))
+            except (ZeroDivisionError, ValueError, TypeError):
+                cpo = ""
         rows.append([
             date,
             email_item["count"],
@@ -882,9 +950,9 @@ def build_daily_rows(
             "",
             "",
             "",
-            "",
-            "",
-            "",
+            ad_spend,
+            cpa,
+            cpo,
             "",
             member_count,
             mid_term_cancel_count,
@@ -902,6 +970,8 @@ def build_data_source_rows(
     booking_daily_row_count: int,
     membership_status: Dict[str, Dict[str, str]],
     membership_daily_row_count: int,
+    ad_spend_status: Dict[str, str] = None,
+    ad_spend_daily_row_count: int = 0,
 ) -> List[List[str]]:
     updated_at = status.get("更新日時", "")
     booking_updated_at = booking_status.get("最終同期日") or booking_status.get("更新日時", "")
@@ -912,6 +982,12 @@ def build_data_source_rows(
     membership_member = membership_status.get("会員数", {})
     membership_mid_term = membership_status.get("中途解約数", {})
     membership_cooling_off = membership_status.get("クーリングオフ数", {})
+    ad_spend_status = ad_spend_status or {}
+    ad_spend_state = ad_spend_status.get("ステータス", "確認待ち")
+    ad_spend_updated_at = ad_spend_status.get("最終同期日") or ad_spend_status.get("更新日時", "")
+    ad_spend_updates = ad_spend_status.get("更新数", str(ad_spend_daily_row_count))
+    ad_spend_errors = ad_spend_status.get("エラー数", "0")
+    ad_spend_memo = ad_spend_status.get("メモ", "数値管理シートのカテゴリ=広告の日別合計")
     rows = [
         ["KPIカラム", "グループ", "ソース元", "優先度", "スプレッドシートURL", "タブ名", "参照先列", "正規化 / 計算", "入力条件", "ステータス", "最終同期日", "更新数", "エラー数", "メモ"],
         ["集客数", "集客", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{EMAIL_METRICS_SHEET_ID}/edit","【アドネス株式会社】集客データ_メール集計（加工）")', "日別メール登録件数", "B列", "重複あり件数", "2025/01/01以降", "一部接続", updated_at, str(daily_row_count), "0", "現状はメールのみ。LINE未接続"],
@@ -920,10 +996,10 @@ def build_data_source_rows(
         ["個別予約数（UU）", "個別予約", "加工データ", "2", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{BOOKING_METRICS_SHEET_ID}/edit","【アドネス株式会社】個別面談データ（加工）")', "日別個別予約数（UU）", "B列", "将来接続。ユニークユーザー数", "個別予約完了タグの通知ログとLINE統合後", "確認待ち", "", "", "", "現時点ではユニーク判定が弱いため未接続"],
         ["個別実施数", "個別予約", "収集データ候補", "2", "", "Zoom接続ログ または 面談ダッシュボード", "", "接続ユーザー数", "正本未確定", "確認待ち", "", "", "", "今は未接続"],
         ["着金売上", "売上", "収集データ候補", "1", "", "決済履歴シート + お客様相談窓口_進捗管理シート", "", "日別着金額", "着金日と返金処理の確定", "確認待ち", "", "", "", "日別正本の集計シートが未作成"],
-        ["広告費", "広告費", "収集データ候補", "1", "", "媒体原本（Meta / Google / TikTok / X）", "", "対象媒体の消化額", "対象アカウントの確定", "確認待ち", "", "", "", "legacy の Looker 依存を外す必要あり"],
-        ["CPA", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "I列", "広告費 / 集客数", "広告費と集客数が入力済み", "未接続", "", "", "", "自動計算予定"],
-        ["個別予約CPO", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "J列", "広告費 / 個別予約数", "広告費と個別予約数が入力済み", "未接続", "", "", "", "自動計算予定"],
-        ["ROAS", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "K列", "着金売上 / 広告費", "着金売上と広告費が入力済み", "未接続", "", "", "", "自動計算予定"],
+        ["広告費", "広告費", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{AD_SPEND_METRICS_SHEET_ID}/edit","【アドネス株式会社】広告費データ（加工）")', AD_SPEND_DAILY_TAB, "B列", "数値管理シートのカテゴリ=広告の日別合計", "2025/07/01以降", ad_spend_state, ad_spend_updated_at, ad_spend_updates, ad_spend_errors, ad_spend_memo],
+        ["CPA", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "I列", "広告費 / 集客数", "広告費と集客数が入力済み", "接続中", "", "", "", "広告費と集客数が入力された日だけ自動計算"],
+        ["個別予約CPO", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "J列", "広告費 / 個別予約数", "広告費と個別予約数が入力済み", "接続中", "", "", "", "広告費と個別予約数が入力された日だけ自動計算"],
+        ["ROAS", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "K列", "着金売上 / 広告費", "着金売上と広告費が入力済み", "未接続", "", "", "", "着金売上が未接続のため保留"],
         ["会員数", "会員", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{MEMBERSHIP_METRICS_SHEET_ID}/edit","【アドネス株式会社】会員データ（加工）")', MEMBERSHIP_DAILY_TAB, "D列", "契約締結日から7日経過した会員の日次残高", "2025/01/01以降", membership_member.get("ステータス", "確認待ち"), membership_member.get("最終同期日", ""), membership_member.get("更新数", str(membership_daily_row_count)), membership_member.get("エラー数", "0"), membership_member.get("メモ", "会員データ（加工）の日別会員数値を参照する")],
         ["中途解約数", "会員", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{MEMBERSHIP_METRICS_SHEET_ID}/edit","【アドネス株式会社】会員データ（加工）")', MEMBERSHIP_DAILY_TAB, "E列", "日別件数", "2025/01/01以降", membership_mid_term.get("ステータス", "確認待ち"), membership_mid_term.get("最終同期日", ""), membership_mid_term.get("更新数", str(membership_daily_row_count)), membership_mid_term.get("エラー数", "0"), membership_mid_term.get("メモ", "会員データ（加工）の日別会員数値を参照する")],
         ["クーリングオフ数", "会員", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{MEMBERSHIP_METRICS_SHEET_ID}/edit","【アドネス株式会社】会員データ（加工）")', MEMBERSHIP_DAILY_TAB, "C列", "日別件数", "2025/01/01以降", membership_cooling_off.get("ステータス", "確認待ち"), membership_cooling_off.get("最終同期日", ""), membership_cooling_off.get("更新数", str(membership_daily_row_count)), membership_cooling_off.get("エラー数", "0"), membership_cooling_off.get("メモ", "会員データ（加工）の日別会員数値を参照する")],
@@ -1050,7 +1126,8 @@ def main() -> None:
     daily_metrics = load_email_daily_metrics(gc)
     booking_metrics = load_booking_daily_metrics(gc)
     membership_metrics = load_membership_daily_metrics(gc)
-    daily_rows = build_daily_rows(daily_metrics, booking_metrics, membership_metrics)
+    ad_spend_metrics = load_ad_spend_daily_metrics(gc)
+    daily_rows = build_daily_rows(daily_metrics, booking_metrics, membership_metrics, ad_spend_metrics)
     write_rows(spreadsheet, tabs["日別数値"], daily_rows)
     apply_table_style(
         spreadsheet,
@@ -1095,6 +1172,7 @@ def main() -> None:
     )
 
     email_metrics_status = load_email_metrics_status(gc)
+    ad_spend_status = load_ad_spend_status(gc)
     data_source_rows = build_data_source_rows(
         email_metrics_status,
         max(len(daily_metrics), 0),
@@ -1102,6 +1180,8 @@ def main() -> None:
         max(len(booking_metrics), 0),
         membership_status,
         max(len(membership_metrics), 0),
+        ad_spend_status,
+        max(len(ad_spend_metrics), 0),
     )
     write_rows(spreadsheet, tabs["データソース管理"], data_source_rows)
     apply_table_style(

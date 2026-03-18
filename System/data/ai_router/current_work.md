@@ -72,6 +72,20 @@
 - `【アドネス株式会社】共通除外マスタ`
   - `除外リスト / 無条件除外ルール / データソース管理 / データ追加ルール`
   を整備
+- `【アドネス株式会社】広告費データ（加工）`
+  - `日別広告費 / 媒体別広告費 / 広告費サマリー / データソース管理 / データ追加ルール`
+  を整備
+  - 正本: `【アドネス全体】数値管理シート / スキルプラス（日別）` の `カテゴリ=広告` 行
+  - データ範囲: `2025/07/01 ~ 2026/03/15`（258日分、10媒体）
+  - 媒体名は正規化統合（Yahoo!リスティング→Yahoo!広告 等）
+  - 異常検知: 0件停止 / 日数急減5% / 金額急減10%
+- `【アドネス株式会社】広告データ（収集）`
+  - 骨格のみ作成済み（Meta / TikTok / X タブ）
+  - API取得スクリプト `fetch_meta_ads.py` は途中物として存在
+- `【アドネス株式会社】KPIダッシュボード`
+  - `広告費 / CPA / 個別予約CPO` を追加接続
+  - CPA = 広告費 / 集客数、個別予約CPO = 広告費 / 個別予約数 で自動計算
+  - ROAS は着金売上が未接続のため保留
 - スプレッドシート作成ルール
   - 主要タブは左
   - ヘッダーは青背景/白文字/太字/12pt
@@ -82,12 +96,10 @@
 
 ## 未完了
 
-- `【アドネス株式会社】広告費データ（加工）`
-  - 未着手。次の主タスク
 - `【アドネス株式会社】着金売上データ（加工）`
-  - 未着手
+  - 未着手。次の主タスク
 - `【アドネス株式会社】KPIダッシュボード`
-  - `広告費 / 着金売上 / CPA / 個別予約CPO / ROAS` は未接続
+  - `着金売上 / ROAS` は未接続（着金売上が未接続のため ROAS も保留）
 - `個別予約数（UU）`
   - 統合キー未確定のため保留
 - `LSTEP live 補完`
@@ -115,6 +127,13 @@
   - 理由: 集客/個別予約/決済/会員で同じ除外基準を使えるため
 - 旧シートは消さず legacy 化
   - 理由: 2025年以前や再検証で参照する可能性があるため
+- `広告費データ（加工）` の正本は `数値管理シート / スキルプラス（日別）`
+  - 理由: 既に日別で広告費が入っている。API全量取得は初期コストが高い
+  - 将来は `広告データ（収集）` に API で蓄積し、段階移行する
+- 広告費に共通除外マスタは適用しない
+  - 理由: 広告費はメールアドレス単位のデータではないため
+- CPA / 個別予約CPO はダッシュボード側で動的計算する
+  - 理由: 広告費と集客数/予約数が揃った日だけ計算することで、不完全な値を出さない
 
 ## 参照先
 
@@ -134,6 +153,10 @@
   - https://docs.google.com/spreadsheets/d/1OFKvyQsydPmTqd9MwSMX53MXxG9ASfkFquyf4PV-M8E/edit
 - `【アドネス株式会社】共通除外マスタ`
   - https://docs.google.com/spreadsheets/d/1dSIXBovs-c8wVnBWsOqbe2wdqmJQ10bOIWhKJbC1MPw/edit
+- `【アドネス株式会社】広告費データ（加工）`
+  - https://docs.google.com/spreadsheets/d/1-dEYsY6KB0GF2XRf7PvoxVxhICCamdCBPKxHJRJdUOE/edit
+- `【アドネス株式会社】広告データ（収集）`
+  - https://docs.google.com/spreadsheets/d/11lVHxkA0geY7TEVKoujYrv1JyxWhzxqSepNhFxnFZlo/edit
 - `README`
   - `/Users/koa800/Desktop/cursor/Master/sheets/README.md`
 - `KPIダッシュボード完成形設計`
@@ -143,6 +166,7 @@
 
 ## 変更したファイル
 
+- `/Users/koa800/Desktop/cursor/System/ad_spend_metrics_sheet_sync.py`（新規）
 - `/Users/koa800/Desktop/cursor/System/kpi_dashboard_layout_setup.py`
 - `/Users/koa800/Desktop/cursor/System/booking_notification_log_sync.py`
 - `/Users/koa800/Desktop/cursor/System/booking_metrics_sheet_sync.py`
@@ -156,18 +180,10 @@
 
 ## 次の担当へ
 
-- まず `【アドネス株式会社】広告費データ（加工）` の要件定義から始める
-- 進め方は毎回
-  - 目的
-  - 正本
-  - タブ構成
-  - 防止策
-  - 検知
-  - 自動更新
-  の順で固める
+- 次の主タスクは `【アドネス株式会社】着金売上データ（加工）` の要件定義と実装
+- 進め方は毎回 `目的 -> 正本 -> タブ構成 -> 防止策 -> 検知 -> 自動更新` の順で固める
 - `LSTEP live 補完` と `個別予約数（UU）` は今は後回し
-- `KPIダッシュボード` の未接続項目は、`広告費` と `着金売上` が固まってから接続する
-- 作業ツリーには handoff と無関係の既存 dirty 変更がある
-  - まとめてコミットしない
-  - 今回の handoff 関連だけ分けて扱う
+- `ROAS` は着金売上が接続されたら自動的に計算可能になる
+- `広告費データ（加工）` の Orchestrator 定期実行設定はまだ未追加（手動で `python3 System/ad_spend_metrics_sheet_sync.py` を実行する）
+- 未コミットの `fetch_meta_ads.py` / `setup_ads_sheet.py` は将来の API 直接取得用の途中物。今回のコミットには含めない
 
