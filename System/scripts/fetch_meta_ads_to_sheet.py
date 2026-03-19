@@ -778,7 +778,11 @@ def count_active_objects(account_id, edge, token):
         active_count += sum(
             1
             for row in rows
-            if clean_cell(row.get("effective_status")) == "ACTIVE" or clean_cell(row.get("status")) == "ACTIVE"
+            if clean_cell(row.get("effective_status")) == "ACTIVE"
+            or (
+                not clean_cell(row.get("effective_status"))
+                and clean_cell(row.get("status")) == "ACTIVE"
+            )
         )
         url = data.get("paging", {}).get("next")
         params = None
