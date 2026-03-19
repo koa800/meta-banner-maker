@@ -29,22 +29,23 @@ META_HEADERS = [
     "広告セット名",
     "広告ID",
     "広告名",
+    "インプレッション",
+    "リーチ",
+    "フリークエンシー",
+    "総クリック数",
+    "リンククリック数",
+    "リンククリック数（ユニーク）",
+    "外部クリック数",
+    "外部クリック数（ユニーク）",
+    "消化金額",
     "配信ステータス",
     "広告作成日",
     "最終更新日",
     "クリエイティブID",
-    "メディアタイプ",
-    "メディアID",
     "遷移先URL",
-    "インプレッション",
-    "リーチ",
-    "フリークエンシー",
-    "リンククリック数",
-    "ユニークリンククリック数",
-    "消化金額",
-    "リンクCPC",
-    "CPM",
-    "リンクCTR",
+    "動画ID",
+    "画像ハッシュ",
+    "コンバージョン（JSON）",
 ]
 
 # --- TikTok広告 ---
@@ -121,6 +122,16 @@ TABS = {
 TAB_COLOR_BLUE = {"red": 0.357, "green": 0.584, "blue": 0.976}
 
 
+def to_a1_column_letter(column_number):
+    """1始まりの列番号をA1表記の列記号へ変換する。"""
+    result = []
+    number = column_number
+    while number > 0:
+        number, remainder = divmod(number - 1, 26)
+        result.append(chr(ord("A") + remainder))
+    return "".join(reversed(result))
+
+
 def estimate_column_width(header):
     """カラム名から適切な列幅を推定（全角≒14px, 半角≒7px + 余白20px）"""
     width = 0
@@ -129,22 +140,22 @@ def estimate_column_width(header):
             width += 14
         else:
             width += 7
-    return max(width + 40, 80)  # 最低80px
+    return max(width + 80, 120)  # 少し広めに取り、最低120px
 
 
-def apply_formatting(sh, ws, headers):
+def apply_formatting(sh, ws, headers, include_table_styles=True, include_protection=True):
     """スキル準拠の書式を適用"""
     sheet_id = ws.id
     col_count = len(headers)
-    col_letter = chr(ord("A") + col_count - 1) if col_count <= 26 else "Z"
+    col_letter = to_a1_column_letter(col_count)
 
-    # --- ヘッダー書式（青背景 / 白文字 / 太字 / fontSize 12 / 中央揃え / Arial）---
+    # --- ヘッダー書式（青背景 / 白文字 / 太字 / fontSize 11 / 中央揃え / Arial）---
     header_range = f"A1:{col_letter}1"
     ws.format(header_range, {
         "backgroundColor": HEADER_BG,
         "textFormat": {
             "bold": True,
-            "fontSize": 12,
+            "fontSize": 11,
             "foregroundColor": HEADER_TEXT,
             "fontFamily": "Arial",
         },
@@ -205,27 +216,7 @@ def apply_formatting(sh, ws, headers):
         }
     })
 
-    # --- 罫線（ヘッダー行 + データ領域100行分）---
-    # 外枠太線
-    requests.append({
-        "updateBorders": {
-            "range": {
-                "sheetId": sheet_id,
-                "startRowIndex": 0,
-                "endRowIndex": 101,
-                "startColumnIndex": 0,
-                "endColumnIndex": col_count,
-            },
-            "top": {"style": "SOLID_MEDIUM", "color": {"red": 0, "green": 0, "blue": 0}},
-            "bottom": {"style": "SOLID_MEDIUM", "color": {"red": 0, "green": 0, "blue": 0}},
-            "left": {"style": "SOLID_MEDIUM", "color": {"red": 0, "green": 0, "blue": 0}},
-            "right": {"style": "SOLID_MEDIUM", "color": {"red": 0, "green": 0, "blue": 0}},
-            "innerHorizontal": {"style": "SOLID", "color": {"red": 0.8, "green": 0.8, "blue": 0.8}},
-            "innerVertical": {"style": "SOLID", "color": {"red": 0.8, "green": 0.8, "blue": 0.8}},
-        }
-    })
-
-    # ヘッダー下太線
+    # --- ヘッダー行の黒枠 ---
     requests.append({
         "updateBorders": {
             "range": {
@@ -235,14 +226,56 @@ def apply_formatting(sh, ws, headers):
                 "startColumnIndex": 0,
                 "endColumnIndex": col_count,
             },
+            "top": {"style": "SOLID_MEDIUM", "color": {"red": 0, "green": 0, "blue": 0}},
             "bottom": {"style": "SOLID_MEDIUM", "color": {"red": 0, "green": 0, "blue": 0}},
+            "left": {"style": "SOLID_MEDIUM", "color": {"red": 0, "green": 0, "blue": 0}},
+            "right": {"style": "SOLID_MEDIUM", "color": {"red": 0, "green": 0, "blue": 0}},
+            "innerVertical": {"style": "SOLID", "color": {"red": 0.8, "green": 0.8, "blue": 0.8}},
         }
     })
 
-    # --- 交互色（addBanding）---
-    requests.append({
-        "addBanding": {
-            "bandedRange": {
+    if include_table_styles:
+        # --- 罫線（ヘッダー行 + データ領域100行分）---
+        # 外枠太線
+        requests.append({
+            "updateBorders": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": 0,
+                    "endRowIndex": 101,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": col_count,
+                },
+                "top": {"style": "SOLID_MEDIUM", "color": {"red": 0, "green": 0, "blue": 0}},
+                "bottom": {"style": "SOLID_MEDIUM", "color": {"red": 0, "green": 0, "blue": 0}},
+                "left": {"style": "SOLID_MEDIUM", "color": {"red": 0, "green": 0, "blue": 0}},
+                "right": {"style": "SOLID_MEDIUM", "color": {"red": 0, "green": 0, "blue": 0}},
+                "innerHorizontal": {"style": "SOLID", "color": {"red": 0.8, "green": 0.8, "blue": 0.8}},
+                "innerVertical": {"style": "SOLID", "color": {"red": 0.8, "green": 0.8, "blue": 0.8}},
+            }
+        })
+        # --- 交互色（addBanding）---
+        requests.append({
+            "addBanding": {
+                "bandedRange": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": 1,
+                        "endRowIndex": 1000,
+                        "startColumnIndex": 0,
+                        "endColumnIndex": col_count,
+                    },
+                    "rowProperties": {
+                        "firstBandColor": WHITE,
+                        "secondBandColor": ZEBRA_BG,
+                    },
+                }
+            }
+        })
+
+        # --- データ行のデフォルト書式（Arial / fontSize 10）---
+        requests.append({
+            "repeatCell": {
                 "range": {
                     "sheetId": sheet_id,
                     "startRowIndex": 1,
@@ -250,62 +283,57 @@ def apply_formatting(sh, ws, headers):
                     "startColumnIndex": 0,
                     "endColumnIndex": col_count,
                 },
-                "rowProperties": {
-                    "firstBandColor": WHITE,
-                    "secondBandColor": ZEBRA_BG,
+                "cell": {
+                    "userEnteredFormat": {
+                        "textFormat": {
+                            "fontFamily": "Arial",
+                            "fontSize": 10,
+                            "bold": False,
+                        },
+                    }
                 },
+                "fields": "userEnteredFormat.textFormat",
             }
-        }
-    })
+        })
 
-    # --- データ行のデフォルト書式（Arial / fontSize 10）---
-    requests.append({
-        "repeatCell": {
-            "range": {
-                "sheetId": sheet_id,
-                "startRowIndex": 1,
-                "endRowIndex": 1000,
-                "startColumnIndex": 0,
-                "endColumnIndex": col_count,
-            },
-            "cell": {
-                "userEnteredFormat": {
-                    "textFormat": {
-                        "fontFamily": "Arial",
-                        "fontSize": 10,
-                        "bold": False,
+    if include_protection:
+        # --- ヘッダー行保護（警告モード）---
+        requests.append({
+            "addProtectedRange": {
+                "protectedRange": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": 0,
+                        "endRowIndex": 1,
+                        "startColumnIndex": 0,
+                        "endColumnIndex": col_count,
                     },
+                    "description": "ヘッダー行（変更注意）",
+                    "warningOnly": True,
                 }
-            },
-            "fields": "userEnteredFormat.textFormat",
-        }
-    })
-
-    # --- ヘッダー行保護（警告モード）---
-    requests.append({
-        "addProtectedRange": {
-            "protectedRange": {
-                "range": {
-                    "sheetId": sheet_id,
-                    "startRowIndex": 0,
-                    "endRowIndex": 1,
-                    "startColumnIndex": 0,
-                    "endColumnIndex": col_count,
-                },
-                "description": "ヘッダー行（変更注意）",
-                "warningOnly": True,
             }
-        }
-    })
+        })
 
     sh.batch_update({"requests": requests})
 
 
 def main():
+    reformat_only = "--reformat-only" in sys.argv
     client = get_client("kohara")
     sh = client.open_by_key(SPREADSHEET_ID)
 
     existing_sheets = {ws.title: ws for ws in sh.worksheets()}
+
+    if reformat_only:
+        for tab_name, headers in TABS.items():
+            if tab_name not in existing_sheets:
+                continue
+            ws = existing_sheets[tab_name]
+            current_headers = ws.row_values(1) or headers
+            apply_formatting(sh, ws, current_headers, include_table_styles=False, include_protection=False)
+            print(f"[{tab_name}] 既存タブにヘッダー体裁を再適用。")
+        print("\n既存タブの再整形完了！")
+        return
 
     for tab_name, headers in TABS.items():
         # 既存タブがあれば削除して再作成（書式を完全リセット）
