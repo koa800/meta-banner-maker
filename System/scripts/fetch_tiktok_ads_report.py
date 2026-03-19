@@ -5,14 +5,18 @@ from __future__ import annotations
 
 import argparse
 import csv
+import io
 import json
 import os
+import posixpath
 import sys
 import time
+import zipfile
 from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+import xml.etree.ElementTree as ET
 
 import requests
 from gspread.exceptions import APIError
@@ -51,6 +55,25 @@ ADS_MANAGER_REQUEST_HEADERS = (
     "x-csrftoken",
 )
 ADS_MANAGER_PAGE_SIZE = 100
+BULK_EXPORT_WAIT_SECONDS = 120
+OOXML_NS = {
+    "a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+    "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+    "pkg": "http://schemas.openxmlformats.org/package/2006/relationships",
+}
+BULK_EXPORT_FIELD_ALIASES = {
+    "ad_id": ("Ad ID",),
+    "destination": ("Destination",),
+    "instant_page_id": ("Instant page ID ", "Instant page ID"),
+    "website_type": ("Website type",),
+    "web_url": ("Web URL",),
+    "deeplink_url": ("Deeplink URL",),
+    "fallback_website_url": ("Fallback Website URL",),
+    "click_tracking_url": ("Click Tracking URL",),
+    "optimization_location": ("Optimization location",),
+    "sales_destination": ("Sales destination",),
+    "campaign_type": ("Campaign type",),
+}
 
 DEFAULT_METRICS = ["spend", "impressions", "clicks"]
 DEFAULT_DIMENSIONS_BY_LEVEL = {
@@ -383,6 +406,49 @@ def has_meaningful_value(value: Any) -> bool:
     return True
 
 
+def find_click_center_by_text(page, label: str) -> dict[str, float] | None:
+    return page.evaluate(
+        """
+        (targetLabel) => {
+          const elements = Array.from(document.querySelectorAll('ks-button-915, [data-testid], button, div, span'));
+          const preferred = [];
+          const fallback = [];
+          for (const el of elements) {
+            const text = (el.innerText || '').trim();
+            if (text !== targetLabel) {
+              continue;
+            }
+            const rect = el.getBoundingClientRect();
+            if (!rect.width || !rect.height) {
+              continue;
+            }
+            const tag = (el.tagName || '').toLowerCase();
+            const dataTestid = el.getAttribute('data-testid') || '';
+            const payload = {x: rect.left + rect.width / 2, y: rect.top + rect.height / 2};
+            if (tag.startsWith('ks-button') || dataTestid.startsWith('menu-bulk-import-export-entry-menu')) {
+              preferred.push(payload);
+            } else {
+              fallback.push(payload);
+            }
+          }
+          return preferred[0] || fallback[0] || null;
+        }
+        """,
+        label,
+    )
+
+
+def click_text_button(page, label: str, timeout_seconds: int = 15) -> None:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        center = find_click_center_by_text(page, label)
+        if center:
+            page.mouse.click(center["x"], center["y"])
+            return
+        page.wait_for_timeout(500)
+    raise RuntimeError(f"TikTok Ads Manager でボタンを見つけられませんでした: {label}")
+
+
 def extract_ads_manager_headers(headers: dict[str, str]) -> dict[str, str]:
     return {
         key: value
@@ -506,6 +572,211 @@ def fetch_ads_manager_ad_metadata(
                 pass
 
 
+def fetch_ads_manager_bulk_export_blob(
+    advertiser_id: str,
+    start_date: str,
+    end_date: str,
+) -> bytes:
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.connect_over_cdp(ADS_MANAGER_CDP_URL)
+        if not browser.contexts:
+            raise RuntimeError("TikTok Ads Manager のログイン済み Chrome コンテキストが見つかりません")
+        context = browser.contexts[0]
+        page = context.new_page()
+        try:
+            holder: dict[str, Any] = {
+                "job_id": "",
+                "xlsx_body": None,
+            }
+
+            def handle_response(response) -> None:
+                url = response.url
+                try:
+                    if "/helper/download/launch/" in url and response.request.method == "POST":
+                        payload = json.loads(response.text())
+                        if payload.get("code") != 0:
+                            holder["launch_error"] = payload.get("msg") or "bulk export launch failed"
+                            return
+                        holder["job_id"] = str(payload.get("data", {}).get("job_id") or "").strip()
+                        return
+
+                    if "/helper/download/check/" not in url:
+                        return
+                    job_id = str(holder.get("job_id") or "").strip()
+                    if job_id and job_id not in url:
+                        return
+                    body = response.body()
+                    if body[:2] == b"PK":
+                        holder["xlsx_body"] = body
+                except Exception as exc:
+                    holder.setdefault("response_errors", []).append(str(exc))
+
+            page.on("response", handle_response)
+            page.goto(
+                ADS_MANAGER_CREATIVE_URL.format(
+                    advertiser_id=advertiser_id,
+                    start_date=start_date,
+                    end_date=end_date,
+                ),
+                wait_until="domcontentloaded",
+                timeout=120000,
+            )
+            page.wait_for_timeout(5000)
+            click_text_button(page, "Bulk export/import", timeout_seconds=25)
+            page.wait_for_timeout(1000)
+            click_text_button(page, "Filtered ads")
+            page.wait_for_timeout(1500)
+            click_text_button(page, "All")
+
+            deadline = time.time() + BULK_EXPORT_WAIT_SECONDS
+            while time.time() < deadline:
+                if holder.get("launch_error"):
+                    raise RuntimeError(str(holder["launch_error"]))
+                if holder.get("xlsx_body") is not None:
+                    return holder["xlsx_body"]
+                page.wait_for_timeout(1000)
+
+            raise RuntimeError(
+                f"TikTok Bulk Export の完了を待てませんでした: advertiser_id={advertiser_id} job_id={holder.get('job_id') or 'unknown'}"
+            )
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
+
+
+def build_smart_plus_procedural_targets(
+    rows: list[dict[str, str]],
+    metadata_by_ad: dict[str, dict[str, Any]],
+) -> dict[str, str]:
+    targets: dict[str, str] = {}
+    for row in rows:
+        ad_id = normalize_lookup_id(row.get("ad_id", ""))
+        if not ad_id:
+            continue
+        metadata = metadata_by_ad.get(ad_id, {})
+        if not is_smart_plus_metadata(metadata):
+            continue
+        if select_landing_page_url(metadata):
+            continue
+        creative_id = normalize_lookup_id(metadata.get("smart_plus_ad_id", "")) or ad_id
+        if creative_id:
+            targets[ad_id] = creative_id
+    return targets
+
+
+def fetch_ads_manager_smart_plus_procedural_metadata(
+    advertiser_id: str,
+    start_date: str,
+    end_date: str,
+    creative_targets: dict[str, str],
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, str]]]:
+    if not creative_targets:
+        return {}, []
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.connect_over_cdp(ADS_MANAGER_CDP_URL)
+        if not browser.contexts:
+            raise RuntimeError("TikTok Ads Manager のログイン済み Chrome コンテキストが見つかりません")
+        context = browser.contexts[0]
+        page = context.new_page()
+        try:
+            page.goto(
+                ADS_MANAGER_CREATIVE_URL.format(
+                    advertiser_id=advertiser_id,
+                    start_date=start_date,
+                    end_date=end_date,
+                ),
+                wait_until="domcontentloaded",
+                timeout=120000,
+            )
+            page.wait_for_timeout(3000)
+            payload = page.evaluate(
+                """
+                async ({ advertiserId, targets }) => {
+                  const results = [];
+                  for (const item of targets) {
+                    const url =
+                      `https://ads.tiktok.com/mi/api/v3/i18n/perf/creative/procedural_detail/?aadvid=${advertiserId}` +
+                      `&creative_id=${item.creative_id}&creative_material_mode=6`;
+                    try {
+                      const response = await fetch(url, { credentials: 'include' });
+                      const json = await response.json();
+                      results.push({
+                        ad_id: item.ad_id,
+                        creative_id: item.creative_id,
+                        status: response.status,
+                        code: json?.code ?? null,
+                        msg: json?.msg ?? '',
+                        data: json?.data ?? {},
+                      });
+                    } catch (error) {
+                      results.push({
+                        ad_id: item.ad_id,
+                        creative_id: item.creative_id,
+                        status: 0,
+                        code: null,
+                        msg: String(error),
+                        data: {},
+                      });
+                    }
+                  }
+                  return results;
+                }
+                """,
+                {
+                    "advertiserId": advertiser_id,
+                    "targets": [
+                        {"ad_id": ad_id, "creative_id": creative_id}
+                        for ad_id, creative_id in creative_targets.items()
+                    ],
+                },
+            )
+            metadata_by_ad: dict[str, dict[str, Any]] = {}
+            errors: list[dict[str, str]] = []
+            for item in payload:
+                ad_id = normalize_lookup_id(item.get("ad_id", ""))
+                creative_id = normalize_lookup_id(item.get("creative_id", ""))
+                status = int(item.get("status") or 0)
+                code = item.get("code")
+                data = item.get("data") if isinstance(item.get("data"), dict) else {}
+                if status == 200 and code == 0:
+                    metadata_by_ad[ad_id] = {
+                        "creative_external_url": str(data.get("external_url") or "").strip(),
+                        "creative_open_url": str(data.get("open_url") or "").strip(),
+                        "creative_name": str(data.get("creative_name") or "").strip(),
+                        "creative_material_mode": "6",
+                        "resolved_creative_id": creative_id,
+                    }
+                    track_url = data.get("track_url") or []
+                    if isinstance(track_url, list) and track_url:
+                        metadata_by_ad[ad_id]["creative_click_tracking_url"] = str(track_url[0] or "").strip()
+                    action_track_url = data.get("action_track_url") or []
+                    if isinstance(action_track_url, list) and action_track_url:
+                        metadata_by_ad[ad_id]["creative_action_track_url"] = str(action_track_url[0] or "").strip()
+                    multi_dest_list = data.get("multi_dest_list") or []
+                    if isinstance(multi_dest_list, list) and multi_dest_list:
+                        metadata_by_ad[ad_id]["creative_multi_dest_list"] = multi_dest_list
+                    continue
+                errors.append(
+                    {
+                        "advertiser_id": advertiser_id,
+                        "ad_id": ad_id,
+                        "creative_id": creative_id,
+                        "status": str(status),
+                        "code": "" if code is None else str(code),
+                        "error": str(item.get("msg") or "procedural_detail failed"),
+                    }
+                )
+            return metadata_by_ad, errors
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
+
+
 def merge_fallback_metadata(
     base_metadata: dict[str, dict[str, Any]],
     fallback_metadata: dict[str, dict[str, Any]],
@@ -515,6 +786,28 @@ def merge_fallback_metadata(
         for key, value in values.items():
             if has_meaningful_value(value):
                 target[key] = value
+
+
+def merge_bulk_export_metadata_into_ads(
+    base_metadata: dict[str, dict[str, Any]],
+    bulk_export_metadata: dict[str, dict[str, Any]],
+) -> None:
+    for ad_id, target in base_metadata.items():
+        candidate_ids = [
+            normalize_lookup_id(target.get("smart_plus_ad_id", "")),
+            normalize_lookup_id(target.get("creative_id", "")),
+            normalize_lookup_id(ad_id),
+        ]
+        for candidate_id in candidate_ids:
+            if not candidate_id:
+                continue
+            values = bulk_export_metadata.get(candidate_id)
+            if not values:
+                continue
+            for key, value in values.items():
+                if has_meaningful_value(value):
+                    target[key] = value
+            break
 
 
 def merge_adgroup_metadata_into_ads(
@@ -542,6 +835,40 @@ def find_missing_website_landing_page_ad_ids(
             continue
         metadata = metadata_by_ad.get(ad_id, {})
         if str(metadata.get("promotion_type") or "").strip() != "WEBSITE":
+            continue
+        if select_landing_page_url(metadata):
+            continue
+        missing.append(ad_id)
+    return sorted(set(missing))
+
+
+def find_missing_landing_page_ad_ids(
+    rows: list[dict[str, str]],
+    metadata_by_ad: dict[str, dict[str, Any]],
+) -> list[str]:
+    missing: list[str] = []
+    for row in rows:
+        ad_id = normalize_lookup_id(row.get("ad_id", ""))
+        if not ad_id:
+            continue
+        metadata = metadata_by_ad.get(ad_id, {})
+        if select_landing_page_url(metadata):
+            continue
+        missing.append(ad_id)
+    return sorted(set(missing))
+
+
+def find_missing_non_smart_landing_page_ad_ids(
+    rows: list[dict[str, str]],
+    metadata_by_ad: dict[str, dict[str, Any]],
+) -> list[str]:
+    missing: list[str] = []
+    for row in rows:
+        ad_id = normalize_lookup_id(row.get("ad_id", ""))
+        if not ad_id:
+            continue
+        metadata = metadata_by_ad.get(ad_id, {})
+        if is_smart_plus_metadata(metadata):
             continue
         if select_landing_page_url(metadata):
             continue
@@ -615,11 +942,123 @@ def normalize_lookup_id(value: str | Any) -> str:
     text = str(value or "").strip()
     if text.startswith("'"):
         text = text[1:]
+    if text.startswith("id:"):
+        text = text.split(":", 1)[1]
     if text.endswith(".0"):
         integer, decimal = text.rsplit(".", 1)
         if decimal == "0":
             text = integer
     return text
+
+
+def column_letters_to_index(reference: str) -> int:
+    letters = []
+    for char in reference:
+        if char.isalpha():
+            letters.append(char.upper())
+        else:
+            break
+    number = 0
+    for char in letters:
+        number = number * 26 + (ord(char) - ord("A") + 1)
+    return max(number - 1, 0)
+
+
+def read_excel_cell(cell, shared_strings: list[str]) -> str:
+    cell_type = cell.attrib.get("t")
+    if cell_type == "inlineStr":
+        return "".join(node.text or "" for node in cell.findall(".//a:t", OOXML_NS))
+    value_node = cell.find("a:v", OOXML_NS)
+    if value_node is None:
+        return ""
+    raw = value_node.text or ""
+    if cell_type == "s":
+        return shared_strings[int(raw)]
+    return raw
+
+
+def parse_first_sheet_xlsx(blob: bytes) -> list[dict[str, str]]:
+    with zipfile.ZipFile(io.BytesIO(blob)) as archive:
+        shared_strings: list[str] = []
+        if "xl/sharedStrings.xml" in archive.namelist():
+            root = ET.fromstring(archive.read("xl/sharedStrings.xml"))
+            for item in root.findall("a:si", OOXML_NS):
+                shared_strings.append("".join(node.text or "" for node in item.findall(".//a:t", OOXML_NS)))
+
+        workbook = ET.fromstring(archive.read("xl/workbook.xml"))
+        rels = ET.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+        relationship_map = {
+            rel.attrib["Id"]: rel.attrib["Target"]
+            for rel in rels.findall("pkg:Relationship", OOXML_NS)
+        }
+        first_sheet = workbook.find("a:sheets/a:sheet", OOXML_NS)
+        if first_sheet is None:
+            return []
+        relation_id = first_sheet.attrib["{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"]
+        target = relationship_map[relation_id]
+        sheet_path = posixpath.normpath("xl/" + target.lstrip("/"))
+        worksheet = ET.fromstring(archive.read(sheet_path))
+
+        row_dicts: list[dict[int, str]] = []
+        max_index = 0
+        for row in worksheet.findall(".//a:sheetData/a:row", OOXML_NS):
+            values_by_index: dict[int, str] = {}
+            for cell in row.findall("a:c", OOXML_NS):
+                reference = cell.attrib.get("r", "")
+                column_index = column_letters_to_index(reference) if reference else len(values_by_index)
+                values_by_index[column_index] = read_excel_cell(cell, shared_strings)
+                max_index = max(max_index, column_index)
+            row_dicts.append(values_by_index)
+
+        if not row_dicts:
+            return []
+
+        headers = [row_dicts[0].get(index, "").strip() for index in range(max_index + 1)]
+        parsed_rows: list[dict[str, str]] = []
+        for row_values in row_dicts[1:]:
+            parsed_row = {
+                header: row_values.get(index, "").strip()
+                for index, header in enumerate(headers)
+                if header
+            }
+            if any(parsed_row.values()):
+                parsed_rows.append(parsed_row)
+        return parsed_rows
+
+
+def get_bulk_export_value(row: dict[str, str], key: str) -> str:
+    aliases = BULK_EXPORT_FIELD_ALIASES[key]
+    for alias in aliases:
+        value = str(row.get(alias) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def is_probable_url(value: str) -> bool:
+    text = str(value or "").strip()
+    return text.startswith("http://") or text.startswith("https://")
+
+
+def extract_bulk_export_metadata(blob: bytes) -> dict[str, dict[str, Any]]:
+    metadata_by_ad: dict[str, dict[str, Any]] = {}
+    for row in parse_first_sheet_xlsx(blob):
+        ad_id = normalize_lookup_id(get_bulk_export_value(row, "ad_id"))
+        if not ad_id:
+            continue
+        metadata_by_ad[ad_id] = {
+            "bulk_export_destination": get_bulk_export_value(row, "destination"),
+            "bulk_export_instant_page_id": normalize_lookup_id(get_bulk_export_value(row, "instant_page_id")),
+            "bulk_export_website_type": get_bulk_export_value(row, "website_type"),
+            "bulk_export_web_url": get_bulk_export_value(row, "web_url"),
+            "bulk_export_deeplink_url": get_bulk_export_value(row, "deeplink_url"),
+            "bulk_export_fallback_website_url": get_bulk_export_value(row, "fallback_website_url"),
+            "bulk_export_click_tracking_url": get_bulk_export_value(row, "click_tracking_url"),
+            "bulk_export_optimization_location": get_bulk_export_value(row, "optimization_location"),
+            "bulk_export_sales_destination": get_bulk_export_value(row, "sales_destination"),
+            "bulk_export_campaign_type": get_bulk_export_value(row, "campaign_type"),
+        }
+    return metadata_by_ad
 
 
 def as_sheet_text(value: str | Any) -> str:
@@ -671,7 +1110,14 @@ def select_creative_key(metadata: dict[str, Any]) -> str:
 
 
 def select_landing_page_url(metadata: dict[str, Any]) -> str:
-    for key in ("landing_page_url", "creative_external_url", "creative_click_tracking_url", "creative_deeplink_url"):
+    for key in (
+        "landing_page_url",
+        "creative_external_url",
+        "creative_open_url",
+        "creative_click_tracking_url",
+        "creative_deeplink_url",
+        "creative_action_track_url",
+    ):
         value = str(metadata.get(key) or "").strip()
         if value:
             return value
@@ -686,8 +1132,20 @@ def select_landing_page_url(metadata: dict[str, Any]) -> str:
 
     text = str(landing_page_urls).strip()
     if text in {"[]", "None", "null"}:
-        return ""
-    return text
+        text = ""
+    if text:
+        return text
+
+    for key in ("bulk_export_web_url", "bulk_export_fallback_website_url", "bulk_export_click_tracking_url", "bulk_export_deeplink_url"):
+        value = str(metadata.get(key) or "").strip()
+        if is_probable_url(value):
+            return value
+
+    destination = str(metadata.get("bulk_export_destination") or "").strip()
+    if is_probable_url(destination):
+        return destination
+
+    return ""
 
 
 def is_smart_plus_metadata(metadata: dict[str, Any]) -> bool:
@@ -916,9 +1374,6 @@ def collect_missing_landing_page_details(rows: list[list[str]], limit: int = 20)
     details: list[dict[str, str]] = []
 
     for row in rows:
-        promotion_type = row[idx["プロモーション種別"]].strip()
-        if promotion_type != "WEBSITE":
-            continue
         if row[idx["遷移先URL"]].strip():
             continue
         details.append(
@@ -930,8 +1385,10 @@ def collect_missing_landing_page_details(rows: list[list[str]], limit: int = 20)
                 "広告グループ名": row[idx["広告グループ名"]].strip(),
                 "広告ID": normalize_lookup_id(row[idx["広告ID"]]),
                 "広告名": row[idx["広告名"]].strip(),
+                "プロモーション種別": row[idx["プロモーション種別"]].strip(),
                 "出稿形式レーン": row[idx["出稿形式レーン"]].strip(),
                 "キャンペーン自動化種別": row[idx["キャンペーン自動化種別"]].strip(),
+                "URL取得状態": row[idx["URL取得状態"]].strip(),
             }
         )
         if len(details) >= limit:
@@ -1104,6 +1561,90 @@ def main() -> None:
                     )
                     print(
                         f"{advertiser_id} AdsManager補完失敗 -> 対象 {len(missing_landing_page_ad_ids)}件 / {str(exc)[:160]}"
+                    )
+
+            smart_plus_targets = build_smart_plus_procedural_targets(
+                flattened,
+                metadata_by_advertiser[advertiser_id],
+            )
+            if smart_plus_targets:
+                try:
+                    smart_plus_metadata, smart_plus_errors = fetch_ads_manager_smart_plus_procedural_metadata(
+                        advertiser_id=advertiser_id,
+                        start_date=args.start_date,
+                        end_date=args.end_date,
+                        creative_targets=smart_plus_targets,
+                    )
+                    merge_fallback_metadata(metadata_by_advertiser[advertiser_id], smart_plus_metadata)
+                    resolved_count = sum(
+                        1
+                        for ad_id in smart_plus_targets
+                        if select_landing_page_url(metadata_by_advertiser[advertiser_id].get(ad_id, {}))
+                    )
+                    print(
+                        f"{advertiser_id} Smart+補完 -> 対象 {len(smart_plus_targets)}件 / 解決 {resolved_count}件"
+                    )
+                    for error in smart_plus_errors:
+                        ads_manager_fallback_errors.append(
+                            {
+                                "advertiser_id": advertiser_id,
+                                "advertiser_name": advertiser_name,
+                                "missing_url_rows": "1",
+                                "fallback": "smart_plus_procedural_detail",
+                                "ad_id": error["ad_id"],
+                                "creative_id": error["creative_id"],
+                                "status": error["status"],
+                                "code": error["code"],
+                                "error": error["error"],
+                            }
+                        )
+                except Exception as exc:
+                    ads_manager_fallback_errors.append(
+                        {
+                            "advertiser_id": advertiser_id,
+                            "advertiser_name": advertiser_name,
+                            "missing_url_rows": str(len(smart_plus_targets)),
+                            "fallback": "smart_plus_procedural_detail",
+                            "error": str(exc),
+                        }
+                    )
+                    print(
+                        f"{advertiser_id} Smart+補完失敗 -> 対象 {len(smart_plus_targets)}件 / {str(exc)[:160]}"
+                    )
+
+            remaining_missing_landing_page_ad_ids = find_missing_non_smart_landing_page_ad_ids(
+                flattened,
+                metadata_by_advertiser[advertiser_id],
+            )
+            if remaining_missing_landing_page_ad_ids:
+                try:
+                    bulk_export_blob = fetch_ads_manager_bulk_export_blob(
+                        advertiser_id=advertiser_id,
+                        start_date=args.start_date,
+                        end_date=args.end_date,
+                    )
+                    bulk_export_metadata = extract_bulk_export_metadata(bulk_export_blob)
+                    merge_bulk_export_metadata_into_ads(metadata_by_advertiser[advertiser_id], bulk_export_metadata)
+                    resolved_count = sum(
+                        1
+                        for ad_id in remaining_missing_landing_page_ad_ids
+                        if select_landing_page_url(metadata_by_advertiser[advertiser_id].get(ad_id, {}))
+                    )
+                    print(
+                        f"{advertiser_id} BulkExport補完 -> 対象 {len(remaining_missing_landing_page_ad_ids)}件 / 解決 {resolved_count}件"
+                    )
+                except Exception as exc:
+                    ads_manager_fallback_errors.append(
+                        {
+                            "advertiser_id": advertiser_id,
+                            "advertiser_name": advertiser_name,
+                            "missing_url_rows": str(len(remaining_missing_landing_page_ad_ids)),
+                            "fallback": "bulk_export",
+                            "error": str(exc),
+                        }
+                    )
+                    print(
+                        f"{advertiser_id} BulkExport補完失敗 -> 対象 {len(remaining_missing_landing_page_ad_ids)}件 / {str(exc)[:160]}"
                     )
 
         print(f"{advertiser_id} {advertiser_name or '(名称未登録)'} -> {len(flattened)}行")
