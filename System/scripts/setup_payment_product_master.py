@@ -47,13 +47,10 @@ ATTR_BOTH = "両方"
 PRODUCT_MASTER_HEADERS = [
     "商品ID",
     "商品管理コード",
-    "商品コード",
     "商品名",
     "事業区分",
     "対象顧客",
     "顧客属性区分",
-    "旧対象顧客",
-    "販売状況",
     "価格",
     "購入形態",
     "初期費用",
@@ -87,7 +84,7 @@ PAYMENT_MAPPING_HEADERS = [
     "備考",
 ]
 
-PRODUCT_MASTER_WIDTHS = [100, 130, 110, 320, 130, 120, 120, 140, 100, 110, 120, 100, 100]
+PRODUCT_MASTER_WIDTHS = [100, 130, 320, 130, 120, 120, 110, 120, 100, 100]
 PRODUCT_REVIEW_WIDTHS = [100, 130, 320, 130, 120, 120, 260]
 PAYMENT_MAPPING_WIDTHS = [120, 360, 90, 130, 260, 100, 140, 130, 120, 120, 110, 220, 220, 240]
 
@@ -106,7 +103,6 @@ class ProductRule:
 class ProductMeta:
     product_id: str
     management_code: str
-    legacy_code: str
     business: str
     target: str
     customer_attr: str
@@ -193,6 +189,12 @@ REVIEW_EXTRA_NAMES = [
 
 REVIEW_EXCLUDED_PRODUCTS = {
     "受託_業務委託契約",
+}
+
+SOURCE_EXCLUDED_PRODUCTS = {
+    "",
+    "受託_業務委託契約",
+    "新商品・サービスが増えたら最新の商品の下に追加！！",
 }
 
 BUSINESS_CODE = {
@@ -331,14 +333,15 @@ def load_source_product_rows(ws: gspread.Worksheet) -> list[dict[str, str]]:
     for row in values[1:]:
         product_code = pick(row, "商品コード")
         product_name = pick(row, "商品・サービス名")
-        if not product_code and not product_name:
+        if product_name in SOURCE_EXCLUDED_PRODUCTS:
+            continue
+        if not product_name:
             continue
         source_rows.append(
             {
                 "商品コード": product_code,
                 "商品名": product_name,
                 "旧対象顧客": pick(row, "対象顧客"),
-                "販売状況": pick(row, "販売状況"),
                 "価格": pick(row, "価格（内税）"),
                 "購入形態": pick(row, "課金形態"),
                 "初期費用": pick(row, "初期費用"),
@@ -411,10 +414,14 @@ def build_product_id(number: int) -> str:
 
 
 def build_management_code(product_id: str, business: str, target: str, customer_attr: str) -> str:
+    if not product_id or not business or not target or not customer_attr:
+        return ""
     numeric = product_id.split("-")[-1]
-    business_code = BUSINESS_CODE.get(business, "ZZ")
-    target_code = TARGET_CODE.get(target, "Z")
-    attr_code = ATTR_CODE.get(customer_attr, "Z")
+    business_code = BUSINESS_CODE.get(business)
+    target_code = TARGET_CODE.get(target)
+    attr_code = ATTR_CODE.get(customer_attr)
+    if not business_code or not target_code or not attr_code:
+        return ""
     return f"{business_code}-{target_code}-{attr_code}-{numeric}"
 
 
@@ -468,7 +475,6 @@ def sync_product_master_structure(
         product_index[name] = ProductMeta(
             product_id=product_id,
             management_code=management_code,
-            legacy_code=legacy_code,
             business=rule.business,
             target=rule.target,
             customer_attr=rule.customer_attr,
