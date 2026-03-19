@@ -7,7 +7,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 import gspread
 
@@ -19,6 +19,7 @@ from sheets_manager import get_client  # noqa: E402
 
 MASTER_SHEET_ID = "1kxUbLqhnzLC1Pg0ASVgU135bnx4Rsv_jP0pqGC0R69w"
 MASTER_PRODUCT_TAB = "商品マスタ"
+PRODUCT_REVIEW_TAB = "商品区分たたき台"
 PAYMENT_MAPPING_TAB = "決済商品変換マスタ"
 
 REFERENCE_SHEET_ID = "1Y6akVont1zmqoVgLS527tbjMButHUS6ej5zHdY8XhA0"
@@ -27,16 +28,47 @@ REFERENCE_TAB = "シート1"
 PAYMENT_COLLECTION_SHEET_ID = "1FfGM0HpofM8yayhJniArXp_vQ6-4JRvlp6rxDt-eHTI"
 PAYMENT_COLLECTION_TAB = "決済データ"
 
+BUSINESS_SKILLPLUS = "スキルプラス事業"
+BUSINESS_ADDNESS = "Addness事業"
+BUSINESS_AI_TRAINING = "AI研修事業"
+BUSINESS_DEZA_JV = "デザジュクJV"
+
+TARGET_NON_MEMBER = "非会員向け"
+TARGET_MEMBER = "会員向け"
+TARGET_BOTH = "両方向け"
+
+ATTR_INDIVIDUAL = "個人"
+ATTR_CORPORATE = "法人"
+ATTR_BOTH = "両方"
+
 PRODUCT_MASTER_HEADERS = [
+    "商品ID",
+    "商品管理コード",
     "商品コード",
     "商品名",
+    "事業区分",
     "対象顧客",
+    "顧客属性区分",
+    "旧対象顧客",
     "販売状況",
     "価格",
     "購入形態",
     "初期費用",
     "商品種類",
+]
+
+PRODUCT_REVIEW_HEADERS = [
+    "商品ID",
+    "商品管理コード",
+    "商品コード",
+    "商品名",
     "事業区分",
+    "対象顧客",
+    "顧客属性区分",
+    "参考_旧対象顧客",
+    "参考_商品種類",
+    "正本状態",
+    "メモ",
 ]
 
 PAYMENT_MAPPING_HEADERS = [
@@ -45,19 +77,40 @@ PAYMENT_MAPPING_HEADERS = [
     "参照件数",
     "参照金額",
     "正式商品名",
+    "商品ID",
+    "商品管理コード",
     "事業区分",
+    "対象顧客",
+    "顧客属性区分",
     "判定区分",
     "補助条件",
     "判定根拠",
     "備考",
 ]
 
-BUSINESS_SKILLPLUS = "スキルプラス事業"
-BUSINESS_ADDNESS = "Addness事業"
-BUSINESS_AI_TRAINING = "AI研修事業"
+PRODUCT_MASTER_WIDTHS = [100, 130, 110, 320, 130, 120, 120, 140, 100, 110, 120, 100, 100]
+PRODUCT_REVIEW_WIDTHS = [100, 130, 110, 320, 130, 120, 120, 140, 100, 100, 260]
+PAYMENT_MAPPING_WIDTHS = [120, 360, 90, 130, 260, 100, 140, 130, 120, 120, 110, 220, 220, 240]
 
-PAYMENT_MAPPING_WIDTHS = [120, 360, 90, 130, 260, 130, 110, 220, 220, 240]
-PRODUCT_MASTER_WIDTHS = [120, 260, 140, 100, 110, 120, 100, 100, 130]
+ID_PATTERN = re.compile(r"^PRD-(\d{4,})$")
+
+
+@dataclass(frozen=True)
+class ProductRule:
+    business: str = ""
+    target: str = ""
+    customer_attr: str = ""
+    note: str = ""
+
+
+@dataclass(frozen=True)
+class ProductMeta:
+    product_id: str
+    management_code: str
+    legacy_code: str
+    business: str
+    target: str
+    customer_attr: str
 
 
 @dataclass
@@ -66,6 +119,94 @@ class PaymentAggregate:
     raw_name: str
     count: int = 0
     amount: int = 0
+
+
+PRODUCT_RULES: dict[str, ProductRule] = {
+    "SNSマーケ完全攻略ダイナマイト合宿": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "AIXコンサルタント3日間完全攻略合宿": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "デザイン限界突破3日間合宿": ProductRule(BUSINESS_DEZA_JV, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "みかみ秘密の部屋": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "AIみかみ秘密の部屋": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "コンドウハルキ秘密の部屋": ProductRule(BUSINESS_DEZA_JV, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "月商1.9億を支えるテンプレ大全": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "最速1分でバズ投稿を量産できる禁断のAIテンプレパック": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "パラダイムシフト": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "iステップ": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
+    "スレップ": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
+    "動画広告分析Pro　1媒体": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
+    "動画広告分析Pro　3媒体": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
+    "生成AIキャンプ": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
+    "生成AIキャンプアフターサポート": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
+    "スキルプラスフリープラン": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "スキルプラスススタートダッシュプラン": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "スキルプラススタンダードプラン": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "スキルプラスエリートプラン": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "スキルプラスプライムプラン": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "スキルプラスデザインプラン／デザジュク": ProductRule(BUSINESS_DEZA_JV, TARGET_NON_MEMBER, ATTR_INDIVIDUAL, "デザジュク系のため要確認"),
+    "スキルプラスフルサポートプラン": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "スキルプラス月額プラン": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "アドネス大合宿_STD生用": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
+    "代理店ビギナー": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
+    "代理店レギュラー": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
+    "代理店プレミアム": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
+    "Visiontodo Basic (1-10名)": ProductRule(BUSINESS_ADDNESS, TARGET_NON_MEMBER, ATTR_CORPORATE),
+    "Visiontodo Basic (11-50名)": ProductRule(BUSINESS_ADDNESS, TARGET_NON_MEMBER, ATTR_CORPORATE),
+    "Visiontodo Basic (51-100名)": ProductRule(BUSINESS_ADDNESS, TARGET_NON_MEMBER, ATTR_CORPORATE),
+    "Visiontodo Basic (101-200名)": ProductRule(BUSINESS_ADDNESS, TARGET_NON_MEMBER, ATTR_CORPORATE),
+    "Visiontodo Basic (201名-)": ProductRule(BUSINESS_ADDNESS, TARGET_NON_MEMBER, ATTR_CORPORATE),
+    "スキルプラスfor Biz　研修": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_CORPORATE),
+    "受託_業務委託契約": ProductRule(BUSINESS_ADDNESS, TARGET_NON_MEMBER, ATTR_CORPORATE, "仮置き"),
+    "アドネス×USEN光01 光回線限定プラン": ProductRule(BUSINESS_ADDNESS, TARGET_NON_MEMBER, "", "要確認"),
+    "AIエージェント": ProductRule(BUSINESS_AI_TRAINING, TARGET_NON_MEMBER, ATTR_CORPORATE),
+    "（仮）AIエージェントプラスサービスの概念実証（PoC）": ProductRule(
+        BUSINESS_AI_TRAINING,
+        TARGET_NON_MEMBER,
+        ATTR_CORPORATE,
+        "AIエージェント系PoCとして仮置き",
+    ),
+    "新スキルプラスフルサポートプラン": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "スキルプラス ライトプラン（月額）": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "スキルプラス オールインワンプラン": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "スキルプラス ライトプラン（年間）": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "（仮）新生スキルプラスエグゼクティブ？？": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, "", "要確認"),
+    "生成AIプロンプトマルチパック": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL, "仮置き"),
+    "アドネスサポートパック": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
+    "みかみの秘密の部屋_月額プラン": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL, "仮置き"),
+    "みかみの秘密の部屋_年額プラン": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL, "仮置き"),
+    "広告マーケティングコース アクションマップ": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
+    "動画編集コース アクションマップ": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
+    "マインドセットコース　アクションマップ": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
+    "AICAN(アイキャン)": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+}
+
+REVIEW_EXTRA_ROWS = [
+    ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL, "AIコンテンツ自動量産Live参加費用 等の集約名"),
+    ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL, "VIPチケット / 一般チケット / 両方参加 / みかみとお茶会 の集約名"),
+]
+
+REVIEW_EXTRA_NAMES = [
+    "Live参加費",
+    "スキルプラスイベント",
+]
+
+BUSINESS_CODE = {
+    BUSINESS_SKILLPLUS: "SP",
+    BUSINESS_ADDNESS: "AD",
+    BUSINESS_AI_TRAINING: "AI",
+    BUSINESS_DEZA_JV: "JV",
+}
+
+TARGET_CODE = {
+    TARGET_NON_MEMBER: "N",
+    TARGET_MEMBER: "M",
+    TARGET_BOTH: "B",
+}
+
+ATTR_CODE = {
+    ATTR_INDIVIDUAL: "C",
+    ATTR_CORPORATE: "B",
+    ATTR_BOTH: "X",
+}
 
 
 def ensure_worksheet(spreadsheet: gspread.Spreadsheet, title: str, rows: int, cols: int) -> gspread.Worksheet:
@@ -128,21 +269,17 @@ def normalize_candidate_name(raw_name: str) -> str:
     return text
 
 
-def infer_business_from_master(code: str, name: str, current: str) -> str:
+def infer_business_from_legacy(code: str, name: str, current: str) -> str:
     if current:
         return current
 
     normalized = (name or "").replace("　", " ").strip()
-
-    if "スキルプラスfor Biz" in normalized or "研修" in normalized:
-        return BUSINESS_AI_TRAINING
-
-    if code.startswith("IN-SYS-") or code.startswith("IN-BIZ-"):
-        return BUSINESS_ADDNESS
-
+    if "スキルプラスfor Biz" in normalized:
+        return BUSINESS_SKILLPLUS
     if "AIエージェント" in normalized or "概念実証" in normalized or "PoC" in normalized:
+        return BUSINESS_AI_TRAINING
+    if code.startswith("IN-SYS-"):
         return BUSINESS_ADDNESS
-
     if code.startswith("IN-SKL-"):
         return BUSINESS_SKILLPLUS
 
@@ -153,10 +290,11 @@ def infer_business_from_master(code: str, name: str, current: str) -> str:
         "AICAN",
         "アクションマップ",
         "アドネスサポートパック",
+        "生成AI",
+        "テンプレ",
     )
-    if code.startswith("IN-EDU-") and any(marker in normalized for marker in skillplus_markers):
+    if any(marker in normalized for marker in skillplus_markers):
         return BUSINESS_SKILLPLUS
-
     return ""
 
 
@@ -169,37 +307,189 @@ def load_product_master_rows(ws: gspread.Worksheet) -> tuple[list[str], list[lis
     return headers, rows
 
 
-def sync_product_master_structure(ws: gspread.Worksheet) -> dict[str, tuple[str, str]]:
+def ordered_product_headers(headers: list[str]) -> list[str]:
+    extra = [header for header in headers if header not in PRODUCT_MASTER_HEADERS]
+    return PRODUCT_MASTER_HEADERS + extra
+
+
+def legacy_target_from_record(record: dict[str, str]) -> str:
+    legacy = (record.get("旧対象顧客") or "").strip()
+    if legacy:
+        return legacy
+
+    current_target = (record.get("対象顧客") or "").strip()
+    if current_target in {TARGET_NON_MEMBER, TARGET_MEMBER, TARGET_BOTH}:
+        return ""
+    return current_target
+
+
+def infer_target_from_legacy(legacy_target: str) -> str:
+    text = (legacy_target or "").strip()
+    if not text:
+        return ""
+    if "スキルプラス生" in text or "サブスク会員" in text or "_STD" in text:
+        return TARGET_MEMBER
+    if "非会員" in text:
+        return TARGET_NON_MEMBER
+    if "事業者" in text:
+        return TARGET_NON_MEMBER
+    return ""
+
+
+def infer_customer_attr_from_legacy(legacy_target: str) -> str:
+    text = (legacy_target or "").strip()
+    if not text:
+        return ""
+    if "事業者" in text and "個人" in text:
+        return ATTR_BOTH
+    if "事業者" in text:
+        return ATTR_CORPORATE
+    if "個人" in text:
+        return ATTR_INDIVIDUAL
+    if "非会員" in text or "スキルプラス生" in text or "サブスク会員" in text or "_STD" in text:
+        return ATTR_INDIVIDUAL
+    return ""
+
+
+def classify_product(name: str, legacy_code: str, legacy_target: str, current_business: str) -> ProductRule:
+    explicit = PRODUCT_RULES.get(name)
+    if explicit:
+        return explicit
+
+    business = infer_business_from_legacy(legacy_code, name, current_business)
+    target = infer_target_from_legacy(legacy_target)
+    customer_attr = infer_customer_attr_from_legacy(legacy_target)
+    note = "要確認" if not (business and target and customer_attr) else ""
+    return ProductRule(business, target, customer_attr, note)
+
+
+def parse_existing_product_id(value: str) -> Optional[int]:
+    match = ID_PATTERN.match((value or "").strip())
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def build_product_id(number: int) -> str:
+    return f"PRD-{number:04d}"
+
+
+def build_management_code(product_id: str, business: str, target: str, customer_attr: str) -> str:
+    numeric = product_id.split("-")[-1]
+    business_code = BUSINESS_CODE.get(business, "ZZ")
+    target_code = TARGET_CODE.get(target, "Z")
+    attr_code = ATTR_CODE.get(customer_attr, "Z")
+    return f"{business_code}-{target_code}-{attr_code}-{numeric}"
+
+
+def sync_product_master_structure(ws: gspread.Worksheet) -> tuple[dict[str, ProductMeta], list[list[str]], dict[str, str]]:
     headers, rows = load_product_master_rows(ws)
     if not headers:
         headers = PRODUCT_MASTER_HEADERS[:]
 
-    for header in PRODUCT_MASTER_HEADERS:
-        if header not in headers:
-            headers.append(header)
+    ordered_headers = ordered_product_headers(headers)
+    max_existing_id = 0
+    for row in rows:
+        padded = row + [""] * (len(headers) - len(row))
+        record = {headers[idx]: padded[idx] for idx in range(len(headers))}
+        existing_id = parse_existing_product_id(record.get("商品ID", ""))
+        if existing_id:
+            max_existing_id = max(max_existing_id, existing_id)
 
+    next_id = max_existing_id + 1 if max_existing_id else 1
     normalized_rows: list[list[str]] = []
-    product_index: dict[str, tuple[str, str]] = {}
+    product_index: dict[str, ProductMeta] = {}
+    review_notes: dict[str, str] = {}
 
     for row in rows:
         padded = row + [""] * (len(headers) - len(row))
         record = {headers[idx]: padded[idx] for idx in range(len(headers))}
-        code = record.get("商品コード", "").strip()
+        legacy_code = record.get("商品コード", "").strip()
         name = record.get("商品名", "").strip()
-        if not code and not name:
+        if not legacy_code and not name:
             continue
 
-        business = infer_business_from_master(code, name, record.get("事業区分", "").strip())
-        record["事業区分"] = business
-        normalized_rows.append([record.get(header, "") for header in headers])
-        product_index[name] = (code, business)
+        legacy_target = legacy_target_from_record(record)
+        rule = classify_product(name, legacy_code, legacy_target, record.get("事業区分", "").strip())
+        product_id = record.get("商品ID", "").strip()
+        if not parse_existing_product_id(product_id):
+            product_id = build_product_id(next_id)
+            next_id += 1
 
-    payload = [headers] + normalized_rows
+        management_code = build_management_code(product_id, rule.business, rule.target, rule.customer_attr)
+        record["商品ID"] = product_id
+        record["商品管理コード"] = management_code
+        record["事業区分"] = rule.business
+        record["対象顧客"] = rule.target
+        record["顧客属性区分"] = rule.customer_attr
+        record["旧対象顧客"] = legacy_target
+
+        normalized_rows.append([record.get(header, "") for header in ordered_headers])
+        product_index[name] = ProductMeta(
+            product_id=product_id,
+            management_code=management_code,
+            legacy_code=legacy_code,
+            business=rule.business,
+            target=rule.target,
+            customer_attr=rule.customer_attr,
+        )
+        review_notes[name] = rule.note
+
+    payload = [ordered_headers] + normalized_rows
     ws.clear()
-    ws.resize(rows=max(len(payload) + 20, 200), cols=len(headers))
+    ws.resize(rows=max(len(payload) + 20, 200), cols=len(ordered_headers))
     ws.update(range_name="A1", values=payload, value_input_option="USER_ENTERED")
     apply_basic_formatting(ws, PRODUCT_MASTER_WIDTHS)
-    return product_index
+    return product_index, normalized_rows, review_notes
+
+
+def build_review_rows(master_rows: list[list[str]], product_headers: list[str], review_notes: dict[str, str]) -> list[list[str]]:
+    idx = {header: i for i, header in enumerate(product_headers)}
+    rows: list[list[str]] = [PRODUCT_REVIEW_HEADERS]
+
+    for row in master_rows:
+        name = row[idx["商品名"]].strip()
+        rows.append(
+            [
+                row[idx["商品ID"]],
+                row[idx["商品管理コード"]],
+                row[idx["商品コード"]],
+                name,
+                row[idx["事業区分"]],
+                row[idx["対象顧客"]],
+                row[idx["顧客属性区分"]],
+                row[idx["旧対象顧客"]],
+                row[idx["商品種類"]],
+                "商品マスタ",
+                review_notes.get(name, ""),
+            ]
+        )
+
+    rows.append([""] * len(PRODUCT_REVIEW_HEADERS))
+    for name, rule in zip(REVIEW_EXTRA_NAMES, REVIEW_EXTRA_ROWS):
+        rows.append(
+            [
+                "",
+                "",
+                "",
+                name,
+                rule.business,
+                rule.target,
+                rule.customer_attr,
+                "",
+                "",
+                "商品マスタ未登録",
+                rule.note,
+            ]
+        )
+    return rows
+
+
+def write_review_rows(ws: gspread.Worksheet, rows: list[list[str]]) -> None:
+    ws.clear()
+    ws.resize(rows=max(len(rows) + 30, 120), cols=len(PRODUCT_REVIEW_HEADERS))
+    ws.update(range_name="A1", values=rows, value_input_option="USER_ENTERED")
+    apply_basic_formatting(ws, PRODUCT_REVIEW_WIDTHS)
 
 
 def load_reference_mapping(ws: gspread.Worksheet) -> dict[str, str]:
@@ -246,7 +536,7 @@ def aggregate_live_payment_products(ws: gspread.Worksheet) -> list[PaymentAggreg
 
 def build_mapping_rows(
     aggregates: Iterable[PaymentAggregate],
-    product_index: dict[str, tuple[str, str]],
+    product_index: dict[str, ProductMeta],
     reference_mapping: dict[str, str],
 ) -> list[list[str]]:
     rows: list[list[str]] = [PAYMENT_MAPPING_HEADERS]
@@ -255,7 +545,7 @@ def build_mapping_rows(
     for aggregate in aggregates:
         raw_name = aggregate.raw_name
         candidate_name = ""
-        business = ""
+        product_meta: Optional[ProductMeta] = None
         status = "要確認"
         extra_condition = ""
         reason_parts: list[str] = []
@@ -279,14 +569,14 @@ def build_mapping_rows(
                     reason_parts.append("装飾除去で一致")
 
             if candidate_name:
-                code, business = product_index.get(candidate_name, ("", ""))
-                if candidate_name not in exact_product_names:
+                product_meta = product_index.get(candidate_name)
+                if product_meta is None:
                     status = "商品マスタ未登録"
                     note = "正式商品名候補はあるが商品マスタ未登録"
                 else:
                     status = "変換済み"
-                    if code:
-                        reason_parts.append(code)
+                    if product_meta.management_code:
+                        reason_parts.append(product_meta.management_code)
             else:
                 status = "要確認"
                 note = "正式商品名候補を未確定"
@@ -298,7 +588,11 @@ def build_mapping_rows(
                 str(aggregate.count),
                 normalize_display_amount(aggregate.amount),
                 candidate_name,
-                business,
+                product_meta.product_id if product_meta else "",
+                product_meta.management_code if product_meta else "",
+                product_meta.business if product_meta else "",
+                product_meta.target if product_meta else "",
+                product_meta.customer_attr if product_meta else "",
                 status,
                 extra_condition,
                 " / ".join(reason_parts),
@@ -395,6 +689,7 @@ def main() -> None:
 
     master_ss = gc.open_by_key(MASTER_SHEET_ID)
     product_ws = master_ss.worksheet(MASTER_PRODUCT_TAB)
+    review_ws = ensure_worksheet(master_ss, PRODUCT_REVIEW_TAB, 120, len(PRODUCT_REVIEW_HEADERS))
     mapping_ws = ensure_worksheet(master_ss, PAYMENT_MAPPING_TAB, 500, len(PAYMENT_MAPPING_HEADERS))
 
     reference_ss = gc.open_by_key(REFERENCE_SHEET_ID)
@@ -403,13 +698,17 @@ def main() -> None:
     payment_ss = gc.open_by_key(PAYMENT_COLLECTION_SHEET_ID)
     payment_ws = payment_ss.worksheet(PAYMENT_COLLECTION_TAB)
 
-    product_index = sync_product_master_structure(product_ws)
+    product_index, normalized_rows, review_notes = sync_product_master_structure(product_ws)
+    review_rows = build_review_rows(normalized_rows, ordered_product_headers(PRODUCT_MASTER_HEADERS), review_notes)
+    write_review_rows(review_ws, review_rows)
+
     reference_mapping = load_reference_mapping(reference_ws)
     aggregates = aggregate_live_payment_products(payment_ws)
     mapping_rows = build_mapping_rows(aggregates, product_index, reference_mapping)
     write_mapping_rows(mapping_ws, mapping_rows)
 
     print(f"商品マスタ更新: {len(product_index):,} 商品")
+    print(f"商品区分たたき台更新: {len(review_rows) - 1:,} 行")
     print(f"決済商品変換マスタ更新: {len(mapping_rows) - 1:,} 行")
 
 
