@@ -183,6 +183,11 @@ SOURCE_EXCLUDED_PRODUCTS = {
     "新商品・サービスが増えたら最新の商品の下に追加！！",
 }
 
+PAYMENT_MAPPING_EXCLUDED_RAW_NAMES = {
+    "タスクマさん",
+    "タスクデビル",
+}
+
 SOURCE_EXTRA_PRODUCTS = [
     {
         "商品名": "Live授業",
@@ -240,6 +245,7 @@ RAW_NAME_ALIAS_MAPPING = {
     "AIコンテンツ自動量産Live参加費用": "Live授業",
     "AIカレッジ【24分割プラン】※頭金10万円銀行振込用": "AIカレッジ　継続",
     "AIカレッジ【頭金10万円＋24分割払いプラン】": "AIカレッジ　継続",
+    "みかみの秘密合宿 - オフライン版 -": "プライム合宿",
     "センサーズ【24分割プラン】※頭金10万円銀行振込用": "センサーズ　継続",
     "新生センサーズ限定プラン【頭金10万円＋24分割】": "センサーズ　継続",
     "VIPチケット（先着5名）": "スキルプラスイベント",
@@ -356,6 +362,15 @@ def infer_average_amount_alias(aggregate: PaymentAggregate) -> str:
     if average_amount == 798000:
         return "スキルプラススタンダードプラン"
     return ""
+
+
+def infer_generic_skillplus_payment_alias(raw_name: str) -> str:
+    compact = (raw_name or "").replace(" ", "").replace("　", "").replace("_", "").replace("＿", "")
+    if "スキルプラス" not in compact:
+        return ""
+    if not any(keyword in compact for keyword in ("支払い", "お支払い", "お支払", "代金", "料金", "請求")):
+        return ""
+    return "スキルプラススタンダードプラン"
 
 
 def infer_business_from_legacy(code: str, name: str, current: str) -> str:
@@ -634,6 +649,8 @@ def aggregate_live_payment_products(ws: gspread.Worksheet) -> list[PaymentAggreg
             continue
 
         raw_name = padded[idx["商品名"]].strip() or "(空欄)"
+        if raw_name in PAYMENT_MAPPING_EXCLUDED_RAW_NAMES:
+            continue
         key = (source, raw_name)
         aggregate = aggregates.setdefault(key, PaymentAggregate(source=source, raw_name=raw_name))
         aggregate.count += 1
@@ -689,6 +706,11 @@ def build_mapping_rows(
                 if normalized in exact_product_names:
                     candidate_name = normalized
                     reason_parts.append("装飾除去で一致")
+            if not candidate_name:
+                generic_skillplus_name = infer_generic_skillplus_payment_alias(raw_name)
+                if generic_skillplus_name in exact_product_names:
+                    candidate_name = generic_skillplus_name
+                    reason_parts.append("スキルプラス汎用請求名")
             if not candidate_name:
                 average_aliased_name = infer_average_amount_alias(aggregate)
                 if average_aliased_name in exact_product_names:
