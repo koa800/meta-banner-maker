@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import time
+from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -89,10 +90,12 @@ AD_FIELDS = [
     "landing_page_url",
     "landing_page_urls",
     "smart_plus_ad_id",
+    "campaign_automation_type",
     "card_id",
     "ad_format",
     "creative_type",
     "image_mode",
+    "optimization_event",
 ]
 ADGROUP_FIELDS = [
     "adgroup_id",
@@ -687,12 +690,42 @@ def select_landing_page_url(metadata: dict[str, Any]) -> str:
     return text
 
 
+def is_smart_plus_metadata(metadata: dict[str, Any]) -> bool:
+    automation_type = str(metadata.get("campaign_automation_type") or "").strip()
+    smart_plus_ad_id = str(metadata.get("smart_plus_ad_id") or "").strip()
+    return "SMART_PLUS" in automation_type or bool(smart_plus_ad_id)
+
+
+def select_delivery_lane(metadata: dict[str, Any]) -> str:
+    promotion_type = str(metadata.get("promotion_type") or "").strip()
+    smart_plus = is_smart_plus_metadata(metadata)
+    if promotion_type == "LEAD_GENERATION":
+        if smart_plus:
+            return "Lead Gen / Smart+"
+        return "Lead Gen / 通常"
+    if promotion_type == "WEBSITE":
+        if smart_plus:
+            return "Web / Smart+"
+        return "Web / 通常"
+    if smart_plus:
+        return "Smart+"
+    return "通常"
+
+
 def select_landing_page_status(metadata: dict[str, Any]) -> str:
     if select_landing_page_url(metadata):
         return "取得済み"
-    promotion_type = str(metadata.get("promotion_type") or "").strip()
-    if promotion_type == "LEAD_GENERATION":
-        return "対象外（リード獲得）"
+    lane = select_delivery_lane(metadata)
+    if lane == "Lead Gen / Smart+":
+        return "未取得（Lead Gen / Smart+）"
+    if lane == "Lead Gen / 通常":
+        return "未取得（Lead Gen）"
+    if lane == "Web / Smart+":
+        return "未取得（Web / Smart+）"
+    if lane == "Web / 通常":
+        return "未取得（WEBSITE）"
+    if lane == "Smart+":
+        return "未取得（Smart+）"
     return "未取得"
 
 
@@ -742,6 +775,9 @@ def build_sheet_rows(
             "動画2秒再生数": row.get("video_watched_2s", ""),
             "動画6秒再生数": row.get("video_watched_6s", ""),
             "動画完全再生数": row.get("video_views_p100", ""),
+            "キャンペーン自動化種別": str(metadata.get("campaign_automation_type") or "").strip(),
+            "出稿形式レーン": select_delivery_lane(metadata),
+            "最適化イベント": str(metadata.get("optimization_event") or "").strip(),
         }
 
         prepared: list[str] = []
@@ -833,15 +869,21 @@ def append_rows_to_sheet(worksheet, rows: list[list[str]], max_chunk: int = 1000
         time.sleep(1)
 
 
-def summarize_sheet_quality(rows: list[list[str]]) -> dict[str, int]:
+def summarize_sheet_quality(rows: list[list[str]]) -> dict[str, Any]:
     idx = {header: position for position, header in enumerate(TIKTOK_HEADERS)}
     summary = {
         "row_count": len(rows),
         "missing_creative_key_rows": 0,
         "missing_media_id_rows": 0,
         "missing_promotion_type_rows": 0,
-        "missing_landing_page_url_rows": 0,
+        "missing_landing_page_url_rows_web": 0,
+        "missing_landing_page_url_rows_lead_generation": 0,
+        "missing_landing_page_url_rows_smart_plus": 0,
+        "delivery_lane_counts": {},
+        "url_status_counts": {},
     }
+    lane_counter: Counter[str] = Counter()
+    status_counter: Counter[str] = Counter()
 
     for row in rows:
         if not row[idx["CR識別キー"]].strip():
@@ -849,11 +891,23 @@ def summarize_sheet_quality(rows: list[list[str]]) -> dict[str, int]:
         if not row[idx["メディアID"]].strip():
             summary["missing_media_id_rows"] += 1
         promotion_type = row[idx["プロモーション種別"]].strip()
+        lane = row[idx["出稿形式レーン"]].strip()
+        status = row[idx["URL取得状態"]].strip()
+        if lane:
+            lane_counter[lane] += 1
+        if status:
+            status_counter[status] += 1
         if not promotion_type:
             summary["missing_promotion_type_rows"] += 1
         if promotion_type == "WEBSITE" and not row[idx["遷移先URL"]].strip():
-            summary["missing_landing_page_url_rows"] += 1
+            summary["missing_landing_page_url_rows_web"] += 1
+        if promotion_type == "LEAD_GENERATION" and not row[idx["遷移先URL"]].strip():
+            summary["missing_landing_page_url_rows_lead_generation"] += 1
+        if "Smart+" in lane and not row[idx["遷移先URL"]].strip():
+            summary["missing_landing_page_url_rows_smart_plus"] += 1
 
+    summary["delivery_lane_counts"] = dict(lane_counter)
+    summary["url_status_counts"] = dict(status_counter)
     return summary
 
 
@@ -876,6 +930,8 @@ def collect_missing_landing_page_details(rows: list[list[str]], limit: int = 20)
                 "広告グループ名": row[idx["広告グループ名"]].strip(),
                 "広告ID": normalize_lookup_id(row[idx["広告ID"]]),
                 "広告名": row[idx["広告名"]].strip(),
+                "出稿形式レーン": row[idx["出稿形式レーン"]].strip(),
+                "キャンペーン自動化種別": row[idx["キャンペーン自動化種別"]].strip(),
             }
         )
         if len(details) >= limit:
@@ -1102,7 +1158,9 @@ def main() -> None:
             f"CR識別キー欠損 {sheet_quality_summary['missing_creative_key_rows']} / "
             f"メディアID欠損 {sheet_quality_summary['missing_media_id_rows']} / "
             f"プロモーション種別欠損 {sheet_quality_summary['missing_promotion_type_rows']} / "
-            f"遷移先URL欠損(Webのみ) {sheet_quality_summary['missing_landing_page_url_rows']}"
+            f"遷移先URL欠損(Webのみ) {sheet_quality_summary['missing_landing_page_url_rows_web']} / "
+            f"遷移先URL未取得(Lead Gen) {sheet_quality_summary['missing_landing_page_url_rows_lead_generation']} / "
+            f"遷移先URL未取得(Smart+) {sheet_quality_summary['missing_landing_page_url_rows_smart_plus']}"
         )
 
     summary_path = output_path.with_name(output_path.stem + "_summary.json")
