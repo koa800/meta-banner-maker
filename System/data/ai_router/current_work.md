@@ -29,7 +29,7 @@
   - シートID: `1FfGM0HpofM8yayhJniArXp_vQ6-4JRvlp6rxDt-eHTI`
   - 決済データタブ: 276,487行（19列の共通カラム。1行=1イベント）
   - UTAGE補助タブ: 176,257行（UTAGEはUnivaPayと金額重複するため別タブ。登録経路の補助データ）
-  - データソース管理タブ / データ追加ルールタブ
+  - データソース管理タブ / データ追加ルールタブ / 運用監査タブ / 取込ファイルログタブ / 異常ファイルログタブ / 月次照合タブ
 
 - **各ソースの取り込み状況**:
 
@@ -52,6 +52,7 @@
 - **スクリプト**:
   - `System/scripts/payment_csv_to_sheet.py`: CSV→19列正規化→シート書き込み
   - `System/scripts/payment_daily_sync.py`: Google Drive日別フォルダ監視→自動取り込み
+  - `System/scripts/payment_collection_audit.py`: 監査タブ（週次監査 / 月次照合 / 異常ログ / 取込ログ）を再生成
 
 - **日次同期の現在地**:
   - `payment_daily_sync.py` は Orchestrator 登録済み
@@ -64,6 +65,10 @@
   - 503 の一時エラーに対するリトライと、途中状態を落とさないチェックポイント保存を実装済み
   - `取込失敗` は次回実行で再試行する。再試行成功後は異常ログから解消する
   - `データソース管理` の `ステータス / 最終同期日 / 最終同期行数 / エラー数` を実行結果に同期する
+  - `運用監査` タブで直近7日監査と容量監視を可視化する
+  - `取込ファイルログ` タブでファイル単位の成功/0件正常/重複のみを追跡する
+  - `異常ファイルログ` タブで検出/解消の履歴を残す
+  - `月次照合` タブで「フォルダ月 x ソース」単位の `converted = written + duplicate` を照合する
 
 - **収集段階のフィルタ方針**:
   - 収集データにはフィルタしない。全イベント・全ステータスをそのまま入れる
@@ -113,6 +118,7 @@
 
 - 日次で Google Drive の日別フォルダを監視し、自動取り込みまで接続済み
 - 2026-03-18 までのデータは反映済み
+- 日次同期のたびに監査タブも更新されるため、週次監査と月次照合は別シートを見れば確認できる
 - 残論点は `【データ収集】2026/03/16（全期間）` を削除するか、バックアップ用途で残すかの整理
 
 ### 広告データの残り
@@ -168,6 +174,7 @@
 
 - `System/scripts/payment_csv_to_sheet.py`（新規）
 - `System/scripts/payment_daily_sync.py`（新規）
+- `System/scripts/payment_collection_audit.py`（新規）
 - `System/scripts/fetch_meta_ads_to_sheet.py`（新規）
 - `System/scripts/fetch_meta_ads_test.py`（新規）
 - `System/ad_spend_metrics_sheet_sync.py`（新規）

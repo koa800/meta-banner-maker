@@ -35,6 +35,7 @@ from googleapiclient.http import MediaIoBaseDownload
 
 from sheets_manager import get_client
 from scripts import payment_csv_to_sheet as payment_import
+from scripts import payment_collection_audit
 
 try:
     from mac_mini.agent_orchestrator.notifier import send_line_notify
@@ -59,6 +60,7 @@ SCOPES = [
 
 DEFAULT_LOOKBACK_DAYS = 14
 RETRYABLE_ANOMALY_CATEGORIES = {"import_error"}
+MAX_HISTORY_ITEMS = 1000
 
 
 def get_drive_service():
@@ -80,6 +82,7 @@ def load_state() -> dict:
         "processed_file_fingerprints": {},
         "anomaly_files": {},
         "anomaly_fingerprints": {},
+        "anomaly_history": [],
         "duplicate_files": {},
         "last_run": "",
         "last_summary": {},
@@ -94,6 +97,13 @@ def checkpoint_state(state: dict) -> None:
 def save_state(state: dict) -> None:
     state["last_run"] = datetime.now().isoformat()
     checkpoint_state(state)
+
+
+def append_anomaly_history(state: dict, event: dict) -> None:
+    history = state.setdefault("anomaly_history", [])
+    history.append(event)
+    if len(history) > MAX_HISTORY_ITEMS:
+        del history[:-MAX_HISTORY_ITEMS]
 
 
 def list_daily_folders(service, page_size: int = 60) -> list[dict]:
@@ -208,6 +218,9 @@ def register_anomaly(state: dict, file_meta: dict, category: str, reason: str, n
     fingerprint = build_file_fingerprint(file_meta)
 
     previous = state.setdefault("anomaly_files", {}).get(file_id, {})
+    previous_category = previous.get("category", "")
+    previous_reason = previous.get("reason", "")
+    should_record_history = not previous
     if not previous:
         previous = {
             "file_name": file_meta["name"],
@@ -230,6 +243,8 @@ def register_anomaly(state: dict, file_meta: dict, category: str, reason: str, n
             "source": str(file_meta.get("source") or ""),
         }
     )
+    if previous_category != category or previous_reason != reason:
+        should_record_history = True
     state["anomaly_files"][file_id] = previous
 
     anomaly_fingerprints = state.setdefault("anomaly_fingerprints", {})
@@ -262,6 +277,23 @@ def register_anomaly(state: dict, file_meta: dict, category: str, reason: str, n
                 "notified_at": now_iso,
             }
 
+    if should_record_history:
+        append_anomaly_history(
+            state,
+            {
+                "recorded_at": now_iso,
+                "event_type": "detected",
+                "category": category,
+                "source": str(file_meta.get("source") or ""),
+                "folder_name": file_meta.get("folder_name", ""),
+                "file_name": file_meta["name"],
+                "reason": reason,
+                "notified_at": previous.get("notified_at", ""),
+                "file_id": file_id,
+                "file_fingerprint": fingerprint,
+            },
+        )
+
 
 def mark_duplicate_file(state: dict, file_meta: dict, duplicate_reason: str) -> None:
     state.setdefault("duplicate_files", {})[str(file_meta["id"])] = {
@@ -276,8 +308,24 @@ def mark_duplicate_file(state: dict, file_meta: dict, duplicate_reason: str) -> 
 def resolve_anomaly(state: dict, file_meta: dict) -> None:
     file_id = str(file_meta["id"])
     fingerprint = build_file_fingerprint(file_meta)
-    state.setdefault("anomaly_files", {}).pop(file_id, None)
+    resolved = state.setdefault("anomaly_files", {}).pop(file_id, None)
     state.setdefault("anomaly_fingerprints", {}).pop(fingerprint, None)
+    if resolved:
+        append_anomaly_history(
+            state,
+            {
+                "recorded_at": datetime.now().isoformat(),
+                "event_type": "resolved",
+                "category": resolved.get("category", ""),
+                "source": resolved.get("source", ""),
+                "folder_name": resolved.get("folder_name", ""),
+                "file_name": resolved.get("file_name", ""),
+                "reason": resolved.get("reason", ""),
+                "notified_at": resolved.get("notified_at", ""),
+                "file_id": file_id,
+                "file_fingerprint": fingerprint,
+            },
+        )
 
 
 def anomaly_blocks_reimport(meta: dict) -> bool:
@@ -464,6 +512,7 @@ def main():
             "written_utage_rows": 0,
         }
         save_state(state)
+        payment_collection_audit.sync_payment_collection_audit(spreadsheet=spreadsheet if unresolved_source_issues else None, state=state)
         print("\n新しい取込対象ファイルはありません。")
         return
 
@@ -601,6 +650,7 @@ def main():
         "skipped_utage_duplicates": skipped_utage_duplicates_total,
     }
     save_state(state)
+    payment_collection_audit.sync_payment_collection_audit(spreadsheet=spreadsheet, state=state)
 
     print("\n実行結果:")
     print(f"  処理成功ファイル: {processed_count}件")
