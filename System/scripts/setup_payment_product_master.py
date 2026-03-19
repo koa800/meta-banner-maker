@@ -167,6 +167,7 @@ PRODUCT_RULES: dict[str, ProductRule] = {
     "マインドセットコース　アクションマップ": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "AICAN(アイキャン)": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "Live授業": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "スキルプラスイベント": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
     "みかみとお茶会": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
 }
 
@@ -201,10 +202,23 @@ SOURCE_EXTRA_PRODUCTS = [
         "初期費用": "",
         "商品種類": "",
     },
+    {
+        "商品名": "スキルプラスイベント",
+        "事業区分": BUSINESS_SKILLPLUS,
+        "対象顧客": TARGET_MEMBER,
+        "顧客属性区分": ATTR_INDIVIDUAL,
+        "価格": "",
+        "購入形態": "",
+        "初期費用": "",
+        "商品種類": "",
+    },
 ]
 
 RAW_NAME_ALIAS_MAPPING = {
     "AIコンテンツ自動量産Live参加費用": "Live授業",
+    "VIPチケット（先着5名）": "スキルプラスイベント",
+    "一般チケット": "スキルプラスイベント",
+    "両方参加": "スキルプラスイベント",
 }
 
 KEYWORD_ALIAS_RULES = [
