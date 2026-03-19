@@ -31,6 +31,7 @@ PAYMENT_COLLECTION_TAB = "決済データ"
 BUSINESS_SKILLPLUS = "スキルプラス事業"
 BUSINESS_ADDNESS = "Addness事業"
 BUSINESS_AI_TRAINING = "AI研修事業"
+BUSINESS_DEZAJUKU = "デザジュク事業"
 BUSINESS_DEZA_JV = "デザジュクJV"
 
 TARGET_NON_MEMBER = "非会員向け"
@@ -134,7 +135,7 @@ PRODUCT_RULES: dict[str, ProductRule] = {
     "スキルプラススタンダードプラン": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "スキルプラスエリートプラン": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "スキルプラスプライムプラン": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
-    "スキルプラスデザインプラン／デザジュク": ProductRule(BUSINESS_DEZA_JV, TARGET_NON_MEMBER, ATTR_INDIVIDUAL, "デザジュク系のため要確認"),
+    "スキルプラスデザインプラン／デザジュク": ProductRule(BUSINESS_DEZAJUKU, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "スキルプラスフルサポートプラン": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "スキルプラス月額プラン": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "アドネス大合宿_STD生用": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
@@ -147,20 +148,15 @@ PRODUCT_RULES: dict[str, ProductRule] = {
     "Visiontodo Basic (101-200名)": ProductRule(BUSINESS_ADDNESS, TARGET_NON_MEMBER, ATTR_CORPORATE),
     "Visiontodo Basic (201名-)": ProductRule(BUSINESS_ADDNESS, TARGET_NON_MEMBER, ATTR_CORPORATE),
     "スキルプラスfor Biz　研修": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_CORPORATE),
-    "アドネス×USEN光01 光回線限定プラン": ProductRule(BUSINESS_ADDNESS, TARGET_NON_MEMBER, "", "要確認"),
+    "アドネス×USEN光01 光回線限定プラン": ProductRule(BUSINESS_DEZA_JV, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "AIエージェント": ProductRule(BUSINESS_AI_TRAINING, TARGET_NON_MEMBER, ATTR_CORPORATE),
-    "（仮）AIエージェントプラスサービスの概念実証（PoC）": ProductRule(
-        BUSINESS_AI_TRAINING,
-        TARGET_NON_MEMBER,
-        ATTR_CORPORATE,
-        "AIエージェント系PoCとして仮置き",
-    ),
+    "（仮）AIエージェントプラスサービスの概念実証（PoC）": ProductRule(BUSINESS_AI_TRAINING, TARGET_NON_MEMBER, ATTR_CORPORATE),
     "新スキルプラスフルサポートプラン": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "スキルプラス ライトプラン（月額）": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "スキルプラス オールインワンプラン": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "スキルプラス ライトプラン（年間）": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "（仮）新生スキルプラスエグゼクティブ？？": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, "", "要確認"),
-    "生成AIプロンプトマルチパック": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL, "仮置き"),
+    "生成AIプロンプトマルチパック": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "アドネスサポートパック": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "みかみの秘密の部屋_月額プラン": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL, "仮置き"),
     "みかみの秘密の部屋_年額プラン": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL, "仮置き"),
@@ -174,13 +170,11 @@ PRODUCT_RULES: dict[str, ProductRule] = {
 
 REVIEW_EXTRA_ROWS = [
     ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL, "AIコンテンツ自動量産Live参加費用 等の集約名"),
-    ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL, "VIPチケット / 一般チケット / 両方参加 の集約名"),
     ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL, "個別イベント商品として管理"),
 ]
 
 REVIEW_EXTRA_NAMES = [
     "Live参加費",
-    "スキルプラスイベント",
     "みかみとお茶会",
 ]
 
@@ -198,6 +192,7 @@ BUSINESS_CODE = {
     BUSINESS_SKILLPLUS: "SP",
     BUSINESS_ADDNESS: "AD",
     BUSINESS_AI_TRAINING: "AI",
+    BUSINESS_DEZAJUKU: "DZ",
     BUSINESS_DEZA_JV: "JV",
 }
 
