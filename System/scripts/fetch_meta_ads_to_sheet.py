@@ -131,6 +131,8 @@ STATUS_HEADER = [
     "active_campaign数",
     "active_adset数",
     "active_ad数",
+    "直近7日実績行数",
+    "直近7日消化金額",
     "取得状態",
     "鮮度状態",
     "判定理由",
@@ -812,6 +814,54 @@ def fetch_account_activity_map(account_ids, token):
     return result
 
 
+def fetch_recent_insights_map(account_ids, token, since_days=7):
+    result = {}
+    if not account_ids:
+        return result
+
+    until = (datetime.now().date() - timedelta(days=1)).strftime("%Y-%m-%d")
+    since = (datetime.now().date() - timedelta(days=since_days)).strftime("%Y-%m-%d")
+
+    def fetch_one(account_id):
+        url = f"{BASE_URL}/act_{account_id}/insights"
+        params = {
+            "access_token": token,
+            "fields": "ad_id,spend",
+            "level": "ad",
+            "time_increment": 1,
+            "time_range": json.dumps({"since": since, "until": until}, ensure_ascii=False),
+            "limit": 500,
+        }
+        row_count = 0
+        total_spend = 0.0
+        while url:
+            resp = requests.get(url, params=params, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            rows = data.get("data", [])
+            row_count += len(rows)
+            total_spend += sum(float(row.get("spend", 0) or 0) for row in rows)
+            url = data.get("paging", {}).get("next")
+            params = None
+        return account_id, {
+            "recent_rows": row_count,
+            "recent_spend": round(total_spend, 2),
+        }
+
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        futures = {executor.submit(fetch_one, account_id): account_id for account_id in account_ids}
+        for future in as_completed(futures):
+            account_id = futures[future]
+            try:
+                key, value = future.result()
+                result[key] = value
+            except Exception as exc:
+                print(f"  直近実績取得失敗: {account_id} {exc}")
+                result[account_id] = {"recent_rows": "", "recent_spend": ""}
+
+    return result
+
+
 # ============================================================
 # データ変換
 # ============================================================
@@ -1014,6 +1064,8 @@ def determine_freshness_status(
     active_campaigns=0,
     active_adsets=0,
     active_ads=0,
+    recent_rows=0,
+    recent_spend=0,
 ):
     if raw_rows == 0:
         return "0件", "raw行なし"
@@ -1023,17 +1075,24 @@ def determine_freshness_status(
     if "停止中" in clean_cell(master_note):
         return "停止中", "広告アカウントの備考=停止中"
 
-    has_active_objects = any(
-        str(value).strip() not in {"", "0"} and int(value) > 0
-        for value in [active_campaigns, active_adsets, active_ads]
-    )
+    active_campaign_count = int(active_campaigns) if str(active_campaigns).strip() not in {"", "0"} else 0
+    active_adset_count = int(active_adsets) if str(active_adsets).strip() not in {"", "0"} else 0
+    active_ad_count = int(active_ads) if str(active_ads).strip() not in {"", "0"} else 0
+    recent_row_count = int(recent_rows) if str(recent_rows).strip() not in {"", "0"} else 0
+    recent_spend_value = float(recent_spend or 0)
 
     expected_latest = (datetime.now().date() - timedelta(days=1)).strftime("%Y-%m-%d")
     if latest_date >= expected_latest:
         return "最新", "前日まで取得済み"
 
-    if has_active_objects:
-        return "要確認", "currentでactive campaign/adset/adあり"
+    if recent_row_count > 0 or recent_spend_value > 0:
+        return "要確認", "直近7日実績あり"
+
+    if active_ad_count > 0:
+        return "要確認", "currentでactive adあり / 直近7日実績0"
+
+    if active_campaign_count > 0 or active_adset_count > 0:
+        return "停止中", "currentでactive campaign/adsetのみ"
 
     if account_status and account_status != "1":
         return "停止中", f"account_status={account_status}"
@@ -1130,7 +1189,7 @@ def apply_status_tab_formatting(spreadsheet, worksheet, row_count):
                     "sheetId": worksheet.id,
                     "startRowIndex": 1,
                     "startColumnIndex": 4,
-                    "endColumnIndex": 9,
+                    "endColumnIndex": 11,
                 },
                 "cell": {
                     "userEnteredFormat": {
@@ -1148,8 +1207,8 @@ def apply_status_tab_formatting(spreadsheet, worksheet, row_count):
                 "range": {
                     "sheetId": worksheet.id,
                     "startRowIndex": 1,
-                    "startColumnIndex": 13,
-                    "endColumnIndex": 15,
+                    "startColumnIndex": 15,
+                    "endColumnIndex": 17,
                 },
                 "cell": {
                     "userEnteredFormat": {
@@ -1167,8 +1226,8 @@ def apply_status_tab_formatting(spreadsheet, worksheet, row_count):
                 "range": {
                     "sheetId": worksheet.id,
                     "startRowIndex": 1,
-                    "startColumnIndex": 17,
-                    "endColumnIndex": 22,
+                    "startColumnIndex": 19,
+                    "endColumnIndex": 24,
                 },
                 "cell": {
                     "userEnteredFormat": {
@@ -1209,6 +1268,7 @@ def update_meta_status_sheet(
     account_notes=None,
     account_status_map=None,
     account_activity_map=None,
+    recent_insights_map=None,
 ):
     status_ws = ensure_status_tab(spreadsheet)
     raw_summary = build_meta_raw_summary(raw_worksheet)
@@ -1217,6 +1277,7 @@ def update_meta_status_sheet(
     account_notes = account_notes or {}
     account_status_map = account_status_map or {}
     account_activity_map = account_activity_map or {}
+    recent_insights_map = recent_insights_map or {}
 
     rows = [STATUS_HEADER]
     for account_id, account_name in sorted(target_accounts.items(), key=lambda item: item[1]):
@@ -1230,6 +1291,9 @@ def update_meta_status_sheet(
         active_campaigns = activity_info.get("active_campaigns", "")
         active_adsets = activity_info.get("active_adsets", "")
         active_ads = activity_info.get("active_ads", "")
+        recent_info = recent_insights_map.get(account_id, {})
+        recent_rows = recent_info.get("recent_rows", "")
+        recent_spend = recent_info.get("recent_spend", "")
         freshness_status, freshness_reason = determine_freshness_status(
             raw.get("raw行数", 0),
             raw.get("最終取得日", ""),
@@ -1239,6 +1303,8 @@ def update_meta_status_sheet(
             active_campaigns,
             active_adsets,
             active_ads,
+            recent_rows,
+            recent_spend,
         )
         rows.append(
                 [
@@ -1251,6 +1317,8 @@ def update_meta_status_sheet(
                     active_campaigns,
                     active_adsets,
                     active_ads,
+                    recent_rows,
+                    recent_spend,
                     determine_collection_status(progress_rows, raw.get("raw行数", 0)),
                     freshness_status,
                     freshness_reason,
@@ -1310,6 +1378,7 @@ def main():
     account_notes = load_meta_account_notes_from_master(gc)
     account_status_map = fetch_account_status_map(accounts.keys(), token)
     account_activity_map = fetch_account_activity_map(accounts.keys(), token)
+    recent_insights_map = fetch_recent_insights_map(accounts.keys(), token)
 
     if args.repair_existing_ids:
         repaired = repair_existing_id_columns(ws)
@@ -1326,6 +1395,7 @@ def main():
             account_notes=account_notes,
             account_status_map=account_status_map,
             account_activity_map=account_activity_map,
+            recent_insights_map=recent_insights_map,
         )
         print(f"既存広告メタ情報を補完: {result}")
         return
@@ -1339,6 +1409,7 @@ def main():
             account_notes=account_notes,
             account_status_map=account_status_map,
             account_activity_map=account_activity_map,
+            recent_insights_map=recent_insights_map,
         )
         print("Meta収集状況タブを更新しました")
         return
@@ -1426,6 +1497,7 @@ def main():
         account_notes=account_notes,
         account_status_map=account_status_map,
         account_activity_map=account_activity_map,
+        recent_insights_map=recent_insights_map,
     )
 
 
