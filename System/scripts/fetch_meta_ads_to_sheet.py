@@ -133,6 +133,7 @@ STATUS_HEADER = [
     "active_ad数",
     "取得状態",
     "鮮度状態",
+    "判定理由",
     "最終日配信ステータス",
     "progress記録行数",
     "raw行数",
@@ -1015,12 +1016,12 @@ def determine_freshness_status(
     active_ads=0,
 ):
     if raw_rows == 0:
-        return "0件"
+        return "0件", "raw行なし"
     if not latest_date:
-        return "未取得"
+        return "未取得", "最終取得日なし"
 
     if "停止中" in clean_cell(master_note):
-        return "停止中"
+        return "停止中", "広告アカウントの備考=停止中"
 
     has_active_objects = any(
         str(value).strip() not in {"", "0"} and int(value) > 0
@@ -1029,20 +1030,20 @@ def determine_freshness_status(
 
     expected_latest = (datetime.now().date() - timedelta(days=1)).strftime("%Y-%m-%d")
     if latest_date >= expected_latest:
-        return "最新"
+        return "最新", "前日まで取得済み"
 
     if has_active_objects:
-        return "要確認"
+        return "要確認", "currentでactive campaign/adset/adあり"
 
     if account_status and account_status != "1":
-        return "停止中"
+        return "停止中", f"account_status={account_status}"
 
     status_set = {status for status in latest_statuses if status}
     if status_set and status_set.issubset(PAUSED_LIKE_STATUSES):
-        return "停止中"
+        return "停止中", "最終日配信ステータスが停止系のみ"
     if status_set & ACTIVE_LIKE_STATUSES:
-        return "要確認"
-    return "要確認"
+        return "要確認", "最終日配信ステータスにACTIVEを含む"
+    return "要確認", "停止根拠不足のため要確認"
 
 
 def ensure_status_tab(spreadsheet):
@@ -1147,8 +1148,8 @@ def apply_status_tab_formatting(spreadsheet, worksheet, row_count):
                 "range": {
                     "sheetId": worksheet.id,
                     "startRowIndex": 1,
-                    "startColumnIndex": 12,
-                    "endColumnIndex": 14,
+                    "startColumnIndex": 13,
+                    "endColumnIndex": 15,
                 },
                 "cell": {
                     "userEnteredFormat": {
@@ -1166,8 +1167,8 @@ def apply_status_tab_formatting(spreadsheet, worksheet, row_count):
                 "range": {
                     "sheetId": worksheet.id,
                     "startRowIndex": 1,
-                    "startColumnIndex": 16,
-                    "endColumnIndex": 21,
+                    "startColumnIndex": 17,
+                    "endColumnIndex": 22,
                 },
                 "cell": {
                     "userEnteredFormat": {
@@ -1229,6 +1230,16 @@ def update_meta_status_sheet(
         active_campaigns = activity_info.get("active_campaigns", "")
         active_adsets = activity_info.get("active_adsets", "")
         active_ads = activity_info.get("active_ads", "")
+        freshness_status, freshness_reason = determine_freshness_status(
+            raw.get("raw行数", 0),
+            raw.get("最終取得日", ""),
+            latest_statuses,
+            account_notes.get(account_id, ""),
+            account_status,
+            active_campaigns,
+            active_adsets,
+            active_ads,
+        )
         rows.append(
                 [
                     "Meta広告",
@@ -1241,16 +1252,8 @@ def update_meta_status_sheet(
                     active_adsets,
                     active_ads,
                     determine_collection_status(progress_rows, raw.get("raw行数", 0)),
-                    determine_freshness_status(
-                        raw.get("raw行数", 0),
-                        raw.get("最終取得日", ""),
-                        latest_statuses,
-                        account_notes.get(account_id, ""),
-                        account_status,
-                        active_campaigns,
-                        active_adsets,
-                        active_ads,
-                    ),
+                    freshness_status,
+                    freshness_reason,
                     format_latest_statuses(latest_statuses),
                     progress_rows if progress_rows is not None else "",
                     raw.get("raw行数", 0),
