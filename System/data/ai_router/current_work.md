@@ -27,9 +27,9 @@
 - `【アドネス株式会社】決済データ（収集）` に全ソースの過去データを取り込み完了
 - 2026-03-19 に日次同期を強化し、Drive 日別フォルダ起点で 2026-03-18 までのデータ反映を完了
   - シートID: `1FfGM0HpofM8yayhJniArXp_vQ6-4JRvlp6rxDt-eHTI`
-  - 決済データタブ: 275,994行（21列の共通カラム。1行=1イベント）
+  - 決済データタブ: 275,994行（20列の共通カラム。1行=1イベント）
   - UTAGE補助タブ: 117,568行（UTAGEはUnivaPayと金額重複するため別タブ。登録経路の補助データ）
-  - データソース管理タブ / データ追加ルールタブ / 決済データ（旧）タブ
+  - データソース管理タブ / データ追加ルールタブ
 
 - **各ソースの取り込み状況**:
 
@@ -45,12 +45,12 @@
 | CREDIX | 33 | 2026/01〜2026/03 | 旧データ（31件）+ 日別CSVフォルダ（2件）。2025年はサービス未開始 |
 | UTAGE補助 | 117,568 | 2024/02〜2026/03 | 全期間CSVフォルダ。¥0取引（カード認証）1,446件除外済み |
 
-- **共通カラム定義（21列）**: `Master/knowledge/payment_systems_definitions.md` に保存
+- **共通カラム定義（20列）**: `Master/knowledge/payment_systems_definitions.md` に保存
 - **各決済システムの公式定義**: 同ファイルに保存（UnivaPayのイベント/ステータス、MOSHの送金ステータス、CREDIXの決済ステータス等）
 - **ログイン情報**: `System/credentials/payment_systems.json`
 
 - **スクリプト**:
-  - `System/scripts/payment_csv_to_sheet.py`: CSV→21列正規化→シート書き込み
+  - `System/scripts/payment_csv_to_sheet.py`: CSV→20列正規化→シート書き込み
   - `System/scripts/payment_daily_sync.py`: Google Drive日別フォルダ監視→自動取り込み
 
 - **日次同期の現在地**:
