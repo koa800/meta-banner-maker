@@ -975,6 +975,38 @@ def append_rows_to_sheet(ws, rows, max_chunk=5000):
         time.sleep(2)
 
 
+def build_existing_ad_keys(worksheet, account_ids=None, since_date=None, until_date=None):
+    rows = worksheet.get_all_values()
+    if not rows:
+        return {}
+
+    header = rows[0]
+    idx = {name: i for i, name in enumerate(header)}
+    key_map = {}
+    target_account_ids = set(account_ids or [])
+
+    for row in rows[1:]:
+        account_id = normalize_lookup_id(row[idx["広告アカウントID"]]) if len(row) > idx["広告アカウントID"] else ""
+        if not account_id:
+            continue
+        if target_account_ids and account_id not in target_account_ids:
+            continue
+
+        date_value = clean_cell(row[idx["日付"]]) if len(row) > idx["日付"] else ""
+        if since_date and date_value and date_value < since_date:
+            continue
+        if until_date and date_value and date_value > until_date:
+            continue
+
+        ad_id = normalize_lookup_id(row[idx["広告ID"]]) if len(row) > idx["広告ID"] else ""
+        if not ad_id or not date_value:
+            continue
+
+        key_map.setdefault(account_id, set()).add((date_value, ad_id))
+
+    return key_map
+
+
 def build_meta_raw_summary(worksheet):
     rows = worksheet.get_all_values()
     if not rows:
@@ -1031,6 +1063,104 @@ def build_meta_raw_summary(worksheet):
             item["画像ハッシュ未入力行数"] += 1
 
     return summary
+
+
+def refresh_running_account_gaps(
+    worksheet,
+    target_accounts,
+    token,
+    progress,
+    account_notes,
+    account_status_map,
+    account_activity_map,
+    recent_insights_map,
+    target_account_id=None,
+):
+    raw_summary = build_meta_raw_summary(worksheet)
+    expected_latest = (datetime.now().date() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    candidate_accounts = {}
+    for account_id, account_name in target_accounts.items():
+        if target_account_id and account_id != target_account_id:
+            continue
+        raw = raw_summary.get(account_id, {})
+        operation_status, _ = determine_operation_status(
+            raw.get("raw行数", 0),
+            raw.get("最終取得日", ""),
+            raw.get("最終日配信ステータス", set()),
+            account_notes.get(account_id, ""),
+            clean_cell(account_status_map.get(account_id, {}).get("account_status")),
+            account_activity_map.get(account_id, {}).get("active_campaigns", ""),
+            account_activity_map.get(account_id, {}).get("active_adsets", ""),
+            account_activity_map.get(account_id, {}).get("active_ads", ""),
+            recent_insights_map.get(account_id, {}).get("recent_rows", ""),
+            recent_insights_map.get(account_id, {}).get("recent_spend", ""),
+        )
+        latest_date = raw.get("最終取得日", "")
+        if operation_status != "稼働中":
+            continue
+        if latest_date and latest_date >= expected_latest:
+            continue
+        candidate_accounts[account_id] = {
+            "広告アカウント名": account_name,
+            "since": (
+                (datetime.strptime(latest_date, "%Y-%m-%d").date() + timedelta(days=1)).strftime("%Y-%m-%d")
+                if latest_date
+                else (datetime.now().date() - timedelta(days=7)).strftime("%Y-%m-%d")
+            ),
+            "until": expected_latest,
+        }
+
+    if not candidate_accounts:
+        return {"target_accounts": 0, "fetched_rows": 0, "appended_rows": 0}
+
+    earliest_since = min(item["since"] for item in candidate_accounts.values())
+    existing_key_map = build_existing_ad_keys(
+        worksheet,
+        account_ids=candidate_accounts.keys(),
+        since_date=earliest_since,
+        until_date=expected_latest,
+    )
+
+    total_fetched_rows = 0
+    total_appended_rows = 0
+
+    for account_id, item in candidate_accounts.items():
+        since = item["since"]
+        until = item["until"]
+        account_name = item["広告アカウント名"]
+        if since > until:
+            continue
+
+        print(f"  recent refresh: {account_name} {since} -> {until}")
+        ad_meta = fetch_ad_metadata(account_id, account_name, token)
+        insight_rows = fetch_insights_with_subdivision(account_id, account_name, token, since, until)
+        total_fetched_rows += len(insight_rows)
+
+        account_existing_keys = existing_key_map.setdefault(account_id, set())
+        new_sheet_rows = []
+        for row in insight_rows:
+            key = (clean_cell(row.get("date_start")), clean_cell(row.get("ad_id")))
+            if not key[0] or not key[1] or key in account_existing_keys:
+                continue
+            account_existing_keys.add(key)
+            new_sheet_rows.append(row_to_sheet_row(row, account_name, ad_meta))
+
+        if new_sheet_rows:
+            append_rows_to_sheet(worksheet, new_sheet_rows)
+            progress["completed_accounts"][account_id] = progress["completed_accounts"].get(account_id, 0) + len(new_sheet_rows)
+            progress["total_rows_written"] = progress.get("total_rows_written", 0) + len(new_sheet_rows)
+            save_progress(progress)
+            total_appended_rows += len(new_sheet_rows)
+            print(f"    appended: {len(new_sheet_rows)}行")
+        else:
+            print("    appended: 0行")
+
+    return {
+        "target_accounts": len(candidate_accounts),
+        "fetched_rows": total_fetched_rows,
+        "appended_rows": total_appended_rows,
+    }
 
 
 def determine_collection_status(progress_rows, raw_rows):
@@ -1397,6 +1527,11 @@ def main():
         action="store_true",
         help="Meta収集状況タブを現在の raw と progress から再生成して終了",
     )
+    parser.add_argument(
+        "--refresh-running-gaps",
+        action="store_true",
+        help="稼働中なのに raw の最終取得日が古いアカウントだけ、最近分を差分取得して終了",
+    )
     args = parser.parse_args()
 
     token = load_token()
@@ -1442,6 +1577,32 @@ def main():
             recent_insights_map=recent_insights_map,
         )
         print("Meta収集状況タブを更新しました")
+        return
+
+    if args.refresh_running_gaps:
+        progress = load_progress()
+        result = refresh_running_account_gaps(
+            ws,
+            accounts,
+            token,
+            progress,
+            account_notes,
+            account_status_map,
+            account_activity_map,
+            recent_insights_map,
+            target_account_id=args.account,
+        )
+        update_meta_status_sheet(
+            sh,
+            ws,
+            accounts,
+            load_progress(),
+            account_notes=account_notes,
+            account_status_map=fetch_account_status_map(accounts.keys(), token),
+            account_activity_map=fetch_account_activity_map(accounts.keys(), token),
+            recent_insights_map=fetch_recent_insights_map(accounts.keys(), token),
+        )
+        print(f"recent gap refresh完了: {result}")
         return
 
     progress = load_progress()
