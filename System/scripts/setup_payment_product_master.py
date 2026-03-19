@@ -166,17 +166,9 @@ PRODUCT_RULES: dict[str, ProductRule] = {
     "動画編集コース アクションマップ": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "マインドセットコース　アクションマップ": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "AICAN(アイキャン)": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "Live授業": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "みかみとお茶会": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
 }
-
-REVIEW_EXTRA_ROWS = [
-    ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL, "AIコンテンツ自動量産Live参加費用 等の集約名"),
-    ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL, "個別イベント商品として管理"),
-]
-
-REVIEW_EXTRA_NAMES = [
-    "Live参加費",
-    "みかみとお茶会",
-]
 
 REVIEW_EXCLUDED_PRODUCTS = {
     "受託_業務委託契約",
@@ -187,6 +179,41 @@ SOURCE_EXCLUDED_PRODUCTS = {
     "受託_業務委託契約",
     "新商品・サービスが増えたら最新の商品の下に追加！！",
 }
+
+SOURCE_EXTRA_PRODUCTS = [
+    {
+        "商品名": "Live授業",
+        "事業区分": BUSINESS_SKILLPLUS,
+        "対象顧客": TARGET_NON_MEMBER,
+        "顧客属性区分": ATTR_INDIVIDUAL,
+        "価格": "",
+        "購入形態": "",
+        "初期費用": "",
+        "商品種類": "",
+    },
+    {
+        "商品名": "みかみとお茶会",
+        "事業区分": BUSINESS_SKILLPLUS,
+        "対象顧客": TARGET_MEMBER,
+        "顧客属性区分": ATTR_INDIVIDUAL,
+        "価格": "",
+        "購入形態": "",
+        "初期費用": "",
+        "商品種類": "",
+    },
+]
+
+RAW_NAME_ALIAS_MAPPING = {
+    "AIコンテンツ自動量産Live参加費用": "Live授業",
+}
+
+KEYWORD_ALIAS_RULES = [
+    ("デザインプラン", "スキルプラスデザインプラン／デザジュク"),
+    ("デザジュク", "スキルプラスデザインプラン／デザジュク"),
+    ("スタンダード", "スキルプラススタンダードプラン"),
+    ("プライム", "スキルプラスプライムプラン"),
+    ("PRIM", "スキルプラスプライムプラン"),
+]
 
 BUSINESS_CODE = {
     BUSINESS_SKILLPLUS: "SP",
@@ -269,6 +296,17 @@ def normalize_candidate_name(raw_name: str) -> str:
     return text
 
 
+def infer_alias_product_name(raw_name: str) -> str:
+    compact = (raw_name or "").replace(" ", "").replace("　", "").replace("_", "").replace("＿", "")
+    compact_upper = compact.upper()
+    for keyword, product_name in KEYWORD_ALIAS_RULES:
+        target = compact_upper if keyword.isascii() else compact
+        probe = keyword.upper() if keyword.isascii() else keyword
+        if probe in target:
+            return product_name
+    return ""
+
+
 def infer_business_from_legacy(code: str, name: str, current: str) -> str:
     if current:
         return current
@@ -310,7 +348,8 @@ def load_product_master_rows(ws: gspread.Worksheet) -> tuple[list[str], list[lis
 def load_source_product_rows(ws: gspread.Worksheet) -> list[dict[str, str]]:
     headers, rows = load_product_master_rows(ws)
     if not headers:
-        return []
+        rows = []
+        headers = PRODUCT_MASTER_HEADERS[:]
 
     index = {header: idx for idx, header in enumerate(headers)}
 
@@ -321,10 +360,12 @@ def load_source_product_rows(ws: gspread.Worksheet) -> list[dict[str, str]]:
         return row[idx].strip()
 
     source_rows: list[dict[str, str]] = []
+    existing_names: set[str] = set()
     for row in rows:
         product_name = pick(row, "商品名")
         if product_name in SOURCE_EXCLUDED_PRODUCTS or not product_name:
             continue
+        existing_names.add(product_name)
         source_rows.append(
             {
                 "商品ID": pick(row, "商品ID"),
@@ -338,6 +379,12 @@ def load_source_product_rows(ws: gspread.Worksheet) -> list[dict[str, str]]:
                 "商品種類": pick(row, "商品種類"),
             }
         )
+
+    for record in SOURCE_EXTRA_PRODUCTS:
+        product_name = record["商品名"]
+        if product_name in existing_names:
+            continue
+        source_rows.append({"商品ID": "", "商品管理コード": "", **record})
     return source_rows
 
 
@@ -495,20 +542,6 @@ def build_review_rows(master_rows: list[list[str]], product_headers: list[str], 
                 review_notes.get(name, ""),
             ]
         )
-
-    rows.append([""] * len(PRODUCT_REVIEW_HEADERS))
-    for name, rule in zip(REVIEW_EXTRA_NAMES, REVIEW_EXTRA_ROWS):
-        rows.append(
-            [
-                "",
-                "",
-                name,
-                rule.business,
-                rule.target,
-                rule.customer_attr,
-                rule.note,
-            ]
-        )
     return rows
 
 
@@ -583,13 +616,22 @@ def build_mapping_rows(
             extra_condition = "イベント金額・課金タイプ・メール照合で個別判定"
             note = "空欄商品のため自動確定しない"
         else:
-            if raw_name in exact_product_names:
+            aliased_name = RAW_NAME_ALIAS_MAPPING.get(raw_name, "")
+            if aliased_name in exact_product_names:
+                candidate_name = aliased_name
+                reason_parts.append("明示エイリアス")
+            else:
+                keyword_aliased_name = infer_alias_product_name(raw_name)
+                if keyword_aliased_name in exact_product_names:
+                    candidate_name = keyword_aliased_name
+                    reason_parts.append("明示キーワード")
+            if not candidate_name and raw_name in exact_product_names:
                 candidate_name = raw_name
                 reason_parts.append("商品マスタ完全一致")
-            elif raw_name in reference_mapping:
+            elif not candidate_name and raw_name in reference_mapping:
                 candidate_name = reference_mapping[raw_name]
                 reason_parts.append("不明商品名照合テーブル")
-            else:
+            if not candidate_name:
                 normalized = normalize_candidate_name(raw_name)
                 if normalized in exact_product_names:
                     candidate_name = normalized
@@ -709,6 +751,71 @@ def write_mapping_rows(ws: gspread.Worksheet, rows: list[list[str]]) -> None:
     ws.resize(rows=max(len(rows) + 50, 500), cols=len(PAYMENT_MAPPING_HEADERS))
     ws.update(range_name="A1", values=rows, value_input_option="USER_ENTERED")
     apply_basic_formatting(ws, PAYMENT_MAPPING_WIDTHS)
+    apply_mapping_status_formatting(ws, rows)
+
+
+def apply_mapping_status_formatting(ws: gspread.Worksheet, rows: list[list[str]]) -> None:
+    if len(rows) <= 1:
+        return
+
+    status_to_rows: dict[str, list[int]] = {"要確認": [], "商品マスタ未登録": [], "不明": []}
+    for row_number, row in enumerate(rows[1:], start=2):
+        status = row[10] if len(row) > 10 else ""
+        if status in status_to_rows:
+            status_to_rows[status].append(row_number)
+
+    requests = [
+        {
+            "repeatCell": {
+                "range": {
+                    "sheetId": ws.id,
+                    "startRowIndex": 1,
+                    "endRowIndex": len(rows),
+                    "startColumnIndex": 4,
+                    "endColumnIndex": 14,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "backgroundColor": {"red": 1, "green": 1, "blue": 1},
+                    }
+                },
+                "fields": "userEnteredFormat.backgroundColor",
+            }
+        }
+    ]
+
+    def add_row_formats(row_numbers: list[int], color: dict[str, float]) -> None:
+        for row_number in row_numbers:
+            requests.append(
+                {
+                    "repeatCell": {
+                        "range": {
+                            "sheetId": ws.id,
+                            "startRowIndex": row_number - 1,
+                            "endRowIndex": row_number,
+                            "startColumnIndex": 4,
+                            "endColumnIndex": 14,
+                        },
+                        "cell": {
+                            "userEnteredFormat": {
+                                "backgroundColor": color,
+                            }
+                        },
+                        "fields": "userEnteredFormat.backgroundColor",
+                    }
+                }
+            )
+
+    add_row_formats(
+        status_to_rows["要確認"] + status_to_rows["商品マスタ未登録"],
+        {"red": 1.0, "green": 0.957, "blue": 0.8},
+    )
+    add_row_formats(
+        status_to_rows["不明"],
+        {"red": 0.973, "green": 0.839, "blue": 0.839},
+    )
+
+    ws.spreadsheet.batch_update({"requests": requests})
 
 
 def main() -> None:
