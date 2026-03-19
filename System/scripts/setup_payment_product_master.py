@@ -25,9 +25,6 @@ PAYMENT_MAPPING_TAB = "決済商品変換マスタ"
 REFERENCE_SHEET_ID = "1Y6akVont1zmqoVgLS527tbjMButHUS6ej5zHdY8XhA0"
 REFERENCE_TAB = "シート1"
 
-DETAIL_PRODUCT_SHEET_ID = "1LGBK5ZCEp4M9jWfUWd5uOAnc-YI5LlHBXUxKLHP0wTM"
-DETAIL_PRODUCT_TAB = "商品一覧"
-
 PAYMENT_COLLECTION_SHEET_ID = "1FfGM0HpofM8yayhJniArXp_vQ6-4JRvlp6rxDt-eHTI"
 PAYMENT_COLLECTION_TAB = "決済データ"
 
@@ -316,11 +313,10 @@ def load_product_master_rows(ws: gspread.Worksheet) -> tuple[list[str], list[lis
 
 
 def load_source_product_rows(ws: gspread.Worksheet) -> list[dict[str, str]]:
-    values = ws.get_all_values()
-    if not values:
+    headers, rows = load_product_master_rows(ws)
+    if not headers:
         return []
 
-    headers = values[0]
     index = {header: idx for idx, header in enumerate(headers)}
 
     def pick(row: list[str], header: str) -> str:
@@ -330,22 +326,21 @@ def load_source_product_rows(ws: gspread.Worksheet) -> list[dict[str, str]]:
         return row[idx].strip()
 
     source_rows: list[dict[str, str]] = []
-    for row in values[1:]:
-        product_code = pick(row, "商品コード")
-        product_name = pick(row, "商品・サービス名")
-        if product_name in SOURCE_EXCLUDED_PRODUCTS:
-            continue
-        if not product_name:
+    for row in rows:
+        product_name = pick(row, "商品名")
+        if product_name in SOURCE_EXCLUDED_PRODUCTS or not product_name:
             continue
         source_rows.append(
             {
-                "商品コード": product_code,
+                "商品ID": pick(row, "商品ID"),
                 "商品名": product_name,
-                "旧対象顧客": pick(row, "対象顧客"),
-                "価格": pick(row, "価格（内税）"),
-                "購入形態": pick(row, "課金形態"),
+                "事業区分": pick(row, "事業区分"),
+                "対象顧客": pick(row, "対象顧客"),
+                "顧客属性区分": pick(row, "顧客属性区分"),
+                "価格": pick(row, "価格"),
+                "購入形態": pick(row, "購入形態"),
                 "初期費用": pick(row, "初期費用"),
-                "商品種類": "",
+                "商品種類": pick(row, "商品種類"),
             }
         )
     return source_rows
@@ -390,14 +385,14 @@ def infer_customer_attr_from_legacy(legacy_target: str) -> str:
     return ""
 
 
-def classify_product(name: str, legacy_code: str, legacy_target: str, current_business: str) -> ProductRule:
+def classify_product(name: str, record: dict[str, str]) -> ProductRule:
     explicit = PRODUCT_RULES.get(name)
     if explicit:
         return explicit
 
-    business = infer_business_from_legacy(legacy_code, name, current_business)
-    target = infer_target_from_legacy(legacy_target)
-    customer_attr = infer_customer_attr_from_legacy(legacy_target)
+    business = (record.get("事業区分") or "").strip()
+    target = (record.get("対象顧客") or "").strip()
+    customer_attr = (record.get("顧客属性区分") or "").strip()
     note = "要確認" if not (business and target and customer_attr) else ""
     return ProductRule(business, target, customer_attr, note)
 
@@ -451,14 +446,12 @@ def sync_product_master_structure(
     review_notes: dict[str, str] = {}
 
     for record in source_rows:
-        legacy_code = record.get("商品コード", "").strip()
         name = record.get("商品名", "").strip()
-        if not legacy_code and not name:
+        if not name:
             continue
 
-        legacy_target = legacy_target_from_record(record)
-        rule = classify_product(name, legacy_code, legacy_target, record.get("事業区分", "").strip())
-        product_id = existing_id_map.get(name, "")
+        rule = classify_product(name, record)
+        product_id = (record.get("商品ID") or "").strip() or existing_id_map.get(name, "")
         if not parse_existing_product_id(product_id):
             product_id = build_product_id(next_id)
             next_id += 1
@@ -469,7 +462,6 @@ def sync_product_master_structure(
         record["事業区分"] = rule.business
         record["対象顧客"] = rule.target
         record["顧客属性区分"] = rule.customer_attr
-        record["旧対象顧客"] = legacy_target
 
         normalized_rows.append([record.get(header, "") for header in PRODUCT_MASTER_HEADERS])
         product_index[name] = ProductMeta(
@@ -735,13 +727,10 @@ def main() -> None:
     reference_ss = gc.open_by_key(REFERENCE_SHEET_ID)
     reference_ws = reference_ss.worksheet(REFERENCE_TAB)
 
-    detail_ss = gc.open_by_key(DETAIL_PRODUCT_SHEET_ID)
-    detail_ws = detail_ss.worksheet(DETAIL_PRODUCT_TAB)
-
     payment_ss = gc.open_by_key(PAYMENT_COLLECTION_SHEET_ID)
     payment_ws = payment_ss.worksheet(PAYMENT_COLLECTION_TAB)
 
-    source_rows = load_source_product_rows(detail_ws)
+    source_rows = load_source_product_rows(product_ws)
     product_index, normalized_rows, review_notes = sync_product_master_structure(product_ws, source_rows)
     review_rows = build_review_rows(normalized_rows, PRODUCT_MASTER_HEADERS, review_notes)
     write_review_rows(review_ws, review_rows)
