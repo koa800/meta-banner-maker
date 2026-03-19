@@ -61,6 +61,7 @@ SCOPES = [
 DEFAULT_LOOKBACK_DAYS = 14
 RETRYABLE_ANOMALY_CATEGORIES = {"import_error"}
 MAX_HISTORY_ITEMS = 1000
+MAX_SCANNED_FOLDERS = 30
 
 
 def get_drive_service():
@@ -84,6 +85,7 @@ def load_state() -> dict:
         "anomaly_fingerprints": {},
         "anomaly_history": [],
         "duplicate_files": {},
+        "recent_scanned_folders": [],
         "last_run": "",
         "last_summary": {},
     }
@@ -145,6 +147,13 @@ def extract_folder_date(folder_name: str) -> Optional[datetime]:
         return None
     year, month, day = map(int, match.groups())
     return datetime(year, month, day)
+
+
+def extract_folder_date_key(folder_name: str) -> str:
+    folder_date = extract_folder_date(folder_name)
+    if folder_date is None:
+        return ""
+    return folder_date.strftime("%Y/%m/%d")
 
 
 def build_file_fingerprint(file_meta: dict) -> str:
@@ -372,6 +381,29 @@ def should_scan_folder(folder_name: str, days: int) -> bool:
     return folder_date >= cutoff
 
 
+def build_folder_snapshot(folder_name: str, captured_at: str) -> dict:
+    return {
+        "folder_name": folder_name,
+        "folder_date_key": extract_folder_date_key(folder_name),
+        "captured_at": captured_at,
+        "file_count": 0,
+        "csv_like_count": 0,
+        "supported_count": 0,
+        "ignored_count": 0,
+        "unknown_count": 0,
+        "duplicate_count": 0,
+    }
+
+
+def save_recent_scanned_folders(state: dict, folder_snapshots: dict[str, dict]) -> None:
+    snapshots = sorted(
+        folder_snapshots.values(),
+        key=lambda item: str(item.get("folder_date_key") or item.get("folder_name") or ""),
+        reverse=True,
+    )
+    state["recent_scanned_folders"] = snapshots[:MAX_SCANNED_FOLDERS]
+
+
 def main():
     parser = argparse.ArgumentParser(description="決済データの日次同期")
     parser.add_argument("--dry-run", action="store_true", help="取り込みせずに確認のみ")
@@ -401,6 +433,8 @@ def main():
     print(f"\n対象フォルダ: {len(folders)}件")
 
     candidates: list[dict] = []
+    scanned_at = datetime.now().isoformat()
+    recent_folder_snapshots: dict[str, dict] = {}
     ignored_count = 0
     unknown_count = 0
     duplicate_count = 0
@@ -411,6 +445,8 @@ def main():
         print(f"\n[{folder_name}]")
 
         files = list_files_in_folder(service, folder_id)
+        snapshot_key = extract_folder_date_key(folder_name) or folder_name
+        folder_snapshot = recent_folder_snapshots.setdefault(snapshot_key, build_folder_snapshot(folder_name, scanned_at))
         for file_meta in files:
             file_id = str(file_meta["id"])
             file_name = str(file_meta["name"])
@@ -418,9 +454,20 @@ def main():
             file_meta["folder_name"] = folder_name
             file_meta["folder_id"] = folder_id
             file_meta["file_fingerprint"] = file_fingerprint
+            folder_snapshot["file_count"] += 1
 
             file_status, source, reason = payment_import.classify_filename(file_name)
-            if not is_csv_like_file(file_meta):
+            csv_like = is_csv_like_file(file_meta)
+            if csv_like:
+                folder_snapshot["csv_like_count"] += 1
+            if file_status == "unknown":
+                folder_snapshot["unknown_count"] += 1
+            elif file_status == "ignored":
+                folder_snapshot["ignored_count"] += 1
+            else:
+                folder_snapshot["supported_count"] += 1
+
+            if not csv_like:
                 if file_status == "ignored":
                     ignored_count += 1
                     print(f"  {file_name} — 既知の対象外（非CSV）")
@@ -444,6 +491,7 @@ def main():
 
             if file_fingerprint in seen_file_fingerprints:
                 duplicate_count += 1
+                folder_snapshot["duplicate_count"] += 1
                 print(f"  {file_name} — 重複ファイルとしてスキップ")
                 mark_duplicate_file(
                     state,
@@ -478,6 +526,7 @@ def main():
         "\n候補まとめ: "
         f"取込候補 {len(candidates)}件 / 対象外 {ignored_count}件 / 未知 {unknown_count}件 / 重複 {duplicate_count}件"
     )
+    save_recent_scanned_folders(state, recent_folder_snapshots)
     checkpoint_state(state)
 
     if args.dry_run:

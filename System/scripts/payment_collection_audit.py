@@ -3,8 +3,8 @@
 決済データ（収集）の運用監査タブを更新する。
 
 方針:
-- 収集運用の可視化をスプレッドシート内で完結させる
-- 日次同期のたびに、週次監査と月次照合に必要な集計を再生成する
+- 人が見る場所は `運用監査` 1枚に絞る
+- 日次同期のたびに、最新日付の到着確認と月次照合を再生成する
 - 月次照合は「日別フォルダに入ったCSVが収集シートへ正しく反映されたか」を検証する
 """
 
@@ -38,14 +38,32 @@ ANOMALY_LOG_TAB_NAME = "異常ファイルログ"
 MONTHLY_TAB_NAME = "月次照合"
 
 AUDIT_TAB_SPECS = {
-    OPS_TAB_NAME: (120, 10),
-    FILE_LOG_TAB_NAME: (5000, 13),
-    ANOMALY_LOG_TAB_NAME: (3000, 10),
-    MONTHLY_TAB_NAME: (500, 11),
+    OPS_TAB_NAME: (240, 12),
 }
+OBSOLETE_AUDIT_TABS = (
+    FILE_LOG_TAB_NAME,
+    ANOMALY_LOG_TAB_NAME,
+    MONTHLY_TAB_NAME,
+)
 
 WRITE_RETRY_SECONDS = (5, 10, 20, 40)
 FOLDER_DATE_RE = re.compile(r"(\d{4})/(\d{1,2})/(\d{1,2})")
+DAILY_ARRIVAL_RULES = [
+    {"source": "UnivaPay", "expectation": "必須"},
+    {"source": "日本プラム", "expectation": "必須"},
+    {"source": "MOSH", "expectation": "必須"},
+    {"source": "きらぼし銀行", "expectation": "必須"},
+    {"source": "INVOY", "expectation": "必須"},
+    {"source": "UTAGE売上一覧", "expectation": "必須"},
+    {"source": "CREDIX", "expectation": "任意"},
+]
+ARRIVAL_STATUS_RANK = {
+    "未検出": 0,
+    "要確認": 1,
+    "重複確認": 2,
+    "0件正常": 3,
+    "確認済み": 4,
+}
 
 
 def load_state() -> dict[str, Any]:
@@ -75,7 +93,6 @@ def run_with_retry(description: str, func):
 
 def ensure_audit_tabs(spreadsheet):
     worksheets = {ws.title: ws for ws in spreadsheet.worksheets()}
-    ordered_existing = [ws.title for ws in spreadsheet.worksheets()]
     for title, (rows, cols) in AUDIT_TAB_SPECS.items():
         ws = worksheets.get(title)
         if ws is None:
@@ -90,6 +107,14 @@ def ensure_audit_tabs(spreadsheet):
                 lambda ws=ws, rows=max(ws.row_count, rows), cols=max(ws.col_count, cols): ws.resize(rows=rows, cols=cols),
             )
 
+    for title in OBSOLETE_AUDIT_TABS:
+        ws = worksheets.get(title)
+        if ws is None:
+            continue
+        run_with_retry(f"{title} タブ削除", lambda ws=ws: spreadsheet.del_worksheet(ws))
+
+    worksheets = {ws.title: ws for ws in spreadsheet.worksheets()}
+    ordered_existing = [ws.title for ws in spreadsheet.worksheets()]
     requests = []
     base_titles = [
         payment_import.TAB_NAME,
@@ -156,6 +181,14 @@ def extract_folder_month(folder_name: str) -> str:
     return f"{year}/{int(month):02d}"
 
 
+def extract_folder_date_key(folder_name: str) -> str:
+    match = FOLDER_DATE_RE.search(str(folder_name or ""))
+    if not match:
+        return ""
+    year, month, day = match.groups()
+    return f"{year}/{int(month):02d}/{int(day):02d}"
+
+
 def detect_source_display(meta: dict[str, Any]) -> str:
     source = str(meta.get("source") or "").strip()
     if not source:
@@ -170,103 +203,160 @@ def numeric(value: Any) -> int:
         return 0
 
 
-def build_file_log_rows(state: dict[str, Any]) -> list[list[Any]]:
-    rows = [[
-        "処理時刻",
-        "状態",
-        "ソース",
-        "フォルダ",
-        "ファイル名",
-        "raw行数",
-        "converted行数",
-        "追加行数",
-        "duplicate除外行数",
-        "warning",
-        "file_id",
-        "file_fingerprint",
-        "月次照合キー",
-    ]]
+def update_arrival_status(
+    coverage: dict[tuple[str, str], dict[str, Any]],
+    *,
+    date_key: str,
+    source_name: str,
+    status: str,
+    file_name: str = "",
+    note: str = "",
+    seen_at: str = "",
+) -> None:
+    if not date_key or not source_name:
+        return
+    key = (date_key, source_name)
+    entry = coverage.setdefault(key, {"status": "未検出", "files": set(), "notes": set(), "seen_at": ""})
+    if ARRIVAL_STATUS_RANK.get(status, 0) > ARRIVAL_STATUS_RANK.get(str(entry.get("status") or "未検出"), 0):
+        entry["status"] = status
+    if file_name:
+        entry["files"].add(file_name)
+    if note:
+        entry["notes"].add(note)
+    if seen_at and seen_at > str(entry.get("seen_at") or ""):
+        entry["seen_at"] = seen_at
 
-    processed_items = sorted(
-        state.get("processed_files", {}).items(),
-        key=lambda kv: kv[1].get("processed_at", ""),
-        reverse=True,
-    )
-    for file_id, meta in processed_items:
-        warnings = meta.get("warnings") or []
-        warning_text = " / ".join(warnings)
-        written_rows = numeric(meta.get("written_payment_rows")) + numeric(meta.get("written_utage_rows"))
-        duplicate_rows = numeric(meta.get("skipped_payment_duplicates")) + numeric(meta.get("skipped_utage_duplicates"))
+
+def load_recent_scanned_folders(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    snapshots: dict[str, dict[str, Any]] = {}
+    for item in state.get("recent_scanned_folders", []):
+        folder_name = str(item.get("folder_name") or "")
+        date_key = str(item.get("folder_date_key") or "") or extract_folder_date_key(folder_name)
+        if not date_key:
+            continue
+        current = snapshots.get(date_key)
+        captured_at = str(item.get("captured_at") or "")
+        if current and captured_at <= str(current.get("captured_at") or ""):
+            continue
+        snapshots[date_key] = {
+            "folder_name": folder_name,
+            "captured_at": captured_at,
+            "file_count": numeric(item.get("file_count")),
+            "csv_like_count": numeric(item.get("csv_like_count")),
+            "supported_count": numeric(item.get("supported_count")),
+            "ignored_count": numeric(item.get("ignored_count")),
+            "unknown_count": numeric(item.get("unknown_count")),
+            "duplicate_count": numeric(item.get("duplicate_count")),
+        }
+    return snapshots
+
+
+def build_folder_summary(snapshot: dict[str, Any] | None) -> str:
+    if not snapshot:
+        return "処理履歴から再構成"
+
+    parts = [
+        f"ファイル{numeric(snapshot.get('file_count'))}",
+        f"CSV{numeric(snapshot.get('csv_like_count'))}",
+        f"対象{numeric(snapshot.get('supported_count'))}",
+    ]
+    if numeric(snapshot.get("duplicate_count")):
+        parts.append(f"重複{numeric(snapshot.get('duplicate_count'))}")
+    if numeric(snapshot.get("unknown_count")):
+        parts.append(f"未知{numeric(snapshot.get('unknown_count'))}")
+    if numeric(snapshot.get("ignored_count")):
+        parts.append(f"対象外{numeric(snapshot.get('ignored_count'))}")
+    return " / ".join(parts)
+
+
+def build_daily_arrival_rows(state: dict[str, Any]) -> tuple[list[list[Any]], int, str]:
+    coverage: dict[tuple[str, str], dict[str, Any]] = {}
+    folder_snapshots = load_recent_scanned_folders(state)
+    date_keys: set[str] = set(folder_snapshots.keys())
+
+    for meta in state.get("processed_files", {}).values():
+        date_key = extract_folder_date_key(str(meta.get("folder_name") or ""))
+        source_name = detect_source_display(meta)
+        if not date_key or not source_name:
+            continue
+        date_keys.add(date_key)
+        warning_text = " / ".join(meta.get("warnings") or [])
         if "ヘッダーのみでデータ行がありません" in warning_text:
             status = "0件正常"
-        elif written_rows == 0 and duplicate_rows > 0:
-            status = "重複のみ"
         else:
-            status = "正常"
-        month_key = extract_folder_month(str(meta.get("folder_name") or ""))
-        rows.append([
-            format_dt(parse_iso(str(meta.get("processed_at") or ""))),
-            status,
-            detect_source_display(meta),
-            str(meta.get("folder_name") or ""),
-            str(meta.get("file_name") or ""),
-            numeric(meta.get("raw_row_count")),
-            numeric(meta.get("converted_row_count")),
-            written_rows,
-            duplicate_rows,
-            warning_text,
-            file_id,
-            str(meta.get("file_fingerprint") or ""),
-            month_key,
-        ])
-    return rows
+            status = "確認済み"
+        update_arrival_status(
+            coverage,
+            date_key=date_key,
+            source_name=source_name,
+            status=status,
+            file_name=str(meta.get("file_name") or ""),
+            note=warning_text,
+            seen_at=str(meta.get("processed_at") or ""),
+        )
 
+    for meta in state.get("duplicate_files", {}).values():
+        date_key = extract_folder_date_key(str(meta.get("folder_name") or ""))
+        source_name = detect_source_display(meta)
+        if not date_key or not source_name:
+            continue
+        date_keys.add(date_key)
+        update_arrival_status(
+            coverage,
+            date_key=date_key,
+            source_name=source_name,
+            status="重複確認",
+            file_name=str(meta.get("file_name") or ""),
+            note=str(meta.get("duplicate_reason") or ""),
+            seen_at=str(meta.get("detected_at") or ""),
+        )
 
-def build_anomaly_rows(state: dict[str, Any]) -> list[list[Any]]:
-    rows = [[
-        "記録時刻",
-        "イベント",
-        "判定",
-        "ソース",
-        "フォルダ",
-        "ファイル名",
-        "理由",
-        "通知時刻",
-        "file_id",
-        "file_fingerprint",
-    ]]
+    for meta in state.get("anomaly_files", {}).values():
+        source_name = detect_source_display(meta)
+        date_key = extract_folder_date_key(str(meta.get("folder_name") or ""))
+        if not date_key or not source_name:
+            continue
+        date_keys.add(date_key)
+        category = str(meta.get("category") or "")
+        if category == "ignored":
+            continue
+        update_arrival_status(
+            coverage,
+            date_key=date_key,
+            source_name=source_name,
+            status="要確認",
+            file_name=str(meta.get("file_name") or ""),
+            note=str(meta.get("reason") or ""),
+            seen_at=str(meta.get("last_seen_at") or ""),
+        )
 
-    history = list(state.get("anomaly_history") or [])
-    if not history:
-        for file_id, meta in state.get("anomaly_files", {}).items():
-            history.append({
-                "recorded_at": meta.get("first_detected_at") or meta.get("last_seen_at") or "",
-                "event_type": "detected",
-                "category": meta.get("category") or "",
-                "source": meta.get("source") or "",
-                "folder_name": meta.get("folder_name") or "",
-                "file_name": meta.get("file_name") or "",
-                "reason": meta.get("reason") or "",
-                "notified_at": meta.get("notified_at") or "",
-                "file_id": file_id,
-                "file_fingerprint": meta.get("file_fingerprint") or "",
-            })
+    latest_dates = sorted(date_keys, reverse=True)[:3]
+    rows = [["対象日", "フォルダ確認", "期待", "ソース", "到着状況", "確認ファイル", "補足"]]
+    latest_missing_required = 0
+    latest_date_key = latest_dates[0] if latest_dates else ""
 
-    history.sort(key=lambda item: str(item.get("recorded_at") or ""), reverse=True)
-    for item in history:
-        rows.append([
-            format_dt(parse_iso(str(item.get("recorded_at") or ""))),
-            "検出" if str(item.get("event_type") or "") == "detected" else "解消",
-            str(item.get("category") or ""),
-            payment_import.SOURCE_DISPLAY_NAMES.get(str(item.get("source") or ""), str(item.get("source") or "")),
-            str(item.get("folder_name") or ""),
-            str(item.get("file_name") or ""),
-            str(item.get("reason") or ""),
-            format_dt(parse_iso(str(item.get("notified_at") or ""))),
-            str(item.get("file_id") or ""),
-            str(item.get("file_fingerprint") or ""),
-        ])
-    return rows
+    for date_key in latest_dates:
+        folder_summary = build_folder_summary(folder_snapshots.get(date_key))
+        for rule in DAILY_ARRIVAL_RULES:
+            source_name = rule["source"]
+            entry = coverage.get((date_key, source_name), {"status": "未検出", "files": set(), "notes": set()})
+            status = str(entry.get("status") or "未検出")
+            if date_key == latest_date_key and rule["expectation"] == "必須" and status == "未検出":
+                latest_missing_required += 1
+            rows.append([
+                date_key,
+                folder_summary,
+                rule["expectation"],
+                source_name,
+                status,
+                " / ".join(sorted(entry.get("files") or []))[:300],
+                " / ".join(sorted(entry.get("notes") or []))[:300],
+            ])
+        rows.append([])
+
+    if rows and rows[-1] == []:
+        rows.pop()
+    return rows, latest_missing_required, latest_date_key
 
 
 def build_monthly_rows(state: dict[str, Any]) -> list[list[Any]]:
@@ -408,15 +498,21 @@ def build_ops_rows(state: dict[str, Any], spreadsheet) -> list[list[Any]]:
         if source_name:
             per_source[source_name]["issues"] += 1
 
+    folder_snapshots = load_recent_scanned_folders(state)
+    daily_arrival_rows, latest_missing_required, latest_date_key = build_daily_arrival_rows(state)
+    latest_folder_summary = build_folder_summary(folder_snapshots.get(latest_date_key))
+    monthly_rows = build_monthly_rows(state)
+
     summary_rows = [
         ["項目", "値", "補足", "", "ソース", "直近7日ファイル数", "直近7日追加行数", "0件CSV数", "未解決異常", "最終成功"],
         ["最終実行", format_dt(parse_iso(str(state.get("last_run") or ""))), "payment_daily_sync の完了時刻", "", "", "", "", "", "", ""],
-        ["処理済みファイル総数", len(processed_files), "state に残っている正常処理ファイル数", "", "", "", "", "", "", ""],
+        ["最新確認フォルダ", latest_date_key, latest_folder_summary, "", "", "", "", "", "", ""],
         ["直近7日処理ファイル数", len(recent_processed), "0件CSVを含む", "", "", "", "", "", "", ""],
         ["直近7日0件CSV数", zero_data_count, "ヘッダーのみCSVを正常処理した件数", "", "", "", "", "", "", ""],
         ["直近7日追加行数", recent_written_rows, "決済データ + UTAGE補助", "", "", "", "", "", "", ""],
         ["未解決異常件数", len(unresolved_anomalies), "ignored を除く", "", "", "", "", "", "", ""],
         ["既知の対象外件数", len(unresolved_known_ignored), "known ignored の current 件数", "", "", "", "", "", "", ""],
+        ["最新日付の必須ソース未到着", latest_missing_required, "最新フォルダ日付で必須ソースが未検出の件数", "", "", "", "", "", "", ""],
         ["総セル数", total_cells, "Google Sheets 上限 10,000,000", "", "", "", "", "", "", ""],
         ["残セル数", remaining_cells, "容量監視の目安", "", "", "", "", "", "", ""],
     ]
@@ -446,6 +542,14 @@ def build_ops_rows(state: dict[str, Any], spreadsheet) -> list[list[Any]]:
             str(meta.get("reason") or ""),
         ])
 
+    summary_rows.append([])
+    summary_rows.append(["日次到着確認", "", "", "", "", ""])
+    summary_rows.extend(daily_arrival_rows)
+    summary_rows.append([])
+    summary_rows.append(["月次照合", "", "", "", "", "", "", "", "", "", ""])
+    summary_rows.append(["ステータス定義", "速報=当月 / 照合済=差分なし / 要確認=差分あり or 未解決異常あり", "", "", "", "", "", "", "", "", ""])
+    summary_rows.extend(monthly_rows)
+
     return summary_rows
 
 
@@ -462,9 +566,6 @@ def sync_payment_collection_audit(spreadsheet=None, state: dict[str, Any] | None
 
     tabs = ensure_audit_tabs(spreadsheet)
     write_rows(tabs[OPS_TAB_NAME], build_ops_rows(state, spreadsheet))
-    write_rows(tabs[FILE_LOG_TAB_NAME], build_file_log_rows(state))
-    write_rows(tabs[ANOMALY_LOG_TAB_NAME], build_anomaly_rows(state))
-    write_rows(tabs[MONTHLY_TAB_NAME], build_monthly_rows(state))
 
 
 def main():
