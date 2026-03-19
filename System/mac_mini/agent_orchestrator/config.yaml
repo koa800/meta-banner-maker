@@ -78,6 +78,15 @@ schedule:
   looker_session_keepalive:
     cron: "0 7 * * *"            # 07:00  Looker Studio セッション維持（CDP でページを開いて閉じる）
     enabled: true
+  meta_ads_collection:
+    cron: "8 7 * * *"            # 07:08  Meta広告 raw の差分取得と収集状況更新
+    enabled: true
+  tiktok_token_health_check:
+    cron: "14 7 * * *"           # 07:14  TikTok Marketing API の認証診断
+    enabled: true
+  tiktok_ads_collection:
+    cron: "22 7 * * *"           # 07:22  TikTok広告 raw を直近3日ぶん再取得して収集シートへ追記
+    enabled: true
   oauth_health_check:
     cron: "25 8 * * *"           # 08:25  認証チェック（Google + Claude Code OAuth）※日報入力(08:40)の前に実行
     enabled: true

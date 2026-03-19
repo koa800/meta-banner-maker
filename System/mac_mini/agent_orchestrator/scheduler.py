@@ -13,7 +13,7 @@ import os
 import re
 import sys
 from functools import lru_cache
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -80,6 +80,10 @@ _MEMBERSHIP_METRICS_SUMMARY_TAB = "会員サマリー"
 _MEMBERSHIP_METRICS_SOURCE_TAB = "データソース管理"
 _TELEAPO_SHEET_ID = "12RGMUfU8Wj0CCdcRfY7kI56kdATV7wDXjvYmGdQb_Nk"
 _TELEAPO_TARGET_TAB = "架電一覧"
+_ADS_COLLECTION_SHEET_ID = "11lVHxkA0geY7TEVKoujYrv1JyxWhzxqSepNhFxnFZlo"
+_ADS_COLLECTION_META_TAB = "Meta"
+_ADS_COLLECTION_META_STATUS_TAB = "Meta収集状況"
+_ADS_COLLECTION_TIKTOK_TAB = "TikTok"
 _CLAUDE_CHROME_EXTENSION_ID = "fcoeoabgfenejglbffodgkkbkcdhcgfn"
 _CLAUDE_CHROME_CDP_ORIGIN = "http://127.0.0.1:9224"
 _CLAUDE_SECRETARY_EMAIL = "koa800.secretary@gmail.com"
@@ -536,6 +540,9 @@ class TaskScheduler:
             "openai_credit_check": self._run_openai_credit_check,
             "looker_session_keepalive": self._run_looker_session_keepalive,
             "kpi_anomaly_check": self._run_kpi_anomaly_check,
+            "meta_ads_collection": self._run_meta_ads_collection,
+            "tiktok_token_health_check": self._run_tiktok_token_health_check,
+            "tiktok_ads_collection": self._run_tiktok_ads_collection,
             "monthly_invoice_submission": self._run_monthly_invoice_submission,
             "ds_insight_biweekly_report": self._run_ds_insight_biweekly_report,
             "ds_insight_mail_collect": self._run_ds_insight_mail_collect,
@@ -593,6 +600,29 @@ class TaskScheduler:
         now_jst = now or datetime.now(_SCHEDULER_TIMEZONE)
         recorded_at = self._get_state_datetime(key)
         return bool(recorded_at and recorded_at.date() == now_jst.date())
+
+    def _build_python_task_env(self) -> dict[str, str]:
+        env = dict(os.environ)
+        if "/opt/homebrew/bin" not in env.get("PATH", ""):
+            env["PATH"] = f"/opt/homebrew/bin:{env.get('PATH', '')}"
+        env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+        return env
+
+    def _extract_prefixed_value(self, output: str, prefix: str) -> str:
+        for line in (output or "").splitlines():
+            stripped = line.strip()
+            if stripped.startswith(prefix):
+                return stripped[len(prefix):].strip()
+        return ""
+
+    def _load_json_file(self, path: str) -> dict | None:
+        if not path:
+            return None
+        try:
+            return json.loads(Path(path).read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning(f"json load failed: path={path} error={e}")
+            return None
 
     async def _ensure_routine_slot_completed(
         self,
@@ -5203,6 +5233,264 @@ head -3 "{csv_dir}/{csv_filename}"
                 logger.info(f"KPI anomaly detected and notified: {output[:200]}")
         else:
             logger.warning(f"KPI anomaly check failed: {result.error[:200] if result.error else 'unknown'}")
+
+    async def _run_meta_ads_collection(self):
+        """毎朝: Meta広告 raw を差分取得し、収集状況も更新する。"""
+        import subprocess
+        from .notifier import send_line_notify
+
+        script = self.system_dir / "scripts" / "fetch_meta_ads_to_sheet.py"
+        env = self._build_python_task_env()
+
+        try:
+            proc = subprocess.run(
+                ["python3", str(script), "--refresh-running-gaps"],
+                capture_output=True,
+                text=True,
+                timeout=1800,
+                cwd=str(self.project_root),
+                env=env,
+            )
+        except subprocess.TimeoutExpired:
+            send_line_notify(
+                _format_line_message(
+                    "Meta広告の定期収集がタイムアウトしました",
+                    summary_lines=["30分経っても差分取得が完了しませんでした"],
+                    action_lines=[
+                        "まず Meta収集状況 を開いて、稼働中のアカウントで最終取得日が古いものがないか確認してください",
+                    ],
+                    links=[
+                        ("広告データ（収集） / Meta収集状況", _build_sheet_url(_ADS_COLLECTION_SHEET_ID, _ADS_COLLECTION_META_STATUS_TAB)),
+                        ("広告データ（収集） / Meta", _build_sheet_url(_ADS_COLLECTION_SHEET_ID, _ADS_COLLECTION_META_TAB)),
+                    ],
+                )
+            )
+            return
+
+        output = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+        if proc.returncode == 0:
+            logger.info(f"Meta ads collection completed: {(output or '')[-500:]}")
+            self._record_schedule_success("meta_ads_collection")
+            return
+
+        send_line_notify(
+            _format_line_message(
+                "Meta広告の定期収集が止まりました",
+                summary_lines=[(output or "詳細エラーを取得できませんでした")[:220]],
+                action_lines=[
+                    "まず Meta収集状況 を開いて、取得状態と稼働状態を確認してください",
+                    "必要なら Meta タブで直近日の行が増えているか確認してください",
+                ],
+                links=[
+                    ("広告データ（収集） / Meta収集状況", _build_sheet_url(_ADS_COLLECTION_SHEET_ID, _ADS_COLLECTION_META_STATUS_TAB)),
+                    ("広告データ（収集） / Meta", _build_sheet_url(_ADS_COLLECTION_SHEET_ID, _ADS_COLLECTION_META_TAB)),
+                ],
+            )
+        )
+
+    async def _run_tiktok_token_health_check(self):
+        """毎朝: TikTok Marketing API の read-only 認証状態を確認する。"""
+        import subprocess
+        from .notifier import send_line_notify
+
+        script = self.system_dir / "scripts" / "tiktok_token_health_check.py"
+        refresh_script = self.system_dir / "scripts" / "refresh_tiktok_marketing_token.py"
+        env = self._build_python_task_env()
+
+        try:
+            proc = subprocess.run(
+                ["python3", str(script)],
+                capture_output=True,
+                text=True,
+                timeout=600,
+                cwd=str(self.project_root),
+                env=env,
+            )
+        except subprocess.TimeoutExpired:
+            send_line_notify(
+                _format_line_message(
+                    "TikTok認証チェックがタイムアウトしました",
+                    summary_lines=["10分経っても認証診断が終わりませんでした"],
+                    action_lines=[
+                        "TikTok の access token が失効していないか確認してください",
+                    ],
+                    links=[
+                        ("広告データ（収集） / TikTok", _build_sheet_url(_ADS_COLLECTION_SHEET_ID, _ADS_COLLECTION_TIKTOK_TAB)),
+                    ],
+                )
+            )
+            return
+
+        output = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+        overall_status = self._extract_prefixed_value(output, "overall_status=") or "unknown"
+        saved_path = self._extract_prefixed_value(output, "saved_to=")
+
+        if proc.returncode == 0:
+            logger.info(f"TikTok token health check completed: status={overall_status} saved_to={saved_path}")
+            self._record_schedule_success("tiktok_token_health_check")
+            return
+
+        logger.warning(f"TikTok token health check failed, attempting reauth: status={overall_status}")
+        try:
+            reauth_proc = subprocess.run(
+                ["python3", str(refresh_script)],
+                capture_output=True,
+                text=True,
+                timeout=600,
+                cwd=str(self.project_root),
+                env=env,
+            )
+            reauth_output = ((reauth_proc.stdout or "") + "\n" + (reauth_proc.stderr or "")).strip()
+        except subprocess.TimeoutExpired:
+            reauth_proc = subprocess.CompletedProcess(args=["python3", str(refresh_script)], returncode=1)
+            reauth_output = "TikTok browser 再認可がタイムアウトしました"
+        if reauth_proc.returncode == 0:
+            retry_proc = subprocess.run(
+                ["python3", str(script)],
+                capture_output=True,
+                text=True,
+                timeout=600,
+                cwd=str(self.project_root),
+                env=env,
+            )
+            retry_output = ((retry_proc.stdout or "") + "\n" + (retry_proc.stderr or "")).strip()
+            retry_status = self._extract_prefixed_value(retry_output, "overall_status=") or "unknown"
+            if retry_proc.returncode == 0:
+                logger.info(
+                    "TikTok token health recovered after reauth: "
+                    f"status={retry_status} reauth={(reauth_output or '')[-200:]}"
+                )
+                self._record_schedule_success("tiktok_token_health_check")
+                return
+            output = retry_output
+            overall_status = retry_status
+
+        send_line_notify(
+            _format_line_message(
+                "TikTok認証チェックが失敗しました",
+                summary_lines=[
+                    f"overall_status={overall_status}",
+                    (output or "詳細エラーを取得できませんでした")[:180],
+                    f"再認可結果: {'失敗' if reauth_proc.returncode != 0 else '実行済みだが復旧せず'}",
+                    (reauth_output or "再認可ログなし")[:180],
+                ],
+                action_lines=[
+                    "TikTok Marketing API の認証情報を確認してください",
+                    "必要なら Chrome の TikTok ログイン状態を確認してください",
+                ],
+                links=[
+                    ("広告データ（収集） / TikTok", _build_sheet_url(_ADS_COLLECTION_SHEET_ID, _ADS_COLLECTION_TIKTOK_TAB)),
+                ],
+            )
+        )
+
+    async def _run_tiktok_ads_collection(self):
+        """毎朝: TikTok広告 raw を直近3日ぶん再取得し、重複なく収集シートへ反映する。"""
+        import subprocess
+        from .notifier import send_line_notify
+
+        script = self.system_dir / "scripts" / "fetch_tiktok_ads_report.py"
+        env = self._build_python_task_env()
+        end_date = (datetime.now(_SCHEDULER_TIMEZONE).date() - timedelta(days=1))
+        start_date = end_date - timedelta(days=2)
+        command = [
+            "python3",
+            str(script),
+            "--start-date",
+            start_date.isoformat(),
+            "--end-date",
+            end_date.isoformat(),
+            "--write-sheet",
+        ]
+
+        try:
+            proc = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=1800,
+                cwd=str(self.project_root),
+                env=env,
+            )
+        except subprocess.TimeoutExpired:
+            send_line_notify(
+                _format_line_message(
+                    "TikTok広告の定期収集がタイムアウトしました",
+                    summary_lines=["30分経っても収集が終わりませんでした"],
+                    action_lines=[
+                        "TikTok タブを開いて、昨日分の行が増えていないか確認してください",
+                    ],
+                    links=[
+                        ("広告データ（収集） / TikTok", _build_sheet_url(_ADS_COLLECTION_SHEET_ID, _ADS_COLLECTION_TIKTOK_TAB)),
+                    ],
+                )
+            )
+            return
+
+        output = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+        summary_path = self._extract_prefixed_value(output, "サマリー:")
+        summary = self._load_json_file(summary_path) or {}
+        sheet_quality = summary.get("sheet_quality") or {}
+        missing_url_count = int(sheet_quality.get("missing_landing_page_url_rows") or 0)
+        missing_url_details = summary.get("missing_landing_page_details") or []
+        fallback_errors = summary.get("ads_manager_fallback_errors") or []
+
+        if proc.returncode == 0:
+            logger.info(
+                "TikTok ads collection completed: "
+                f"rows={summary.get('total_rows', 0)} appended={summary.get('appended_rows', 0)} "
+                f"missing_web_urls={missing_url_count}"
+            )
+            self._record_schedule_success("tiktok_ads_collection")
+
+            if missing_url_count > 0:
+                signature = json.dumps(
+                    {
+                        "missing_url_count": missing_url_count,
+                        "missing_url_details": missing_url_details[:5],
+                        "fallback_errors": fallback_errors[:3],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                state_key = "last_tiktok_missing_url_signature"
+                if self.memory.get_state(state_key) != signature:
+                    summary_lines = [f"WEBSITE配信で遷移先URL未取得が {missing_url_count} 行あります"]
+                    if missing_url_details:
+                        first = missing_url_details[0]
+                        summary_lines.append(
+                            f"例: {first.get('広告アカウント名', '')} / {first.get('広告名', '')} / {first.get('広告ID', '')}"
+                        )
+                    if fallback_errors:
+                        summary_lines.append(f"Ads Manager補完エラー {len(fallback_errors)} 件")
+                    send_line_notify(
+                        _format_line_message(
+                            "TikTok広告の遷移先URLで未取得があります",
+                            summary_lines=summary_lines,
+                            action_lines=[
+                                "TikTok タブの URL取得状態 を見て、未取得の WEBSITE 配信だけ確認してください",
+                            ],
+                            links=[
+                                ("広告データ（収集） / TikTok", _build_sheet_url(_ADS_COLLECTION_SHEET_ID, _ADS_COLLECTION_TIKTOK_TAB)),
+                            ],
+                        )
+                    )
+                    self.memory.set_state(state_key, signature)
+            return
+
+        send_line_notify(
+            _format_line_message(
+                "TikTok広告の定期収集が止まりました",
+                summary_lines=[(output or "詳細エラーを取得できませんでした")[:220]],
+                action_lines=[
+                    "TikTok タブを開いて、直近3日分の行が増えていないか確認してください",
+                    "必要なら TikTok認証チェックの直近結果も確認してください",
+                ],
+                links=[
+                    ("広告データ（収集） / TikTok", _build_sheet_url(_ADS_COLLECTION_SHEET_ID, _ADS_COLLECTION_TIKTOK_TAB)),
+                ],
+            )
+        )
 
     async def _run_log_rotate(self):
         """毎日3:00: ログローテーション"""
