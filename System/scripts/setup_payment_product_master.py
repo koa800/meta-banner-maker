@@ -167,6 +167,7 @@ PRODUCT_RULES: dict[str, ProductRule] = {
     "マインドセットコース　アクションマップ": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "AICAN(アイキャン)": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "Live授業": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
+    "AIカレッジ　継続": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
     "センサーズ　継続": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
     "スキルプラスイベント": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
     "みかみとお茶会": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
@@ -187,6 +188,16 @@ SOURCE_EXTRA_PRODUCTS = [
         "商品名": "Live授業",
         "事業区分": BUSINESS_SKILLPLUS,
         "対象顧客": TARGET_NON_MEMBER,
+        "顧客属性区分": ATTR_INDIVIDUAL,
+        "価格": "",
+        "購入形態": "",
+        "初期費用": "",
+        "商品種類": "",
+    },
+    {
+        "商品名": "AIカレッジ　継続",
+        "事業区分": BUSINESS_SKILLPLUS,
+        "対象顧客": TARGET_MEMBER,
         "顧客属性区分": ATTR_INDIVIDUAL,
         "価格": "",
         "購入形態": "",
@@ -227,6 +238,8 @@ SOURCE_EXTRA_PRODUCTS = [
 
 RAW_NAME_ALIAS_MAPPING = {
     "AIコンテンツ自動量産Live参加費用": "Live授業",
+    "AIカレッジ【24分割プラン】※頭金10万円銀行振込用": "AIカレッジ　継続",
+    "AIカレッジ【頭金10万円＋24分割払いプラン】": "AIカレッジ　継続",
     "センサーズ【24分割プラン】※頭金10万円銀行振込用": "センサーズ　継続",
     "新生センサーズ限定プラン【頭金10万円＋24分割】": "センサーズ　継続",
     "VIPチケット（先着5名）": "スキルプラスイベント",
@@ -331,6 +344,17 @@ def infer_alias_product_name(raw_name: str) -> str:
         probe = keyword.upper() if keyword.isascii() else keyword
         if probe in target:
             return product_name
+    return ""
+
+
+def infer_average_amount_alias(aggregate: PaymentAggregate) -> str:
+    if aggregate.count <= 0:
+        return ""
+    if aggregate.amount % aggregate.count != 0:
+        return ""
+    average_amount = aggregate.amount // aggregate.count
+    if average_amount == 798000:
+        return "スキルプラススタンダードプラン"
     return ""
 
 
@@ -639,9 +663,14 @@ def build_mapping_rows(
         note = ""
 
         if raw_name == "(空欄)":
-            status = "不明"
-            extra_condition = "イベント金額・課金タイプ・メール照合で個別判定"
-            note = "空欄商品のため自動確定しない"
+            candidate_name = infer_average_amount_alias(aggregate)
+            if candidate_name:
+                reason_parts.append("平均79.8万円ルール")
+                extra_condition = "参照金額÷参照件数=798,000"
+            else:
+                status = "不明"
+                extra_condition = "イベント金額・課金タイプ・メール照合で個別判定"
+                note = "空欄商品のため自動確定しない"
         else:
             aliased_name = RAW_NAME_ALIAS_MAPPING.get(raw_name, "")
             if aliased_name in exact_product_names:
@@ -655,27 +684,33 @@ def build_mapping_rows(
             if not candidate_name and raw_name in exact_product_names:
                 candidate_name = raw_name
                 reason_parts.append("商品マスタ完全一致")
-            elif not candidate_name and raw_name in reference_mapping:
-                candidate_name = reference_mapping[raw_name]
-                reason_parts.append("不明商品名照合テーブル")
             if not candidate_name:
                 normalized = normalize_candidate_name(raw_name)
                 if normalized in exact_product_names:
                     candidate_name = normalized
                     reason_parts.append("装飾除去で一致")
+            if not candidate_name:
+                average_aliased_name = infer_average_amount_alias(aggregate)
+                if average_aliased_name in exact_product_names:
+                    candidate_name = average_aliased_name
+                    extra_condition = "参照金額÷参照件数=798,000"
+                    reason_parts.append("平均79.8万円ルール")
+            if not candidate_name and raw_name in reference_mapping:
+                candidate_name = reference_mapping[raw_name]
+                reason_parts.append("不明商品名照合テーブル")
 
-            if candidate_name:
-                product_meta = product_index.get(candidate_name)
-                if product_meta is None:
-                    status = "商品マスタ未登録"
-                    note = "正式商品名候補はあるが商品マスタ未登録"
-                else:
-                    status = "変換済み"
-                    if product_meta.management_code:
-                        reason_parts.append(product_meta.management_code)
+        if candidate_name:
+            product_meta = product_index.get(candidate_name)
+            if product_meta is None:
+                status = "商品マスタ未登録"
+                note = "正式商品名候補はあるが商品マスタ未登録"
             else:
-                status = "要確認"
-                note = "正式商品名候補を未確定"
+                status = "変換済み"
+                if product_meta.management_code:
+                    reason_parts.append(product_meta.management_code)
+        elif raw_name != "(空欄)":
+            status = "要確認"
+            note = "正式商品名候補を未確定"
 
         rows.append(
             [
