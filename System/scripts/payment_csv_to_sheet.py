@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-決済CSVを共通20列に正規化して収集シートに書き込む。
+決済CSVを共通19列に正規化して収集シートに書き込む。
 
 方針:
 - CSV格納は人がやる。このスクリプトはCSV読み込み→正規化→シート書き込みを担当
-- 各ソースのCSVを共通20列に変換する
+- 各ソースのCSVを共通19列に変換する
 - 収集段階ではフィルタしない。全イベント・全ステータスを入れる
 - 書き込み先: 【アドネス株式会社】決済データ（収集） / 決済データ
 """
@@ -40,7 +40,7 @@ HEADER = [
     "課金ID", "参照システム", "イベント", "イベント日時", "イベント金額",
     "課金ステータス", "商品名", "メールアドレス", "姓", "名",
     "名前（原本）", "フリガナ", "電話番号", "カードブランド", "課金タイプ",
-    "支払回数", "定期課金ID", "返金日時", "返金金額",
+    "支払回数", "定期課金ID", "返金日時",
     "メタデータ（JSON）",
 ]
 
@@ -407,7 +407,7 @@ UNIVAPAY_EXCLUDE_EVENTS = {
 
 
 def convert_univapay(rows: List[List[str]]) -> List[List[str]]:
-    """UnivaPayのCSVを共通20列に変換。認証プロセスは除外"""
+    """UnivaPayのCSVを共通19列に変換。認証プロセスは除外"""
     if not rows:
         return []
 
@@ -468,8 +468,7 @@ def convert_univapay(rows: List[List[str]]) -> List[List[str]]:
             g("支払い回数"),                 # 16. 支払回数
             g("定期課金ID"),                 # 17. 定期課金ID
             normalize_datetime(g("返金作成日時")),  # 18. 返金日時
-            g("返金金額"),                   # 19. 返金金額
-            meta_json,                       # 20. メタデータ（JSON）
+            meta_json,                       # 19. メタデータ（JSON）
         ])
 
     if skipped:
@@ -484,7 +483,7 @@ def convert_univapay(rows: List[List[str]]) -> List[List[str]]:
 
 
 def convert_mosh(rows: List[List[str]]) -> List[List[str]]:
-    """MOSHのCSVを共通20列に変換"""
+    """MOSHのCSVを共通19列に変換"""
     if not rows:
         return []
 
@@ -524,8 +523,7 @@ def convert_mosh(rows: List[List[str]]) -> List[List[str]]:
             g("総支払い回数"),               # 16. 支払回数
             "",                              # 17. 定期課金ID
             normalize_datetime(g("キャンセル日時")),  # 18. 返金日時
-            "",                              # 19. 返金金額
-            "",                              # 20. メタデータ（JSON）
+            "",                              # 19. メタデータ（JSON）
         ])
 
     return result
@@ -537,7 +535,7 @@ def convert_mosh(rows: List[List[str]]) -> List[List[str]]:
 
 
 def convert_jplum(rows: List[List[str]]) -> List[List[str]]:
-    """日本プラムのCSVを共通20列に変換"""
+    """日本プラムのCSVを共通19列に変換"""
     if not rows:
         return []
 
@@ -574,8 +572,7 @@ def convert_jplum(rows: List[List[str]]) -> List[List[str]]:
             g("支払回数"),                   # 16. 支払回数
             "",                              # 17. 定期課金ID
             "",                              # 18. 返金日時
-            "",                              # 19. 返金金額
-            "",                              # 20. メタデータ（JSON）
+            "",                              # 19. メタデータ（JSON）
         ])
 
     return result
@@ -587,7 +584,7 @@ def convert_jplum(rows: List[List[str]]) -> List[List[str]]:
 
 
 def convert_kiraboshi(rows: List[List[str]]) -> List[List[str]]:
-    """きらぼし銀行のCSVを共通20列に変換"""
+    """きらぼし銀行のCSVを共通19列に変換"""
     if not rows:
         return []
 
@@ -650,8 +647,7 @@ def convert_kiraboshi(rows: List[List[str]]) -> List[List[str]]:
             "",                              # 16. 支払回数
             "",                              # 17. 定期課金ID
             "",                              # 18. 返金日時
-            "",                              # 19. 返金金額
-            "",                              # 20. メタデータ（JSON）
+            "",                              # 19. メタデータ（JSON）
         ])
 
     return result
@@ -663,7 +659,7 @@ def convert_kiraboshi(rows: List[List[str]]) -> List[List[str]]:
 
 
 def convert_invoy(rows: List[List[str]]) -> List[List[str]]:
-    """INVOYのCSVを共通20列に変換"""
+    """INVOYのCSVを共通19列に変換"""
     if not rows:
         return []
 
@@ -711,8 +707,7 @@ def convert_invoy(rows: List[List[str]]) -> List[List[str]]:
             "",                              # 16. 支払回数
             "",                              # 17. 定期課金ID
             "",                              # 18. 返金日時
-            "",                              # 19. 返金金額
-            "",                              # 20. メタデータ（JSON）
+            "",                              # 19. メタデータ（JSON）
         ])
 
     return result
@@ -724,7 +719,7 @@ def convert_invoy(rows: List[List[str]]) -> List[List[str]]:
 
 
 def convert_credix(rows: List[List[str]]) -> List[List[str]]:
-    """CREDIXのCSVを共通20列に変換"""
+    """CREDIXのCSVを共通19列に変換"""
     if not rows:
         return []
 
@@ -758,8 +753,7 @@ def convert_credix(rows: List[List[str]]) -> List[List[str]]:
             g("支払回数"),                   # 16. 支払回数
             "",                              # 17. 定期課金ID
             normalize_datetime(g("取り消し日")),  # 18. 返金日時
-            "",                              # 19. 返金金額
-            "",                              # 20. メタデータ（JSON）
+            "",                              # 19. メタデータ（JSON）
         ])
 
     return result
