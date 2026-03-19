@@ -43,6 +43,10 @@ HEADER = [
     "支払回数", "定期課金ID", "返金日時",
     "メタデータ（JSON）",
 ]
+TARGET_TAB_HEADERS = {
+    TAB_NAME: HEADER,
+    UTAGE_TAB_NAME: UTAGE_HEADER,
+}
 
 WRITE_RETRY_SECONDS = (5, 10, 20, 40)
 
@@ -275,9 +279,30 @@ def validate_csv_rows(rows: List[List[str]], source: str) -> List[str]:
     if missing:
         errors.append(f"必須ヘッダー不足: {', '.join(missing)}")
 
-    if len(rows) <= 1:
-        errors.append("ヘッダーのみでデータ行がありません")
+    return errors
 
+
+def collect_csv_warnings(rows: List[List[str]]) -> List[str]:
+    warnings: List[str] = []
+    if rows and len(rows) <= 1:
+        warnings.append("ヘッダーのみでデータ行がありません")
+    return warnings
+
+
+def validate_collection_sheet_headers(spreadsheet) -> List[str]:
+    errors: List[str] = []
+    for tab_name, expected_header in TARGET_TAB_HEADERS.items():
+        try:
+            actual_header = [str(cell).strip() for cell in spreadsheet.worksheet(tab_name).row_values(1)]
+        except Exception as exc:
+            errors.append(f"{tab_name}: ヘッダー取得失敗 ({exc})")
+            continue
+
+        if actual_header != expected_header:
+            errors.append(
+                f"{tab_name}: 期待ヘッダーと不一致 "
+                f"(期待 {len(expected_header)}列 / 実際 {len(actual_header)}列)"
+            )
     return errors
 
 
@@ -357,20 +382,27 @@ def append_normalized_rows(
     }
 
 
-def update_source_management(spreadsheet, source_counts: Dict[str, int]) -> None:
+def update_source_management(spreadsheet, source_health: Dict[str, Dict[str, object]]) -> None:
     """データソース管理の同期情報を更新する。"""
     try:
         ws_source = spreadsheet.worksheet(SOURCE_MGMT_TAB)
         source_rows = ws_source.get_all_values()
-        now_str = datetime.now().strftime("%Y/%m/%d %H:%M")
         for i, srow in enumerate(source_rows):
             if i == 0:
                 continue
             source_name = srow[0] if srow else ""
-            if source_name in source_counts:
-                ws_source.update_cell(i + 1, 7, "正常")
-                ws_source.update_cell(i + 1, 8, now_str)
-                ws_source.update_cell(i + 1, 9, source_counts[source_name])
+            entry = source_health.get(source_name)
+            if not entry:
+                continue
+
+            if "status" in entry:
+                ws_source.update_cell(i + 1, 7, str(entry.get("status", "")))
+            if "last_sync" in entry:
+                ws_source.update_cell(i + 1, 8, str(entry.get("last_sync", "")))
+            if "row_count" in entry:
+                ws_source.update_cell(i + 1, 9, int(entry.get("row_count", 0)))
+            if "error_count" in entry:
+                ws_source.update_cell(i + 1, 10, int(entry.get("error_count", 0)))
         print("データソース管理を更新しました。")
     except Exception as e:
         print(f"データソース管理の更新でエラー: {e}")
@@ -855,6 +887,7 @@ def process_csv_file(path: Path, source_override: Optional[str] = None) -> dict:
         "payment_rows": [],
         "utage_rows": [],
         "validation_errors": [],
+        "warnings": [],
     }
 
     if status != "supported" or not detected_source:
@@ -870,6 +903,7 @@ def process_csv_file(path: Path, source_override: Optional[str] = None) -> dict:
         result["validation_errors"] = validation_errors
         return result
 
+    result["warnings"] = collect_csv_warnings(rows)
     converter = CONVERTERS[detected_source]
     converted = converter(rows)
     result["converted_row_count"] = len(converted)
@@ -930,6 +964,8 @@ def main():
             for h, v in zip(display_header, sample):
                 if v:
                     print(f"    {h}: {str(v)[:80]}")
+        elif result["warnings"]:
+            print(f"  注意: {result['warnings'][0]}")
 
         if source == "utage":
             utage_rows.extend(result["utage_rows"])
@@ -951,6 +987,12 @@ def main():
     # シートに書き込み
     gc = get_client("kohara")
     sh = gc.open_by_key(SHEET_ID)
+    structure_errors = validate_collection_sheet_headers(sh)
+    if structure_errors:
+        print("\n収集シートの構造が想定と一致しません。")
+        for error in structure_errors:
+            print(f"  - {error}")
+        sys.exit(1)
     print("\n収集シートに書き込み中...")
     write_result = append_normalized_rows(sh, all_rows, utage_rows)
     print(
@@ -963,7 +1005,17 @@ def main():
         f"{write_result['written_utage_rows']:,} 行 "
         f"(重複除外 {write_result['skipped_utage_duplicates']:,} 行)"
     )
-    update_source_management(sh, source_counts)
+    now_str = datetime.now().strftime("%Y/%m/%d %H:%M")
+    source_health = {
+        source_name: {
+            "status": "正常",
+            "last_sync": now_str,
+            "row_count": row_count,
+            "error_count": 0,
+        }
+        for source_name, row_count in source_counts.items()
+    }
+    update_source_management(sh, source_health)
 
 
 if __name__ == "__main__":

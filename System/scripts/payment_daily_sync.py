@@ -58,6 +58,7 @@ SCOPES = [
 ]
 
 DEFAULT_LOOKBACK_DAYS = 14
+RETRYABLE_ANOMALY_CATEGORIES = {"import_error"}
 
 
 def get_drive_service():
@@ -197,7 +198,7 @@ def build_alert_message(title: str, file_name: str, folder_name: str, reason: st
     elif category == "unexpected_content":
         lines.append("・ファイル名は対象ですが中身が想定外です。CSVヘッダー変更や出力形式変更を確認してください。")
     else:
-        lines.append("・このファイルだけ再実行対象に残しています。正常ファイルの取込は継続しています。")
+        lines.append("・このファイルだけ再試行対象に残しています。正常ファイルの取込は継続しています。")
     return "\n".join(lines)
 
 
@@ -226,6 +227,7 @@ def register_anomaly(state: dict, file_meta: dict, category: str, reason: str, n
             "reason": reason,
             "last_seen_at": now_iso,
             "file_fingerprint": fingerprint,
+            "source": str(file_meta.get("source") or ""),
         }
     )
     state["anomaly_files"][file_id] = previous
@@ -237,6 +239,7 @@ def register_anomaly(state: dict, file_meta: dict, category: str, reason: str, n
         "file_name": file_meta["name"],
         "category": category,
         "reason": reason,
+        "source": str(file_meta.get("source") or ""),
         "notified_at": known_fingerprint.get("notified_at", ""),
     }
 
@@ -255,6 +258,7 @@ def register_anomaly(state: dict, file_meta: dict, category: str, reason: str, n
                 "file_name": file_meta["name"],
                 "category": category,
                 "reason": reason,
+                "source": str(file_meta.get("source") or ""),
                 "notified_at": now_iso,
             }
 
@@ -267,6 +271,45 @@ def mark_duplicate_file(state: dict, file_meta: dict, duplicate_reason: str) -> 
         "detected_at": datetime.now().isoformat(),
         "file_fingerprint": build_file_fingerprint(file_meta),
     }
+
+
+def resolve_anomaly(state: dict, file_meta: dict) -> None:
+    file_id = str(file_meta["id"])
+    fingerprint = build_file_fingerprint(file_meta)
+    state.setdefault("anomaly_files", {}).pop(file_id, None)
+    state.setdefault("anomaly_fingerprints", {}).pop(fingerprint, None)
+
+
+def anomaly_blocks_reimport(meta: dict) -> bool:
+    category = str(meta.get("category") or "").strip()
+    reason = str(meta.get("reason") or "").strip()
+    if not category:
+        return True
+    if category == "unexpected_content" and "ヘッダーのみでデータ行がありません" in reason:
+        return False
+    return category not in RETRYABLE_ANOMALY_CATEGORIES
+
+
+def infer_source_display_name(meta: dict) -> str:
+    source = str(meta.get("source") or "").strip()
+    if not source:
+        source = payment_import.detect_source(str(meta.get("file_name") or "")) or ""
+    if not source:
+        return ""
+    return payment_import.SOURCE_DISPLAY_NAMES.get(source, source)
+
+
+def collect_unresolved_source_issues(state: dict) -> dict[str, int]:
+    issue_counts: dict[str, int] = {}
+    for meta in state.get("anomaly_files", {}).values():
+        category = str(meta.get("category") or "").strip()
+        if category not in {"unexpected_content", "import_error"}:
+            continue
+        source_name = infer_source_display_name(meta)
+        if not source_name:
+            continue
+        issue_counts[source_name] = issue_counts.get(source_name, 0) + 1
+    return issue_counts
 
 
 def should_scan_folder(folder_name: str, days: int) -> bool:
@@ -295,7 +338,12 @@ def main():
     state = load_state()
     processed_files = state.setdefault("processed_files", {})
     processed_fingerprints = state.setdefault("processed_file_fingerprints", {})
-    seen_file_fingerprints = set(processed_fingerprints.keys()) | set(state.setdefault("anomaly_fingerprints", {}).keys())
+    anomaly_fingerprints = state.setdefault("anomaly_fingerprints", {})
+    seen_file_fingerprints = set(processed_fingerprints.keys()) | {
+        fingerprint
+        for fingerprint, meta in anomaly_fingerprints.items()
+        if anomaly_blocks_reimport(meta)
+    }
 
     print(f"最終実行: {state.get('last_run', 'なし')}")
     print(f"取り込み済みファイル: {len(processed_files)}件")
@@ -390,6 +438,23 @@ def main():
         return
 
     if not candidates:
+        unresolved_source_issues = collect_unresolved_source_issues(state)
+        if unresolved_source_issues:
+            gc = get_client("kohara")
+            spreadsheet = gc.open_by_key(payment_import.SHEET_ID)
+            structure_errors = payment_import.validate_collection_sheet_headers(spreadsheet)
+            if structure_errors:
+                raise RuntimeError(" / ".join(structure_errors))
+            payment_import.update_source_management(
+                spreadsheet,
+                {
+                    source_name: {
+                        "status": "要確認",
+                        "error_count": issue_count,
+                    }
+                    for source_name, issue_count in unresolved_source_issues.items()
+                },
+            )
         state["last_summary"] = {
             "processed_files": 0,
             "ignored_files": ignored_count,
@@ -405,6 +470,9 @@ def main():
     TMP_DIR.mkdir(parents=True, exist_ok=True)
     gc = get_client("kohara")
     spreadsheet = gc.open_by_key(payment_import.SHEET_ID)
+    structure_errors = payment_import.validate_collection_sheet_headers(spreadsheet)
+    if structure_errors:
+        raise RuntimeError(" / ".join(structure_errors))
     existing_payment_signatures, existing_utage_signatures = payment_import.load_existing_row_signatures(spreadsheet)
 
     processed_count = 0
@@ -437,6 +505,9 @@ def main():
                 checkpoint_state(state)
                 continue
 
+            if result["warnings"]:
+                print(f"  注意: {result['warnings'][0]}")
+
             write_result = payment_import.append_normalized_rows(
                 spreadsheet,
                 result["payment_rows"],
@@ -455,6 +526,7 @@ def main():
             source_write_counts[source_name] = source_write_counts.get(source_name, 0) + written_count
 
             processed_count += 1
+            resolve_anomaly(state, file_meta)
             processed_files[str(file_meta["id"])] = {
                 "file_name": file_meta["name"],
                 "folder_name": file_meta["folder_name"],
@@ -462,6 +534,7 @@ def main():
                 "processed_at": datetime.now().isoformat(),
                 "raw_row_count": result["raw_row_count"],
                 "converted_row_count": result["converted_row_count"],
+                "warnings": result["warnings"],
                 "written_payment_rows": write_result["written_payment_rows"],
                 "written_utage_rows": write_result["written_utage_rows"],
                 "skipped_payment_duplicates": write_result["skipped_payment_duplicates"],
@@ -494,8 +567,26 @@ def main():
         finally:
             local_path.unlink(missing_ok=True)
 
-    if source_write_counts:
-        payment_import.update_source_management(spreadsheet, source_write_counts)
+    source_issue_counts = collect_unresolved_source_issues(state)
+    if source_write_counts or source_issue_counts:
+        now_str = datetime.now().strftime("%Y/%m/%d %H:%M")
+        source_health = {
+            source_name: {
+                "status": "要確認" if source_issue_counts.get(source_name, 0) else "正常",
+                "last_sync": now_str,
+                "row_count": row_count,
+                "error_count": source_issue_counts.get(source_name, 0),
+            }
+            for source_name, row_count in source_write_counts.items()
+        }
+        for source_name, issue_count in source_issue_counts.items():
+            if source_name in source_health:
+                continue
+            source_health[source_name] = {
+                "status": "要確認",
+                "error_count": issue_count,
+            }
+        payment_import.update_source_management(spreadsheet, source_health)
 
     state["last_summary"] = {
         "processed_files": processed_count,
