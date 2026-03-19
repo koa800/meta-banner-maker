@@ -64,6 +64,76 @@ ARRIVAL_STATUS_RANK = {
     "0件正常": 3,
     "確認済み": 4,
 }
+HEADER_BG = {"red": 0.26, "green": 0.52, "blue": 0.96}
+SECTION_BG = {"red": 0.13, "green": 0.36, "blue": 0.78}
+SUBHEADER_BG = {"red": 0.89, "green": 0.94, "blue": 0.99}
+NOTE_BG = {"red": 0.97, "green": 0.97, "blue": 0.97}
+WHITE_BG = {"red": 1, "green": 1, "blue": 1}
+HEADER_TEXT_COLOR = {"red": 1, "green": 1, "blue": 1}
+BODY_TEXT_COLOR = {"red": 0, "green": 0, "blue": 0}
+TAB_COLOR_META = {"red": 0.204, "green": 0.659, "blue": 0.325}
+TAB_COLOR_MONITOR = {"red": 0.98, "green": 0.67, "blue": 0.12}
+
+UTAGE_TAB_WIDTHS = [155, 330, 220, 150, 120, 220, 105, 105]
+SOURCE_MGMT_WIDTHS = [120, 230, 95, 95, 115, 230, 90, 135, 110, 75, 250, 150]
+RULE_TAB_WIDTHS = [140, 420, 260]
+OPS_TAB_WIDTHS = [150, 120, 300, 32, 120, 125, 130, 95, 95, 125, 120]
+OPS_SECTION_TITLES = {"未解決異常", "日次到着確認", "月次照合"}
+
+
+def repeat_cell_request(sheet_id: int, start_row: int, end_row: int, start_col: int, end_col: int, fmt: dict, fields: str) -> dict:
+    return {
+        "repeatCell": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": start_row,
+                "endRowIndex": end_row,
+                "startColumnIndex": start_col,
+                "endColumnIndex": end_col,
+            },
+            "cell": {"userEnteredFormat": fmt},
+            "fields": fields,
+        }
+    }
+
+
+def set_column_width_request(sheet_id: int, start_col: int, end_col: int, width: int) -> dict:
+    return {
+        "updateDimensionProperties": {
+            "range": {
+                "sheetId": sheet_id,
+                "dimension": "COLUMNS",
+                "startIndex": start_col,
+                "endIndex": end_col,
+            },
+            "properties": {"pixelSize": width},
+            "fields": "pixelSize",
+        }
+    }
+
+
+def set_row_height_request(sheet_id: int, start_row: int, end_row: int, height: int) -> dict:
+    return {
+        "updateDimensionProperties": {
+            "range": {
+                "sheetId": sheet_id,
+                "dimension": "ROWS",
+                "startIndex": start_row,
+                "endIndex": end_row,
+            },
+            "properties": {"pixelSize": height},
+            "fields": "pixelSize",
+        }
+    }
+
+
+def set_sheet_properties_request(sheet_id: int, properties: dict, fields: str) -> dict:
+    return {
+        "updateSheetProperties": {
+            "properties": {"sheetId": sheet_id, **properties},
+            "fields": fields,
+        }
+    }
 
 
 def load_state() -> dict[str, Any]:
@@ -155,6 +225,379 @@ def write_rows(ws, rows: list[list[Any]]) -> None:
         f"{ws.title} 更新",
         lambda: ws.update(range_name="A1", values=rows, value_input_option="USER_ENTERED"),
     )
+
+
+def apply_standard_tab_style(
+    spreadsheet,
+    ws,
+    *,
+    widths: list[int],
+    data_row_count: int,
+    header_font_size: int = 10,
+    body_font_size: int = 10,
+    center_cols: tuple[int, ...] = (),
+    right_cols: tuple[int, ...] = (),
+    tab_color: dict[str, float] | None = None,
+) -> None:
+    col_count = len(widths)
+    row_end = max(data_row_count, 2)
+    requests = [
+        repeat_cell_request(
+            ws.id,
+            0,
+            1,
+            0,
+            col_count,
+            {
+                "backgroundColor": HEADER_BG,
+                "horizontalAlignment": "CENTER",
+                "verticalAlignment": "MIDDLE",
+                "wrapStrategy": "CLIP",
+                "textFormat": {
+                    "foregroundColor": HEADER_TEXT_COLOR,
+                    "bold": True,
+                    "fontSize": header_font_size,
+                    "fontFamily": "Arial",
+                },
+            },
+            "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,wrapStrategy,textFormat)",
+        ),
+        repeat_cell_request(
+            ws.id,
+            1,
+            row_end,
+            0,
+            col_count,
+            {
+                "backgroundColor": WHITE_BG,
+                "horizontalAlignment": "LEFT",
+                "verticalAlignment": "MIDDLE",
+                "wrapStrategy": "CLIP",
+                "textFormat": {
+                    "foregroundColor": BODY_TEXT_COLOR,
+                    "bold": False,
+                    "fontSize": body_font_size,
+                    "fontFamily": "Arial",
+                },
+            },
+            "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,wrapStrategy,textFormat)",
+        ),
+        set_row_height_request(ws.id, 0, 1, 30),
+        set_row_height_request(ws.id, 1, row_end, 24),
+        set_sheet_properties_request(ws.id, {"gridProperties": {"frozenRowCount": 1}}, "gridProperties.frozenRowCount"),
+    ]
+    if tab_color is not None:
+        requests.append(set_sheet_properties_request(ws.id, {"tabColor": tab_color}, "tabColor"))
+    for col in center_cols:
+        requests.append(
+            repeat_cell_request(
+                ws.id,
+                1,
+                row_end,
+                col,
+                col + 1,
+                {"horizontalAlignment": "CENTER"},
+                "userEnteredFormat.horizontalAlignment",
+            )
+        )
+    for col in right_cols:
+        requests.append(
+            repeat_cell_request(
+                ws.id,
+                1,
+                row_end,
+                col,
+                col + 1,
+                {"horizontalAlignment": "RIGHT"},
+                "userEnteredFormat.horizontalAlignment",
+            )
+        )
+    for index, width in enumerate(widths):
+        requests.append(set_column_width_request(ws.id, index, index + 1, width))
+    run_with_retry(f"{ws.title} 体裁適用", lambda: spreadsheet.batch_update({"requests": requests}))
+
+
+def find_last_non_empty_row(rows: list[list[Any]]) -> int:
+    for idx in range(len(rows) - 1, -1, -1):
+        if any(str(cell).strip() for cell in rows[idx]):
+            return idx + 1
+    return 1
+
+
+def find_section_end(rows: list[list[Any]], start_idx: int) -> int:
+    end_idx = start_idx
+    for idx in range(start_idx, len(rows)):
+        if not any(str(cell).strip() for cell in rows[idx]):
+            break
+        end_idx = idx + 1
+    return end_idx
+
+
+def apply_ops_tab_style(spreadsheet, ws, rows: list[list[Any]]) -> None:
+    col_count = len(OPS_TAB_WIDTHS)
+    row_end = max(find_last_non_empty_row(rows), 2)
+    requests = [
+        repeat_cell_request(
+            ws.id,
+            0,
+            row_end,
+            0,
+            col_count,
+            {
+                "backgroundColor": WHITE_BG,
+                "horizontalAlignment": "LEFT",
+                "verticalAlignment": "MIDDLE",
+                "wrapStrategy": "CLIP",
+                "textFormat": {
+                    "foregroundColor": BODY_TEXT_COLOR,
+                    "bold": False,
+                    "fontSize": 9,
+                    "fontFamily": "Arial",
+                },
+            },
+            "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,wrapStrategy,textFormat)",
+        ),
+        repeat_cell_request(
+            ws.id,
+            0,
+            1,
+            0,
+            col_count,
+            {
+                "backgroundColor": HEADER_BG,
+                "horizontalAlignment": "CENTER",
+                "verticalAlignment": "MIDDLE",
+                "wrapStrategy": "CLIP",
+                "textFormat": {
+                    "foregroundColor": HEADER_TEXT_COLOR,
+                    "bold": True,
+                    "fontSize": 9,
+                    "fontFamily": "Arial",
+                },
+            },
+            "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,wrapStrategy,textFormat)",
+        ),
+        set_row_height_request(ws.id, 0, 1, 30),
+        set_row_height_request(ws.id, 1, row_end, 24),
+        set_sheet_properties_request(ws.id, {"gridProperties": {"frozenRowCount": 1}}, "gridProperties.frozenRowCount"),
+        set_sheet_properties_request(ws.id, {"tabColor": TAB_COLOR_MONITOR}, "tabColor"),
+    ]
+
+    summary_end = min(11, row_end)
+    if summary_end > 1:
+        for col in (1, 5, 6, 7, 8, 9):
+            requests.append(
+                repeat_cell_request(
+                    ws.id,
+                    1,
+                    summary_end,
+                    col,
+                    col + 1,
+                    {"horizontalAlignment": "CENTER"},
+                    "userEnteredFormat.horizontalAlignment",
+                )
+            )
+        for col in (0, 4):
+            requests.append(
+                repeat_cell_request(
+                    ws.id,
+                    1,
+                    summary_end,
+                    col,
+                    col + 1,
+                    {"textFormat": {"bold": True}},
+                    "userEnteredFormat.textFormat.bold",
+                )
+            )
+
+    anomaly_header_idx = None
+    daily_header_idx = None
+    monthly_header_idx = None
+    for row_idx, row in enumerate(rows):
+        values = [str(cell).strip() for cell in row]
+        first = values[0] if values else ""
+        non_empty = [value for value in values if value]
+        if not non_empty:
+            requests.append(set_row_height_request(ws.id, row_idx, row_idx + 1, 10))
+            continue
+        if first in OPS_SECTION_TITLES and len(non_empty) == 1:
+            requests.append(
+                repeat_cell_request(
+                    ws.id,
+                    row_idx,
+                    row_idx + 1,
+                    0,
+                    col_count,
+                    {
+                        "backgroundColor": SECTION_BG,
+                        "horizontalAlignment": "LEFT",
+                        "verticalAlignment": "MIDDLE",
+                        "wrapStrategy": "CLIP",
+                        "textFormat": {
+                            "foregroundColor": HEADER_TEXT_COLOR,
+                            "bold": True,
+                            "fontSize": 10,
+                            "fontFamily": "Arial",
+                        },
+                    },
+                    "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,wrapStrategy,textFormat)",
+                )
+            )
+            requests.append(set_row_height_request(ws.id, row_idx, row_idx + 1, 28))
+            continue
+        if first == "ステータス定義":
+            requests.append(
+                repeat_cell_request(
+                    ws.id,
+                    row_idx,
+                    row_idx + 1,
+                    0,
+                    col_count,
+                    {
+                        "backgroundColor": NOTE_BG,
+                        "horizontalAlignment": "LEFT",
+                        "verticalAlignment": "MIDDLE",
+                        "wrapStrategy": "CLIP",
+                        "textFormat": {
+                            "foregroundColor": BODY_TEXT_COLOR,
+                            "bold": False,
+                            "fontSize": 9,
+                            "fontFamily": "Arial",
+                        },
+                    },
+                    "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,wrapStrategy,textFormat)",
+                )
+            )
+            continue
+        if first in {"確認時刻", "対象日", "対象月"} and len(non_empty) > 1:
+            requests.append(
+                repeat_cell_request(
+                    ws.id,
+                    row_idx,
+                    row_idx + 1,
+                    0,
+                    col_count,
+                    {
+                        "backgroundColor": SUBHEADER_BG,
+                        "horizontalAlignment": "CENTER",
+                        "verticalAlignment": "MIDDLE",
+                        "wrapStrategy": "CLIP",
+                        "textFormat": {
+                            "foregroundColor": BODY_TEXT_COLOR,
+                            "bold": True,
+                            "fontSize": 9,
+                            "fontFamily": "Arial",
+                        },
+                    },
+                    "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,wrapStrategy,textFormat)",
+                )
+            )
+            requests.append(set_row_height_request(ws.id, row_idx, row_idx + 1, 26))
+            if first == "確認時刻":
+                anomaly_header_idx = row_idx
+            elif first == "対象日":
+                daily_header_idx = row_idx
+            elif first == "対象月":
+                monthly_header_idx = row_idx
+            continue
+
+    if anomaly_header_idx is not None:
+        anomaly_end = find_section_end(rows, anomaly_header_idx + 1)
+        for col in (0, 1, 2):
+            requests.append(
+                repeat_cell_request(
+                    ws.id,
+                    anomaly_header_idx + 1,
+                    anomaly_end,
+                    col,
+                    col + 1,
+                    {"horizontalAlignment": "CENTER"},
+                    "userEnteredFormat.horizontalAlignment",
+                )
+            )
+
+    if daily_header_idx is not None:
+        daily_end = find_section_end(rows, daily_header_idx + 1)
+        for col in (0, 1, 2, 3, 4):
+            requests.append(
+                repeat_cell_request(
+                    ws.id,
+                    daily_header_idx + 1,
+                    daily_end,
+                    col,
+                    col + 1,
+                    {"horizontalAlignment": "CENTER"},
+                    "userEnteredFormat.horizontalAlignment",
+                )
+            )
+
+    if monthly_header_idx is not None:
+        monthly_end = find_section_end(rows, monthly_header_idx + 1)
+        for col in range(0, 11):
+            requests.append(
+                repeat_cell_request(
+                    ws.id,
+                    monthly_header_idx + 1,
+                    monthly_end,
+                    col,
+                    col + 1,
+                    {"horizontalAlignment": "CENTER"},
+                    "userEnteredFormat.horizontalAlignment",
+                )
+            )
+
+    for index, width in enumerate(OPS_TAB_WIDTHS):
+        requests.append(set_column_width_request(ws.id, index, index + 1, width))
+
+    run_with_retry(f"{ws.title} 体裁適用", lambda: spreadsheet.batch_update({"requests": requests}))
+
+
+def apply_collection_sheet_styles(spreadsheet, tabs: dict[str, Any], ops_rows: list[list[Any]]) -> None:
+    utage_ws = tabs.get(payment_import.UTAGE_TAB_NAME)
+    if utage_ws is not None:
+        apply_standard_tab_style(
+            spreadsheet,
+            utage_ws,
+            widths=UTAGE_TAB_WIDTHS,
+            data_row_count=utage_ws.row_count,
+            header_font_size=10,
+            body_font_size=10,
+            center_cols=(7,),
+            right_cols=(0, 6),
+            tab_color=TAB_COLOR_META,
+        )
+
+    source_ws = tabs.get(payment_import.SOURCE_MGMT_TAB)
+    if source_ws is not None:
+        apply_standard_tab_style(
+            spreadsheet,
+            source_ws,
+            widths=SOURCE_MGMT_WIDTHS,
+            data_row_count=source_ws.row_count,
+            header_font_size=10,
+            body_font_size=10,
+            center_cols=(0, 2, 3, 4, 6, 7, 9),
+            right_cols=(8,),
+            tab_color=TAB_COLOR_META,
+        )
+
+    rules_ws = tabs.get("データ追加ルール")
+    if rules_ws is not None:
+        apply_standard_tab_style(
+            spreadsheet,
+            rules_ws,
+            widths=RULE_TAB_WIDTHS,
+            data_row_count=rules_ws.row_count,
+            header_font_size=10,
+            body_font_size=10,
+            center_cols=(0,),
+            right_cols=(),
+            tab_color=TAB_COLOR_META,
+        )
+
+    ops_ws = tabs.get(OPS_TAB_NAME)
+    if ops_ws is not None:
+        apply_ops_tab_style(spreadsheet, ops_ws, ops_rows)
 
 
 def parse_iso(raw: str) -> datetime | None:
@@ -531,7 +974,8 @@ def build_ops_rows(state: dict[str, Any], spreadsheet) -> list[list[Any]]:
         summary_rows[row_index][9] = format_dt(parse_iso(str(bucket.get("last_success") or "")))
 
     summary_rows.append([])
-    summary_rows.append(["未解決異常", "判定", "ソース", "フォルダ", "ファイル名", "理由"])
+    summary_rows.append(["未解決異常", "", "", "", "", ""])
+    summary_rows.append(["確認時刻", "判定", "ソース", "フォルダ", "ファイル名", "理由"])
     for meta in sorted(unresolved_anomalies, key=lambda item: str(item.get("last_seen_at") or ""), reverse=True)[:10]:
         summary_rows.append([
             format_dt(parse_iso(str(meta.get("last_seen_at") or ""))),
@@ -565,7 +1009,9 @@ def sync_payment_collection_audit(spreadsheet=None, state: dict[str, Any] | None
         raise RuntimeError(" / ".join(structure_errors))
 
     tabs = ensure_audit_tabs(spreadsheet)
-    write_rows(tabs[OPS_TAB_NAME], build_ops_rows(state, spreadsheet))
+    ops_rows = build_ops_rows(state, spreadsheet)
+    write_rows(tabs[OPS_TAB_NAME], ops_rows)
+    apply_collection_sheet_styles(spreadsheet, tabs, ops_rows)
 
 
 def main():
