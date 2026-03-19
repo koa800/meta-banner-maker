@@ -134,7 +134,8 @@ STATUS_HEADER = [
     "直近7日実績行数",
     "直近7日消化金額",
     "取得状態",
-    "鮮度状態",
+    "稼働状態",
+    "制限状態",
     "判定理由",
     "最終日配信ステータス",
     "progress記録行数",
@@ -1055,7 +1056,7 @@ def calc_days_since(date_text):
     return (datetime.now().date() - target).days
 
 
-def determine_freshness_status(
+def determine_operation_status(
     raw_rows,
     latest_date,
     latest_statuses,
@@ -1068,12 +1069,9 @@ def determine_freshness_status(
     recent_spend=0,
 ):
     if raw_rows == 0:
-        return "0件", "raw行なし"
+        return "停止中", "raw行なし"
     if not latest_date:
-        return "未取得", "最終取得日なし"
-
-    if "停止中" in clean_cell(master_note):
-        return "停止中", "広告アカウントの備考=停止中"
+        return "停止中", "最終取得日なし"
 
     active_campaign_count = int(active_campaigns) if str(active_campaigns).strip() not in {"", "0"} else 0
     active_adset_count = int(active_adsets) if str(active_adsets).strip() not in {"", "0"} else 0
@@ -1081,28 +1079,38 @@ def determine_freshness_status(
     recent_row_count = int(recent_rows) if str(recent_rows).strip() not in {"", "0"} else 0
     recent_spend_value = float(recent_spend or 0)
 
-    expected_latest = (datetime.now().date() - timedelta(days=1)).strftime("%Y-%m-%d")
-    if latest_date >= expected_latest:
-        return "最新", "前日まで取得済み"
+    if "停止中" in clean_cell(master_note) and recent_row_count == 0 and recent_spend_value == 0:
+        return "停止中", "広告アカウントの備考=停止中"
+
+    if account_status and account_status != "1" and recent_row_count == 0 and recent_spend_value == 0:
+        return "停止中", f"account_status={account_status}"
 
     if recent_row_count > 0 or recent_spend_value > 0:
-        return "要確認", "直近7日実績あり"
+        return "稼働中", "直近7日実績あり"
 
     if active_ad_count > 0:
-        return "要確認", "currentでactive adあり / 直近7日実績0"
+        return "稼働中", "currentでactive adあり / 直近7日実績0"
+
+    expected_latest = (datetime.now().date() - timedelta(days=1)).strftime("%Y-%m-%d")
+    if latest_date >= expected_latest:
+        return "稼働中", "前日まで取得済み"
 
     if active_campaign_count > 0 or active_adset_count > 0:
         return "停止中", "currentでactive campaign/adsetのみ"
-
-    if account_status and account_status != "1":
-        return "停止中", f"account_status={account_status}"
 
     status_set = {status for status in latest_statuses if status}
     if status_set and status_set.issubset(PAUSED_LIKE_STATUSES):
         return "停止中", "最終日配信ステータスが停止系のみ"
     if status_set & ACTIVE_LIKE_STATUSES:
-        return "要確認", "最終日配信ステータスにACTIVEを含む"
-    return "要確認", "停止根拠不足のため要確認"
+        return "稼働中", "最終日配信ステータスにACTIVEを含む"
+    return "停止中", "currentの稼働根拠なし"
+
+
+def determine_restriction_status(account_status="", disable_reason=""):
+    disable_reason_text = clean_cell(disable_reason)
+    if disable_reason_text and disable_reason_text not in {"0"}:
+        return "Meta制限", f"disable_reason={disable_reason_text}"
+    return "正常", ""
 
 
 def ensure_status_tab(spreadsheet):
@@ -1207,8 +1215,8 @@ def apply_status_tab_formatting(spreadsheet, worksheet, row_count):
                 "range": {
                     "sheetId": worksheet.id,
                     "startRowIndex": 1,
-                    "startColumnIndex": 15,
-                    "endColumnIndex": 17,
+                    "startColumnIndex": 16,
+                    "endColumnIndex": 18,
                 },
                 "cell": {
                     "userEnteredFormat": {
@@ -1226,8 +1234,8 @@ def apply_status_tab_formatting(spreadsheet, worksheet, row_count):
                 "range": {
                     "sheetId": worksheet.id,
                     "startRowIndex": 1,
-                    "startColumnIndex": 19,
-                    "endColumnIndex": 24,
+                    "startColumnIndex": 20,
+                    "endColumnIndex": 25,
                 },
                 "cell": {
                     "userEnteredFormat": {
@@ -1294,7 +1302,7 @@ def update_meta_status_sheet(
         recent_info = recent_insights_map.get(account_id, {})
         recent_rows = recent_info.get("recent_rows", "")
         recent_spend = recent_info.get("recent_spend", "")
-        freshness_status, freshness_reason = determine_freshness_status(
+        operation_status, operation_reason = determine_operation_status(
             raw.get("raw行数", 0),
             raw.get("最終取得日", ""),
             latest_statuses,
@@ -1306,6 +1314,13 @@ def update_meta_status_sheet(
             recent_rows,
             recent_spend,
         )
+        restriction_status, restriction_reason = determine_restriction_status(
+            account_status=account_status,
+            disable_reason=disable_reason,
+        )
+        reasons = [operation_reason]
+        if restriction_reason:
+            reasons.append(restriction_reason)
         rows.append(
                 [
                     "Meta広告",
@@ -1320,8 +1335,9 @@ def update_meta_status_sheet(
                     recent_rows,
                     recent_spend,
                     determine_collection_status(progress_rows, raw.get("raw行数", 0)),
-                    freshness_status,
-                    freshness_reason,
+                    operation_status,
+                    restriction_status,
+                    " / ".join(reason for reason in reasons if reason),
                     format_latest_statuses(latest_statuses),
                     progress_rows if progress_rows is not None else "",
                     raw.get("raw行数", 0),
