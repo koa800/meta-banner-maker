@@ -34,6 +34,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
 from sheets_manager import get_client
+import payment_metrics_sheet_sync
 from scripts import payment_csv_to_sheet as payment_import
 from scripts import payment_collection_audit
 
@@ -562,6 +563,7 @@ def main():
         }
         save_state(state)
         payment_collection_audit.sync_payment_collection_audit(spreadsheet=spreadsheet if unresolved_source_issues else None, state=state)
+        payment_metrics_sheet_sync.sync_payment_metrics_sheet()
         print("\n新しい取込対象ファイルはありません。")
         return
 
@@ -700,6 +702,7 @@ def main():
     }
     save_state(state)
     payment_collection_audit.sync_payment_collection_audit(spreadsheet=spreadsheet, state=state)
+    payment_metrics_sheet_sync.sync_payment_metrics_sheet()
 
     print("\n実行結果:")
     print(f"  処理成功ファイル: {processed_count}件")

@@ -1,0 +1,1552 @@
+#!/usr/bin/env python3
+"""
+【アドネス株式会社】決済データ（加工）を再生成する。
+
+方針:
+- visible なタブは `日別売上数値 / 売上サマリー / データソース管理 / データ追加ルール` の4つだけに絞る
+- 内部ロジックでは 1資金イベント単位で正規化するが、明細タブは常設しない
+- 日別タブにはスキルプラス事業だけを出し、`完全不明` は入れない
+- `返金額` は相談窓口シートを案件正本にし、raw 決済は突合と補完にだけ使う
+- `解約請求額` は中途解約タブの負値を正本にする
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import time
+import unicodedata
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional
+
+import gspread
+from gspread.exceptions import APIError, SpreadsheetNotFound
+
+from sheets_manager import get_client
+from scripts.setup_payment_product_master import (
+    BUSINESS_SKILLPLUS,
+    MASTER_SHEET_ID,
+    MASTER_PRODUCT_TAB,
+    PAYMENT_COLLECTION_SHEET_ID,
+    PAYMENT_COLLECTION_TAB,
+    PAYMENT_MAPPING_TAB,
+    source_sale_is_success,
+)
+
+
+TARGET_SPREADSHEET_TITLE = "【アドネス株式会社】決済データ（加工）"
+CS_SHEET_ID = "1XOkJsXzEx4iV9h8F-cywg0FOS4Knf7IfekN78RZAr6I"
+CDP_SHEET_ID = "1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk"
+CDP_CUSTOMER_TAB = "顧客マスタ"
+
+DAILY_TAB_NAME = "日別売上数値"
+SUMMARY_TAB_NAME = "売上サマリー"
+SOURCE_MANAGEMENT_TAB_NAME = "データソース管理"
+RULE_TAB_NAME = "データ追加ルール"
+
+TAB_SPECS = {
+    DAILY_TAB_NAME: (1200, 8),
+    SUMMARY_TAB_NAME: (50, 3),
+    SOURCE_MANAGEMENT_TAB_NAME: (80, 12),
+    RULE_TAB_NAME: (60, 3),
+}
+
+BASE_DIR = Path(__file__).resolve().parent
+STATE_PATH = BASE_DIR / "data" / "payment_metrics_sheet_state.json"
+LOCK_PATH = BASE_DIR / "data" / "payment_metrics_sheet_sync.lock"
+
+HEADER_BG = {"red": 0.26, "green": 0.52, "blue": 0.96}
+HEADER_TEXT = {
+    "foregroundColor": {"red": 1, "green": 1, "blue": 1},
+    "bold": True,
+    "fontSize": 11,
+}
+TAB_COLORS = {
+    DAILY_TAB_NAME: "#1A73E8",
+    SUMMARY_TAB_NAME: "#FBBC04",
+    SOURCE_MANAGEMENT_TAB_NAME: "#34A853",
+    RULE_TAB_NAME: "#9E9E9E",
+}
+STATUS_OPTIONS = ["正常", "要確認", "停止"]
+STATUS_FORMATS = {
+    "正常": {"backgroundColor": {"red": 0.851, "green": 0.918, "blue": 0.827}},
+    "要確認": {"backgroundColor": {"red": 1.0, "green": 0.945, "blue": 0.8}},
+    "停止": {"backgroundColor": {"red": 0.957, "green": 0.8, "blue": 0.8}},
+}
+PROTECTED_EDITOR_EMAILS = [
+    "kohara.kaito@team.addness.co.jp",
+    "gwsadmin@team.addness.co.jp",
+]
+PROTECTION_PREFIX = "決済データ（加工）自動生成"
+WRITE_RETRY_SECONDS = (5, 10, 20, 40)
+START_DATE = datetime(2025, 1, 1)
+START_DATE_TEXT = START_DATE.strftime("%Y/%m/%d")
+DATE_RE = re.compile(r"(\d{4})[/-](\d{1,2})[/-](\d{1,2})")
+
+SKILLPLUS_CASE_CODES = {"STD", "PRM", "ELT", "SPS"}
+NON_SKILLPLUS_CASE_CODES = {"デザジュク", "アドネス", "ギブセル", "その他"}
+REFUND_MATCH_LOOKBACK_DAYS = 30
+REFUND_MATCH_LOOKAHEAD_DAYS = 120
+SKILLPLUS_UNKNOWN_PRODUCT_LABEL = "スキルプラス本体（プラン不明）"
+SKILLPLUS_BLANK_SOURCE_CONFIRMED_SOURCES = {
+    "日本プラム",
+    "きらぼし銀行",
+    "CBS",
+    "京都信販",
+    "CREDIX",
+}
+
+
+@dataclass(frozen=True)
+class MappingEntry:
+    source: str
+    raw_name: str
+    product_name: str
+    product_id: str
+    management_code: str
+    business: str
+    target: str
+    customer_attr: str
+    status: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class PaymentSaleEvent:
+    date: str
+    amount: int
+    email: str
+    full_name: str
+    line_name: str
+    phone: str
+    product_name: str
+    business: str
+
+
+@dataclass(frozen=True)
+class RefundCase:
+    date: str
+    amount: int
+    email: str
+    full_name: str
+    line_name: str
+    phone: str
+    source_tab: str
+    sheet_row: int
+
+
+class FileLock:
+    def __init__(self, lock_path: Path = LOCK_PATH, timeout_seconds: int = 1800):
+        self.lock_path = Path(lock_path)
+        self.timeout_seconds = timeout_seconds
+
+    def acquire(self) -> None:
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.lock_path.exists():
+            try:
+                lock_data = json.loads(self.lock_path.read_text())
+                locked_at = datetime.fromisoformat(lock_data.get("locked_at", ""))
+                elapsed = (datetime.now() - locked_at).total_seconds()
+                if elapsed < self.timeout_seconds:
+                    raise RuntimeError(
+                        f"決済データ（加工）の更新はロック中です: "
+                        f"{lock_data.get('locked_by', '不明')} ({int(elapsed)}秒前に開始)"
+                    )
+            except RuntimeError:
+                raise
+            except Exception:
+                pass
+
+        payload = {
+            "locked_at": datetime.now().isoformat(),
+            "locked_by": f"payment_metrics_sheet_sync (PID: {os.getpid()})",
+        }
+        self.lock_path.write_text(json.dumps(payload, ensure_ascii=False))
+
+    def release(self) -> None:
+        if self.lock_path.exists():
+            self.lock_path.unlink()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
+        return False
+
+
+def repeat_cell_request(sheet_id: int, start_row: int, end_row: int, start_col: int, end_col: int, fmt: dict, fields: str) -> dict:
+    return {
+        "repeatCell": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": start_row,
+                "endRowIndex": end_row,
+                "startColumnIndex": start_col,
+                "endColumnIndex": end_col,
+            },
+            "cell": {"userEnteredFormat": fmt},
+            "fields": fields,
+        }
+    }
+
+
+def set_column_width_request(sheet_id: int, start_col: int, end_col: int, width: int) -> dict:
+    return {
+        "updateDimensionProperties": {
+            "range": {
+                "sheetId": sheet_id,
+                "dimension": "COLUMNS",
+                "startIndex": start_col,
+                "endIndex": end_col,
+            },
+            "properties": {"pixelSize": width},
+            "fields": "pixelSize",
+        }
+    }
+
+
+def set_row_height_request(sheet_id: int, start_row: int, end_row: int, height: int) -> dict:
+    return {
+        "updateDimensionProperties": {
+            "range": {
+                "sheetId": sheet_id,
+                "dimension": "ROWS",
+                "startIndex": start_row,
+                "endIndex": end_row,
+            },
+            "properties": {"pixelSize": height},
+            "fields": "pixelSize",
+        }
+    }
+
+
+def set_sheet_properties_request(sheet_id: int, properties: dict, fields: str) -> dict:
+    return {
+        "updateSheetProperties": {
+            "properties": {"sheetId": sheet_id, **properties},
+            "fields": fields,
+        }
+    }
+
+
+def hex_to_rgb(hex_color: str) -> dict:
+    hex_color = hex_color.lstrip("#")
+    return {
+        "red": int(hex_color[0:2], 16) / 255.0,
+        "green": int(hex_color[2:4], 16) / 255.0,
+        "blue": int(hex_color[4:6], 16) / 255.0,
+    }
+
+
+def normalize_text(value: object) -> str:
+    return str(value or "").strip()
+
+
+def normalize_email(value: object) -> str:
+    return normalize_text(value).lower()
+
+
+def normalize_phone(value: object) -> str:
+    return re.sub(r"\D", "", normalize_text(value))
+
+
+def normalize_name_key(value: object) -> str:
+    text = unicodedata.normalize("NFKC", normalize_text(value)).lower()
+    text = re.sub(r"[\s\u3000]+", "", text)
+    return "".join(ch for ch in text if ch.isalnum() or ch == "ー")
+
+
+def normalize_date(raw: str) -> str:
+    value = normalize_text(raw)
+    if not value:
+        return ""
+    match = DATE_RE.search(value)
+    if not match:
+        return ""
+    year, month, day = map(int, match.groups())
+    return f"{year:04d}/{month:02d}/{day:02d}"
+
+
+def parse_date(raw: str) -> datetime | None:
+    normalized = normalize_date(raw)
+    if not normalized:
+        return None
+    return datetime.strptime(normalized, "%Y/%m/%d")
+
+
+def parse_amount(raw: object) -> int:
+    text = normalize_text(raw)
+    if not text:
+        return 0
+    sign = -1 if text.startswith("-") else 1
+    digits = re.sub(r"[^\d]", "", text)
+    if not digits:
+        return 0
+    return sign * int(digits)
+
+
+def normalize_display_amount(value: int) -> str:
+    return f"¥{value:,}"
+
+
+def normalize_display_count(value: int) -> str:
+    return f"{value:,}"
+
+
+def is_quota_error(exc: APIError) -> bool:
+    status_code = getattr(getattr(exc, "response", None), "status_code", None)
+    return status_code == 429 or "Quota exceeded" in str(exc)
+
+
+def run_write_with_retry(description: str, func):
+    last_error = None
+    waits = (0, *WRITE_RETRY_SECONDS)
+    for attempt, wait_seconds in enumerate(waits, start=1):
+        if wait_seconds:
+            time.sleep(wait_seconds)
+        try:
+            return func()
+        except APIError as exc:
+            if not is_quota_error(exc) or attempt == len(waits):
+                raise
+            last_error = exc
+            print(f"{description}: Sheets の書き込み回数制限に当たったため再試行します。")
+    if last_error:
+        raise last_error
+
+
+def batch_update_with_retry(spreadsheet, body: dict, description: str) -> None:
+    run_write_with_retry(description, lambda: spreadsheet.batch_update(body))
+
+
+def worksheet_write_with_retry(description: str, func) -> None:
+    run_write_with_retry(description, func)
+
+
+def get_all_values_with_retry(ws) -> List[List[str]]:
+    for attempt in range(4):
+        try:
+            return ws.get_all_values()
+        except Exception as exc:
+            message = str(exc)
+            is_quota = "429" in message or "Quota exceeded" in message
+            if not is_quota or attempt == 3:
+                raise
+            wait_seconds = 65 * (attempt + 1)
+            print(f"読み取り上限に到達: {ws.title} を {wait_seconds} 秒待って再試行")
+            time.sleep(wait_seconds)
+    return []
+
+
+def get_or_create_target_spreadsheet(gc) -> gspread.Spreadsheet:
+    try:
+        spreadsheet = gc.open(TARGET_SPREADSHEET_TITLE)
+    except SpreadsheetNotFound:
+        spreadsheet = run_write_with_retry(
+            "決済データ（加工）シートの作成",
+            lambda: gc.create(TARGET_SPREADSHEET_TITLE),
+        )
+    ensure_spreadsheet_title(spreadsheet)
+    return spreadsheet
+
+
+def ensure_spreadsheet_title(spreadsheet) -> None:
+    metadata = spreadsheet.fetch_sheet_metadata({"fields": "properties.title"})
+    title = metadata.get("properties", {}).get("title", "")
+    if title == TARGET_SPREADSHEET_TITLE:
+        return
+    batch_update_with_retry(
+        spreadsheet,
+        {
+            "requests": [
+                {
+                    "updateSpreadsheetProperties": {
+                        "properties": {"title": TARGET_SPREADSHEET_TITLE},
+                        "fields": "title",
+                    }
+                }
+            ]
+        },
+        "決済データ（加工）のシート名更新",
+    )
+
+
+def ensure_tabs(spreadsheet):
+    tabs = {ws.title: ws for ws in spreadsheet.worksheets()}
+    for name, (rows, cols) in TAB_SPECS.items():
+        if name in tabs:
+            ws = tabs[name]
+            if ws.row_count != rows or ws.col_count != cols:
+                worksheet_write_with_retry(
+                    f"{name} タブのサイズ調整",
+                    lambda ws=ws, rows=rows, cols=cols: ws.resize(rows=rows, cols=cols),
+                )
+            continue
+        tabs[name] = run_write_with_retry(
+            f"{name} タブの作成",
+            lambda name=name, rows=rows, cols=cols: spreadsheet.add_worksheet(title=name, rows=rows, cols=cols),
+        )
+
+    target_names = set(TAB_SPECS.keys())
+    for title, ws in list(tabs.items()):
+        if title not in target_names:
+            batch_update_with_retry(
+                spreadsheet,
+                {"requests": [{"deleteSheet": {"sheetId": ws.id}}]},
+                f"{title} タブの削除",
+            )
+            tabs.pop(title, None)
+
+    requests = []
+    ordered_names = [DAILY_TAB_NAME, SUMMARY_TAB_NAME, SOURCE_MANAGEMENT_TAB_NAME, RULE_TAB_NAME]
+    for idx, name in enumerate(ordered_names):
+        ws = tabs[name]
+        requests.append(set_sheet_properties_request(ws.id, {"index": idx, "hidden": False}, "index,hidden"))
+        requests.append(
+            set_sheet_properties_request(
+                ws.id,
+                {"tabColorStyle": {"rgbColor": hex_to_rgb(TAB_COLORS[name])}},
+                "tabColorStyle",
+            )
+        )
+    batch_update_with_retry(spreadsheet, {"requests": requests}, "決済データ（加工）のタブ整列")
+    return {ws.title: ws for ws in spreadsheet.worksheets()}
+
+
+def write_rows(spreadsheet, ws, rows: List[List[object]]) -> None:
+    max_cols = max((len(row) for row in rows), default=1)
+    padded = [list(row) + [""] * max(0, max_cols - len(row)) for row in rows]
+    target_rows = max(len(padded), 2)
+    if ws.row_count != target_rows or ws.col_count != max_cols:
+        worksheet_write_with_retry(
+            f"{ws.title} タブのサイズ最適化",
+            lambda: ws.resize(rows=target_rows, cols=max_cols),
+        )
+    worksheet_write_with_retry(f"{ws.title} クリア", lambda: ws.clear())
+    worksheet_write_with_retry(
+        f"{ws.title} 更新",
+        lambda: ws.update(range_name="A1", values=padded, value_input_option="USER_ENTERED"),
+    )
+
+
+def style_daily_tab(spreadsheet, ws) -> None:
+    widths = [120, 130, 120, 130, 130, 110, 110, 120]
+    requests = [
+        repeat_cell_request(
+            ws.id,
+            0,
+            1,
+            0,
+            len(widths),
+            {
+                "backgroundColor": HEADER_BG,
+                "horizontalAlignment": "CENTER",
+                "verticalAlignment": "MIDDLE",
+                "textFormat": HEADER_TEXT,
+                "wrapStrategy": "CLIP",
+            },
+            "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,textFormat,wrapStrategy)",
+        ),
+        repeat_cell_request(
+            ws.id,
+            1,
+            ws.row_count,
+            0,
+            len(widths),
+            {
+                "backgroundColor": {"red": 1, "green": 1, "blue": 1},
+                "horizontalAlignment": "RIGHT",
+                "verticalAlignment": "MIDDLE",
+                "wrapStrategy": "CLIP",
+                "textFormat": {"foregroundColor": {"red": 0, "green": 0, "blue": 0}, "fontSize": 10},
+                "numberFormat": {"type": "NUMBER", "pattern": "#,##0"},
+            },
+            "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,wrapStrategy,textFormat,numberFormat)",
+        ),
+        repeat_cell_request(
+            ws.id,
+            1,
+            ws.row_count,
+            0,
+            1,
+            {
+                "horizontalAlignment": "LEFT",
+                "numberFormat": {"type": "DATE", "pattern": "yyyy/mm/dd"},
+            },
+            "userEnteredFormat(horizontalAlignment,numberFormat)",
+        ),
+        set_row_height_request(ws.id, 0, 1, 34),
+        set_row_height_request(ws.id, 1, ws.row_count, 24),
+        {
+            "updateSheetProperties": {
+                "properties": {"sheetId": ws.id, "gridProperties": {"frozenRowCount": 1}},
+                "fields": "gridProperties.frozenRowCount",
+            }
+        },
+        {
+            "setBasicFilter": {
+                "filter": {
+                    "range": {
+                        "sheetId": ws.id,
+                        "startRowIndex": 0,
+                        "endRowIndex": ws.row_count,
+                        "startColumnIndex": 0,
+                        "endColumnIndex": len(widths),
+                    }
+                }
+            }
+        },
+    ]
+    for idx, width in enumerate(widths):
+        requests.append(set_column_width_request(ws.id, idx, idx + 1, width))
+    batch_update_with_retry(spreadsheet, {"requests": requests}, f"{ws.title} の体裁適用")
+
+
+def style_meta_tab(spreadsheet, ws, widths: List[int], *, center_cols=None, date_cols=None, status_col=None, number_cols=None) -> None:
+    center_cols = center_cols or []
+    date_cols = date_cols or []
+    number_cols = number_cols or []
+    requests = [
+        repeat_cell_request(
+            ws.id,
+            0,
+            1,
+            0,
+            len(widths),
+            {
+                "backgroundColor": HEADER_BG,
+                "horizontalAlignment": "CENTER",
+                "verticalAlignment": "MIDDLE",
+                "textFormat": HEADER_TEXT,
+                "wrapStrategy": "CLIP",
+            },
+            "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,textFormat,wrapStrategy)",
+        ),
+        repeat_cell_request(
+            ws.id,
+            1,
+            ws.row_count,
+            0,
+            len(widths),
+            {
+                "backgroundColor": {"red": 1, "green": 1, "blue": 1},
+                "horizontalAlignment": "LEFT",
+                "verticalAlignment": "MIDDLE",
+                "wrapStrategy": "CLIP",
+                "textFormat": {"foregroundColor": {"red": 0, "green": 0, "blue": 0}, "fontSize": 10},
+            },
+            "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,wrapStrategy,textFormat)",
+        ),
+        set_row_height_request(ws.id, 0, 1, 34),
+        set_row_height_request(ws.id, 1, ws.row_count, 24),
+        {
+            "updateSheetProperties": {
+                "properties": {"sheetId": ws.id, "gridProperties": {"frozenRowCount": 1}},
+                "fields": "gridProperties.frozenRowCount",
+            }
+        },
+        {
+            "setBasicFilter": {
+                "filter": {
+                    "range": {
+                        "sheetId": ws.id,
+                        "startRowIndex": 0,
+                        "endRowIndex": ws.row_count,
+                        "startColumnIndex": 0,
+                        "endColumnIndex": len(widths),
+                    }
+                }
+            }
+        },
+    ]
+    for idx in center_cols:
+        requests.append(
+            repeat_cell_request(
+                ws.id,
+                1,
+                ws.row_count,
+                idx,
+                idx + 1,
+                {"horizontalAlignment": "CENTER"},
+                "userEnteredFormat.horizontalAlignment",
+            )
+        )
+    for idx in date_cols:
+        requests.append(
+            repeat_cell_request(
+                ws.id,
+                1,
+                ws.row_count,
+                idx,
+                idx + 1,
+                {"numberFormat": {"type": "DATE_TIME", "pattern": "yyyy/mm/dd hh:mm"}},
+                "userEnteredFormat.numberFormat",
+            )
+        )
+    for idx in number_cols:
+        requests.append(
+            repeat_cell_request(
+                ws.id,
+                1,
+                ws.row_count,
+                idx,
+                idx + 1,
+                {"horizontalAlignment": "RIGHT", "numberFormat": {"type": "NUMBER", "pattern": "#,##0"}},
+                "userEnteredFormat(horizontalAlignment,numberFormat)",
+            )
+        )
+    if status_col is not None:
+        requests.append(
+            repeat_cell_request(
+                ws.id,
+                1,
+                ws.row_count,
+                status_col,
+                status_col + 1,
+                {"horizontalAlignment": "CENTER"},
+                "userEnteredFormat.horizontalAlignment",
+            )
+        )
+    for idx, width in enumerate(widths):
+        requests.append(set_column_width_request(ws.id, idx, idx + 1, width))
+    batch_update_with_retry(spreadsheet, {"requests": requests}, f"{ws.title} の体裁適用")
+
+    if status_col is not None:
+        validation = {
+            "condition": {"type": "ONE_OF_LIST", "values": [{"userEnteredValue": value} for value in STATUS_OPTIONS]},
+            "showCustomUi": True,
+            "strict": True,
+        }
+        batch_update_with_retry(
+            spreadsheet,
+            {
+                "requests": [
+                    {
+                        "setDataValidation": {
+                            "range": {
+                                "sheetId": ws.id,
+                                "startRowIndex": 1,
+                                "endRowIndex": ws.row_count,
+                                "startColumnIndex": status_col,
+                                "endColumnIndex": status_col + 1,
+                            },
+                            "rule": validation,
+                        }
+                    }
+                ]
+            },
+            f"{ws.title} のステータス入力規則",
+        )
+
+
+def apply_status_cell_colors(spreadsheet, ws, rows: List[List[object]], status_col_index: int) -> None:
+    requests = []
+    for row_index, row in enumerate(rows[1:], start=1):
+        status = str(row[status_col_index]).strip() if len(row) > status_col_index else ""
+        fmt = STATUS_FORMATS.get(status)
+        if not fmt:
+            continue
+        requests.append(
+            repeat_cell_request(
+                ws.id,
+                row_index,
+                row_index + 1,
+                status_col_index,
+                status_col_index + 1,
+                {
+                    **fmt,
+                    "horizontalAlignment": "CENTER",
+                    "verticalAlignment": "MIDDLE",
+                    "textFormat": {"bold": True},
+                },
+                "userEnteredFormat.backgroundColor,userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment,userEnteredFormat.textFormat.bold",
+            )
+        )
+    if requests:
+        batch_update_with_retry(spreadsheet, {"requests": requests}, f"{ws.title} のステータス色適用")
+
+
+def apply_protections(spreadsheet, tabs) -> None:
+    protected_names = list(TAB_SPECS.keys())
+    target_sheet_ids = {tabs[name].id for name in protected_names}
+    metadata = spreadsheet.fetch_sheet_metadata(
+        {
+            "includeGridData": False,
+            "fields": "sheets(properties.sheetId,protectedRanges(protectedRangeId,description,range(sheetId,startRowIndex,endRowIndex,startColumnIndex,endColumnIndex)))",
+        }
+    )
+
+    requests = []
+    existing_sheet_protection = set()
+    for sheet in metadata.get("sheets", []):
+        sheet_id = sheet.get("properties", {}).get("sheetId")
+        for protected_range in sheet.get("protectedRanges", []):
+            range_info = protected_range.get("range", {})
+            description = protected_range.get("description", "")
+            range_sheet_id = range_info.get("sheetId", sheet_id)
+            if range_sheet_id in target_sheet_ids:
+                has_row = any(key in range_info for key in ("startRowIndex", "endRowIndex"))
+                has_col = any(key in range_info for key in ("startColumnIndex", "endColumnIndex"))
+                if not has_row and not has_col:
+                    existing_sheet_protection.add(range_sheet_id)
+            if range_sheet_id in target_sheet_ids and str(description).startswith(PROTECTION_PREFIX):
+                requests.append({"deleteProtectedRange": {"protectedRangeId": protected_range["protectedRangeId"]}})
+
+    for name in protected_names:
+        if tabs[name].id in existing_sheet_protection:
+            continue
+        requests.append(
+            {
+                "addProtectedRange": {
+                    "protectedRange": {
+                        "range": {"sheetId": tabs[name].id},
+                        "description": f"{PROTECTION_PREFIX}: {name}",
+                        "warningOnly": False,
+                        "editors": {"users": PROTECTED_EDITOR_EMAILS},
+                    }
+                }
+            }
+        )
+
+    if requests:
+        batch_update_with_retry(spreadsheet, {"requests": requests}, "決済データ（加工）の保護設定")
+
+
+def get_tab_url(spreadsheet_id: str, ws) -> str:
+    return f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit#gid={ws.id}"
+
+
+def load_product_business_map(ws) -> tuple[set[str], set[str]]:
+    rows = get_all_values_with_retry(ws)
+    if not rows:
+        return set(), set()
+    headers = rows[0]
+    idx = {header: i for i, header in enumerate(headers)}
+    skillplus_names = set()
+    non_skillplus_names = set()
+    for row in rows[1:]:
+        padded = row + [""] * (len(headers) - len(row))
+        name = normalize_text(padded[idx["商品名"]])
+        business = normalize_text(padded[idx["事業区分"]])
+        if not name:
+            continue
+        if business == BUSINESS_SKILLPLUS:
+            skillplus_names.add(name)
+        else:
+            non_skillplus_names.add(name)
+    return skillplus_names, non_skillplus_names
+
+
+def load_payment_mapping(ws) -> Dict[tuple[str, str], MappingEntry]:
+    rows = get_all_values_with_retry(ws)
+    if not rows:
+        return {}
+    headers = rows[0]
+    idx = {header: i for i, header in enumerate(headers)}
+    mapping: Dict[tuple[str, str], MappingEntry] = {}
+    for row in rows[1:]:
+        padded = row + [""] * (len(headers) - len(row))
+        source = normalize_text(padded[idx["決済ソース"]])
+        raw_name = normalize_text(padded[idx["生商品名"]])
+        if not source or not raw_name:
+            continue
+        mapping[(source, raw_name)] = MappingEntry(
+            source=source,
+            raw_name=raw_name,
+            product_name=normalize_text(padded[idx["正式商品名"]]),
+            product_id=normalize_text(padded[idx["商品ID"]]),
+            management_code=normalize_text(padded[idx["商品管理コード"]]),
+            business=normalize_text(padded[idx["事業区分"]]),
+            target=normalize_text(padded[idx["対象顧客"]]),
+            customer_attr=normalize_text(padded[idx["顧客属性区分"]]),
+            status=normalize_text(padded[idx["判定区分"]]),
+            reason=normalize_text(padded[idx["判定根拠"]]),
+        )
+    return mapping
+
+
+def build_text_markers(product_names: Iterable[str]) -> list[str]:
+    markers = {normalize_text(name) for name in product_names if normalize_text(name)}
+    markers.update({"スキルプラス", "AIX", "SNSマーケ", "みかみ", "AICAN", "AIカレッジ", "センサーズ", "アクションマップ"})
+    return sorted(markers, key=len, reverse=True)
+
+
+def text_contains_any_marker(text: str, markers: Iterable[str]) -> bool:
+    normalized = normalize_text(text)
+    if not normalized:
+        return False
+    return any(marker and marker in normalized for marker in markers)
+
+
+def load_cdp_skillplus_identifiers(ws, skillplus_product_names: set[str]) -> dict[str, set[str]]:
+    rows = get_all_values_with_retry(ws)
+    if len(rows) < 2:
+        return {"emails": set(), "phones": set(), "names": set()}
+
+    headers = rows[1]
+    idx = {header: i for i, header in enumerate(headers)}
+    emails: set[str] = set()
+    phones: set[str] = set()
+    names: set[str] = set()
+    markers = build_text_markers(skillplus_product_names)
+
+    def pick(row: list[str], header: str) -> str:
+        col = idx.get(header)
+        if col is None or col >= len(row):
+            return ""
+        return normalize_text(row[col])
+
+    for row in rows[2:]:
+        if not any(normalize_text(cell) for cell in row):
+            continue
+        plan = pick(row, "プラン")
+        purchase_fields = [
+            pick(row, "初回購入商品"),
+            pick(row, "最新購入商品"),
+            pick(row, "購入商品"),
+        ]
+        is_skillplus = bool(plan) or any(text_contains_any_marker(value, markers) for value in purchase_fields)
+        if not is_skillplus:
+            continue
+
+        email = normalize_email(pick(row, "メールアドレス"))
+        phone = normalize_phone(pick(row, "電話番号"))
+        line_name = normalize_name_key(pick(row, "LINE名"))
+        full_name = normalize_name_key(f"{pick(row, '姓')}{pick(row, '名')}")
+        if email:
+            emails.add(email)
+        if phone:
+            phones.add(phone)
+        if line_name:
+            names.add(line_name)
+        if full_name:
+            names.add(full_name)
+    return {"emails": emails, "phones": phones, "names": names}
+
+
+def build_skillplus_sale_indexes(payment_rows: list[list[str]], mapping: Dict[tuple[str, str], MappingEntry]) -> tuple[list[PaymentSaleEvent], dict[str, set[str]], Counter]:
+    if not payment_rows:
+        return [], {"emails": set(), "phones": set(), "names": set()}, Counter()
+    headers = payment_rows[0]
+    idx = {header: i for i, header in enumerate(headers)}
+    sale_events: list[PaymentSaleEvent] = []
+    identifier_index = {"emails": set(), "phones": set(), "names": set()}
+    source_counter = Counter()
+    unknown_counter = Counter()
+
+    for row in payment_rows[1:]:
+        padded = row + [""] * (len(headers) - len(row))
+        source = normalize_text(padded[idx["参照システム"]])
+        event = normalize_text(padded[idx["イベント"]])
+        status = normalize_text(padded[idx["課金ステータス"]])
+        if not source_sale_is_success(source, event, status):
+            continue
+
+        event_date = normalize_date(padded[idx["イベント日時"]])
+        if not event_date:
+            continue
+        event_dt = parse_date(event_date)
+        if not event_dt or event_dt < START_DATE:
+            continue
+
+        raw_name = normalize_text(padded[idx["商品名"]]) or "(空欄)"
+        mapping_entry = mapping.get((source, raw_name))
+        product_name = ""
+        if mapping_entry and mapping_entry.status == "変換済み":
+            if mapping_entry.business != BUSINESS_SKILLPLUS:
+                continue
+            product_name = mapping_entry.product_name
+        elif raw_name == "(空欄)" and source in SKILLPLUS_BLANK_SOURCE_CONFIRMED_SOURCES:
+            product_name = SKILLPLUS_UNKNOWN_PRODUCT_LABEL
+        else:
+            unknown_counter["amount"] += abs(parse_amount(padded[idx["イベント金額"]]))
+            unknown_counter["count"] += 1
+            continue
+
+        amount = abs(parse_amount(padded[idx["イベント金額"]]))
+        full_name = normalize_text(padded[idx["名前（原本）"]]) or normalize_text(
+            f"{padded[idx['姓']]}{padded[idx['名']]}"
+        )
+        line_name = full_name
+        sale_event = PaymentSaleEvent(
+            date=event_date,
+            amount=amount,
+            email=normalize_email(padded[idx["メールアドレス"]]),
+            full_name=normalize_name_key(full_name),
+            line_name=normalize_name_key(line_name),
+            phone=normalize_phone(padded[idx["電話番号"]]),
+            product_name=product_name,
+            business=BUSINESS_SKILLPLUS,
+        )
+        sale_events.append(sale_event)
+        if sale_event.email:
+            identifier_index["emails"].add(sale_event.email)
+        if sale_event.phone:
+            identifier_index["phones"].add(sale_event.phone)
+        if sale_event.full_name:
+            identifier_index["names"].add(sale_event.full_name)
+        if sale_event.line_name:
+            identifier_index["names"].add(sale_event.line_name)
+        source_counter[source] += 1
+
+    return sale_events, identifier_index, unknown_counter
+
+
+def explicit_case_code_is_skillplus(code: str) -> Optional[bool]:
+    normalized = normalize_text(code)
+    if not normalized:
+        return None
+    if normalized in SKILLPLUS_CASE_CODES:
+        return True
+    if normalized in NON_SKILLPLUS_CASE_CODES:
+        return False
+    return None
+
+
+def identifiers_hit_skillplus(email: str, phone: str, full_name: str, line_name: str, sale_index: dict[str, set[str]], cdp_index: dict[str, set[str]]) -> bool:
+    if email and (email in sale_index["emails"] or email in cdp_index["emails"]):
+        return True
+    if phone and (phone in sale_index["phones"] or phone in cdp_index["phones"]):
+        return True
+    if full_name and (full_name in sale_index["names"] or full_name in cdp_index["names"]):
+        return True
+    if line_name and (line_name in sale_index["names"] or line_name in cdp_index["names"]):
+        return True
+    return False
+
+
+def case_is_skillplus(*, explicit_code: str, text_blob: str, email: str, phone: str, full_name: str, line_name: str, skillplus_markers: list[str], non_skillplus_markers: list[str], sale_index: dict[str, set[str]], cdp_index: dict[str, set[str]]) -> bool:
+    explicit = explicit_case_code_is_skillplus(explicit_code)
+    if explicit is not None:
+        return explicit
+    if text_contains_any_marker(text_blob, non_skillplus_markers):
+        return False
+    if text_contains_any_marker(text_blob, skillplus_markers):
+        return True
+    return identifiers_hit_skillplus(email, phone, full_name, line_name, sale_index, cdp_index)
+
+
+def collect_cs_refund_and_claims(cs_ss, sale_index: dict[str, set[str]], cdp_index: dict[str, set[str]], skillplus_markers: list[str], non_skillplus_markers: list[str]) -> tuple[dict[str, Counter], list[RefundCase], Counter]:
+    tab_configs = [
+        {
+            "tab": "管理用_クーオフ・中途解約以外",
+            "data_start_row": 3,
+            "email_col": 8,
+            "line_name_col": 7,
+            "full_name_col": 6,
+            "product_col": 9,
+            "status_col": 5,
+            "status_value": "完了",
+            "amount_col": 15,
+            "date_col": 1,
+            "text_cols": [4, 14],
+        },
+        {
+            "tab": "管理用_2025.1.25-クーオフ",
+            "data_start_row": 3,
+            "email_col": 10,
+            "line_name_col": 9,
+            "full_name_col": 8,
+            "product_col": 7,
+            "status_col": 6,
+            "status_value": "完了",
+            "amount_col": 19,
+            "date_col": 23,
+            "text_cols": [7, 26],
+        },
+        {
+            "tab": "管理用_20250125-中途解約",
+            "data_start_row": 3,
+            "email_col": 10,
+            "line_name_col": 9,
+            "full_name_col": 8,
+            "product_col": 7,
+            "status_col": 6,
+            "status_value": "完了",
+            "amount_col": 23,
+            "date_col": 27,
+            "text_cols": [7, 32, 33, 34],
+        },
+    ]
+
+    daily = defaultdict(Counter)
+    refund_cases: list[RefundCase] = []
+    stats = Counter()
+
+    for cfg in tab_configs:
+        ws = cs_ss.worksheet(cfg["tab"])
+        rows = get_all_values_with_retry(ws)
+        for sheet_row_number, row in enumerate(rows[cfg["data_start_row"] - 1 :], start=cfg["data_start_row"]):
+            padded = row + [""] * max(0, 40 - len(row))
+            status = normalize_text(padded[cfg["status_col"]])
+            if status != cfg["status_value"]:
+                continue
+
+            amount = parse_amount(padded[cfg["amount_col"]])
+            if amount == 0:
+                continue
+
+            event_date = normalize_date(padded[cfg["date_col"]]) or normalize_date(padded[1])
+            event_dt = parse_date(event_date)
+            if not event_dt or event_dt < START_DATE:
+                continue
+
+            email = normalize_email(padded[cfg["email_col"]])
+            phone = normalize_phone("")
+            full_name = normalize_name_key(padded[cfg["full_name_col"]])
+            line_name = normalize_name_key(padded[cfg["line_name_col"]])
+            explicit_code = normalize_text(padded[cfg["product_col"]])
+            text_blob = " / ".join(normalize_text(padded[col]) for col in cfg["text_cols"])
+            if not case_is_skillplus(
+                explicit_code=explicit_code,
+                text_blob=text_blob,
+                email=email,
+                phone=phone,
+                full_name=full_name,
+                line_name=line_name,
+                skillplus_markers=skillplus_markers,
+                non_skillplus_markers=non_skillplus_markers,
+                sale_index=sale_index,
+                cdp_index=cdp_index,
+            ):
+                continue
+
+            if amount > 0:
+                daily[event_date]["refund_amount"] += amount
+                daily[event_date]["refund_count"] += 1
+                refund_cases.append(
+                    RefundCase(
+                        date=event_date,
+                        amount=amount,
+                        email=email,
+                        full_name=full_name,
+                        line_name=line_name,
+                        phone=phone,
+                        source_tab=cfg["tab"],
+                        sheet_row=sheet_row_number,
+                    )
+                )
+                stats["refund_amount"] += amount
+                stats["refund_count"] += 1
+            else:
+                daily[event_date]["claim_amount"] += abs(amount)
+                daily[event_date]["claim_count"] += 1
+                stats["claim_amount"] += abs(amount)
+                stats["claim_count"] += 1
+
+    return daily, refund_cases, stats
+
+
+def payment_refund_is_candidate(source: str, event: str, refund_date: str) -> bool:
+    if source == "UnivaPay":
+        return "返金" in event or bool(refund_date)
+    if source == "MOSH":
+        return bool(refund_date)
+    return "返金" in event or bool(refund_date)
+
+
+def raw_refund_matches_case(refund_case: RefundCase, *, email: str, phone: str, full_name: str, line_name: str, event_date: datetime) -> bool:
+    start_date = parse_date(refund_case.date)
+    if not start_date:
+        return False
+    if event_date < start_date - timedelta(days=REFUND_MATCH_LOOKBACK_DAYS):
+        return False
+    if event_date > start_date + timedelta(days=REFUND_MATCH_LOOKAHEAD_DAYS):
+        return False
+
+    if email and refund_case.email and email == refund_case.email:
+        return True
+    if full_name and refund_case.full_name and full_name == refund_case.full_name:
+        return True
+    if line_name and refund_case.line_name and line_name == refund_case.line_name:
+        return True
+    if phone and refund_case.phone and phone == refund_case.phone:
+        return True
+    return False
+
+
+def build_refund_case_indexes(refund_cases: list[RefundCase]) -> dict[str, dict[str, list[RefundCase]]]:
+    indexes = {"emails": defaultdict(list), "names": defaultdict(list), "phones": defaultdict(list)}
+    for refund_case in refund_cases:
+        if refund_case.email:
+            indexes["emails"][refund_case.email].append(refund_case)
+        if refund_case.full_name:
+            indexes["names"][refund_case.full_name].append(refund_case)
+        if refund_case.line_name and refund_case.line_name != refund_case.full_name:
+            indexes["names"][refund_case.line_name].append(refund_case)
+        if refund_case.phone:
+            indexes["phones"][refund_case.phone].append(refund_case)
+    return indexes
+
+
+def collect_raw_refund_supplements(payment_rows: list[list[str]], mapping: Dict[tuple[str, str], MappingEntry], refund_cases: list[RefundCase], sale_index: dict[str, set[str]], cdp_index: dict[str, set[str]], skillplus_markers: list[str], non_skillplus_markers: list[str]) -> tuple[dict[str, Counter], Counter]:
+    if not payment_rows:
+        return defaultdict(Counter), Counter()
+
+    headers = payment_rows[0]
+    idx = {header: i for i, header in enumerate(headers)}
+    daily = defaultdict(Counter)
+    stats = Counter()
+    case_indexes = build_refund_case_indexes(refund_cases)
+
+    for row in payment_rows[1:]:
+        padded = row + [""] * (len(headers) - len(row))
+        source = normalize_text(padded[idx["参照システム"]])
+        event = normalize_text(padded[idx["イベント"]])
+        source_refund_date = normalize_date(padded[idx["返金日時"]])
+        event_date_text = normalize_date(padded[idx["イベント日時"]])
+        refund_date_text = source_refund_date or event_date_text
+        refund_dt = parse_date(refund_date_text)
+        if not refund_dt or refund_dt < START_DATE:
+            continue
+        if not payment_refund_is_candidate(source, event, source_refund_date):
+            continue
+
+        amount = abs(parse_amount(padded[idx["イベント金額"]]))
+        if amount <= 0:
+            continue
+
+        raw_name = normalize_text(padded[idx["商品名"]]) or "(空欄)"
+        mapping_entry = mapping.get((source, raw_name))
+        email = normalize_email(padded[idx["メールアドレス"]])
+        phone = normalize_phone(padded[idx["電話番号"]])
+        full_name = normalize_name_key(
+            normalize_text(padded[idx["名前（原本）"]]) or normalize_text(f"{padded[idx['姓']]}{padded[idx['名']]}")
+        )
+        line_name = full_name
+
+        if not mapping_entry or mapping_entry.status != "変換済み":
+            continue
+        if mapping_entry.business != BUSINESS_SKILLPLUS:
+            continue
+        if not identifiers_hit_skillplus(email, phone, full_name, line_name, sale_index, cdp_index):
+            continue
+
+        candidate_cases: list[RefundCase] = []
+        if email and email in case_indexes["emails"]:
+            candidate_cases = case_indexes["emails"][email]
+        elif full_name and full_name in case_indexes["names"]:
+            candidate_cases = case_indexes["names"][full_name]
+        elif line_name and line_name in case_indexes["names"]:
+            candidate_cases = case_indexes["names"][line_name]
+        elif phone and phone in case_indexes["phones"]:
+            candidate_cases = case_indexes["phones"][phone]
+
+        if any(
+            raw_refund_matches_case(
+                refund_case,
+                email=email,
+                phone=phone,
+                full_name=full_name,
+                line_name=line_name,
+                event_date=refund_dt,
+            )
+            for refund_case in candidate_cases
+        ):
+            continue
+
+        daily[refund_date_text]["refund_amount"] += amount
+        daily[refund_date_text]["refund_count"] += 1
+        stats["refund_amount"] += amount
+        stats["refund_count"] += 1
+
+    return daily, stats
+
+
+def build_daily_rows(payment_rows: list[list[str]], mapping: Dict[tuple[str, str], MappingEntry], refund_daily: dict[str, Counter], refund_stats: Counter, claim_stats: Counter) -> tuple[List[List[object]], dict]:
+    headers = payment_rows[0]
+    idx = {header: i for i, header in enumerate(headers)}
+    daily = defaultdict(Counter)
+    complete_unknown_amount = 0
+    complete_unknown_count = 0
+    sale_source_counts = Counter()
+
+    for row in payment_rows[1:]:
+        padded = row + [""] * (len(headers) - len(row))
+        source = normalize_text(padded[idx["参照システム"]])
+        event = normalize_text(padded[idx["イベント"]])
+        status = normalize_text(padded[idx["課金ステータス"]])
+        if not source_sale_is_success(source, event, status):
+            continue
+
+        event_date = normalize_date(padded[idx["イベント日時"]])
+        event_dt = parse_date(event_date)
+        if not event_dt or event_dt < START_DATE:
+            continue
+
+        raw_name = normalize_text(padded[idx["商品名"]]) or "(空欄)"
+        mapping_entry = mapping.get((source, raw_name))
+        if mapping_entry and mapping_entry.status == "変換済み":
+            if mapping_entry.business != BUSINESS_SKILLPLUS:
+                continue
+        elif not (raw_name == "(空欄)" and source in SKILLPLUS_BLANK_SOURCE_CONFIRMED_SOURCES):
+            complete_unknown_amount += abs(parse_amount(padded[idx["イベント金額"]]))
+            complete_unknown_count += 1
+            continue
+
+        amount = abs(parse_amount(padded[idx["イベント金額"]]))
+        daily[event_date]["sales_amount"] += amount
+        daily[event_date]["sales_count"] += 1
+        sale_source_counts[source] += 1
+
+    all_dates = set(daily.keys()) | set(refund_daily.keys())
+    if not all_dates:
+        rows = [[
+            "日付",
+            "着金売上",
+            "返金額",
+            "純着金売上",
+            "解約請求額",
+            "着金件数",
+            "返金件数",
+            "解約請求件数",
+        ]]
+        stats = {
+            "sales_amount_total": 0,
+            "refund_amount_total": 0,
+            "net_sales_total": 0,
+            "claim_amount_total": 0,
+            "sales_count_total": 0,
+            "refund_count_total": 0,
+            "claim_count_total": 0,
+            "complete_unknown_amount": complete_unknown_amount,
+            "complete_unknown_count": complete_unknown_count,
+            "latest_date": "",
+            "daily_row_count": 0,
+            "source_row_count": 0,
+            "sale_source_counts": dict(sale_source_counts),
+            "supplement_refund_count": refund_stats.get("supplement_count", 0),
+        }
+        return rows, stats
+
+    start_dt = START_DATE
+    end_dt = max(parse_date(date_text) for date_text in all_dates if parse_date(date_text))
+    rows = [[
+        "日付",
+        "着金売上",
+        "返金額",
+        "純着金売上",
+        "解約請求額",
+        "着金件数",
+        "返金件数",
+        "解約請求件数",
+    ]]
+
+    sales_amount_total = 0
+    refund_amount_total = 0
+    claim_amount_total = 0
+    sales_count_total = 0
+    refund_count_total = 0
+    claim_count_total = 0
+
+    cursor = start_dt
+    while cursor <= end_dt:
+        date_text = cursor.strftime("%Y/%m/%d")
+        sales_amount = daily[date_text]["sales_amount"]
+        refund_amount = refund_daily[date_text]["refund_amount"]
+        claim_amount = refund_daily[date_text]["claim_amount"]
+        sales_count = daily[date_text]["sales_count"]
+        refund_count = refund_daily[date_text]["refund_count"]
+        claim_count = refund_daily[date_text]["claim_count"]
+        rows.append([
+            date_text,
+            sales_amount,
+            refund_amount,
+            sales_amount - refund_amount,
+            claim_amount,
+            sales_count,
+            refund_count,
+            claim_count,
+        ])
+        sales_amount_total += sales_amount
+        refund_amount_total += refund_amount
+        claim_amount_total += claim_amount
+        sales_count_total += sales_count
+        refund_count_total += refund_count
+        claim_count_total += claim_count
+        cursor += timedelta(days=1)
+
+    stats = {
+        "sales_amount_total": sales_amount_total,
+        "refund_amount_total": refund_amount_total,
+        "net_sales_total": sales_amount_total - refund_amount_total,
+        "claim_amount_total": claim_amount_total,
+        "sales_count_total": sales_count_total,
+        "refund_count_total": refund_count_total,
+        "claim_count_total": claim_count_total,
+        "complete_unknown_amount": complete_unknown_amount,
+        "complete_unknown_count": complete_unknown_count,
+        "latest_date": end_dt.strftime("%Y/%m/%d"),
+        "daily_row_count": len(rows) - 1,
+        "source_row_count": len(payment_rows) - 1,
+        "sale_source_counts": dict(sale_source_counts),
+        "supplement_refund_count": refund_stats.get("supplement_count", 0),
+    }
+    return rows, stats
+
+
+def build_summary_rows(stats: dict, checked_at: str) -> List[List[object]]:
+    return [
+        ["項目", "数値", "補足"],
+        ["最終更新日時", checked_at, "このシートを最後に再生成した日時"],
+        ["集計開始日", START_DATE_TEXT, "2025/01/01 以降だけを集計対象にする"],
+        ["最新計上日", stats["latest_date"], "日別売上数値で最後に値を持つ日付"],
+        ["累計着金売上", normalize_display_amount(stats["sales_amount_total"]), "スキルプラス事業の成功売上 + 商品未特定だが事業は確定した売上"],
+        ["累計返金額", normalize_display_amount(stats["refund_amount_total"]), "相談窓口シート案件正本 + raw 補完の返金合計"],
+        ["累計純着金売上", normalize_display_amount(stats["net_sales_total"]), "着金売上 - 返金額"],
+        ["累計解約請求額", normalize_display_amount(stats["claim_amount_total"]), "中途解約タブの請求確定額"],
+        ["累計着金件数", normalize_display_count(stats["sales_count_total"]), "成功売上イベント件数"],
+        ["累計返金件数", normalize_display_count(stats["refund_count_total"]), "返金案件数 + raw 補完件数"],
+        ["累計解約請求件数", normalize_display_count(stats["claim_count_total"]), "解約請求案件数"],
+        ["完全不明金額", normalize_display_amount(stats["complete_unknown_amount"]), "スキルプラス事業と確定できず日別へ入れていない売上"],
+        ["完全不明件数", normalize_display_count(stats["complete_unknown_count"]), "完全不明として除外した売上件数"],
+    ]
+
+
+def build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats: dict, checked_at: str) -> List[List[object]]:
+    payment_url = get_tab_url(PAYMENT_COLLECTION_SHEET_ID, payment_ws)
+    mapping_url = get_tab_url(MASTER_SHEET_ID, mapping_ws)
+    refund_ws = cs_ss.worksheet("管理用_2025.1.25-クーオフ")
+    midterm_ws = cs_ss.worksheet("管理用_20250125-中途解約")
+    other_refund_ws = cs_ss.worksheet("管理用_クーオフ・中途解約以外")
+    status = "正常"
+    if stats["complete_unknown_amount"] > 0:
+        status = "要確認"
+
+    rows = [
+        ["加工タブ", "対象カラム", "優先度", "ソース元", "参照タブ", "参照列", "取得条件", "ステータス", "最終同期日", "更新数", "エラー数", "備考"],
+        [
+            DAILY_TAB_NAME,
+            "着金売上 / 着金件数",
+            "1",
+            f'=HYPERLINK("{payment_url}","【アドネス株式会社】決済データ（収集）")',
+            PAYMENT_COLLECTION_TAB,
+            "イベント日時 / イベント金額 / 商品名",
+            "成功売上のみ + 決済商品変換マスタ確定行 + 銀振/信販の空欄成功売上のうちスキルプラス事業と確定できる行",
+            status,
+            f"'{checked_at}",
+            stats["sales_count_total"],
+            1 if status != "正常" else 0,
+            "完全不明は日別に入れず売上サマリーで監視する",
+        ],
+        [
+            DAILY_TAB_NAME,
+            "返金額 / 返金件数",
+            "1",
+            f'=HYPERLINK("{get_tab_url(CS_SHEET_ID, refund_ws)}","お客様相談窓口_進捗管理シート")',
+            "管理用_クーオフ・中途解約以外 / 管理用_2025.1.25-クーオフ / 管理用_20250125-中途解約",
+            "返金額 / 返金予定日 / 返金日",
+            "相談窓口シートを案件正本にし、相談窓口にない raw 返金だけ補完採用する",
+            "正常",
+            f"'{checked_at}",
+            stats["refund_count_total"],
+            0,
+            f'=HYPERLINK("{get_tab_url(CS_SHEET_ID, other_refund_ws)}","一般返金"), HYPERLINK("{get_tab_url(CS_SHEET_ID, refund_ws)}","クーオフ"), HYPERLINK("{get_tab_url(CS_SHEET_ID, midterm_ws)}","中途解約")',
+        ],
+        [
+            DAILY_TAB_NAME,
+            "解約請求額 / 解約請求件数",
+            "1",
+            f'=HYPERLINK("{get_tab_url(CS_SHEET_ID, midterm_ws)}","お客様相談窓口_進捗管理シート")',
+            "管理用_20250125-中途解約",
+            "返金額/請求額 / 返金or支払い予定日",
+            "中途解約タブの負値を請求額として扱う",
+            "正常",
+            f"'{checked_at}",
+            stats["claim_count_total"],
+            0,
+            "請求回収はまだ通常売上へ混ぜない",
+        ],
+        [
+            DAILY_TAB_NAME,
+            "純着金売上",
+            "1",
+            "この加工シート",
+            DAILY_TAB_NAME,
+            "着金売上 / 返金額",
+            "着金売上 - 返金額",
+            "正常",
+            f"'{checked_at}",
+            stats["daily_row_count"],
+            0,
+            "解約請求額は別列で持つ",
+        ],
+        [
+            DAILY_TAB_NAME,
+            "商品分類",
+            "1",
+            f'=HYPERLINK("{mapping_url}","【アドネス株式会社】マスタデータ")',
+            PAYMENT_MAPPING_TAB,
+            "正式商品名 / 事業区分 / 対象顧客 / 顧客属性区分",
+            "決済商品変換マスタで商品を正式商品へ寄せる",
+            status,
+            f"'{checked_at}",
+            stats["source_row_count"],
+            1 if status != "正常" else 0,
+            "商品名空欄でも銀行振込・信販の専用チャネルは着金売上へ含め、完全不明だけ除外する",
+        ],
+    ]
+    return rows
+
+
+def build_rule_rows() -> List[List[object]]:
+    return [
+        ["項目", "ルール", "補足"],
+        ["日別売上数値", "手入力で直さず、元データから再生成する", "数字の理由を後から追えるようにする"],
+        ["着金売上", "決済データ（収集）の成功売上だけを集計する", "スキルプラス事業と確定した商品 + 銀振/信販のプラン未特定売上を対象にする"],
+        ["返金額", "相談窓口シートの返金案件を正本にする", "相談窓口に載っていない raw 返金だけを補完採用する"],
+        ["返金件数", "返金イベント件数ではなく返金案件数で持つ", "分割返金でも1案件として扱う"],
+        ["解約請求額", "中途解約タブの負値を請求額として持つ", "通常の着金売上には混ぜない"],
+        ["日付", "実入出金日ではなく、確定日を使う", "着金売上はイベント日時、返金額と解約請求額は相談窓口上の確定日"],
+        ["商品未特定", "銀行振込・信販の空欄成功売上はスキルプラス事業売上へ含める", "どのプランか不明でも事業までは確定できる前提で扱う"],
+        ["完全不明", "スキルプラス事業と確定できない売上は日別に入れない", "売上サマリーで金額と件数だけ監視する"],
+        ["プラン不明", "スキルプラス事業とだけ言える売上は将来の加工拡張で扱う", "今は完全不明として残すより、根拠が固まってから昇格させる"],
+    ]
+
+
+def load_run_state() -> Dict[str, int]:
+    if not STATE_PATH.exists():
+        return {}
+    try:
+        data = json.loads(STATE_PATH.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_run_state(stats: Dict[str, int]) -> None:
+    payload = {
+        "updated_at": stats["updated_at"],
+        "metrics_start_date": START_DATE_TEXT,
+        "sales_amount_total": stats["sales_amount_total"],
+        "refund_amount_total": stats["refund_amount_total"],
+        "net_sales_total": stats["net_sales_total"],
+        "claim_amount_total": stats["claim_amount_total"],
+        "sales_count_total": stats["sales_count_total"],
+        "refund_count_total": stats["refund_count_total"],
+        "claim_count_total": stats["claim_count_total"],
+        "complete_unknown_amount": stats["complete_unknown_amount"],
+        "complete_unknown_count": stats["complete_unknown_count"],
+        "latest_date": stats["latest_date"],
+        "daily_row_count": stats["daily_row_count"],
+    }
+    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    STATE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
+    with FileLock():
+        gc = get_client()
+        target = get_or_create_target_spreadsheet(gc)
+        source = gc.open_by_key(PAYMENT_COLLECTION_SHEET_ID)
+        master = gc.open_by_key(MASTER_SHEET_ID)
+        cs_ss = gc.open_by_key(CS_SHEET_ID)
+        cdp_ss = gc.open_by_key(CDP_SHEET_ID)
+        tabs = ensure_tabs(target)
+
+        payment_ws = source.worksheet(PAYMENT_COLLECTION_TAB)
+        mapping_ws = master.worksheet(PAYMENT_MAPPING_TAB)
+        product_ws = master.worksheet(MASTER_PRODUCT_TAB)
+        cdp_ws = cdp_ss.worksheet(CDP_CUSTOMER_TAB)
+
+        payment_rows = get_all_values_with_retry(payment_ws)
+        mapping = load_payment_mapping(mapping_ws)
+        skillplus_product_names, non_skillplus_product_names = load_product_business_map(product_ws)
+        sale_events, sale_index, unknown_counter = build_skillplus_sale_indexes(payment_rows, mapping)
+        cdp_index = load_cdp_skillplus_identifiers(cdp_ws, skillplus_product_names)
+        skillplus_markers = build_text_markers(skillplus_product_names)
+        non_skillplus_markers = build_text_markers(non_skillplus_product_names)
+
+        refund_daily, refund_cases, refund_case_stats = collect_cs_refund_and_claims(
+            cs_ss,
+            sale_index=sale_index,
+            cdp_index=cdp_index,
+            skillplus_markers=skillplus_markers,
+            non_skillplus_markers=non_skillplus_markers,
+        )
+        refund_supplement_daily, refund_supplement_stats = collect_raw_refund_supplements(
+            payment_rows,
+            mapping,
+            refund_cases=refund_cases,
+            sale_index=sale_index,
+            cdp_index=cdp_index,
+            skillplus_markers=skillplus_markers,
+            non_skillplus_markers=non_skillplus_markers,
+        )
+        for date_text, counter in refund_supplement_daily.items():
+            refund_daily[date_text]["refund_amount"] += counter["refund_amount"]
+            refund_daily[date_text]["refund_count"] += counter["refund_count"]
+        refund_case_stats["refund_amount"] += refund_supplement_stats["refund_amount"]
+        refund_case_stats["refund_count"] += refund_supplement_stats["refund_count"]
+        refund_case_stats["supplement_count"] = refund_supplement_stats["refund_count"]
+
+        daily_rows, stats = build_daily_rows(
+            payment_rows,
+            mapping,
+            refund_daily,
+            refund_case_stats,
+            refund_case_stats,
+        )
+        stats["complete_unknown_amount"] = unknown_counter["amount"]
+        stats["complete_unknown_count"] = unknown_counter["count"]
+        checked_at = datetime.now().strftime("%Y/%m/%d %H:%M")
+        stats["updated_at"] = checked_at
+
+        summary_rows = build_summary_rows(stats, checked_at)
+        source_rows = build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats, checked_at)
+        rule_rows = build_rule_rows()
+
+        if dry_run:
+            print("【dry-run】累計着金売上:", stats["sales_amount_total"])
+            print("【dry-run】累計返金額:", stats["refund_amount_total"])
+            print("【dry-run】累計純着金売上:", stats["net_sales_total"])
+            print("【dry-run】累計解約請求額:", stats["claim_amount_total"])
+            print("【dry-run】完全不明金額:", stats["complete_unknown_amount"])
+            print("【dry-run】完全不明件数:", stats["complete_unknown_count"])
+            print("【dry-run】補完返金件数:", refund_case_stats.get("supplement_count", 0))
+            print("【dry-run】対象日数:", stats["daily_row_count"])
+            return stats
+
+        write_rows(target, tabs[DAILY_TAB_NAME], daily_rows)
+        style_daily_tab(target, tabs[DAILY_TAB_NAME])
+
+        write_rows(target, tabs[SUMMARY_TAB_NAME], summary_rows)
+        style_meta_tab(target, tabs[SUMMARY_TAB_NAME], widths=[180, 180, 420])
+
+        write_rows(target, tabs[SOURCE_MANAGEMENT_TAB_NAME], source_rows)
+        style_meta_tab(
+            target,
+            tabs[SOURCE_MANAGEMENT_TAB_NAME],
+            widths=[120, 140, 70, 220, 210, 180, 280, 90, 140, 90, 90, 280],
+            center_cols=[2, 7],
+            date_cols=[8],
+            status_col=7,
+            number_cols=[9, 10],
+        )
+        apply_status_cell_colors(target, tabs[SOURCE_MANAGEMENT_TAB_NAME], source_rows, 7)
+
+        write_rows(target, tabs[RULE_TAB_NAME], rule_rows)
+        style_meta_tab(target, tabs[RULE_TAB_NAME], widths=[160, 500, 320])
+
+        apply_protections(target, tabs)
+        save_run_state(stats)
+        print(f"{TARGET_SPREADSHEET_TITLE} を更新しました。")
+        return stats
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="決済データ（加工）を更新する")
+    parser.add_argument("--dry-run", action="store_true", help="Sheets へ書き込まず集計だけ行う")
+    args = parser.parse_args()
+    sync_payment_metrics_sheet(dry_run=args.dry_run)
+
+
+if __name__ == "__main__":
+    main()
