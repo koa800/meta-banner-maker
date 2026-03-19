@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-決済CSVを共通25列に正規化して収集シートに書き込む。
+決済CSVを共通21列に正規化して収集シートに書き込む。
 
 方針:
 - CSV格納は人がやる。このスクリプトはCSV読み込み→正規化→シート書き込みを担当
-- 各ソースのCSVを共通25列に変換する
+- 各ソースのCSVを共通21列に変換する
 - 収集段階ではフィルタしない。全イベント・全ステータスを入れる
 - 書き込み先: 【アドネス株式会社】決済データ（収集） / 決済データ
 """
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import io
 import json
 import os
@@ -33,16 +34,97 @@ SHEET_ID = "1FfGM0HpofM8yayhJniArXp_vQ6-4JRvlp6rxDt-eHTI"
 TAB_NAME = "決済データ"
 UTAGE_TAB_NAME = "UTAGE補助"
 SOURCE_MGMT_TAB = "データソース管理"
+UTAGE_HEADER = ["売上日時", "商品名", "メールアドレス", "名前", "電話番号", "登録経路", "金額", "支払方法", "ステータス"]
 
 HEADER = [
     "課金ID", "参照システム", "イベント", "イベント日時", "イベント金額",
-    "課金金額", "課金ステータス", "商品名", "メールアドレス", "姓",
-    "名", "名前（原本）", "フリガナ", "電話番号", "決済手段",
-    "カードブランド", "課金タイプ", "支払回数", "定期課金ID", "返金日時",
-    "返金金額", "返金ステータス", "返金理由", "登録経路", "メタデータ（JSON）",
+    "課金ステータス", "商品名", "メールアドレス", "姓", "名",
+    "名前（原本）", "フリガナ", "電話番号", "決済手段", "カードブランド",
+    "課金タイプ", "支払回数", "定期課金ID", "返金日時", "返金金額",
+    "メタデータ（JSON）",
 ]
 
 WRITE_RETRY_SECONDS = (5, 10, 20, 40)
+
+SOURCE_DISPLAY_NAMES = {
+    "univapay": "UnivaPay",
+    "jplum": "日本プラム",
+    "mosh": "MOSH",
+    "kiraboshi": "きらぼし銀行",
+    "invoy": "INVOY",
+    "credix": "CREDIX",
+    "utage": "UTAGE売上一覧",
+}
+
+KNOWN_IGNORED_FILE_PATTERNS = [
+    (
+        re.compile(r"^スキルプラス\s*-\s*受講生サイト登録受講生_.*\.csv$", re.IGNORECASE),
+        "UTAGE受講生サイト登録一覧。決済データの取込対象外",
+    ),
+    (
+        re.compile(r"^(?:\d{1,2}[/-]\d{1,2}|\d{1,2}月\d{1,2}日?|データ)なし(?:\.[A-Za-z0-9]+)?$", re.IGNORECASE),
+        "データなしメモ。決済データの取込対象外",
+    ),
+]
+
+SOURCE_REQUIRED_HEADERS = {
+    "univapay": {
+        "課金ID",
+        "イベント",
+        "イベント作成日時",
+        "イベント金額",
+        "課金金額",
+        "課金ステータス",
+        "メールアドレス",
+        "決済方法",
+    },
+    "jplum": {
+        "受付ID",
+        "申込者氏名",
+        "状態",
+        "申込金額",
+    },
+    "mosh": {
+        "サービスID",
+        "ゲストID",
+        "ゲスト名",
+        "決済日",
+        "申し込み総額(税込)",
+        "決済ステータス",
+        "サービス名",
+    },
+    "kiraboshi": {
+        "番号",
+        "勘定日",
+        "取引区分",
+        "入金金額（円）",
+        "摘要",
+    },
+    "invoy": {
+        "請求書番号",
+        "請求先",
+        "件名",
+        "請求額",
+        "ステータス",
+    },
+    "credix": {
+        "オーダーNo",
+        "決済日時",
+        "決済金額",
+        "結果",
+    },
+    "utage": {
+        "売上日時",
+        "商品",
+        "メールアドレス",
+        "名前",
+        "電話番号",
+        "登録経路",
+        "金額",
+        "支払方法",
+        "ステータス",
+    },
+}
 
 
 # ============================================================
@@ -156,11 +238,142 @@ def append_rows_with_retry(ws, rows: List[List], chunk_size=5000):
                 ws.append_rows(chunk, value_input_option="USER_ENTERED")
                 break
             except APIError as e:
-                if ("429" in str(e) or "Quota" in str(e)) and attempt < len(WRITE_RETRY_SECONDS):
-                    print(f"  シート書き込み制限。{WRITE_RETRY_SECONDS[attempt]}秒待機...")
+                error_text = str(e)
+                retryable = any(
+                    token in error_text
+                    for token in ("429", "Quota", "503", "Service is currently unavailable")
+                )
+                if retryable and attempt < len(WRITE_RETRY_SECONDS):
+                    print(f"  シートAPI一時エラー。{WRITE_RETRY_SECONDS[attempt]}秒待機...")
                 else:
                     raise
         time.sleep(2)
+
+
+def classify_filename(filename: str) -> tuple[str, Optional[str], str]:
+    """ファイル名から supported / ignored / unknown を判定する。"""
+    source = detect_source(filename)
+    if source:
+        return "supported", source, ""
+
+    for pattern, reason in KNOWN_IGNORED_FILE_PATTERNS:
+        if pattern.match(filename):
+            return "ignored", None, reason
+
+    return "unknown", None, "想定していないCSVファイル名"
+
+
+def validate_csv_rows(rows: List[List[str]], source: str) -> List[str]:
+    """CSVのヘッダーと最低限の内容を検証する。"""
+    errors: List[str] = []
+    if not rows:
+        return ["CSVが空です"]
+
+    header = [str(cell).strip() for cell in rows[0]]
+    required_headers = SOURCE_REQUIRED_HEADERS.get(source, set())
+    missing = [name for name in required_headers if name not in header]
+    if missing:
+        errors.append(f"必須ヘッダー不足: {', '.join(missing)}")
+
+    if len(rows) <= 1:
+        errors.append("ヘッダーのみでデータ行がありません")
+
+    return errors
+
+
+def row_signature(row: List[str], kind: str) -> str:
+    raw = "|".join([kind, *[str(cell).strip() for cell in row]])
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:20]
+
+
+def load_existing_row_signatures(spreadsheet) -> tuple[set[str], set[str]]:
+    payment_signatures: set[str] = set()
+    utage_signatures: set[str] = set()
+
+    try:
+        payment_rows = spreadsheet.worksheet(TAB_NAME).get_all_values()
+        for row in payment_rows[1:]:
+            if any(str(cell).strip() for cell in row):
+                payment_signatures.add(row_signature(row, "payment"))
+    except Exception:
+        pass
+
+    try:
+        utage_rows = spreadsheet.worksheet(UTAGE_TAB_NAME).get_all_values()
+        for row in utage_rows[1:]:
+            if any(str(cell).strip() for cell in row):
+                utage_signatures.add(row_signature(row, "utage"))
+    except Exception:
+        pass
+
+    return payment_signatures, utage_signatures
+
+
+def append_normalized_rows(
+    spreadsheet,
+    payment_rows: List[List[str]],
+    utage_rows: List[List[str]],
+    existing_payment_signatures: Optional[set[str]] = None,
+    existing_utage_signatures: Optional[set[str]] = None,
+) -> dict:
+    """重複行を除外しながら収集シートへ追記する。"""
+    if existing_payment_signatures is None or existing_utage_signatures is None:
+        existing_payment_signatures, existing_utage_signatures = load_existing_row_signatures(spreadsheet)
+
+    payment_to_write: List[List[str]] = []
+    utage_to_write: List[List[str]] = []
+    skipped_payment = 0
+    skipped_utage = 0
+
+    for row in payment_rows:
+        signature = row_signature(row, "payment")
+        if signature in existing_payment_signatures:
+            skipped_payment += 1
+            continue
+        existing_payment_signatures.add(signature)
+        payment_to_write.append(row)
+
+    for row in utage_rows:
+        signature = row_signature(row, "utage")
+        if signature in existing_utage_signatures:
+            skipped_utage += 1
+            continue
+        existing_utage_signatures.add(signature)
+        utage_to_write.append(row)
+
+    if payment_to_write:
+        ws = spreadsheet.worksheet(TAB_NAME)
+        append_rows_with_retry(ws, payment_to_write)
+
+    if utage_to_write:
+        ws_utage = spreadsheet.worksheet(UTAGE_TAB_NAME)
+        append_rows_with_retry(ws_utage, utage_to_write)
+
+    return {
+        "written_payment_rows": len(payment_to_write),
+        "written_utage_rows": len(utage_to_write),
+        "skipped_payment_duplicates": skipped_payment,
+        "skipped_utage_duplicates": skipped_utage,
+    }
+
+
+def update_source_management(spreadsheet, source_counts: Dict[str, int]) -> None:
+    """データソース管理の同期情報を更新する。"""
+    try:
+        ws_source = spreadsheet.worksheet(SOURCE_MGMT_TAB)
+        source_rows = ws_source.get_all_values()
+        now_str = datetime.now().strftime("%Y/%m/%d %H:%M")
+        for i, srow in enumerate(source_rows):
+            if i == 0:
+                continue
+            source_name = srow[0] if srow else ""
+            if source_name in source_counts:
+                ws_source.update_cell(i + 1, 7, "正常")
+                ws_source.update_cell(i + 1, 8, now_str)
+                ws_source.update_cell(i + 1, 9, source_counts[source_name])
+        print("データソース管理を更新しました。")
+    except Exception as e:
+        print(f"データソース管理の更新でエラー: {e}")
 
 
 # ============================================================
@@ -194,7 +407,7 @@ UNIVAPAY_EXCLUDE_EVENTS = {
 
 
 def convert_univapay(rows: List[List[str]]) -> List[List[str]]:
-    """UnivaPayのCSVを共通25列に変換。認証プロセスは除外"""
+    """UnivaPayのCSVを共通21列に変換。認証プロセスは除外"""
     if not rows:
         return []
 
@@ -242,26 +455,22 @@ def convert_univapay(rows: List[List[str]]) -> List[List[str]]:
             g("イベント"),                   # 3. イベント
             normalize_datetime(g("イベント作成日時")),  # 4. イベント日時
             g("イベント金額"),               # 5. イベント金額
-            g("課金金額"),                   # 6. 課金金額
-            g("課金ステータス"),             # 7. 課金ステータス
-            product_name,                    # 8. 商品名
-            normalize_email(g("メールアドレス")),  # 9. メールアドレス
-            sei,                             # 10. 姓
-            mei,                             # 11. 名
-            customer_name,                   # 12. 名前（原本）
-            "",                              # 13. フリガナ
-            normalize_phone(g("電話番号")),  # 14. 電話番号
-            g("決済方法"),                   # 15. 決済手段
-            g("ブランド"),                   # 16. カードブランド
-            g("タイプ"),                     # 17. 課金タイプ
-            g("支払い回数"),                 # 18. 支払回数
-            g("定期課金ID"),                 # 19. 定期課金ID
-            normalize_datetime(g("返金作成日時")),  # 20. 返金日時
-            g("返金金額"),                   # 21. 返金金額
-            g("返金ステータス"),             # 22. 返金ステータス
-            g("理由"),                       # 23. 返金理由
-            "",                              # 24. 登録経路
-            meta_json,                       # 25. メタデータ（JSON）
+            g("課金ステータス"),             # 6. 課金ステータス
+            product_name,                    # 7. 商品名
+            normalize_email(g("メールアドレス")),  # 8. メールアドレス
+            sei,                             # 9. 姓
+            mei,                             # 10. 名
+            customer_name,                   # 11. 名前（原本）
+            "",                              # 12. フリガナ
+            normalize_phone(g("電話番号")),  # 13. 電話番号
+            g("決済方法"),                   # 14. 決済手段
+            g("ブランド"),                   # 15. カードブランド
+            g("タイプ"),                     # 16. 課金タイプ
+            g("支払い回数"),                 # 17. 支払回数
+            g("定期課金ID"),                 # 18. 定期課金ID
+            normalize_datetime(g("返金作成日時")),  # 19. 返金日時
+            g("返金金額"),                   # 20. 返金金額
+            meta_json,                       # 21. メタデータ（JSON）
         ])
 
     if skipped:
@@ -276,7 +485,7 @@ def convert_univapay(rows: List[List[str]]) -> List[List[str]]:
 
 
 def convert_mosh(rows: List[List[str]]) -> List[List[str]]:
-    """MOSHのCSVを共通25列に変換"""
+    """MOSHのCSVを共通21列に変換"""
     if not rows:
         return []
 
@@ -303,26 +512,22 @@ def convert_mosh(rows: List[List[str]]) -> List[List[str]]:
             "",                              # 3. イベント（MOSHにはない）
             normalize_datetime(g("決済日")),  # 4. イベント日時
             g("申し込み総額(税込)"),          # 5. イベント金額
-            "",                              # 6. 課金金額
-            g("決済ステータス"),             # 7. 課金ステータス
-            g("サービス名"),                 # 8. 商品名
-            normalize_email(g("email")),     # 9. メールアドレス
-            sei,                             # 10. 姓
-            mei,                             # 11. 名
-            guest_name,                      # 12. 名前（原本）
-            "",                              # 13. フリガナ
-            "",                              # 14. 電話番号
-            g("支払い方法"),                 # 15. 決済手段
-            "",                              # 16. カードブランド
-            g("支払い種別"),                 # 17. 課金タイプ
-            g("総支払い回数"),               # 18. 支払回数
-            "",                              # 19. 定期課金ID
-            normalize_datetime(g("キャンセル日時")),  # 20. 返金日時
-            "",                              # 21. 返金金額
-            g("分割ステータス"),             # 22. 返金ステータス
-            "",                              # 23. 返金理由
-            "",                              # 24. 登録経路
-            "",                              # 25. メタデータ（JSON）
+            g("決済ステータス"),             # 6. 課金ステータス
+            g("サービス名"),                 # 7. 商品名
+            normalize_email(g("email")),     # 8. メールアドレス
+            sei,                             # 9. 姓
+            mei,                             # 10. 名
+            guest_name,                      # 11. 名前（原本）
+            "",                              # 12. フリガナ
+            "",                              # 13. 電話番号
+            g("支払い方法"),                 # 14. 決済手段
+            "",                              # 15. カードブランド
+            g("支払い種別"),                 # 16. 課金タイプ
+            g("総支払い回数"),               # 17. 支払回数
+            "",                              # 18. 定期課金ID
+            normalize_datetime(g("キャンセル日時")),  # 19. 返金日時
+            "",                              # 20. 返金金額
+            "",                              # 21. メタデータ（JSON）
         ])
 
     return result
@@ -334,7 +539,7 @@ def convert_mosh(rows: List[List[str]]) -> List[List[str]]:
 
 
 def convert_jplum(rows: List[List[str]]) -> List[List[str]]:
-    """日本プラムのCSVを共通25列に変換"""
+    """日本プラムのCSVを共通21列に変換"""
     if not rows:
         return []
 
@@ -358,26 +563,22 @@ def convert_jplum(rows: List[List[str]]) -> List[List[str]]:
             "",                              # 3. イベント
             normalize_datetime(g("立替日") or g("申込年月日")),  # 4. イベント日時
             g("申込金額"),                   # 5. イベント金額
-            "",                              # 6. 課金金額
-            g("状態"),                       # 7. 課金ステータス
-            "",                              # 8. 商品名（CSVにない）
-            normalize_email(g("メールアドレス")),  # 9. メールアドレス
-            sei,                             # 10. 姓
-            mei,                             # 11. 名
-            full_name,                       # 12. 名前（原本）
-            kana,                            # 13. フリガナ
-            "",                              # 14. 電話番号
-            "日本プラム（分割払い）",         # 15. 決済手段
-            "",                              # 16. カードブランド
-            "分割",                          # 17. 課金タイプ
-            g("支払回数"),                   # 18. 支払回数
-            "",                              # 19. 定期課金ID
-            "",                              # 20. 返金日時
-            "",                              # 21. 返金金額
-            "",                              # 22. 返金ステータス
-            "",                              # 23. 返金理由
-            "",                              # 24. 登録経路
-            "",                              # 25. メタデータ（JSON）
+            g("状態"),                       # 6. 課金ステータス
+            "",                              # 7. 商品名（CSVにない）
+            normalize_email(g("メールアドレス")),  # 8. メールアドレス
+            sei,                             # 9. 姓
+            mei,                             # 10. 名
+            full_name,                       # 11. 名前（原本）
+            kana,                            # 12. フリガナ
+            "",                              # 13. 電話番号
+            "日本プラム（分割払い）",         # 14. 決済手段
+            "",                              # 15. カードブランド
+            "分割",                          # 16. 課金タイプ
+            g("支払回数"),                   # 17. 支払回数
+            "",                              # 18. 定期課金ID
+            "",                              # 19. 返金日時
+            "",                              # 20. 返金金額
+            "",                              # 21. メタデータ（JSON）
         ])
 
     return result
@@ -389,7 +590,7 @@ def convert_jplum(rows: List[List[str]]) -> List[List[str]]:
 
 
 def convert_kiraboshi(rows: List[List[str]]) -> List[List[str]]:
-    """きらぼし銀行のCSVを共通25列に変換"""
+    """きらぼし銀行のCSVを共通21列に変換"""
     if not rows:
         return []
 
@@ -439,26 +640,22 @@ def convert_kiraboshi(rows: List[List[str]]) -> List[List[str]]:
             "",                              # 3. イベント
             normalize_datetime(g("勘定日")),  # 4. イベント日時
             amount,                          # 5. イベント金額
-            "",                              # 6. 課金金額
-            "振込",                          # 7. 課金ステータス
-            "",                              # 8. 商品名
-            "",                              # 9. メールアドレス
-            "",                              # 10. 姓
-            "",                              # 11. 名
-            summary,                         # 12. 名前（原本）（半角カタカナのまま）
-            kana_name_full,                  # 13. フリガナ（全角変換）
-            "",                              # 14. 電話番号
-            "銀行振込",                      # 15. 決済手段
-            "",                              # 16. カードブランド
-            "",                              # 17. 課金タイプ
-            "",                              # 18. 支払回数
-            "",                              # 19. 定期課金ID
-            "",                              # 20. 返金日時
-            "",                              # 21. 返金金額
-            "",                              # 22. 返金ステータス
-            "",                              # 23. 返金理由
-            "",                              # 24. 登録経路
-            "",                              # 25. メタデータ（JSON）
+            "振込",                          # 6. 課金ステータス
+            "",                              # 7. 商品名
+            "",                              # 8. メールアドレス
+            "",                              # 9. 姓
+            "",                              # 10. 名
+            summary,                         # 11. 名前（原本）（半角カタカナのまま）
+            kana_name_full,                  # 12. フリガナ（全角変換）
+            "",                              # 13. 電話番号
+            "銀行振込",                      # 14. 決済手段
+            "",                              # 15. カードブランド
+            "",                              # 16. 課金タイプ
+            "",                              # 17. 支払回数
+            "",                              # 18. 定期課金ID
+            "",                              # 19. 返金日時
+            "",                              # 20. 返金金額
+            "",                              # 21. メタデータ（JSON）
         ])
 
     return result
@@ -470,7 +667,7 @@ def convert_kiraboshi(rows: List[List[str]]) -> List[List[str]]:
 
 
 def convert_invoy(rows: List[List[str]]) -> List[List[str]]:
-    """INVOYのCSVを共通25列に変換"""
+    """INVOYのCSVを共通21列に変換"""
     if not rows:
         return []
 
@@ -505,26 +702,22 @@ def convert_invoy(rows: List[List[str]]) -> List[List[str]]:
             "",                              # 3. イベント
             date_str,                        # 4. イベント日時
             g("請求額"),                     # 5. イベント金額
-            "",                              # 6. 課金金額
-            g("ステータス"),                 # 7. 課金ステータス
-            g("件名"),                       # 8. 商品名
-            "",                              # 9. メールアドレス（CSVにない）
-            sei,                             # 10. 姓
-            mei,                             # 11. 名
-            customer_name,                   # 12. 名前（原本）
-            "",                              # 13. フリガナ
-            "",                              # 14. 電話番号
-            "INVOY",                         # 15. 決済手段
-            "",                              # 16. カードブランド
-            "",                              # 17. 課金タイプ
-            "",                              # 18. 支払回数
-            "",                              # 19. 定期課金ID
-            "",                              # 20. 返金日時
-            "",                              # 21. 返金金額
-            "",                              # 22. 返金ステータス
-            "",                              # 23. 返金理由
-            "",                              # 24. 登録経路
-            "",                              # 25. メタデータ（JSON）
+            g("ステータス"),                 # 6. 課金ステータス
+            g("件名"),                       # 7. 商品名
+            "",                              # 8. メールアドレス（CSVにない）
+            sei,                             # 9. 姓
+            mei,                             # 10. 名
+            customer_name,                   # 11. 名前（原本）
+            "",                              # 12. フリガナ
+            "",                              # 13. 電話番号
+            "INVOY",                         # 14. 決済手段
+            "",                              # 15. カードブランド
+            "",                              # 16. 課金タイプ
+            "",                              # 17. 支払回数
+            "",                              # 18. 定期課金ID
+            "",                              # 19. 返金日時
+            "",                              # 20. 返金金額
+            "",                              # 21. メタデータ（JSON）
         ])
 
     return result
@@ -536,7 +729,7 @@ def convert_invoy(rows: List[List[str]]) -> List[List[str]]:
 
 
 def convert_credix(rows: List[List[str]]) -> List[List[str]]:
-    """CREDIXのCSVを共通25列に変換"""
+    """CREDIXのCSVを共通21列に変換"""
     if not rows:
         return []
 
@@ -557,26 +750,22 @@ def convert_credix(rows: List[List[str]]) -> List[List[str]]:
             "",                              # 3. イベント
             normalize_datetime(g("決済日時")),  # 4. イベント日時
             g("決済金額"),                   # 5. イベント金額
-            "",                              # 6. 課金金額
-            g("結果"),                       # 7. 課金ステータス
-            "",                              # 8. 商品名（CSVにない）
-            normalize_email(g("E-mail")),    # 9. メールアドレス
-            "",                              # 10. 姓
-            "",                              # 11. 名
-            "",                              # 12. 名前（原本）
-            "",                              # 13. フリガナ
-            normalize_phone(g("電話番号")),  # 14. 電話番号
-            "CREDIX",                        # 15. 決済手段
-            "",                              # 16. カードブランド
-            "",                              # 17. 課金タイプ
-            g("支払回数"),                   # 18. 支払回数
-            "",                              # 19. 定期課金ID
-            normalize_datetime(g("取り消し日")),  # 20. 返金日時
-            "",                              # 21. 返金金額
-            "",                              # 22. 返金ステータス
-            "",                              # 23. 返金理由
-            "",                              # 24. 登録経路
-            "",                              # 25. メタデータ（JSON）
+            g("結果"),                       # 6. 課金ステータス
+            "",                              # 7. 商品名（CSVにない）
+            normalize_email(g("E-mail")),    # 8. メールアドレス
+            "",                              # 9. 姓
+            "",                              # 10. 名
+            "",                              # 11. 名前（原本）
+            "",                              # 12. フリガナ
+            normalize_phone(g("電話番号")),  # 13. 電話番号
+            "CREDIX",                        # 14. 決済手段
+            "",                              # 15. カードブランド
+            "",                              # 16. 課金タイプ
+            g("支払回数"),                   # 17. 支払回数
+            "",                              # 18. 定期課金ID
+            normalize_datetime(g("取り消し日")),  # 19. 返金日時
+            "",                              # 20. 返金金額
+            "",                              # 21. メタデータ（JSON）
         ])
 
     return result
@@ -661,6 +850,50 @@ def detect_source(filename: str) -> Optional[str]:
     return None
 
 
+def process_csv_file(path: Path, source_override: Optional[str] = None) -> dict:
+    """1つのCSVを分類・検証・変換して結果を返す。"""
+    status, detected_source, reason = classify_filename(path.name)
+    if source_override:
+        status = "supported"
+        detected_source = source_override
+        reason = ""
+
+    result = {
+        "file_name": path.name,
+        "status": status,
+        "source": detected_source,
+        "reason": reason,
+        "raw_row_count": 0,
+        "converted_row_count": 0,
+        "payment_rows": [],
+        "utage_rows": [],
+        "validation_errors": [],
+    }
+
+    if status != "supported" or not detected_source:
+        return result
+
+    rows = read_csv(str(path))
+    result["raw_row_count"] = max(len(rows) - 1, 0)
+
+    validation_errors = validate_csv_rows(rows, detected_source)
+    if validation_errors:
+        result["status"] = "unexpected_content"
+        result["reason"] = " / ".join(validation_errors)
+        result["validation_errors"] = validation_errors
+        return result
+
+    converter = CONVERTERS[detected_source]
+    converted = converter(rows)
+    result["converted_row_count"] = len(converted)
+    if detected_source == "utage":
+        result["utage_rows"] = converted
+    else:
+        result["payment_rows"] = converted
+
+    return result
+
+
 # ============================================================
 # メイン
 # ============================================================
@@ -673,8 +906,9 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="書き込みなしで変換結果だけ表示")
     args = parser.parse_args()
 
-    all_rows = []       # 決済データタブ用（25列）
-    utage_rows = []     # UTAGE補助タブ用（9列）
+    all_rows = []
+    utage_rows = []
+    source_counts: Dict[str, int] = {}
 
     for csv_path in args.csv_paths:
         path = Path(csv_path)
@@ -682,38 +916,40 @@ def main():
             print(f"ファイルが見つかりません: {csv_path}")
             continue
 
-        source = args.source or detect_source(path.name)
-        if not source:
-            print(f"ソースを判定できません: {path.name}")
-            print(f"  --source オプションで明示指定してください: {list(CONVERTERS.keys())}")
+        result = process_csv_file(path, source_override=args.source)
+        if result["status"] == "ignored":
+            print(f"\n[ignored] {path.name}")
+            print(f"  理由: {result['reason']}")
+            continue
+        if result["status"] == "unknown":
+            print(f"\n[unknown] {path.name}")
+            print(f"  理由: {result['reason']}")
+            continue
+        if result["status"] == "unexpected_content":
+            print(f"\n[unexpected_content] {path.name}")
+            print(f"  理由: {result['reason']}")
             continue
 
-        converter = CONVERTERS[source]
+        source = result["source"]
         print(f"\n[{source}] {path.name} を読み込み中...")
-        rows = read_csv(str(path))
-        print(f"  CSV行数: {len(rows) - 1}")
+        print(f"  CSV行数: {result['raw_row_count']}")
+        print(f"  変換後行数: {result['converted_row_count']}")
 
-        converted = converter(rows)
-        print(f"  変換後行数: {len(converted)}")
-
-        if converted:
-            # サンプル表示
-            sample = converted[0]
-            print(f"  サンプル（1行目）:")
-            if source == "utage":
-                utage_header = ["売上日時", "商品名", "メールアドレス", "名前", "電話番号", "登録経路", "金額", "支払方法", "ステータス"]
-                for i, (h, v) in enumerate(zip(utage_header, sample)):
-                    if v:
-                        print(f"    {h}: {v[:80]}")
-            else:
-                for i, (h, v) in enumerate(zip(HEADER, sample)):
-                    if v:
-                        print(f"    {h}: {v[:80]}")
+        sample_rows = result["utage_rows"] if source == "utage" else result["payment_rows"]
+        if sample_rows:
+            sample = sample_rows[0]
+            print("  サンプル（1行目）:")
+            display_header = UTAGE_HEADER if source == "utage" else HEADER
+            for h, v in zip(display_header, sample):
+                if v:
+                    print(f"    {h}: {str(v)[:80]}")
 
         if source == "utage":
-            utage_rows.extend(converted)
+            utage_rows.extend(result["utage_rows"])
         else:
-            all_rows.extend(converted)
+            all_rows.extend(result["payment_rows"])
+        display_name = SOURCE_DISPLAY_NAMES.get(source, source)
+        source_counts[display_name] = source_counts.get(display_name, 0) + result["converted_row_count"]
 
     if not all_rows and not utage_rows:
         print("\n変換データがありません。")
@@ -728,43 +964,19 @@ def main():
     # シートに書き込み
     gc = get_client("kohara")
     sh = gc.open_by_key(SHEET_ID)
-
-    if all_rows:
-        print(f"\n決済データタブに書き込み中... ({len(all_rows):,} 行)")
-        ws = sh.worksheet(TAB_NAME)
-        append_rows_with_retry(ws, all_rows)
-        print(f"  書き込み完了")
-
-    if utage_rows:
-        print(f"\nUTAGE補助タブに書き込み中... ({len(utage_rows):,} 行)")
-        ws_utage = sh.worksheet(UTAGE_TAB_NAME)
-        append_rows_with_retry(ws_utage, utage_rows)
-        print(f"  書き込み完了")
-
-    # データソース管理のステータスを更新
-    try:
-        ws_source = sh.worksheet(SOURCE_MGMT_TAB)
-        source_rows = ws_source.get_all_values()
-        now_str = datetime.now().strftime("%Y/%m/%d %H:%M")
-
-        # ソースごとの行数を集計
-        source_counts = {}
-        for row in all_rows:
-            s = row[1]  # 参照システム列
-            source_counts[s] = source_counts.get(s, 0) + 1
-
-        for i, srow in enumerate(source_rows):
-            if i == 0:
-                continue
-            source_name = srow[0] if srow else ""
-            if source_name in source_counts:
-                # ステータス(7列目)、最終同期日(8列目)、行数(9列目)を更新
-                ws_source.update_cell(i + 1, 7, "正常")
-                ws_source.update_cell(i + 1, 8, now_str)
-                ws_source.update_cell(i + 1, 9, source_counts[source_name])
-        print("データソース管理を更新しました。")
-    except Exception as e:
-        print(f"データソース管理の更新でエラー: {e}")
+    print("\n収集シートに書き込み中...")
+    write_result = append_normalized_rows(sh, all_rows, utage_rows)
+    print(
+        "  決済データ 追加: "
+        f"{write_result['written_payment_rows']:,} 行 "
+        f"(重複除外 {write_result['skipped_payment_duplicates']:,} 行)"
+    )
+    print(
+        "  UTAGE補助 追加: "
+        f"{write_result['written_utage_rows']:,} 行 "
+        f"(重複除外 {write_result['skipped_utage_duplicates']:,} 行)"
+    )
+    update_source_management(sh, source_counts)
 
 
 if __name__ == "__main__":

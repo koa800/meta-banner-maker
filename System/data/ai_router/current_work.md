@@ -1,189 +1,173 @@
 # 引き継ぎメモ
 
-最終更新: 2026-03-18
+最終更新: 2026-03-19
 
 ## 目的
 
 - `アドネス株式会社` の KPI 基盤を `データソース -> 収集データ -> 加工データ -> 統合データ -> KPIダッシュボード` の流れで整備する
 - `KPIダッシュボード` は表示層に徹し、各加工シートを正本として日次更新する
-- Claude Code でも、そのまま続きの実装と運用確認に入れる状態にする
 
-## 確定事項
-
-- シート命名ルール
-  - `【アドネス株式会社】<領域>（収集）`
-  - `【アドネス株式会社】<領域>（加工）`
-  - `【アドネス株式会社】<領域>（統合）`
-  - `KPIダッシュボード` と `共通除外マスタ` は例外
-- 集客
-  - 主系統は `【アドネス株式会社】集客データ_メール集計（加工）`
-  - 旧 `UUメールアドレス` と `全メール登録数` は legacy。定期更新停止済み
-- 個別予約
-  - `【アドネス株式会社】個別面談データ（収集） / 個別予約通知ログ`
-    を Slack 通知の正本として使う
-  - `2026/03/17` 以降は Slack 通知ベース
-  - 同一人物の通知が `同日10分以内` に連続した場合は `1件`
-  - `個別予約数（UU）` は未接続。LSTEP live 補完と統合キー確定まで保留
-- 会員
-  - 収集: `【アドネス株式会社】会員データ（収集） / 会員イベント`
-  - 加工: `【アドネス株式会社】会員データ（加工） / 日別会員数値`
-  - 日付は `2025/01/01` 開始
-  - 未来日は入れない。`今日以前に確定したイベント` のみ計上
-  - `クーリングオフ数`
-    - 定義: `入金あり契約から7日以内に契約解除を申し出たユーザー数`
-    - 集計元は `お客様相談窓口_進捗管理シート` のクーリングオフ集計を正とする
-  - `中途解約数`
-    - 定義: `サポート期間が終了する前に契約解除が確定した会員数`
-  - `契約数`
-    - 定義: `スキルプラスの契約書を締結したユーザー数`
-- 定義一覧
-  - すべて `マスタデータ / 定義一覧` に集約
-  - 他シートの `定義` タブは削除済み
-- 除外
-  - `【アドネス株式会社】共通除外マスタ` を正本化済み
-  - `除外リスト` と `無条件除外ルール` を各集計が参照する構成
+---
 
 ## 完了したこと
 
-- `【アドネス株式会社】集客データ_メールアドレス（収集）`
-  - `【アドネス株式会社】顧客データ_メールアドレスのみ（統合）`
-  - `【アドネス株式会社】顧客データ_複数イベント（統合）`
-  - `【アドネス株式会社】集客データ_メール集計（加工）`
-  の流れを整備
-- `【アドネス株式会社】個別面談データ（収集）`
-  - `個別予約通知ログ / データソース管理 / データ追加ルール`
-  を整備
-- `【アドネス株式会社】個別面談データ（加工）`
-  - `日別個別予約数 / 日別個別予約数（UU） / 個別予約サマリー / データソース管理 / データ追加ルール`
-  を整備
-- `【アドネス株式会社】会員データ（収集）`
-  - `会員イベント / データソース管理 / データ追加ルール`
-  を整備
-- `【アドネス株式会社】会員データ（加工）`
-  - `日別会員数値 / 会員サマリー / データソース管理 / データ追加ルール`
-  を整備
-  - `2015年/2016年` の異常日付を排除
-  - 未来日計上を排除
-- `【アドネス株式会社】KPIダッシュボード`
-  - `スキルプラス事業サマリー / 日別数値 / データソース管理`
-  へ整理
-  - `集客数 / 集客数（UU） / 個別予約数 / 会員数 / 中途解約数 / クーリングオフ数`
-    を接続済み
-- `【アドネス株式会社】共通除外マスタ`
-  - `除外リスト / 無条件除外ルール / データソース管理 / データ追加ルール`
-  を整備
-- `【アドネス株式会社】広告費データ（加工）`
-  - `日別広告費 / 媒体別広告費 / 広告費サマリー / データソース管理 / データ追加ルール`
-  を整備
-  - 正本: `【アドネス全体】数値管理シート / スキルプラス（日別）` の `カテゴリ=広告` 行
-  - データ範囲: `2025/07/01 ~ 2026/03/15`（258日分、10媒体）
-  - 媒体名は正規化統合（Yahoo!リスティング→Yahoo!広告 等）
-  - 異常検知: 0件停止 / 日数急減5% / 金額急減10%
-- `【アドネス株式会社】広告データ（収集）`
-  - 骨格のみ作成済み（Meta / TikTok / X タブ）
-  - API取得スクリプト `fetch_meta_ads.py` は途中物として存在
-- `【アドネス株式会社】KPIダッシュボード`
-  - `広告費 / CPA / 個別予約CPO` を追加接続
-  - CPA = 広告費 / 集客数、個別予約CPO = 広告費 / 個別予約数 で自動計算
-  - ROAS は着金売上が未接続のため保留
-- スプレッドシート作成ルール
-  - 主要タブは左
-  - ヘッダーは青背景/白文字/太字/12pt
-  - 行は縦に伸ばしすぎない
-  - 不要列・不要行は削除
-  - 数値は 4 桁以上カンマ
-  を明文化済み
+### 広告データ（収集）— Meta広告
 
-## 未完了
+- `【アドネス株式会社】広告データ（収集） / Meta` に28アカウント分の全期間データを取得完了
+  - 88,531行。2024/02〜2026/03
+  - スキルプラス関連28アカウント（VisionToDo・デザジュク1〜5は除外）
+  - 取得項目: 日別×広告ID単位のInsights（インプレッション/リーチ/クリック5種/消化金額/コンバージョンJSON）+ メタデータ（配信ステータス/遷移先URL/動画ID等）
+  - スクリプト: `System/scripts/fetch_meta_ads_to_sheet.py`
+  - 進捗管理: `System/data/meta_ads_fetch_progress.json`
+- TikTok / X の収集は未着手（API調査が必要）
+- 委託先（YouTube広告/X広告）はシート記入で受け取り。未着手
 
-- `【アドネス株式会社】着金売上データ（加工）`
-  - 未着手。次の主タスク
-- `【アドネス株式会社】KPIダッシュボード`
-  - `着金売上 / ROAS` は未接続（着金売上が未接続のため ROAS も保留）
-- `個別予約数（UU）`
-  - 統合キー未確定のため保留
-- `LSTEP live 補完`
-  - 保留
-  - `個別予約通知ログ` の `メールアドレス / 電話番号` の live 取得は未実装完了
-- `LINE集客`
-  - 収集/加工の全体統合は未着手
+### 決済データ（収集）
 
-## 判断とその理由（最重要）
+- `【アドネス株式会社】決済データ（収集）` に全ソースの過去データを取り込み完了
+- 2026-03-19 に日次同期を強化し、Drive 日別フォルダ起点で 2026-03-18 までのデータ反映を完了
+  - シートID: `1FfGM0HpofM8yayhJniArXp_vQ6-4JRvlp6rxDt-eHTI`
+  - 決済データタブ: 275,994行（21列の共通カラム。1行=1イベント）
+  - UTAGE補助タブ: 117,568行（UTAGEはUnivaPayと金額重複するため別タブ。登録経路の補助データ）
+  - データソース管理タブ / データ追加ルールタブ / 決済データ（旧）タブ
 
-- `KPIダッシュボード` に元データや複雑なロジックを入れない
-  - 理由: 表示層を軽く保ち、壊れた時の切り分けを簡単にするため
-- `収集データ -> 加工データ -> 統合データ` の順序を崩さない
-  - 理由: `統合データから加工データを作る` 設計にすると、責務が混ざりやすい
-- `定義一覧` は 1 箇所へ集約
-  - 理由: シートごとに定義がズレるのを防ぐため
-- `個別予約数` は Slack 通知を正本へ寄せる
-  - 理由: `★【個別予約完了】★` 自体は累積タグで、イベント件数の正本に向かないため
-- `会員数` は未来日を持たない
-  - 理由: まだ会員と確定していない未来イベントを KPI に混ぜるのは誤りだから
-- `収集データは事実の日付`
-  - `加工データは毎回再計算`
-  - 理由: 入力遅延があっても、後から過去日付を正しく補正できるため
-- `共通除外マスタ` は独立正本
-  - 理由: 集客/個別予約/決済/会員で同じ除外基準を使えるため
-- 旧シートは消さず legacy 化
-  - 理由: 2025年以前や再検証で参照する可能性があるため
-- `広告費データ（加工）` の正本は `数値管理シート / スキルプラス（日別）`
-  - 理由: 既に日別で広告費が入っている。API全量取得は初期コストが高い
-  - 将来は `広告データ（収集）` に API で蓄積し、段階移行する
-- 広告費に共通除外マスタは適用しない
-  - 理由: 広告費はメールアドレス単位のデータではないため
-- CPA / 個別予約CPO はダッシュボード側で動的計算する
-  - 理由: 広告費と集客数/予約数が揃った日だけ計算することで、不完全な値を出さない
+- **各ソースの取り込み状況**:
+
+| ソース | 件数 | 期間 | 取り込み元 |
+|---|---|---|---|
+| UnivaPay | 267,413 | 2024/02〜2026/03 | 管理画面から全期間CSV取得 |
+| MOSH | 2,668 | 2025/01〜2026/03 | 管理画面からCSVメール受取 |
+| 日本プラム | 2,292 | 全期間 | 全期間CSVフォルダ |
+| きらぼし銀行 | 1,793 | 2025/01〜2026/03 | 顧客管理シート「銀行振込」タブ（673行目以降の生データ） |
+| CBS | 798 | 2025/01〜2025/11 | 旧データ（242件）+ 顧客管理シート「信販決済」タブ（681行目以降） |
+| 京都信販 | 221 | 2025/01〜2025/08 | 旧データ（56件）+ 顧客管理シート「信販決済」タブ |
+| INVOY | 776 | 全期間 | 全期間CSVフォルダ |
+| CREDIX | 33 | 2026/01〜2026/03 | 旧データ（31件）+ 日別CSVフォルダ（2件）。2025年はサービス未開始 |
+| UTAGE補助 | 117,568 | 2024/02〜2026/03 | 全期間CSVフォルダ。¥0取引（カード認証）1,446件除外済み |
+
+- **共通カラム定義（21列）**: `Master/knowledge/payment_systems_definitions.md` に保存
+- **各決済システムの公式定義**: 同ファイルに保存（UnivaPayのイベント/ステータス、MOSHの送金ステータス、CREDIXの決済ステータス等）
+- **ログイン情報**: `System/credentials/payment_systems.json`
+
+- **スクリプト**:
+  - `System/scripts/payment_csv_to_sheet.py`: CSV→21列正規化→シート書き込み
+  - `System/scripts/payment_daily_sync.py`: Google Drive日別フォルダ監視→自動取り込み
+
+- **日次同期の現在地**:
+  - `payment_daily_sync.py` は Orchestrator 登録済み
+  - 監視対象は直近14日の日別フォルダ。`（全期間）` フォルダは自動収集対象外
+  - 重複防止は `file_id / file fingerprint / 行 signature` の3段
+  - 既知の対象外は `受講生サイト登録CSV` と `データなしメモ（3/18なし, データなし.txt 等）`
+  - `未知ファイル / 中身不一致 / 取込失敗` のみ LINE 通知。既知の対象外はログだけ残す
+  - 503 の一時エラーに対するリトライと、途中状態を落とさないチェックポイント保存を実装済み
+
+- **収集段階のフィルタ方針**:
+  - 収集データにはフィルタしない。全イベント・全ステータスをそのまま入れる
+  - UnivaPayの認証プロセス（3-Dセキュア/CVVオーソリ/トークン発行）のみ除外（決済の事実ではないため）
+  - きらぼし銀行の法人振込（カ)ニホンプラム等）は除外済み
+  - フィルタ（着金確定の判定等）は加工の責務
+
+### 広告費データ（加工）— 暫定版
+
+- `【アドネス株式会社】広告費データ（加工）` を作成済み（数値管理シートを正本にした暫定版）
+  - シートID: `1-dEYsY6KB0GF2XRf7PvoxVxhICCamdCBPKxHJRJdUOE`
+  - Meta収集データから正本を切り替える作業は未着手
+  - KPIダッシュボードに広告費/CPA/個別予約CPOを接続済み
+
+### KPIダッシュボード
+
+- 接続済み: 集客数 / 集客数（UU） / 個別予約数 / 広告費 / CPA / 個別予約CPO / 会員数 / 中途解約数 / クーリングオフ数
+- 未接続: 着金売上 / ROAS（決済データの加工が先）
+
+### その他の収集・加工シート（以前から完了済み）
+
+- 集客データ_メール集計（加工）
+- 個別面談データ（収集）/ 個別面談データ（加工）
+- 会員データ（収集）/ 会員データ（加工）
+- 共通除外マスタ
+
+---
+
+## 未完了タスク
+
+### 最優先: 決済データ（加工）
+
+- 収集データから日別着金売上を集計する加工シートを作る
+- 加工時の着金確定フィルタ:
+  - UnivaPay: イベント=売上。商品名空のリカーリング2回目以降を含めるか要確認
+  - 日本プラム: 状態=最終承認
+  - MOSH: 決済ステータス=支払い済み
+  - きらぼし銀行: 全件（法人除外済み）
+  - INVOY: ステータス=入金済
+  - CREDIX: 結果=決済完了
+  - CBS / 京都信販: 全件
+- デザジュク系の除外が必要（デザイン限界突破/コンドウハルキ等）
+- 商品名が空でも金額からスキルプラスと分かるもの（¥798,000等）は含める
+- 加工完了後、KPIダッシュボードに着金売上/ROASを接続
+
+### 決済データの日次収集ワークフロー
+
+- 日次で Google Drive の日別フォルダを監視し、自動取り込みまで接続済み
+- 2026-03-18 までのデータは反映済み
+- 残論点は `【データ収集】2026/03/16（全期間）` を削除するか、バックアップ用途で残すかの整理
+
+### 広告データの残り
+
+- TikTok / X のAPI収集: 未着手
+- 委託先（YouTube広告/X広告）の取り込み: 未着手
+- 広告費データ（加工）の正本切り替え: Meta収集データ→加工シート再構築
+
+### 保留中
+
+- 個別予約数（UU）: 統合キー未確定
+- LSTEP live 補完: 保留
+- LINE集客: 未着手
+
+---
+
+## 数値管理シートとの突合結果
+
+2025/07〜2026/02の着金売上を数値管理シートと比較検証済み。
+
+- UnivaPayの商品名空（リカーリング2回目以降）とデザジュク系を除外して集計すると、合計で-2.8%（¥7,500万の不足）
+- 不足の主因: UnivaPayの商品名が空でも高額（¥798,000等）のバックエンド商品がある。これを含めれば数字は近づく
+- 結論: **収集データは揃っている。加工段階でフィルタを正しく設定すれば正確な着金売上が出せる**
+
+---
+
+## 判断とその理由
+
+- `KPIダッシュボード` に元データや複雑なロジックを入れない → 表示層を軽く保つため
+- `収集データ -> 加工データ` の順序を崩さない → 責務が混ざるのを防ぐため
+- 収集データにはフィルタしない。全イベント・全ステータスを入れる → 加工で柔軟にフィルタできるように
+- UTAGE売上一覧は決済データタブとは別タブ → UnivaPayと金額が重複するため。登録経路の補助データ
+- きらぼし銀行の法人振込は除外 → 決済売上ではなく企業間の立替金振込
+- UnivaPayの認証プロセス（3-Dセキュア等）は収集データから除外 → 決済の事実ではない
+- デザジュク系の除外は加工の責務 → 収集には入れておく
+
+---
 
 ## 参照先
 
-- `マスタデータ / 定義一覧`
-  - https://docs.google.com/spreadsheets/d/1kxUbLqhnzLC1Pg0ASVgU135bnx4Rsv_jP0pqGC0R69w/edit
-- `【アドネス株式会社】KPIダッシュボード`
-  - https://docs.google.com/spreadsheets/d/1utCt9ex0puEi3-oxcjq9v37Jt-9X_dpSjPowZBsHeqA/edit
-- `【アドネス株式会社】集客データ_メール集計（加工）`
-  - https://docs.google.com/spreadsheets/d/13HS9KmlTdxQwMMaK45H3Ga1mMTUiJdhYKWnrExge_yY/edit
-- `【アドネス株式会社】個別面談データ（収集）`
-  - https://docs.google.com/spreadsheets/d/12bYadR0cgi24t4tz8GeESlsKffmNkkTHprI4ray_Sq4/edit
-- `【アドネス株式会社】個別面談データ（加工）`
-  - https://docs.google.com/spreadsheets/d/1ip_RARDHmQvTjmaVavw1L71ltPrn4Kg6sa__njqyQZ8/edit
-- `【アドネス株式会社】会員データ（収集）`
-  - https://docs.google.com/spreadsheets/d/1VwAO5rxib8pcR7KgGn-T3HKP7FaHqZmUhIBddo3okyw/edit
-- `【アドネス株式会社】会員データ（加工）`
-  - https://docs.google.com/spreadsheets/d/1OFKvyQsydPmTqd9MwSMX53MXxG9ASfkFquyf4PV-M8E/edit
-- `【アドネス株式会社】共通除外マスタ`
-  - https://docs.google.com/spreadsheets/d/1dSIXBovs-c8wVnBWsOqbe2wdqmJQ10bOIWhKJbC1MPw/edit
-- `【アドネス株式会社】広告費データ（加工）`
-  - https://docs.google.com/spreadsheets/d/1-dEYsY6KB0GF2XRf7PvoxVxhICCamdCBPKxHJRJdUOE/edit
-- `【アドネス株式会社】広告データ（収集）`
-  - https://docs.google.com/spreadsheets/d/11lVHxkA0geY7TEVKoujYrv1JyxWhzxqSepNhFxnFZlo/edit
-- `README`
-  - `/Users/koa800/Desktop/cursor/Master/sheets/README.md`
-- `KPIダッシュボード完成形設計`
-  - `/Users/koa800/Desktop/cursor/Project/4_AI基盤/KPIダッシュボード完成形設計.md`
-- `用語定義`
-  - `/Users/koa800/Desktop/cursor/Master/前提/用語定義.md`
+- `【アドネス株式会社】決済データ（収集）`: https://docs.google.com/spreadsheets/d/1FfGM0HpofM8yayhJniArXp_vQ6-4JRvlp6rxDt-eHTI/edit
+- `【アドネス株式会社】広告データ（収集）`: https://docs.google.com/spreadsheets/d/11lVHxkA0geY7TEVKoujYrv1JyxWhzxqSepNhFxnFZlo/edit
+- `【アドネス株式会社】広告費データ（加工）`: https://docs.google.com/spreadsheets/d/1-dEYsY6KB0GF2XRf7PvoxVxhICCamdCBPKxHJRJdUOE/edit
+- `【アドネス株式会社】KPIダッシュボード`: https://docs.google.com/spreadsheets/d/1utCt9ex0puEi3-oxcjq9v37Jt-9X_dpSjPowZBsHeqA/edit
+- 決済統合ロジック: https://docs.google.com/spreadsheets/d/1o9ylfSVXd_SzcUdoT1t-hGM9x1TPtwZ4-FpwPgr0EpY/edit
+- 顧客管理シート（銀行振込・信販決済の生データ）: https://docs.google.com/spreadsheets/d/1l2gHhdUMfRANEDmZNfgpjx8KZi0yVCEknckjtpvYwBo/edit
+- 決済システム定義: `Master/knowledge/payment_systems_definitions.md`
+- KPIダッシュボード完成形設計: `Project/4_AI基盤/KPIダッシュボード完成形設計.md`
+- スプレッドシート設計スキル: `Skills/6_システム/スプレッドシート設計ルール.md`
+- ログイン情報: `System/credentials/payment_systems.json`
 
 ## 変更したファイル
 
-- `/Users/koa800/Desktop/cursor/System/ad_spend_metrics_sheet_sync.py`（新規）
-- `/Users/koa800/Desktop/cursor/System/kpi_dashboard_layout_setup.py`
-- `/Users/koa800/Desktop/cursor/System/booking_notification_log_sync.py`
-- `/Users/koa800/Desktop/cursor/System/booking_metrics_sheet_sync.py`
-- `/Users/koa800/Desktop/cursor/System/membership_collection_sheet_setup.py`
-- `/Users/koa800/Desktop/cursor/System/membership_metrics_sheet_sync.py`
-- `/Users/koa800/Desktop/cursor/System/common_exclusion_master_setup.py`
-- `/Users/koa800/Desktop/cursor/Master/sheets/README.md`
-- `/Users/koa800/Desktop/cursor/Project/4_AI基盤/KPIダッシュボード完成形設計.md`
-- `/Users/koa800/Desktop/cursor/Master/前提/用語定義.md`
-- `/Users/koa800/Desktop/cursor/Master/前提/用語定義.json`
-
-## 次の担当へ
-
-- 次の主タスクは `【アドネス株式会社】着金売上データ（加工）` の要件定義と実装
-- 進め方は毎回 `目的 -> 正本 -> タブ構成 -> 防止策 -> 検知 -> 自動更新` の順で固める
-- `LSTEP live 補完` と `個別予約数（UU）` は今は後回し
-- `ROAS` は着金売上が接続されたら自動的に計算可能になる
-- `広告費データ（加工）` の Orchestrator 定期実行設定はまだ未追加（手動で `python3 System/ad_spend_metrics_sheet_sync.py` を実行する）
-- 未コミットの `fetch_meta_ads.py` / `setup_ads_sheet.py` は将来の API 直接取得用の途中物。今回のコミットには含めない
-
+- `System/scripts/payment_csv_to_sheet.py`（新規）
+- `System/scripts/payment_daily_sync.py`（新規）
+- `System/scripts/fetch_meta_ads_to_sheet.py`（新規）
+- `System/scripts/fetch_meta_ads_test.py`（新規）
+- `System/ad_spend_metrics_sheet_sync.py`（新規）
+- `System/kpi_dashboard_layout_setup.py`（変更）
+- `Master/knowledge/payment_systems_definitions.md`（新規）
+- `Master/sheets/README.md`（変更）
+- `System/credentials/payment_systems.json`（新規）

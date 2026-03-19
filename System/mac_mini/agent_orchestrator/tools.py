@@ -322,6 +322,18 @@ def email_collection_metrics_sheet_sync(dry_run: bool = False) -> ToolResult:
     )
 
 
+def payment_daily_sync(dry_run: bool = False, days: int = 14) -> ToolResult:
+    """決済データの収集シートを日次フォルダから更新する"""
+    args = ["--days", str(days)]
+    if dry_run:
+        args.insert(0, "--dry-run")
+    return _run_script(
+        os.path.join(SYSTEM_DIR, "scripts", "payment_daily_sync.py"),
+        args,
+        timeout=1800,
+    )
+
+
 def booking_metrics_sheet_sync(dry_run: bool = False) -> ToolResult:
     """個別面談データの集計シートを再生成する"""
     args = []
@@ -956,6 +968,7 @@ TOOL_REGISTRY = {
     "unique_email_sheet_sync": {"fn": unique_email_sheet_sync, "description": "UUメールアドレス管理シートを再生成"},
     "email_registration_count_sheet_sync": {"fn": email_registration_count_sheet_sync, "description": "全メール登録件数管理シートを再生成"},
     "email_collection_metrics_sheet_sync": {"fn": email_collection_metrics_sheet_sync, "description": "メール集計の統合シートを再生成"},
+    "payment_daily_sync": {"fn": payment_daily_sync, "description": "決済データの収集シートを日次フォルダから更新"},
     "booking_metrics_sheet_sync": {"fn": booking_metrics_sheet_sync, "description": "個別面談データの集計シートを再生成"},
     "booking_notification_log_sync": {"fn": booking_notification_log_sync, "description": "個別予約通知ログを更新"},
     "membership_collection_sheet_sync": {"fn": membership_collection_sheet_sync, "description": "会員データ（収集）を更新"},

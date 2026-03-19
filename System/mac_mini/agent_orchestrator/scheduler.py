@@ -61,6 +61,10 @@ _EMAIL_REGISTRATION_COUNT_SOURCE_TAB = "データソース管理"
 _EMAIL_COLLECTION_METRICS_SHEET_ID = "13HS9KmlTdxQwMMaK45H3Ga1mMTUiJdhYKWnrExge_yY"
 _EMAIL_COLLECTION_METRICS_SUMMARY_TAB = "メール集計サマリー"
 _EMAIL_COLLECTION_METRICS_SOURCE_TAB = "データソース管理"
+_PAYMENT_COLLECTION_SHEET_ID = "1FfGM0HpofM8yayhJniArXp_vQ6-4JRvlp6rxDt-eHTI"
+_PAYMENT_COLLECTION_MAIN_TAB = "決済データ"
+_PAYMENT_COLLECTION_UTAGE_TAB = "UTAGE補助"
+_PAYMENT_COLLECTION_SOURCE_TAB = "データソース管理"
 _BOOKING_METRICS_SHEET_ID = "1ip_RARDHmQvTjmaVavw1L71ltPrn4Kg6sa__njqyQZ8"
 _BOOKING_METRICS_SUMMARY_TAB = "個別予約サマリー"
 _BOOKING_METRICS_SOURCE_TAB = "データソース管理"
@@ -503,6 +507,7 @@ class TaskScheduler:
             "unique_email_sheet_sync": self._run_unique_email_sheet_sync,
             "email_registration_count_sheet_sync": self._run_email_registration_count_sheet_sync,
             "email_collection_metrics_sheet_sync": self._run_email_collection_metrics_sheet_sync,
+            "payment_daily_sync": self._run_payment_daily_sync,
             "booking_notification_log_sync": self._run_booking_notification_log_sync,
             "booking_metrics_sheet_sync": self._run_booking_metrics_sheet_sync,
             "membership_collection_sheet_sync": self._run_membership_collection_sheet_sync,
@@ -806,7 +811,7 @@ class TaskScheduler:
         logger.info("Scheduler shut down")
 
     # タスク失敗通知を送らないタスク（自前でエラーハンドリングするもの）
-    _NO_FAILURE_NOTIFY = {"health_check", "oauth_health_check", "render_health_check", "anthropic_credit_check", "secretary_goal_progress", "interview_insights_sync", "interview_insights_backfill", "interview_insights_analysis", "unique_email_sheet_sync", "email_registration_count_sheet_sync", "email_collection_metrics_sheet_sync", "booking_notification_log_sync", "booking_metrics_sheet_sync", "membership_collection_sheet_sync", "membership_metrics_sheet_sync"}
+    _NO_FAILURE_NOTIFY = {"health_check", "oauth_health_check", "render_health_check", "anthropic_credit_check", "secretary_goal_progress", "interview_insights_sync", "interview_insights_backfill", "interview_insights_analysis", "unique_email_sheet_sync", "email_registration_count_sheet_sync", "email_collection_metrics_sheet_sync", "payment_daily_sync", "booking_notification_log_sync", "booking_metrics_sheet_sync", "membership_collection_sheet_sync", "membership_metrics_sheet_sync"}
     # git_pull_syncは独自の頻度制限付き通知を実装（_run_git_pull_sync参照）
 
     async def _execute_tool(self, task_name: str, tool_fn, **kwargs) -> tools.ToolResult:
@@ -4803,6 +4808,45 @@ head -3 "{csv_dir}/{csv_filename}"
                     (
                         "メール集計 / データソース管理",
                         _build_sheet_url(_EMAIL_COLLECTION_METRICS_SHEET_ID, _EMAIL_COLLECTION_METRICS_SOURCE_TAB),
+                    ),
+                ],
+            )
+        )
+
+    async def _run_payment_daily_sync(self):
+        """2時間ごと: 決済データ（収集）を日次フォルダから更新する。"""
+        result = await self._execute_tool(
+            "payment_daily_sync",
+            tools.payment_daily_sync,
+        )
+        if result.success:
+            logger.info(f"Payment daily sync completed: {(result.output or '')[-300:]}")
+            return
+
+        from .notifier import send_line_notify
+
+        send_line_notify(
+            _format_line_message(
+                "決済データ（収集）の更新が止まりました",
+                summary_lines=[
+                    (result.error or "詳細エラーを取得できませんでした")[:200],
+                ],
+                action_lines=[
+                    "まず 決済データ を開いて、当日の取引が増えていないか確認してください",
+                    "次に データソース管理 を開いて、各ソースの最終同期日とエラー数を確認してください",
+                ],
+                links=[
+                    (
+                        "決済データ（収集） / 決済データ",
+                        _build_sheet_url(_PAYMENT_COLLECTION_SHEET_ID, _PAYMENT_COLLECTION_MAIN_TAB),
+                    ),
+                    (
+                        "決済データ（収集） / UTAGE補助",
+                        _build_sheet_url(_PAYMENT_COLLECTION_SHEET_ID, _PAYMENT_COLLECTION_UTAGE_TAB),
+                    ),
+                    (
+                        "決済データ（収集） / データソース管理",
+                        _build_sheet_url(_PAYMENT_COLLECTION_SHEET_ID, _PAYMENT_COLLECTION_SOURCE_TAB),
                     ),
                 ],
             )
