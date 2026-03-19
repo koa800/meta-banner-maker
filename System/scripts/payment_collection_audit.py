@@ -77,7 +77,7 @@ TAB_COLOR_MONITOR = {"red": 0.98, "green": 0.67, "blue": 0.12}
 UTAGE_TAB_WIDTHS = [155, 330, 220, 150, 120, 220, 105, 105]
 SOURCE_MGMT_WIDTHS = [120, 230, 95, 95, 115, 230, 90, 135, 110, 75, 250, 150]
 RULE_TAB_WIDTHS = [140, 420, 260]
-OPS_TAB_WIDTHS = [150, 120, 300, 32, 120, 125, 130, 95, 95, 125, 120]
+OPS_TAB_WIDTHS = [140, 220, 90, 130, 110, 240, 260, 100, 110, 100, 100]
 OPS_SECTION_TITLES = {"未解決異常", "日次到着確認", "月次照合"}
 
 
@@ -517,34 +517,43 @@ def apply_ops_tab_style(spreadsheet, ws, rows: list[list[Any]]) -> None:
             )
 
     if daily_header_idx is not None:
-        daily_end = find_section_end(rows, daily_header_idx + 1)
-        for col in (0, 1, 2, 3, 4):
-            requests.append(
-                repeat_cell_request(
-                    ws.id,
-                    daily_header_idx + 1,
-                    daily_end,
-                    col,
-                    col + 1,
-                    {"horizontalAlignment": "CENTER"},
-                    "userEnteredFormat.horizontalAlignment",
+        for row_idx in range(daily_header_idx + 1, len(rows)):
+            values = [str(cell).strip() for cell in rows[row_idx]]
+            first = values[0] if values else ""
+            if first in OPS_SECTION_TITLES or first in {"ステータス定義", "対象月"}:
+                break
+            if not any(values):
+                continue
+            for col in (0, 2, 3, 4):
+                requests.append(
+                    repeat_cell_request(
+                        ws.id,
+                        row_idx,
+                        row_idx + 1,
+                        col,
+                        col + 1,
+                        {"horizontalAlignment": "CENTER"},
+                        "userEnteredFormat.horizontalAlignment",
+                    )
                 )
-            )
 
     if monthly_header_idx is not None:
-        monthly_end = find_section_end(rows, monthly_header_idx + 1)
-        for col in range(0, 11):
-            requests.append(
-                repeat_cell_request(
-                    ws.id,
-                    monthly_header_idx + 1,
-                    monthly_end,
-                    col,
-                    col + 1,
-                    {"horizontalAlignment": "CENTER"},
-                    "userEnteredFormat.horizontalAlignment",
+        for row_idx in range(monthly_header_idx + 1, len(rows)):
+            values = [str(cell).strip() for cell in rows[row_idx]]
+            if not any(values):
+                continue
+            for col in range(0, 11):
+                requests.append(
+                    repeat_cell_request(
+                        ws.id,
+                        row_idx,
+                        row_idx + 1,
+                        col,
+                        col + 1,
+                        {"horizontalAlignment": "CENTER"},
+                        "userEnteredFormat.horizontalAlignment",
+                    )
                 )
-            )
 
     for index, width in enumerate(OPS_TAB_WIDTHS):
         requests.append(set_column_width_request(ws.id, index, index + 1, width))
