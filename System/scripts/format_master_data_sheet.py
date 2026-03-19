@@ -48,8 +48,17 @@ def used_dimensions(ws) -> tuple[int, int, list[list[str]]]:
     return used_rows, max(used_cols, 1), values
 
 
-def fetch_sheet_metadata(spreadsheet, sheet_id: int) -> dict:
-    metadata = spreadsheet.fetch_sheet_metadata()
+def text_column_indexes(values: list[list[str]]) -> list[int]:
+    if not values or not values[0]:
+        return []
+    indexes: list[int] = []
+    for idx, header in enumerate(values[0]):
+        if "ID" in str(header):
+            indexes.append(idx)
+    return indexes
+
+
+def fetch_sheet_metadata(metadata: dict, sheet_id: int) -> dict:
     for sheet in metadata.get("sheets", []):
         if sheet.get("properties", {}).get("sheetId") == sheet_id:
             return sheet
@@ -71,11 +80,12 @@ def build_delete_existing_requests(sheet_meta: dict) -> list[dict]:
     return requests
 
 
-def apply_formatting(spreadsheet, ws) -> None:
+def apply_formatting(spreadsheet, spreadsheet_metadata: dict, ws) -> None:
     used_rows, used_cols, values = used_dimensions(ws)
     last_col = column_letter(used_cols)
     data_end_row = max(used_rows, 2)
-    sheet_meta = fetch_sheet_metadata(spreadsheet, ws.id)
+    sheet_meta = fetch_sheet_metadata(spreadsheet_metadata, ws.id)
+    text_columns = text_column_indexes(values)
 
     requests = build_delete_existing_requests(sheet_meta)
     requests.append(
@@ -196,6 +206,27 @@ def apply_formatting(spreadsheet, ws) -> None:
         }
     )
 
+    for index in text_columns:
+        requests.append(
+            {
+                "repeatCell": {
+                    "range": {
+                        "sheetId": ws.id,
+                        "startRowIndex": 1,
+                        "endRowIndex": max(ws.row_count, data_end_row + 1),
+                        "startColumnIndex": index,
+                        "endColumnIndex": index + 1,
+                    },
+                    "cell": {
+                        "userEnteredFormat": {
+                            "numberFormat": {"type": "TEXT"}
+                        }
+                    },
+                    "fields": "userEnteredFormat.numberFormat",
+                }
+            }
+        )
+
     spreadsheet.batch_update({"requests": requests})
 
     ws.format(
@@ -222,14 +253,26 @@ def apply_formatting(spreadsheet, ws) -> None:
             },
         )
 
+    for index in text_columns:
+        column_values = []
+        for row in values[1:data_end_row]:
+            cell_value = row[index] if index < len(row) else ""
+            if cell_value.startswith("'"):
+                cell_value = cell_value[1:]
+            column_values.append([cell_value])
+        if column_values:
+            column_range = f"{column_letter(index + 1)}2:{column_letter(index + 1)}{len(column_values) + 1}"
+            ws.update(range_name=column_range, values=column_values)
+
 
 def main() -> None:
     spreadsheet_id, _ = sheets_manager.extract_spreadsheet_id(SPREADSHEET_URL)
     client = sheets_manager.get_client("kohara")
     spreadsheet = client.open_by_key(spreadsheet_id)
+    spreadsheet_metadata = spreadsheet.fetch_sheet_metadata()
 
     for ws in spreadsheet.worksheets():
-        apply_formatting(spreadsheet, ws)
+        apply_formatting(spreadsheet, spreadsheet_metadata, ws)
         print(f"formatted={ws.title}")
 
 
