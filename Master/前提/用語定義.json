@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-03-17T19:20:00",
+  "updated_at": "2026-03-19T18:48:10",
   "source_sheet_id": "1nkmeWcHmzxPJH1d5veXwTpDoZrsPFH4_3txevqj225Y",
-  "defined_count": 136,
+  "defined_count": 145,
   "draft_count": 0,
   "entries": [
     {
@@ -954,6 +954,69 @@
       "term": "会員",
       "definition": "スキルプラスの契約締結日から7日間が経過したユーザー。",
       "note": "`会員数` はその日時点で会員条件を満たしている人数。",
+      "status": "defined"
+    },
+    {
+      "row": 138,
+      "term": "広告媒体別参照ルール",
+      "definition": "広告指標は媒体ごとに定義がずれるため、媒体別に固定した公式一次ソースを参照する運用ルール。",
+      "note": "詳細は Markdown の `広告媒体別参照ルール` と `広告媒体別の主要指標定義` を参照。",
+      "status": "defined"
+    },
+    {
+      "row": 139,
+      "term": "Meta広告の指標参照ルール",
+      "definition": "Meta広告の指標は Marketing API の insights reference を正本とし、click 系は `clicks` より `inline_link_clicks` を優先して解釈する。",
+      "note": "主要URL: developers.facebook.com の `ad-account/insights`, `insights`, `estimated-in-development`, `link-clicks-updates`。",
+      "status": "defined"
+    },
+    {
+      "row": 140,
+      "term": "X広告の指標参照ルール",
+      "definition": "X広告の指標は glossary と campaign dashboard を正本とし、`CTR` と `engagement rate` と `results` を混同しない。",
+      "note": "主要URL: business.x.com の `twitter-ads-glossary`, `campaign-dashboard`, `tweet-activity-dashboard`。",
+      "status": "defined"
+    },
+    {
+      "row": 141,
+      "term": "TikTok広告の指標参照ルール",
+      "definition": "TikTok広告の指標は `basic-data` を正本とし、`clicks (all)` と `clicks (destination)`、`CVR` と `CVR, clicks` を分けて扱う。",
+      "note": "主要URL: ads.tiktok.com の `basic-data`, `all-metrics`, `video-play`, `onsite-events`。",
+      "status": "defined"
+    },
+    {
+      "row": 142,
+      "term": "LINE広告の指標参照ルール",
+      "definition": "LINE広告の指標は LY Corporation 公式コラムとマニュアルを正本とし、Web CV と友だち追加を別成果として扱う。",
+      "note": "主要URL: lycbiz.com の `20210728`, `other_007`, `operational-type-ads-basic-knowledge.pdf`。",
+      "status": "defined"
+    },
+    {
+      "row": 143,
+      "term": "Google広告の指標参照ルール",
+      "definition": "Google広告の指標は Google Ads API metrics と Google Ads Help を正本とし、API の `cost_micros` は通貨換算後に金額として扱う。",
+      "note": "主要URL: developers.google.com の `google-ads/api/fields/v23/metrics` と support.google.com/google-ads の CTR, CPM, conversion tracking, YouTube ads metrics。",
+      "status": "defined"
+    },
+    {
+      "row": 144,
+      "term": "LinkedIn広告の指標参照ルール",
+      "definition": "LinkedIn広告の指標は Campaign Manager の performance metrics を正本とし、`Clicks` は chargeable clicks を基準に読む。",
+      "note": "主要URL: linkedin.com/help/lms の `a445476`, `a422642`, `a422348`。",
+      "status": "defined"
+    },
+    {
+      "row": 145,
+      "term": "Pinterest広告の指標参照ルール",
+      "definition": "Pinterest広告の指標は reporting dashboard と media planner を正本とし、`Pin clicks` と `Outbound clicks` を分けて扱う。",
+      "note": "主要URL: help.pinterest.com の `reporting-dashboard-overview`, `media-planner`。",
+      "status": "defined"
+    },
+    {
+      "row": 146,
+      "term": "Snapchat広告の指標参照ルール",
+      "definition": "Snapchat広告の指標は Snap for Business の公式ページで確認できたものだけを使い、他媒体の定義で補完しない。",
+      "note": "主要URL: forbusiness.snapchat.com の `remarketing-how-it-works`。structured glossary が見つかり次第そちらを優先。",
       "status": "defined"
     }
   ]
