@@ -1079,7 +1079,12 @@ def determine_operation_status(
     recent_row_count = int(recent_rows) if str(recent_rows).strip() not in {"", "0"} else 0
     recent_spend_value = float(recent_spend or 0)
 
-    if "停止中" in clean_cell(master_note) and recent_row_count == 0 and recent_spend_value == 0:
+    note_text = clean_cell(master_note)
+
+    if "制限中" in note_text and recent_row_count == 0 and recent_spend_value == 0:
+        return "停止中", "広告アカウントの備考=制限中"
+
+    if "停止中" in note_text and recent_row_count == 0 and recent_spend_value == 0:
         return "停止中", "広告アカウントの備考=停止中"
 
     if account_status and account_status != "1" and recent_row_count == 0 and recent_spend_value == 0:
@@ -1106,8 +1111,11 @@ def determine_operation_status(
     return "停止中", "currentの稼働根拠なし"
 
 
-def determine_restriction_status(account_status="", disable_reason=""):
+def determine_restriction_status(master_note="", account_status="", disable_reason=""):
+    note_text = clean_cell(master_note)
     disable_reason_text = clean_cell(disable_reason)
+    if "制限中" in note_text:
+        return "Meta制限", "広告アカウントの備考=制限中"
     if disable_reason_text and disable_reason_text not in {"0"}:
         return "Meta制限", f"disable_reason={disable_reason_text}"
     return "正常", ""
@@ -1315,12 +1323,14 @@ def update_meta_status_sheet(
             recent_spend,
         )
         restriction_status, restriction_reason = determine_restriction_status(
+            master_note=account_notes.get(account_id, ""),
             account_status=account_status,
             disable_reason=disable_reason,
         )
-        reasons = [operation_reason]
-        if restriction_reason:
-            reasons.append(restriction_reason)
+        reasons = []
+        for reason in [operation_reason, restriction_reason]:
+            if reason and reason not in reasons:
+                reasons.append(reason)
         rows.append(
                 [
                     "Meta広告",
