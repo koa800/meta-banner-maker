@@ -511,6 +511,11 @@ def mapped_product_is_recurring(product_name: str, product_meta: dict[str, dict[
     return product_name == BLANK_SKILLPLUS_RECURRING_PRODUCT_NAME
 
 
+def raw_name_is_dpro_installment(raw_name: str) -> bool:
+    normalized = normalize_text(raw_name)
+    return "動画広告分析Pro" in normalized and "初回3ヶ月間" in normalized
+
+
 def claim_is_collected(*texts: object) -> bool:
     normalized = normalize_compact_text(" / ".join(normalize_text(text) for text in texts))
     if not normalized:
@@ -1868,6 +1873,9 @@ def sale_bucket(context: SaleContext, product_meta: dict[str, dict[str, str]]) -
     if context.is_univapay_head_payment:
         return "new"
 
+    if raw_name_is_dpro_installment(context.raw_name):
+        return "installment"
+
     mapping_entry = context.mapping_entry
     if mapping_entry and mapping_entry.status == "変換済み" and mapping_entry.product_name:
         if mapped_product_is_recurring(mapping_entry.product_name, product_meta):
@@ -2218,8 +2226,8 @@ def build_rule_rows() -> List[List[object]]:
         ["項目", "ルール", "補足"],
         ["日別売上数値", "手入力で直さず、元データから再生成する", "数字の理由を後から追えるようにする"],
         ["新規着金売上", "新規契約として扱う着金だけを集計する", "非会員向け商品、頭金お支払い、銀行振込・信販の初回承認/振込を含める。プライム合宿の148,000円はここへ含める"],
-        ["分割回収売上", "スキルプラス本体の分割金回収を集計する", "UnivaPay の空欄 recurring のうち、分割金パターンとして確定した金額帯をここへ寄せる"],
-        ["継続課金売上", "月額課金や継続利用料など、積み上がる継続課金を集計する", "商品マスタの購入形態が月額、または UTAGE detail で継続課金と exact に確認できた売上をここへ寄せる。センサーズ継続、AIカレッジ継続、スキルプラス継続利用 など"],
+        ["分割回収売上", "スキルプラス本体の分割金回収を集計する", "UnivaPay の空欄 recurring のうち、分割金パターンとして確定した金額帯と、動画広告分析Pro の `初回3ヶ月間` をここへ寄せる"],
+        ["継続課金売上", "月額課金や継続利用料など、積み上がる継続課金を集計する", "商品マスタの購入形態が月額、または UTAGE detail で継続課金と exact に確認できた売上をここへ寄せる。センサーズ継続、AIカレッジ継続、スキルプラス継続利用は 21,780円/月。動画広告分析Pro は `4ヶ月目以降` をここへ寄せる"],
         ["会員向け単発売上", "会員向けの単発売上を継続課金とは分けて集計する", "会員向けかつ買切り/イベント系の商品をここへ寄せる。プライム合宿の59,800円、スキルプラスイベント、みかみとお茶会 など"],
         ["着金売上", "新規着金売上と分割回収売上と継続課金売上と会員向け単発売上の合計を持つ", "総額は保持するが、広告判断では新規着金売上を優先して使う"],
         ["返金額", "相談窓口シートの返金案件を正本にする", "相談窓口に載っていない raw 返金だけを補完採用する"],
