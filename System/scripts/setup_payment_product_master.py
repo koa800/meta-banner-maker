@@ -111,6 +111,7 @@ class ProductMeta:
 class PaymentAggregate:
     source: str
     raw_name: str
+    unit_amount: int = 0
     count: int = 0
     amount: int = 0
 
@@ -170,6 +171,7 @@ PRODUCT_RULES: dict[str, ProductRule] = {
     "Live授業": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "AIカレッジ　継続": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
     "センサーズ　継続": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
+    "プライム合宿（非会員向け）": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "スキルプラスイベント": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
     "みかみとお茶会": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
 }
@@ -222,6 +224,16 @@ SOURCE_EXTRA_PRODUCTS = [
         "商品種類": "",
     },
     {
+        "商品名": "プライム合宿（非会員向け）",
+        "事業区分": BUSINESS_SKILLPLUS,
+        "対象顧客": TARGET_NON_MEMBER,
+        "顧客属性区分": ATTR_INDIVIDUAL,
+        "価格": "¥148,000",
+        "購入形態": "買切り",
+        "初期費用": "",
+        "商品種類": "",
+    },
+    {
         "商品名": "みかみとお茶会",
         "事業区分": BUSINESS_SKILLPLUS,
         "対象顧客": TARGET_MEMBER,
@@ -243,11 +255,15 @@ SOURCE_EXTRA_PRODUCTS = [
     },
 ]
 
+RAW_NAME_AMOUNT_ALIAS_MAPPING = {
+    ("みかみの秘密合宿 - オフライン版 -", 59800): "プライム合宿",
+    ("みかみの秘密合宿 - オフライン版 -", 148000): "プライム合宿（非会員向け）",
+}
+
 RAW_NAME_ALIAS_MAPPING = {
     "AIコンテンツ自動量産Live参加費用": "Live授業",
     "AIカレッジ【24分割プラン】※頭金10万円銀行振込用": "AIカレッジ　継続",
     "AIカレッジ【頭金10万円＋24分割払いプラン】": "AIカレッジ　継続",
-    "みかみの秘密合宿 - オフライン版 -": "プライム合宿",
     "遠藤　眞理子様　ご請求書": "スキルプラススタンダードプラン",
     "センサーズ【24分割プラン】※頭金10万円銀行振込用": "センサーズ　継続",
     "新生センサーズ限定プラン【頭金10万円＋24分割】": "センサーズ　継続",
@@ -366,6 +382,15 @@ def infer_average_amount_alias(aggregate: PaymentAggregate) -> str:
     if average_amount == 798000:
         return "スキルプラススタンダードプラン"
     return ""
+
+
+def infer_amount_specific_alias(aggregate: PaymentAggregate) -> str:
+    if aggregate.count <= 0:
+        return ""
+    if aggregate.amount % aggregate.count != 0:
+        return ""
+    average_amount = aggregate.amount // aggregate.count
+    return RAW_NAME_AMOUNT_ALIAS_MAPPING.get((aggregate.raw_name, average_amount), "")
 
 
 def infer_generic_skillplus_payment_alias(raw_name: str) -> str:
@@ -655,10 +680,15 @@ def aggregate_live_payment_products(ws: gspread.Worksheet) -> list[PaymentAggreg
         raw_name = padded[idx["商品名"]].strip() or "(空欄)"
         if raw_name in PAYMENT_MAPPING_EXCLUDED_RAW_NAMES:
             continue
-        key = (source, raw_name)
-        aggregate = aggregates.setdefault(key, PaymentAggregate(source=source, raw_name=raw_name))
+        event_amount = parse_amount(padded[idx["イベント金額"]])
+        amount_split_key = event_amount if (raw_name, event_amount) in RAW_NAME_AMOUNT_ALIAS_MAPPING else 0
+        key = (source, raw_name, amount_split_key)
+        aggregate = aggregates.setdefault(
+            key,
+            PaymentAggregate(source=source, raw_name=raw_name, unit_amount=amount_split_key),
+        )
         aggregate.count += 1
-        aggregate.amount += parse_amount(padded[idx["イベント金額"]])
+        aggregate.amount += event_amount
 
     return sorted(
         aggregates.values(),
@@ -693,11 +723,17 @@ def build_mapping_rows(
                 extra_condition = "イベント金額・課金タイプ・メール照合で個別判定"
                 note = "空欄商品のため自動確定しない"
         else:
-            aliased_name = RAW_NAME_ALIAS_MAPPING.get(raw_name, "")
-            if aliased_name in exact_product_names:
-                candidate_name = aliased_name
-                reason_parts.append("明示エイリアス")
+            amount_specific_name = infer_amount_specific_alias(aggregate)
+            if amount_specific_name in exact_product_names:
+                candidate_name = amount_specific_name
+                reason_parts.append("金額別エイリアス")
+                extra_condition = f"イベント金額={normalize_display_amount(aggregate.amount // aggregate.count)}"
             else:
+                aliased_name = RAW_NAME_ALIAS_MAPPING.get(raw_name, "")
+                if aliased_name in exact_product_names:
+                    candidate_name = aliased_name
+                    reason_parts.append("明示エイリアス")
+            if not candidate_name:
                 keyword_aliased_name = infer_alias_product_name(raw_name)
                 if keyword_aliased_name in exact_product_names:
                     candidate_name = keyword_aliased_name

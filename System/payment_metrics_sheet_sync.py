@@ -88,6 +88,7 @@ WRITE_RETRY_SECONDS = (5, 10, 20, 40)
 START_DATE = datetime(2025, 1, 1)
 START_DATE_TEXT = START_DATE.strftime("%Y/%m/%d")
 DATE_RE = re.compile(r"(\d{4})[/-](\d{1,2})[/-](\d{1,2})")
+AMOUNT_CONDITION_RE = re.compile(r"(?:イベント金額|1件あたり)\s*=\s*¥?([\d,]+)")
 
 SKILLPLUS_CASE_CODES = {"STD", "PRM", "ELT", "SPS"}
 NON_SKILLPLUS_CASE_CODES = {"デザジュク", "アドネス", "ギブセル", "その他"}
@@ -187,6 +188,7 @@ OTHER_BUSINESS_EVIDENCE_CONFIGS = [
 class MappingEntry:
     source: str
     raw_name: str
+    amount_per_event: int
     product_name: str
     product_id: str
     management_code: str
@@ -414,6 +416,16 @@ def normalize_display_amount(value: int) -> str:
 
 def normalize_display_count(value: int) -> str:
     return f"{value:,}"
+
+
+def parse_mapping_amount_condition(value: object) -> int:
+    text = normalize_text(value)
+    if not text:
+        return 0
+    match = AMOUNT_CONDITION_RE.search(text)
+    if not match:
+        return 0
+    return parse_amount(match.group(1))
 
 
 def parse_meta_json(meta_json: str) -> list[dict]:
@@ -1001,22 +1013,23 @@ def load_product_business_map(ws) -> tuple[set[str], set[str], dict[str, dict[st
     return skillplus_names, non_skillplus_names, product_meta
 
 
-def load_payment_mapping(ws) -> Dict[tuple[str, str], MappingEntry]:
+def load_payment_mapping(ws) -> Dict[tuple[str, str], List[MappingEntry]]:
     rows = get_all_values_with_retry(ws)
     if not rows:
         return {}
     headers = rows[0]
     idx = {header: i for i, header in enumerate(headers)}
-    mapping: Dict[tuple[str, str], MappingEntry] = {}
+    mapping: Dict[tuple[str, str], List[MappingEntry]] = defaultdict(list)
     for row in rows[1:]:
         padded = row + [""] * (len(headers) - len(row))
         source = normalize_text(padded[idx["決済ソース"]])
         raw_name = normalize_text(padded[idx["生商品名"]])
         if not source or not raw_name:
             continue
-        mapping[(source, raw_name)] = MappingEntry(
+        mapping[(source, raw_name)].append(MappingEntry(
             source=source,
             raw_name=raw_name,
+            amount_per_event=parse_mapping_amount_condition(padded[idx["補助条件"]]),
             product_name=normalize_text(padded[idx["正式商品名"]]),
             product_id=normalize_text(padded[idx["商品ID"]]),
             management_code=normalize_text(padded[idx["商品管理コード"]]),
@@ -1025,8 +1038,27 @@ def load_payment_mapping(ws) -> Dict[tuple[str, str], MappingEntry]:
             customer_attr=normalize_text(padded[idx["顧客属性区分"]]),
             status=normalize_text(padded[idx["判定区分"]]),
             reason=normalize_text(padded[idx["判定根拠"]]),
-        )
+        ))
     return mapping
+
+
+def resolve_mapping_entry(
+    mapping: Dict[tuple[str, str], List[MappingEntry]],
+    source: str,
+    raw_name: str,
+    amount: int,
+) -> Optional[MappingEntry]:
+    candidates = mapping.get((source, raw_name), [])
+    if not candidates:
+        return None
+    if amount > 0:
+        for entry in candidates:
+            if entry.amount_per_event and entry.amount_per_event == amount:
+                return entry
+    for entry in candidates:
+        if entry.amount_per_event == 0:
+            return entry
+    return candidates[0]
 
 
 def build_text_markers(product_names: Iterable[str]) -> list[str]:
@@ -1300,7 +1332,10 @@ def identifiers_hit_other_business(
     return False
 
 
-def build_skillplus_sale_indexes(payment_rows: list[list[str]], mapping: Dict[tuple[str, str], MappingEntry]) -> tuple[list[PaymentSaleEvent], dict[str, set[str]], Counter]:
+def build_skillplus_sale_indexes(
+    payment_rows: list[list[str]],
+    mapping: Dict[tuple[str, str], List[MappingEntry]],
+) -> tuple[list[PaymentSaleEvent], dict[str, set[str]], Counter]:
     if not payment_rows:
         return [], {"emails": set(), "phones": set(), "names": set()}, Counter()
     headers = payment_rows[0]
@@ -1331,7 +1366,8 @@ def build_skillplus_sale_indexes(payment_rows: list[list[str]], mapping: Dict[tu
             continue
 
         raw_name = normalize_text(padded[idx["商品名"]]) or "(空欄)"
-        mapping_entry = mapping.get((source, raw_name))
+        amount = abs(parse_amount(padded[idx["イベント金額"]]))
+        mapping_entry = resolve_mapping_entry(mapping, source, raw_name, amount)
         if not mapping_entry or mapping_entry.status != "変換済み":
             unknown_counter["amount"] += abs(parse_amount(padded[idx["イベント金額"]]))
             unknown_counter["count"] += 1
@@ -1339,7 +1375,6 @@ def build_skillplus_sale_indexes(payment_rows: list[list[str]], mapping: Dict[tu
         if mapping_entry.business != BUSINESS_SKILLPLUS:
             continue
 
-        amount = abs(parse_amount(padded[idx["イベント金額"]]))
         full_name = normalize_text(padded[idx["名前（原本）"]]) or normalize_text(
             f"{padded[idx['姓']]}{padded[idx['名']]}"
         )
@@ -1602,7 +1637,15 @@ def build_refund_case_indexes(refund_cases: list[RefundCase]) -> dict[str, dict[
     return indexes
 
 
-def collect_raw_refund_supplements(payment_rows: list[list[str]], mapping: Dict[tuple[str, str], MappingEntry], refund_cases: list[RefundCase], sale_index: dict[str, set[str]], student_index: dict[str, set[str]], skillplus_markers: list[str], non_skillplus_markers: list[str]) -> tuple[dict[str, Counter], Counter]:
+def collect_raw_refund_supplements(
+    payment_rows: list[list[str]],
+    mapping: Dict[tuple[str, str], List[MappingEntry]],
+    refund_cases: list[RefundCase],
+    sale_index: dict[str, set[str]],
+    student_index: dict[str, set[str]],
+    skillplus_markers: list[str],
+    non_skillplus_markers: list[str],
+) -> tuple[dict[str, Counter], Counter]:
     if not payment_rows:
         return defaultdict(Counter), Counter()
 
@@ -1635,7 +1678,7 @@ def collect_raw_refund_supplements(payment_rows: list[list[str]], mapping: Dict[
             continue
 
         raw_name = normalize_text(padded[idx["商品名"]]) or "(空欄)"
-        mapping_entry = mapping.get((source, raw_name))
+        mapping_entry = resolve_mapping_entry(mapping, source, raw_name, amount)
         email = normalize_email(padded[idx["メールアドレス"]])
         phone = normalize_phone(padded[idx["電話番号"]])
         full_name = normalize_name_key(
@@ -1723,7 +1766,7 @@ def sale_matches_other_business(
 def build_sale_context(
     row: list[str],
     idx: dict[str, int],
-    mapping: Dict[tuple[str, str], MappingEntry],
+    mapping: Dict[tuple[str, str], List[MappingEntry]],
     student_index: dict[str, set[str]],
     other_business_index: dict[str, dict[str, list[OtherBusinessEvidence]]],
 ) -> Optional[SaleContext]:
@@ -1753,7 +1796,8 @@ def build_sale_context(
             recurring_id=normalize_text(row[idx["定期課金ID"]]),
             charge_type=normalize_text(row[idx["課金タイプ"]]),
         )
-    mapping_entry = mapping.get((source, raw_name))
+    amount = abs(parse_amount(row[idx["イベント金額"]]))
+    mapping_entry = resolve_mapping_entry(mapping, source, raw_name, amount)
     recurring_id = normalize_text(row[idx["定期課金ID"]])
     charge_type = normalize_text(row[idx["課金タイプ"]])
     classification = "unknown"
@@ -1816,7 +1860,7 @@ def sale_bucket(context: SaleContext, product_meta: dict[str, dict[str, str]]) -
 
 def build_daily_rows(
     payment_rows: list[list[str]],
-    mapping: Dict[tuple[str, str], MappingEntry],
+    mapping: Dict[tuple[str, str], List[MappingEntry]],
     refund_daily: dict[str, Counter],
     refund_stats: Counter,
     claim_stats: Counter,
@@ -2123,9 +2167,9 @@ def build_rule_rows() -> List[List[object]]:
     return [
         ["項目", "ルール", "補足"],
         ["日別売上数値", "手入力で直さず、元データから再生成する", "数字の理由を後から追えるようにする"],
-        ["新規着金売上", "新規契約として扱う着金だけを集計する", "非会員向け商品、頭金お支払い、銀行振込・信販の初回承認/振込を含める"],
+        ["新規着金売上", "新規契約として扱う着金だけを集計する", "非会員向け商品、頭金お支払い、銀行振込・信販の初回承認/振込を含める。プライム合宿の148,000円はここへ含める"],
         ["継続課金売上", "月額課金や継続利用料など、積み上がる継続課金を集計する", "商品マスタの購入形態が月額、または recurring_id がある売上をここへ寄せる。センサーズ継続、AIカレッジ継続、iステップ、動画広告分析Pro など"],
-        ["会員向け単発売上", "会員向けの単発売上を継続課金とは分けて集計する", "会員向けかつ買切り/イベント系の商品をここへ寄せる。プライム合宿、スキルプラスイベント、みかみとお茶会 など"],
+        ["会員向け単発売上", "会員向けの単発売上を継続課金とは分けて集計する", "会員向けかつ買切り/イベント系の商品をここへ寄せる。プライム合宿の59,800円、スキルプラスイベント、みかみとお茶会 など"],
         ["着金売上", "新規着金売上と継続課金売上と会員向け単発売上の合計を持つ", "総額は保持するが、広告判断では新規着金売上を優先して使う"],
         ["返金額", "相談窓口シートの返金案件を正本にする", "相談窓口に載っていない raw 返金だけを補完採用する"],
         ["返金件数", "返金イベント件数ではなく返金案件数で持つ", "分割返金でも1案件として扱う"],
