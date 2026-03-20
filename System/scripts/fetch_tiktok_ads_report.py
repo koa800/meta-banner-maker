@@ -1187,13 +1187,11 @@ def select_landing_page_status(metadata: dict[str, Any]) -> str:
     return "未取得"
 
 
-def build_sheet_rows(
+def build_sheet_records(
     rows: list[dict[str, str]],
     metadata_by_ad: dict[str, dict[str, Any]],
-) -> tuple[list[list[str]], list[tuple[str, str, str]]]:
-    sheet_rows: list[list[str]] = []
-    keys: list[tuple[str, str, str]] = []
-
+) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
     for row in rows:
         advertiser_id = normalize_lookup_id(row.get("advertiser_id", ""))
         advertiser_name = str(row.get("advertiser_name") or "").strip()
@@ -1237,7 +1235,16 @@ def build_sheet_rows(
             "出稿形式レーン": select_delivery_lane(metadata),
             "最適化イベント": str(metadata.get("optimization_event") or "").strip(),
         }
+        records.append({key: str(value or "").strip() for key, value in values.items()})
+    return records
 
+
+def build_sheet_rows(
+    records: list[dict[str, str]],
+) -> tuple[list[list[str]], list[tuple[str, str, str]]]:
+    sheet_rows: list[list[str]] = []
+    keys: list[tuple[str, str, str]] = []
+    for values in records:
         prepared: list[str] = []
         for header in TIKTOK_HEADERS:
             value = values.get(header, "")
@@ -1246,8 +1253,13 @@ def build_sheet_rows(
             else:
                 prepared.append(str(value or "").strip())
         sheet_rows.append(prepared)
-        keys.append((day, advertiser_id, ad_id))
-
+        keys.append(
+            (
+                values.get("日付", "").strip(),
+                normalize_lookup_id(values.get("広告アカウントID", "")),
+                normalize_lookup_id(values.get("広告ID", "")),
+            )
+        )
     return sheet_rows, keys
 
 
@@ -1327,10 +1339,9 @@ def append_rows_to_sheet(worksheet, rows: list[list[str]], max_chunk: int = 1000
         time.sleep(1)
 
 
-def summarize_sheet_quality(rows: list[list[str]]) -> dict[str, Any]:
-    idx = {header: position for position, header in enumerate(TIKTOK_HEADERS)}
+def summarize_sheet_quality(records: list[dict[str, str]]) -> dict[str, Any]:
     summary = {
-        "row_count": len(rows),
+        "row_count": len(records),
         "missing_creative_key_rows": 0,
         "missing_media_id_rows": 0,
         "missing_promotion_type_rows": 0,
@@ -1343,25 +1354,25 @@ def summarize_sheet_quality(rows: list[list[str]]) -> dict[str, Any]:
     lane_counter: Counter[str] = Counter()
     status_counter: Counter[str] = Counter()
 
-    for row in rows:
-        if not row[idx["CR識別キー"]].strip():
+    for record in records:
+        if not record.get("CR識別キー", "").strip():
             summary["missing_creative_key_rows"] += 1
-        if not row[idx["メディアID"]].strip():
+        if not record.get("メディアID", "").strip():
             summary["missing_media_id_rows"] += 1
-        promotion_type = row[idx["プロモーション種別"]].strip()
-        lane = row[idx["出稿形式レーン"]].strip()
-        status = row[idx["URL取得状態"]].strip()
+        promotion_type = record.get("プロモーション種別", "").strip()
+        lane = record.get("出稿形式レーン", "").strip()
+        status = record.get("URL取得状態", "").strip()
         if lane:
             lane_counter[lane] += 1
         if status:
             status_counter[status] += 1
         if not promotion_type:
             summary["missing_promotion_type_rows"] += 1
-        if promotion_type == "WEBSITE" and not row[idx["遷移先URL"]].strip():
+        if promotion_type == "WEBSITE" and not record.get("遷移先URL", "").strip():
             summary["missing_landing_page_url_rows_web"] += 1
-        if promotion_type == "LEAD_GENERATION" and not row[idx["遷移先URL"]].strip():
+        if promotion_type == "LEAD_GENERATION" and not record.get("遷移先URL", "").strip():
             summary["missing_landing_page_url_rows_lead_generation"] += 1
-        if "Smart+" in lane and not row[idx["遷移先URL"]].strip():
+        if "Smart+" in lane and not record.get("遷移先URL", "").strip():
             summary["missing_landing_page_url_rows_smart_plus"] += 1
 
     summary["delivery_lane_counts"] = dict(lane_counter)
@@ -1369,26 +1380,25 @@ def summarize_sheet_quality(rows: list[list[str]]) -> dict[str, Any]:
     return summary
 
 
-def collect_missing_landing_page_details(rows: list[list[str]], limit: int = 20) -> list[dict[str, str]]:
-    idx = {header: position for position, header in enumerate(TIKTOK_HEADERS)}
+def collect_missing_landing_page_details(records: list[dict[str, str]], limit: int = 20) -> list[dict[str, str]]:
     details: list[dict[str, str]] = []
 
-    for row in rows:
-        if row[idx["遷移先URL"]].strip():
+    for record in records:
+        if record.get("遷移先URL", "").strip():
             continue
         details.append(
             {
-                "日付": row[idx["日付"]].strip(),
-                "広告アカウント名": row[idx["広告アカウント名"]].strip(),
-                "広告アカウントID": normalize_lookup_id(row[idx["広告アカウントID"]]),
-                "キャンペーン名": row[idx["キャンペーン名"]].strip(),
-                "広告グループ名": row[idx["広告グループ名"]].strip(),
-                "広告ID": normalize_lookup_id(row[idx["広告ID"]]),
-                "広告名": row[idx["広告名"]].strip(),
-                "プロモーション種別": row[idx["プロモーション種別"]].strip(),
-                "出稿形式レーン": row[idx["出稿形式レーン"]].strip(),
-                "キャンペーン自動化種別": row[idx["キャンペーン自動化種別"]].strip(),
-                "URL取得状態": row[idx["URL取得状態"]].strip(),
+                "日付": record.get("日付", "").strip(),
+                "広告アカウント名": record.get("広告アカウント名", "").strip(),
+                "広告アカウントID": normalize_lookup_id(record.get("広告アカウントID", "")),
+                "キャンペーン名": record.get("キャンペーン名", "").strip(),
+                "広告グループ名": record.get("広告グループ名", "").strip(),
+                "広告ID": normalize_lookup_id(record.get("広告ID", "")),
+                "広告名": record.get("広告名", "").strip(),
+                "プロモーション種別": record.get("プロモーション種別", "").strip(),
+                "出稿形式レーン": record.get("出稿形式レーン", "").strip(),
+                "キャンペーン自動化種別": record.get("キャンペーン自動化種別", "").strip(),
+                "URL取得状態": record.get("URL取得状態", "").strip(),
             }
         )
         if len(details) >= limit:
@@ -1677,11 +1687,14 @@ def main() -> None:
             )
         pending_rows: list[list[str]] = []
         pending_keys: list[tuple[str, str, str]] = []
+        pending_records: list[dict[str, str]] = []
         for advertiser_id in advertiser_ids:
             advertiser_rows = [row for row in all_rows if normalize_lookup_id(row.get("advertiser_id", "")) == advertiser_id]
-            sheet_rows, keys = build_sheet_rows(advertiser_rows, metadata_by_advertiser.get(advertiser_id, {}))
+            records = build_sheet_records(advertiser_rows, metadata_by_advertiser.get(advertiser_id, {}))
+            sheet_rows, keys = build_sheet_rows(records)
             pending_rows.extend(sheet_rows)
             pending_keys.extend(keys)
+            pending_records.extend(records)
 
         rows_to_append = [
             row
@@ -1691,8 +1704,8 @@ def main() -> None:
         if rows_to_append:
             append_rows_to_sheet(worksheet, rows_to_append)
             appended_rows = len(rows_to_append)
-        sheet_quality_summary = summarize_sheet_quality(pending_rows)
-        missing_landing_page_details = collect_missing_landing_page_details(pending_rows)
+        sheet_quality_summary = summarize_sheet_quality(pending_records)
+        missing_landing_page_details = collect_missing_landing_page_details(pending_records)
         print(f"収集シート追記: {appended_rows}行")
         print(
             "TikTok収集品質: "
