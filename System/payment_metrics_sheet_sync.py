@@ -32,6 +32,7 @@ from scripts.setup_payment_product_master import (
     BUSINESS_SKILLPLUS,
     MASTER_SHEET_ID,
     MASTER_PRODUCT_TAB,
+    PAYMENT_MAPPING_EXCLUDED_RAW_NAMES,
     PAYMENT_COLLECTION_SHEET_ID,
     PAYMENT_COLLECTION_TAB,
     PAYMENT_MAPPING_TAB,
@@ -49,7 +50,7 @@ SOURCE_MANAGEMENT_TAB_NAME = "データソース管理"
 RULE_TAB_NAME = "データ追加ルール"
 
 TAB_SPECS = {
-    DAILY_TAB_NAME: (1200, 8),
+    DAILY_TAB_NAME: (1200, 12),
     SUMMARY_TAB_NAME: (50, 3),
     SOURCE_MANAGEMENT_TAB_NAME: (80, 12),
     RULE_TAB_NAME: (60, 3),
@@ -98,6 +99,24 @@ SKILLPLUS_BLANK_SOURCE_CONFIRMED_SOURCES = {
     "京都信販",
     "CREDIX",
 }
+SKILLPLUS_BLANK_SOURCE_DEFAULT_SOURCES = {
+    "UnivaPay",
+    "日本プラム",
+    "きらぼし銀行",
+    "CBS",
+    "京都信販",
+    "CREDIX",
+    "INVOY",
+}
+KIRABOSHI_NON_CUSTOMER_PATTERNS = (
+    "ﾕﾆｳﾞｧﾍﾟｲ",
+    "ﾕﾆｳﾞｱﾍﾟｲ",
+    "ﾕﾆｳﾞｧ",
+    "ﾕﾆｳﾞｱ",
+    "ﾆﾎﾝﾌﾟﾗﾑ",
+    "ｽﾄﾗｲﾌﾟ",
+    "ﾓｯｼｭ",
+)
 SKILLPLUS_STUDENT_EXCLUDED_TABS = {"最新元データ一覧"}
 OTHER_BUSINESS_MATCH_LOOKBACK_DAYS = 30
 OTHER_BUSINESS_MATCH_LOOKAHEAD_DAYS = 120
@@ -196,7 +215,7 @@ class SaleContext:
     event_date: str
     event_dt: datetime
     mapping_entry: Optional[MappingEntry]
-    included: bool
+    classification: str
     is_blank_confirmed: bool
     is_univapay_head_payment: bool
     recurring_id: str
@@ -329,6 +348,10 @@ def normalize_name_key(value: object) -> str:
     return "".join(ch for ch in text if ch.isalnum() or ch == "ー")
 
 
+def normalize_compact_text(value: object) -> str:
+    return re.sub(r"[\s\u3000]+", "", unicodedata.normalize("NFKC", normalize_text(value)).lower())
+
+
 def normalize_header_key(value: object) -> str:
     return re.sub(r"[\s\u3000]+", "", normalize_text(value))
 
@@ -404,6 +427,26 @@ def extract_univapay_product_hints(meta_json: str) -> list[str]:
 
 def is_univapay_head_payment(meta_json: str) -> bool:
     return any("頭金お支払い" in hint for hint in extract_univapay_product_hints(meta_json))
+
+
+def payment_row_dedupe_key(row: list[str]) -> tuple[str, ...]:
+    return tuple(normalize_text(cell) for cell in row)
+
+
+def blank_sale_is_obvious_non_customer_transfer(row: list[str], idx: dict[str, int], source: str) -> bool:
+    if source != "きらぼし銀行":
+        return False
+    name_text = normalize_compact_text(row[idx["名前（原本）"]])
+    if not name_text:
+        return False
+    return any(normalize_compact_text(pattern) in name_text for pattern in KIRABOSHI_NON_CUSTOMER_PATTERNS)
+
+
+def charge_is_recurring(charge_type: str, recurring_id: str) -> bool:
+    normalized = normalize_text(charge_type)
+    if recurring_id:
+        return True
+    return normalized in {"リカーリング", "定期課金"}
 
 
 def header_index_by_exact(headers: list[str], candidates: Iterable[str]) -> Optional[int]:
@@ -1206,9 +1249,14 @@ def build_skillplus_sale_indexes(payment_rows: list[list[str]], mapping: Dict[tu
     identifier_index = {"emails": set(), "phones": set(), "names": set()}
     source_counter = Counter()
     unknown_counter = Counter()
+    seen_rows: set[tuple[str, ...]] = set()
 
     for row in payment_rows[1:]:
         padded = row + [""] * (len(headers) - len(row))
+        dedupe_key = payment_row_dedupe_key(padded)
+        if dedupe_key in seen_rows:
+            continue
+        seen_rows.add(dedupe_key)
         source = normalize_text(padded[idx["参照システム"]])
         event = normalize_text(padded[idx["イベント"]])
         status = normalize_text(padded[idx["課金ステータス"]])
@@ -1488,9 +1536,14 @@ def collect_raw_refund_supplements(payment_rows: list[list[str]], mapping: Dict[
     daily = defaultdict(Counter)
     stats = Counter()
     case_indexes = build_refund_case_indexes(refund_cases)
+    seen_rows: set[tuple[str, ...]] = set()
 
     for row in payment_rows[1:]:
         padded = row + [""] * (len(headers) - len(row))
+        dedupe_key = payment_row_dedupe_key(padded)
+        if dedupe_key in seen_rows:
+            continue
+        seen_rows.add(dedupe_key)
         source = normalize_text(padded[idx["参照システム"]])
         event = normalize_text(padded[idx["イベント"]])
         source_refund_date = normalize_date(padded[idx["返金日時"]])
@@ -1611,26 +1664,43 @@ def build_sale_context(
         return None
 
     raw_name = normalize_text(row[idx["商品名"]]) or "(空欄)"
+    if raw_name in PAYMENT_MAPPING_EXCLUDED_RAW_NAMES:
+        classification = "excluded"
+        return SaleContext(
+            source=source,
+            raw_name=raw_name,
+            event_date=event_date,
+            event_dt=event_dt,
+            mapping_entry=None,
+            classification=classification,
+            is_blank_confirmed=False,
+            is_univapay_head_payment=False,
+            recurring_id=normalize_text(row[idx["定期課金ID"]]),
+            charge_type=normalize_text(row[idx["課金タイプ"]]),
+        )
     mapping_entry = mapping.get((source, raw_name))
     recurring_id = normalize_text(row[idx["定期課金ID"]])
     charge_type = normalize_text(row[idx["課金タイプ"]])
-    included = False
+    classification = "unknown"
     is_blank_confirmed = False
     is_head_payment = False
 
     if mapping_entry and mapping_entry.status == "変換済み":
-        included = mapping_entry.business == BUSINESS_SKILLPLUS
+        classification = "included" if mapping_entry.business == BUSINESS_SKILLPLUS else "excluded"
     else:
-        student_hit = raw_name == "(空欄)" and sale_matches_skillplus_student(row, idx, student_index)
         other_hit = raw_name == "(空欄)" and sale_matches_other_business(row, idx, event_dt, other_business_index)
         is_head_payment = source == "UnivaPay" and raw_name == "(空欄)" and is_univapay_head_payment(row[idx["メタデータ（JSON）"]])
+        is_obvious_non_customer = raw_name == "(空欄)" and blank_sale_is_obvious_non_customer_transfer(row, idx, source)
         is_blank_confirmed = (
             raw_name == "(空欄)"
-            and source in SKILLPLUS_BLANK_SOURCE_CONFIRMED_SOURCES
-            and student_hit
+            and source in SKILLPLUS_BLANK_SOURCE_DEFAULT_SOURCES
             and not other_hit
+            and not is_obvious_non_customer
         )
-        included = is_blank_confirmed or is_head_payment
+        if other_hit or is_obvious_non_customer:
+            classification = "excluded"
+        elif is_blank_confirmed or is_head_payment:
+            classification = "included"
 
     return SaleContext(
         source=source,
@@ -1638,7 +1708,7 @@ def build_sale_context(
         event_date=event_date,
         event_dt=event_dt,
         mapping_entry=mapping_entry,
-        included=included,
+        classification=classification,
         is_blank_confirmed=is_blank_confirmed,
         is_univapay_head_payment=is_head_payment,
         recurring_id=recurring_id,
@@ -1647,11 +1717,20 @@ def build_sale_context(
 
 
 def sale_bucket(context: SaleContext, earliest_recurring_dates: dict[str, datetime]) -> str:
-    if context.is_blank_confirmed or context.is_univapay_head_payment:
+    if context.is_univapay_head_payment:
         return "new"
 
     mapping_entry = context.mapping_entry
     if mapping_entry and mapping_entry.target == "会員向け":
+        return "continuing"
+
+    if context.raw_name == "(空欄)":
+        if context.source in {"日本プラム", "CBS", "京都信販", "きらぼし銀行", "CREDIX", "INVOY"}:
+            return "new"
+        if context.source == "UnivaPay" and charge_is_recurring(context.charge_type, context.recurring_id):
+            return "continuing"
+
+    if charge_is_recurring(context.charge_type, context.recurring_id):
         return "continuing"
 
     if context.recurring_id:
@@ -1678,21 +1757,28 @@ def build_daily_rows(
     complete_unknown_count = 0
     sale_source_counts = Counter()
     earliest_recurring_dates: dict[str, datetime] = {}
+    seen_rows: set[tuple[str, ...]] = set()
 
     contexts: list[tuple[list[str], SaleContext]] = []
     for row in payment_rows[1:]:
         padded = row + [""] * (len(headers) - len(row))
+        dedupe_key = payment_row_dedupe_key(padded)
+        if dedupe_key in seen_rows:
+            continue
+        seen_rows.add(dedupe_key)
         context = build_sale_context(padded, idx, mapping, student_index, other_business_index)
         if context is None:
             continue
         contexts.append((padded, context))
-        if context.included and context.recurring_id:
+        if context.classification == "included" and context.recurring_id:
             current = earliest_recurring_dates.get(context.recurring_id)
             if current is None or context.event_dt < current:
                 earliest_recurring_dates[context.recurring_id] = context.event_dt
 
     for padded, context in contexts:
-        if not context.included:
+        if context.classification == "excluded":
+            continue
+        if context.classification != "included":
             complete_unknown_amount += abs(parse_amount(padded[idx["イベント金額"]]))
             complete_unknown_count += 1
             continue

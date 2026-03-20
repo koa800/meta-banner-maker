@@ -626,7 +626,8 @@ def convert_kiraboshi(rows: List[List[str]]) -> List[List[str]]:
 
     # 法人振込の対象外パターン
     exclude_patterns = [
-        "ﾕﾆｳﾞｧﾍﾟｲ", "ﾕﾆｳﾞｧ", "ｽﾄﾗｲﾌﾟ", "ﾓｯｼｭ",
+        "ﾕﾆｳﾞｧﾍﾟｲ", "ﾕﾆｳﾞｱﾍﾟｲ", "ﾕﾆｳﾞｧ", "ﾕﾆｳﾞｱ",
+        "ﾆﾎﾝﾌﾟﾗﾑ", "ｽﾄﾗｲﾌﾟ", "ﾓｯｼｭ",
     ]
 
     for row in rows[1:]:
