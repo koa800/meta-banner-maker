@@ -8,6 +8,7 @@ import sys
 import time
 import json
 import hashlib
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
@@ -358,6 +359,31 @@ ATTR_CODE = {
     ATTR_INDIVIDUAL: "C",
     ATTR_CORPORATE: "B",
     ATTR_BOTH: "X",
+}
+
+KNOWN_PAYMENT_SOURCES = {
+    "UnivaPay",
+    "MOSH",
+    "INVOY",
+    "日本プラム",
+    "きらぼし銀行",
+    "CBS",
+    "京都信販",
+    "CREDIX",
+}
+
+RAW_NAME_PRICE_VARIANT_EXCLUDED = {
+    "(空欄)",
+    "スキルプラス お支払い代金",
+}
+
+PRICE_VARIANT_MONITORED_SOURCES = {
+    "UnivaPay",
+    "MOSH",
+}
+
+ALLOWED_RAW_NAME_PRICE_VARIANTS = {
+    ("UnivaPay", "みかみの秘密合宿 - オフライン版 -"): {59800, 148000},
 }
 
 
@@ -769,6 +795,90 @@ def aggregate_live_payment_products(ws: gspread.Worksheet) -> list[PaymentAggreg
     )
 
 
+def build_payment_audit_summary(ws: gspread.Worksheet) -> dict[str, object]:
+    rows = with_sheets_retry(lambda: ws.get_all_values(), f"{ws.title} 読み取り")
+    if not rows:
+        return {
+            "unknown_source_count": 0,
+            "price_variant_count": 0,
+            "signature": hashlib.sha256(b"[]").hexdigest(),
+            "items": [],
+        }
+
+    headers = rows[0]
+    idx = {header: i for i, header in enumerate(headers)}
+    unknown_sources: Counter[str] = Counter()
+    amount_counter_by_key: dict[tuple[str, str], Counter[int]] = {}
+
+    for row in rows[1:]:
+        padded = row + [""] * (len(headers) - len(row))
+        source = padded[idx["参照システム"]].strip()
+        event = padded[idx["イベント"]].strip()
+        status = padded[idx["課金ステータス"]].strip()
+        raw_name = padded[idx["商品名"]].strip() or "(空欄)"
+        event_amount = parse_amount(padded[idx["イベント金額"]])
+
+        if source and source not in KNOWN_PAYMENT_SOURCES:
+            unknown_sources[source] += 1
+
+        if not source_sale_is_success(source, event, status):
+            continue
+        if (
+            source not in PRICE_VARIANT_MONITORED_SOURCES
+            or raw_name in PAYMENT_MAPPING_EXCLUDED_RAW_NAMES
+            or raw_name in RAW_NAME_PRICE_VARIANT_EXCLUDED
+        ):
+            continue
+        if event_amount <= 0:
+            continue
+
+        key = (source, raw_name)
+        counter = amount_counter_by_key.setdefault(key, Counter())
+        counter[event_amount] += 1
+
+    items: list[dict[str, object]] = []
+
+    for source, count in sorted(unknown_sources.items(), key=lambda item: (-item[1], item[0])):
+        items.append(
+            {
+                "type": "unknown_source",
+                "source": source,
+                "count": count,
+            }
+        )
+
+    for (source, raw_name), counter in sorted(
+        amount_counter_by_key.items(),
+        key=lambda item: (-sum(item[1].values()), item[0][0], item[0][1]),
+    ):
+        if len(counter) <= 1:
+            continue
+        allowed_amounts = ALLOWED_RAW_NAME_PRICE_VARIANTS.get((source, raw_name), set())
+        observed_amounts = set(counter.keys())
+        unexpected_amounts = observed_amounts - allowed_amounts
+        if not unexpected_amounts:
+            continue
+        items.append(
+            {
+                "type": "price_variant",
+                "source": source,
+                "raw_name": raw_name,
+                "amounts": sorted(observed_amounts),
+                "counts": {str(amount): counter[amount] for amount in sorted(observed_amounts)},
+            }
+        )
+
+    signature = hashlib.sha256(
+        json.dumps(items, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return {
+        "unknown_source_count": sum(1 for item in items if item["type"] == "unknown_source"),
+        "price_variant_count": sum(1 for item in items if item["type"] == "price_variant"),
+        "signature": signature,
+        "items": items,
+    }
+
+
 def build_mapping_rows(
     aggregates: Iterable[PaymentAggregate],
     product_index: dict[str, ProductMeta],
@@ -904,15 +1014,16 @@ def maybe_notify_mapping_issues(summary: dict[str, object]) -> None:
     total = int(summary.get("total", 0) or 0)
     current_signature = str(summary.get("signature") or "")
     state = load_alert_state()
-    previous_signature = str(state.get("signature") or "")
+    mapping_state = state.get("mapping", {}) if isinstance(state, dict) else {}
+    previous_signature = str(mapping_state.get("signature") or state.get("signature") or "")
 
-    save_alert_state(
-        {
+    if isinstance(state, dict):
+        state["mapping"] = {
             "signature": current_signature,
             "counts": summary.get("counts", {}),
             "updated_at": time.strftime("%Y/%m/%d %H:%M"),
         }
-    )
+        save_alert_state(state)
 
     if total == 0 or current_signature == previous_signature:
         return
@@ -931,6 +1042,46 @@ def maybe_notify_mapping_issues(summary: dict[str, object]) -> None:
             f"- {item['source']} | {raw_name} | {item['status']} | {item['amount']}"
         )
     lines.append("対応: 正式商品名と区分を確認して更新してください。")
+    try:
+        send_line_notify("\n".join(lines))
+    except Exception:
+        pass
+
+
+def maybe_notify_payment_audit(summary: dict[str, object]) -> None:
+    current_signature = str(summary.get("signature") or "")
+    state = load_alert_state()
+    payment_audit_state = state.get("payment_audit", {}) if isinstance(state, dict) else {}
+    previous_signature = str(payment_audit_state.get("signature") or "")
+
+    if isinstance(state, dict):
+        state["payment_audit"] = {
+            "signature": current_signature,
+            "unknown_source_count": summary.get("unknown_source_count", 0),
+            "price_variant_count": summary.get("price_variant_count", 0),
+            "updated_at": time.strftime("%Y/%m/%d %H:%M"),
+        }
+        save_alert_state(state)
+
+    if current_signature == previous_signature:
+        return
+    items = summary.get("items", [])
+    if not items:
+        return
+
+    lines = [
+        "決済監査で要確認の差分を検知しました。",
+        f"未知ソース {summary.get('unknown_source_count', 0)}件 / 同名新価格 {summary.get('price_variant_count', 0)}件",
+        "確認場所: 【アドネス株式会社】決済データ（収集） / 決済商品変換マスタ",
+        "主な項目:",
+    ]
+    for item in items[:5]:
+        if item["type"] == "unknown_source":
+            lines.append(f"- 未知ソース | {item['source']} | {item['count']}件")
+            continue
+        amounts = ", ".join(normalize_display_amount(int(amount)) for amount in item["amounts"])
+        lines.append(f"- 新価格候補 | {item['source']} | {item['raw_name']} | {amounts}")
+    lines.append("対応: 新価格や未知ソースが意図どおりかを確認してください。")
     try:
         send_line_notify("\n".join(lines))
     except Exception:
@@ -1118,14 +1269,18 @@ def sync_payment_product_master_structure(gc: Optional[gspread.Client] = None, n
     mapping_rows = build_mapping_rows(aggregates, product_index, reference_mapping)
     write_mapping_rows(mapping_ws, mapping_rows)
     mapping_summary = build_mapping_alert_summary(mapping_rows)
+    payment_audit_summary = build_payment_audit_summary(payment_ws)
     if notify_if_pending:
         maybe_notify_mapping_issues(mapping_summary)
+        maybe_notify_payment_audit(payment_audit_summary)
 
     return {
         "product_count": len(product_index),
         "review_row_count": max(len(review_rows) - 1, 0),
         "mapping_row_count": max(len(mapping_rows) - 1, 0),
         "mapping_pending_count": int(mapping_summary.get("total", 0) or 0),
+        "unknown_source_issue_count": int(payment_audit_summary.get("unknown_source_count", 0) or 0),
+        "price_variant_issue_count": int(payment_audit_summary.get("price_variant_count", 0) or 0),
     }
 
 

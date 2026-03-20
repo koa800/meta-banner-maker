@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -28,6 +29,7 @@ from typing import Dict, Iterable, List, Optional
 import gspread
 from gspread.exceptions import APIError, SpreadsheetNotFound
 
+from line_notify import send as send_line_notify
 from sheets_manager import get_client
 from scripts.setup_payment_product_master import (
     BUSINESS_SKILLPLUS,
@@ -66,6 +68,7 @@ TAB_SPECS = {
 BASE_DIR = Path(__file__).resolve().parent
 STATE_PATH = BASE_DIR / "data" / "payment_metrics_sheet_state.json"
 LOCK_PATH = BASE_DIR / "data" / "payment_metrics_sheet_sync.lock"
+ALERT_STATE_PATH = BASE_DIR / "data" / "payment_metrics_alert_state.json"
 
 HEADER_BG = {"red": 0.26, "green": 0.52, "blue": 0.96}
 HEADER_TEXT = {
@@ -2557,6 +2560,79 @@ def save_run_state(stats: Dict[str, int]) -> None:
     STATE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+def load_alert_state() -> Dict[str, object]:
+    if not ALERT_STATE_PATH.exists():
+        return {}
+    try:
+        payload = json.loads(ALERT_STATE_PATH.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def save_alert_state(payload: Dict[str, object]) -> None:
+    ALERT_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ALERT_STATE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def build_monthly_reconcile_alert_summary(monthly_rows: List[List[object]]) -> dict[str, object]:
+    items: list[dict[str, object]] = []
+    for row in monthly_rows[1:]:
+        if len(row) < 6 or row[5] != "要確認":
+            continue
+        items.append(
+            {
+                "month": str(row[0]),
+                "metric": str(row[1]),
+                "processed": parse_amount(row[2]),
+                "source": parse_amount(row[3]),
+                "diff": parse_amount(row[4]),
+            }
+        )
+    signature = hashlib.sha256(
+        json.dumps(items, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return {
+        "issue_count": len(items),
+        "items": items,
+        "signature": signature,
+    }
+
+
+def maybe_notify_monthly_reconcile_issues(summary: dict[str, object]) -> None:
+    state = load_alert_state()
+    previous_signature = str(state.get("monthly_reconcile_signature") or "")
+    current_signature = str(summary.get("signature") or "")
+    save_alert_state(
+        {
+            "monthly_reconcile_signature": current_signature,
+            "issue_count": summary.get("issue_count", 0),
+            "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M"),
+        }
+    )
+
+    if int(summary.get("issue_count", 0) or 0) == 0:
+        return
+    if current_signature == previous_signature:
+        return
+
+    lines = [
+        "スキルプラス着金データ（月次照合）で差分が出ています。",
+        f"要確認件数: {summary.get('issue_count', 0)}件",
+        "確認場所: 【アドネス株式会社】スキルプラス着金データ（加工） > 月次照合",
+        "主な差分:",
+    ]
+    for item in summary.get("items", [])[:5]:
+        lines.append(
+            f"- {item['month']} | {item['metric']} | 差分 {normalize_display_amount(int(item['diff']))}"
+        )
+    lines.append("対応: 元ソースと加工ロジックのどちらが変わったかを確認してください。")
+    try:
+        send_line_notify("\n".join(lines))
+    except Exception:
+        pass
+
+
 def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
     with FileLock():
         gc = get_client()
@@ -2618,6 +2694,7 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
         checked_at = datetime.now().strftime("%Y/%m/%d %H:%M")
         stats["updated_at"] = checked_at
         monthly_rows, monthly_issue_count = build_monthly_reconciliation_rows(daily_rows, source_monthly)
+        monthly_alert_summary = build_monthly_reconcile_alert_summary(monthly_rows)
         product_monthly_rows = build_product_monthly_rows(
             payment_rows,
             mapping,
@@ -2689,6 +2766,7 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
 
         apply_protections(target, tabs)
         save_run_state(stats)
+        maybe_notify_monthly_reconcile_issues(monthly_alert_summary)
         print(f"{TARGET_SPREADSHEET_TITLE} を更新しました。")
         return stats
 
