@@ -119,6 +119,87 @@ TABS = {
     "X": X_HEADERS,
 }
 
+SOURCE_HEADERS = [
+    "ソースID",
+    "データ種別",
+    "取得レーン",
+    "取得元",
+    "取得面",
+    "スクリプト",
+    "対象タブ",
+    "粒度",
+    "主キー",
+    "対象事業",
+    "現状",
+    "備考",
+]
+
+RULE_HEADERS = [
+    "ルールID",
+    "対象タブ",
+    "対象範囲",
+    "追加単位",
+    "実行方法",
+    "重複判定キー",
+    "更新方式",
+    "欠損時の扱い",
+    "品質判定",
+    "現状",
+    "備考",
+]
+
+MANAGEMENT_TABS = {
+    "Metaデータソース管理": {
+        "headers": SOURCE_HEADERS,
+        "rows": [
+            ["meta_insights_raw", "実績", "本取得", "Meta Graph API", "act_{id}/insights", "fetch_meta_ads_to_sheet.py", "Meta", "1日 x 1広告ID", "日付+広告アカウントID+広告ID", "スキルプラス", "運用中", "raw本体"],
+            ["meta_ad_metadata", "広告メタ情報", "補完", "Meta Graph API", "ad fields / creative fields", "fetch_meta_ads_to_sheet.py", "Meta", "1広告ID x 最新メタ", "広告ID", "スキルプラス", "運用中", "作成日 更新日 URL 動画 画像ハッシュ"],
+            ["meta_account_status", "収集状況", "監視", "Meta Graph API", "account / campaign / adset / ad status", "fetch_meta_ads_to_sheet.py", "Meta収集状況", "1広告アカウント", "広告アカウントID", "スキルプラス", "運用中", "稼働状態 制限状態 判定理由"],
+        ],
+    },
+    "Metaデータ追加ルール": {
+        "headers": RULE_HEADERS,
+        "rows": [
+            ["meta_raw_append", "Meta", "スキルプラス事業", "1日 x 1広告ID", "追記", "日付+広告アカウントID+広告ID", "重複行は追加しない", "値なしは空欄保持", "IDは文字列保持", "運用中", "raw本体"],
+            ["meta_status_replace", "Meta収集状況", "スキルプラス事業", "1広告アカウント", "全面更新", "広告アカウントID", "毎回作り直し", "0件と停止中を分離", "稼働中 / 停止中 / Meta制限を判定", "運用中", "監視用"],
+            ["meta_gap_refresh", "Meta", "稼働中アカウントの直近ギャップ", "不足日単位", "差分再取得", "日付+広告アカウントID+広告ID", "欠損日だけ補完", "欠損日は再取得対象", "収集状況で最新性確認", "運用中", "--refresh-running-gaps"],
+        ],
+    },
+    "TikTokデータソース管理": {
+        "headers": SOURCE_HEADERS,
+        "rows": [
+            ["tiktok_report_raw", "実績", "本取得", "TikTok Marketing API", "report/integrated/get", "fetch_tiktok_ads_report.py", "TikTok", "1日 x 1広告ID", "日付+広告アカウントID+広告ID", "スキルプラス", "運用中", "raw本体"],
+            ["tiktok_ad_metadata", "広告メタ情報", "補完", "TikTok Marketing API", "ad/get", "fetch_tiktok_ads_report.py", "TikTok", "1広告ID x 最新メタ", "広告ID", "スキルプラス", "運用中", "広告名 ステータス CR識別キー URL候補"],
+            ["tiktok_adgroup_metadata", "広告グループ情報", "補完", "TikTok Marketing API", "adgroup/get", "fetch_tiktok_ads_report.py", "TikTok", "1広告グループ x 最新メタ", "広告グループID", "スキルプラス", "運用中", "プロモーション種別"],
+            ["tiktok_ads_manager_list", "URL補完", "fallback", "TikTok Ads Manager", "internal ad/list", "fetch_tiktok_ads_report.py", "TikTok", "1広告ID x fallback", "広告ID", "スキルプラス", "運用中", "通常出稿のURL補完"],
+            ["tiktok_smart_plus_detail", "URL補完", "fallback", "TikTok Ads Manager", "procedural_detail", "fetch_tiktok_ads_report.py", "TikTok", "1広告ID x fallback", "広告ID", "スキルプラス", "運用中", "Smart+のURL補完"],
+            ["tiktok_bulk_export", "URL補完", "fallback", "TikTok Ads Manager", "Bulk export", "fetch_tiktok_ads_report.py", "TikTok", "1広告ID x fallback", "広告ID", "スキルプラス", "予備", "Smart+以外でURLが残欠の時だけ"],
+        ],
+    },
+    "TikTokデータ追加ルール": {
+        "headers": RULE_HEADERS,
+        "rows": [
+            ["tiktok_raw_append", "TikTok", "スキルプラス事業", "1日 x 1広告ID", "追記", "日付+広告アカウントID+広告ID", "重複行は追加しない", "値なしは空欄保持", "URL欠損件数をサマリー保存", "運用中", "raw本体"],
+            ["tiktok_url_fallback", "TikTok", "URLが空の広告", "1広告ID", "補完", "広告ID", "public API後にfallback実行", "未取得は内部サマリーへ残す", "missing_landing_page_details を保存", "運用中", "Smart+ を優先補完"],
+            ["tiktok_token_reauth", "TikTok", "認証 fail 時", "1token", "再認可", "app_id+access_token", "再認可後に再診断", "refresh_token なし前提", "health check で判定", "運用中", "browser再認可方式"],
+        ],
+    },
+    "Xデータソース管理": {
+        "headers": SOURCE_HEADERS,
+        "rows": [
+            ["x_report_raw", "実績", "本取得", "X Ads API", "stats", "未作成", "X", "1日 x 1広告ID", "日付+広告アカウントID+広告ID", "スキルプラス", "未実装", "raw本体はこれから"],
+            ["x_entity_metadata", "広告メタ情報", "補完", "X Ads API", "line_items / promoted_tweets", "未作成", "X", "1広告ID x 最新メタ", "広告ID", "スキルプラス", "未実装", "広告名 URL CR補完想定"],
+        ],
+    },
+    "Xデータ追加ルール": {
+        "headers": RULE_HEADERS,
+        "rows": [
+            ["x_raw_append", "X", "スキルプラス事業", "1日 x 1広告ID", "追記", "日付+広告アカウントID+広告ID", "重複行は追加しない", "値なしは空欄保持", "raw未実装", "未実装", "今後実装"],
+            ["x_metadata_fill", "X", "URLやCRが必要な広告", "1広告ID", "補完", "広告ID", "public API後に補完", "未取得は内部サマリーへ残す", "raw未実装", "未実装", "今後実装"],
+        ],
+    },
+}
+
 # タブ色（RGB 0-1）
 TAB_COLOR_BLUE = {"red": 0.357, "green": 0.584, "blue": 0.976}
 
@@ -318,6 +399,36 @@ def apply_formatting(sh, ws, headers, include_table_styles=True, include_protect
     sh.batch_update({"requests": requests})
 
 
+def ensure_reference_tab(sh, existing_sheets, tab_name, headers, rows):
+    values = [headers] + rows
+    ws = existing_sheets.get(tab_name)
+    target_rows = max(len(values) + 20, 100)
+    if ws is None:
+        ws = sh.add_worksheet(title=tab_name, rows=target_rows, cols=len(headers))
+    else:
+        if ws.row_count < target_rows:
+            ws.resize(rows=target_rows)
+        if ws.col_count < len(headers):
+            ws.resize(cols=len(headers))
+    ws.clear()
+    ws.update(range_name="A1", values=values, value_input_option="RAW")
+    apply_formatting(sh, ws, headers)
+    return ws
+
+
+def ensure_management_tabs(sh):
+    current_sheets = {ws.title: ws for ws in sh.worksheets()}
+    for tab_name, config in MANAGEMENT_TABS.items():
+        ensure_reference_tab(
+            sh,
+            current_sheets,
+            tab_name,
+            config["headers"],
+            config["rows"],
+        )
+        current_sheets = {ws.title: ws for ws in sh.worksheets()}
+
+
 def main():
     reformat_only = "--reformat-only" in sys.argv
     client = get_client("kohara")
@@ -333,6 +444,7 @@ def main():
             current_headers = ws.row_values(1) or headers
             apply_formatting(sh, ws, current_headers, include_table_styles=False, include_protection=False)
             print(f"[{tab_name}] 既存タブにヘッダー体裁を再適用。")
+        ensure_management_tabs(sh)
         print("\n既存タブの再整形完了！")
         return
 
@@ -352,6 +464,8 @@ def main():
         apply_formatting(sh, ws, headers)
 
         print(f"[{tab_name}] 書式設定完了（{len(headers)}列）")
+
+    ensure_management_tabs(sh)
 
     # デフォルトの「シート1」を削除
     existing_sheets = {ws.title: ws for ws in sh.worksheets()}
