@@ -6,6 +6,8 @@ from __future__ import annotations
 import re
 import sys
 import time
+import json
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
@@ -17,6 +19,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
 from sheets_manager import get_client  # noqa: E402
+from line_notify import send as send_line_notify  # noqa: E402
 
 
 MASTER_SHEET_ID = "1kxUbLqhnzLC1Pg0ASVgU135bnx4Rsv_jP0pqGC0R69w"
@@ -29,6 +32,7 @@ REFERENCE_TAB = "シート1"
 
 PAYMENT_COLLECTION_SHEET_ID = "1FfGM0HpofM8yayhJniArXp_vQ6-4JRvlp6rxDt-eHTI"
 PAYMENT_COLLECTION_TAB = "決済データ"
+PAYMENT_MAPPING_ALERT_STATE_PATH = BASE_DIR / "data" / "payment_product_mapping_alert_state.json"
 
 BUSINESS_SKILLPLUS = "スキルプラス事業"
 BUSINESS_ADDNESS = "Addness事業"
@@ -144,6 +148,20 @@ def with_sheets_retry(action, description: str):
     if last_exc:
         raise last_exc
     raise RuntimeError(f"{description} に失敗しました")
+
+
+def load_alert_state() -> dict:
+    if not PAYMENT_MAPPING_ALERT_STATE_PATH.exists():
+        return {}
+    try:
+        return json.loads(PAYMENT_MAPPING_ALERT_STATE_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def save_alert_state(payload: dict) -> None:
+    PAYMENT_MAPPING_ALERT_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PAYMENT_MAPPING_ALERT_STATE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 PRODUCT_RULES: dict[str, ProductRule] = {
@@ -851,6 +869,74 @@ def build_mapping_rows(
     return rows
 
 
+def build_mapping_alert_summary(rows: list[list[str]]) -> dict[str, object]:
+    unresolved_statuses = {"要確認", "商品マスタ未登録", "不明"}
+    unresolved_rows = [row for row in rows[1:] if len(row) > 10 and row[10] in unresolved_statuses]
+    counts: dict[str, int] = {status: 0 for status in unresolved_statuses}
+    normalized_items: list[dict[str, str]] = []
+    for row in unresolved_rows:
+        status = row[10]
+        counts[status] += 1
+        normalized_items.append(
+            {
+                "source": row[0],
+                "raw_name": row[1],
+                "count": row[2],
+                "amount": row[3],
+                "status": status,
+                "candidate": row[4],
+                "condition": row[11],
+                "reason": row[12],
+                "note": row[13],
+            }
+        )
+    digest_source = json.dumps(normalized_items, ensure_ascii=False, sort_keys=True)
+    signature = hashlib.sha256(digest_source.encode("utf-8")).hexdigest()
+    return {
+        "counts": counts,
+        "items": normalized_items,
+        "signature": signature,
+        "total": len(normalized_items),
+    }
+
+
+def maybe_notify_mapping_issues(summary: dict[str, object]) -> None:
+    total = int(summary.get("total", 0) or 0)
+    current_signature = str(summary.get("signature") or "")
+    state = load_alert_state()
+    previous_signature = str(state.get("signature") or "")
+
+    save_alert_state(
+        {
+            "signature": current_signature,
+            "counts": summary.get("counts", {}),
+            "updated_at": time.strftime("%Y/%m/%d %H:%M"),
+        }
+    )
+
+    if total == 0 or current_signature == previous_signature:
+        return
+
+    counts = summary.get("counts", {})
+    items = summary.get("items", [])
+    lines = [
+        "決済商品変換マスタに未確定項目があります。",
+        f"要確認 {counts.get('要確認', 0)}件 / 商品マスタ未登録 {counts.get('商品マスタ未登録', 0)}件 / 不明 {counts.get('不明', 0)}件",
+        "確認場所: 【アドネス株式会社】マスタデータ > 決済商品変換マスタ",
+        "主な項目:",
+    ]
+    for item in items[:5]:
+        raw_name = item["raw_name"] or "(空欄)"
+        lines.append(
+            f"- {item['source']} | {raw_name} | {item['status']} | {item['amount']}"
+        )
+    lines.append("対応: 正式商品名と区分を確認して更新してください。")
+    try:
+        send_line_notify("\n".join(lines))
+    except Exception:
+        pass
+
+
 def apply_basic_formatting(ws: gspread.Worksheet, widths: list[int]) -> None:
     with_sheets_retry(lambda: ws.freeze(rows=1), f"{ws.title} freeze")
     with_sheets_retry(lambda: ws.set_basic_filter(), f"{ws.title} filter")
@@ -1009,7 +1095,7 @@ def apply_mapping_status_formatting(ws: gspread.Worksheet, rows: list[list[str]]
     with_sheets_retry(lambda: ws.spreadsheet.batch_update({"requests": requests}), f"{ws.title} ステータス色反映")
 
 
-def sync_payment_product_master_structure(gc: Optional[gspread.Client] = None) -> dict[str, int]:
+def sync_payment_product_master_structure(gc: Optional[gspread.Client] = None, notify_if_pending: bool = True) -> dict[str, int]:
     gc = gc or get_client()
     master_ss = with_sheets_retry(lambda: gc.open_by_key(MASTER_SHEET_ID), "マスタデータ取得")
     product_ws = with_sheets_retry(lambda: master_ss.worksheet(MASTER_PRODUCT_TAB), f"{MASTER_PRODUCT_TAB} 取得")
@@ -1031,11 +1117,15 @@ def sync_payment_product_master_structure(gc: Optional[gspread.Client] = None) -
     aggregates = aggregate_live_payment_products(payment_ws)
     mapping_rows = build_mapping_rows(aggregates, product_index, reference_mapping)
     write_mapping_rows(mapping_ws, mapping_rows)
+    mapping_summary = build_mapping_alert_summary(mapping_rows)
+    if notify_if_pending:
+        maybe_notify_mapping_issues(mapping_summary)
 
     return {
         "product_count": len(product_index),
         "review_row_count": max(len(review_rows) - 1, 0),
         "mapping_row_count": max(len(mapping_rows) - 1, 0),
+        "mapping_pending_count": int(mapping_summary.get("total", 0) or 0),
     }
 
 
