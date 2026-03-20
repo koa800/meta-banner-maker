@@ -7,7 +7,7 @@
 - 内部ロジックでは 1資金イベント単位で正規化するが、明細タブは常設しない
 - 日別タブにはスキルプラス事業だけを出し、`完全不明` は入れない
 - `返金額` は相談窓口シートを案件正本にし、raw 決済は突合と補完にだけ使う
-- `解約請求額` は中途解約タブの負値を正本にする
+- `解約請求回収額` は中途解約タブの負値のうち、回収済みと確認できたものだけを正本にする
 """
 
 from __future__ import annotations
@@ -116,6 +116,28 @@ KIRABOSHI_NON_CUSTOMER_PATTERNS = (
     "ﾆﾎﾝﾌﾟﾗﾑ",
     "ｽﾄﾗｲﾌﾟ",
     "ﾓｯｼｭ",
+)
+CLAIM_COLLECTED_POSITIVE_MARKERS = (
+    "入金済",
+    "入金確認済",
+    "振込済",
+    "振込み済",
+    "振り込み済",
+    "支払い済",
+    "支払済",
+    "お支払い済",
+    "お支払い済み",
+    "振り込まれております",
+    "振り込まれており",
+    "振込完了",
+)
+CLAIM_COLLECTED_NEGATIVE_MARKERS = (
+    "未入金",
+    "未払い",
+    "未支払",
+    "未振込",
+    "振り込まれておりません",
+    "振り込まれていません",
 )
 SKILLPLUS_STUDENT_EXCLUDED_TABS = {"最新元データ一覧"}
 OTHER_BUSINESS_MATCH_LOOKBACK_DAYS = 30
@@ -447,6 +469,36 @@ def charge_is_recurring(charge_type: str, recurring_id: str) -> bool:
     if recurring_id:
         return True
     return normalized in {"リカーリング", "定期課金"}
+
+
+def claim_is_collected(*texts: object) -> bool:
+    normalized = normalize_compact_text(" / ".join(normalize_text(text) for text in texts))
+    if not normalized:
+        return False
+    negative_markers = [normalize_compact_text(marker) for marker in CLAIM_COLLECTED_NEGATIVE_MARKERS]
+    positive_markers = [normalize_compact_text(marker) for marker in CLAIM_COLLECTED_POSITIVE_MARKERS]
+    if any(marker in normalized for marker in negative_markers):
+        return False
+    return any(marker in normalized for marker in positive_markers)
+
+
+def claim_case_dedupe_key(
+    *,
+    email: str,
+    full_name: str,
+    line_name: str,
+    explicit_code: str,
+    contract_date: str,
+    amount: int,
+) -> tuple[str, ...]:
+    return (
+        email,
+        full_name,
+        line_name,
+        explicit_code,
+        contract_date,
+        str(abs(amount)),
+    )
 
 
 def header_index_by_exact(headers: list[str], candidates: Iterable[str]) -> Optional[int]:
@@ -1418,6 +1470,7 @@ def collect_cs_refund_and_claims(
     daily = defaultdict(Counter)
     refund_cases: list[RefundCase] = []
     stats = Counter()
+    seen_claim_keys: set[tuple[str, ...]] = set()
 
     for cfg in tab_configs:
         ws = cs_ss.worksheet(cfg["tab"])
@@ -1442,6 +1495,7 @@ def collect_cs_refund_and_claims(
             full_name = normalize_name_key(padded[cfg["full_name_col"]])
             line_name = normalize_name_key(padded[cfg["line_name_col"]])
             explicit_code = normalize_text(padded[cfg["product_col"]])
+            contract_date = normalize_date(padded[30])
             text_blob = " / ".join(normalize_text(padded[col]) for col in cfg["text_cols"])
             if not case_is_skillplus(
                 explicit_code=explicit_code,
@@ -1477,6 +1531,19 @@ def collect_cs_refund_and_claims(
                 stats["refund_amount"] += amount
                 stats["refund_count"] += 1
             else:
+                if not claim_is_collected(padded[32], padded[33], padded[34]):
+                    continue
+                dedupe_key = claim_case_dedupe_key(
+                    email=email,
+                    full_name=full_name,
+                    line_name=line_name,
+                    explicit_code=explicit_code,
+                    contract_date=contract_date,
+                    amount=amount,
+                )
+                if dedupe_key in seen_claim_keys:
+                    continue
+                seen_claim_keys.add(dedupe_key)
                 daily[event_date]["claim_amount"] += abs(amount)
                 daily[event_date]["claim_count"] += 1
                 stats["claim_amount"] += abs(amount)
@@ -1804,12 +1871,12 @@ def build_daily_rows(
             "着金売上",
             "返金額",
             "純着金売上",
-            "解約請求額",
+            "解約請求回収額",
             "新規着金件数",
             "継続売上件数",
             "着金件数",
             "返金件数",
-            "解約請求件数",
+            "解約請求回収件数",
         ]]
         stats = {
             "new_sales_amount_total": 0,
@@ -1842,12 +1909,12 @@ def build_daily_rows(
         "着金売上",
         "返金額",
         "純着金売上",
-        "解約請求額",
+        "解約請求回収額",
         "新規着金件数",
         "継続売上件数",
         "着金件数",
         "返金件数",
-        "解約請求件数",
+        "解約請求回収件数",
     ]]
 
     new_sales_amount_total = 0
@@ -1934,12 +2001,12 @@ def build_summary_rows(stats: dict, checked_at: str) -> List[List[object]]:
         ["累計着金売上", normalize_display_amount(stats["sales_amount_total"]), "新規着金売上 + 継続売上"],
         ["累計返金額", normalize_display_amount(stats["refund_amount_total"]), "相談窓口シート案件正本 + raw 補完の返金合計"],
         ["累計純着金売上", normalize_display_amount(stats["net_sales_total"]), "着金売上 - 返金額"],
-        ["累計解約請求額", normalize_display_amount(stats["claim_amount_total"]), "中途解約タブの請求確定額"],
+        ["累計解約請求回収額", normalize_display_amount(stats["claim_amount_total"]), "中途解約タブのうち回収済みと確認できた請求額"],
         ["累計新規着金件数", normalize_display_count(stats["new_sales_count_total"]), "新規契約として扱う着金件数"],
         ["累計継続売上件数", normalize_display_count(stats["continuing_sales_count_total"]), "継続売上として扱う着金件数"],
         ["累計着金件数", normalize_display_count(stats["sales_count_total"]), "新規着金件数 + 継続売上件数"],
         ["累計返金件数", normalize_display_count(stats["refund_count_total"]), "返金案件数 + raw 補完件数"],
-        ["累計解約請求件数", normalize_display_count(stats["claim_count_total"]), "解約請求案件数"],
+        ["累計解約請求回収件数", normalize_display_count(stats["claim_count_total"]), "回収済みと確認できた解約請求案件数"],
         ["完全不明金額", normalize_display_amount(stats["complete_unknown_amount"]), "スキルプラス事業と確定できず日別へ入れていない売上"],
         ["完全不明件数", normalize_display_count(stats["complete_unknown_count"]), "完全不明として除外した売上件数"],
     ]
@@ -1986,17 +2053,17 @@ def build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats: dict, che
         ],
         [
             DAILY_TAB_NAME,
-            "解約請求額 / 解約請求件数",
+            "解約請求回収額 / 解約請求回収件数",
             "1",
             f'=HYPERLINK("{get_tab_url(CS_SHEET_ID, midterm_ws)}","お客様相談窓口_進捗管理シート")',
             "管理用_20250125-中途解約",
             "返金額/請求額 / 返金or支払い予定日",
-            "中途解約タブの負値を請求額として扱う",
+            "中途解約タブの負値のうち、回収済みと確認できた請求だけを扱う",
             "正常",
             f"'{checked_at}",
             stats["claim_count_total"],
             0,
-            "請求回収はまだ通常売上へ混ぜない",
+            "回収済みの請求だけを別列で持ち、通常売上へは混ぜない",
         ],
         [
             DAILY_TAB_NAME,
@@ -2010,7 +2077,7 @@ def build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats: dict, che
             f"'{checked_at}",
             stats["daily_row_count"],
             0,
-            "解約請求額は別列で持つ",
+            "解約請求回収額は別列で持つ",
         ],
         [
             DAILY_TAB_NAME,
@@ -2039,8 +2106,8 @@ def build_rule_rows() -> List[List[object]]:
         ["着金売上", "新規着金売上と継続売上の合計を持つ", "総額は保持するが、広告判断では新規着金売上を優先して使う"],
         ["返金額", "相談窓口シートの返金案件を正本にする", "相談窓口に載っていない raw 返金だけを補完採用する"],
         ["返金件数", "返金イベント件数ではなく返金案件数で持つ", "分割返金でも1案件として扱う"],
-        ["解約請求額", "中途解約タブの負値を請求額として持つ", "通常の着金売上には混ぜない"],
-        ["日付", "実入出金日ではなく、確定日を使う", "着金売上はイベント日時、返金額と解約請求額は相談窓口上の確定日"],
+        ["解約請求回収額", "中途解約タブの負値のうち、入金済み・振込済みなど回収済みと確認できた請求だけを持つ", "通常の着金売上には混ぜない"],
+        ["日付", "実入出金日ではなく、確定日を使う", "着金売上はイベント日時、返金額は相談窓口上の確定日、解約請求回収額は回収済みと確認できた案件の日付を使う"],
         ["商品未特定", "銀行振込・信販の空欄成功売上は、受講生データ元タブでスキルプラス受講生と確認でき、かつ他事業成約リストと競合しないものだけ着金売上へ含める", "どのプランか不明でも、一次データ起点の根拠があるものだけ採用する"],
         ["頭金お支払い", "UnivaPay の空欄でもメタデータに `頭金お支払い` があるものはスキルプラス販売として新規着金売上へ入れる", "過去運用上 100% スキルプラス販売とみなす"],
         ["完全不明", "スキルプラス事業と確定できない売上は日別に入れない", "他事業成約リストと競合する売上、または一次データ根拠が弱い売上は売上サマリーでだけ監視する"],
@@ -2150,7 +2217,7 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
             print("【dry-run】累計着金売上:", stats["sales_amount_total"])
             print("【dry-run】累計返金額:", stats["refund_amount_total"])
             print("【dry-run】累計純着金売上:", stats["net_sales_total"])
-            print("【dry-run】累計解約請求額:", stats["claim_amount_total"])
+            print("【dry-run】累計解約請求回収額:", stats["claim_amount_total"])
             print("【dry-run】累計新規着金件数:", stats["new_sales_count_total"])
             print("【dry-run】累計継続売上件数:", stats["continuing_sales_count_total"])
             print("【dry-run】完全不明金額:", stats["complete_unknown_amount"])
