@@ -254,10 +254,22 @@ def build_recent_day_formula(column_letter: str, offset: int, date_col_letter: s
     )
 
 
+def build_latest_actual_date_formula() -> str:
+    return (
+        '=IFERROR(MAX(FILTER(\'日別数値\'!$A$2:$A,'
+        '\'日別数値\'!$A$2:$A<>"",'
+        '\'日別数値\'!$A$2:$A<=TODAY(),'
+        'BYROW(\'日別数値\'!$B$2:$V,LAMBDA(r,SUM(N(r))>0)))),'
+        'IFERROR(MAX(FILTER(\'日別数値\'!$A$2:$A,\'日別数値\'!$A$2:$A<>"")),""))'
+    )
+
+
 def build_recent_date_formula(offset: int) -> str:
     return (
         '=IFERROR(INDEX(SORT(FILTER(\'日別数値\'!$A$2:$A,'
-        '\'日別数値\'!$A$2:$A<>""),1,FALSE),'
+        '\'日別数値\'!$A$2:$A<>"",'
+        '\'日別数値\'!$A$2:$A<=TODAY(),'
+        'BYROW(\'日別数値\'!$G$2:$O,LAMBDA(r,SUM(N(r))>0))),1,FALSE),'
         f'{offset + 1}),"")'
     )
 
@@ -951,9 +963,9 @@ def build_summary_rows(
     rows = [[""] * 60 for _ in range(120)]
     visible_rows = [
         ["項目", "値", "正本シート", "状態", "メモ"],
-        ["集計開始日", '''=IFERROR(EOMONTH(MAX(FILTER('日別数値'!A:A,'日別数値'!A:A<>"")),-1)+1,"")''', "", "", "手入力で上書き可"],
-        ["集計終了日", '''=IFERROR(MAX(FILTER('日別数値'!A:A,'日別数値'!A:A<>"")),"")''', "", "", "手入力で上書き可"],
-        ["最終更新日", '''=IFERROR(MAX(FILTER('日別数値'!A:A,'日別数値'!A:A<>"")),"")''', "【アドネス株式会社】KPIダッシュボード / 日別数値", "接続中", ""],
+        ["集計開始日", '''=IF($B$3="","",EOMONTH($B$3,-1)+1)''', "", "", "手入力で上書き可"],
+        ["集計終了日", build_latest_actual_date_formula(), "", "", "today時点の最新実績日"],
+        ["最終更新日", '''=IF($B$3="","",$B$3)''', "【アドネス株式会社】KPIダッシュボード / 日別数値", "接続中", ""],
         ["集客数", '''=IF(OR($B$2="",$B$3=""),"",SUMIFS('日別数値'!B:B,'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3))''', "【アドネス株式会社】集客データ_メール集計（加工） / 日別メール登録件数", "一部接続", "現状はメールのみ。LINE未接続"],
         ["集客数（UU）", '''=IF(OR($B$2="",$B$3=""),"",SUMIFS('日別数値'!C:C,'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3))''', "【アドネス株式会社】集客データ_メール集計（加工） / 日別メール登録件数（UU）", "一部接続", "現状はメールのみ。LINE未接続"],
         ["個別予約数", '''=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS('日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3,'日別数値'!D:D,"<>")=0,"",SUMIFS('日別数値'!D:D,'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)))''', "【アドネス株式会社】個別面談データ（加工） / 日別個別予約数", booking_state, "現行は botログ。継続体制では Slack #個別予約通知 から作る 個別予約通知ログへ移行する"],
@@ -1015,7 +1027,7 @@ def build_summary_rows(
         "ROAS（新規）",
         "ROAS（合計）",
     ]
-    rows[1][19] = '''=IFERROR(MAX(FILTER('日別数値'!$A$2:$A,'日別数値'!$A$2:$A<>""))-WEEKDAY(MAX(FILTER('日別数値'!$A$2:$A,'日別数値'!$A$2:$A<>"")),2)+1-77,"")'''
+    rows[1][19] = '''=IF($B$3="","",$B$3-WEEKDAY($B$3,2)+1-77)'''
     for offset in range(12):
         row_index = offset + 1
         row_number = row_index + 1

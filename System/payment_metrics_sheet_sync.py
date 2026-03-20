@@ -99,6 +99,7 @@ WRITE_RETRY_SECONDS = (5, 10, 20, 40)
 START_DATE = datetime(2025, 1, 1)
 START_DATE_TEXT = START_DATE.strftime("%Y/%m/%d")
 DATE_RE = re.compile(r"(\d{4})[/-](\d{1,2})[/-](\d{1,2})")
+MONTH_DAY_RE = re.compile(r"(?<!\d)(\d{1,2})[/-](\d{1,2})(?!\d)")
 AMOUNT_CONDITION_RE = re.compile(r"(?:イベント金額|1件あたり)\s*=\s*¥?([\d,]+)")
 BLANK_SKILLPLUS_RECURRING_PRODUCT_NAME = "スキルプラス継続利用"
 UNKNOWN_SKILLPLUS_MAIN_PRODUCT_NAME = "スキルプラス本体（プラン不明）"
@@ -449,6 +450,55 @@ def parse_date(raw: str) -> datetime | None:
     return datetime.strptime(normalized, "%Y/%m/%d")
 
 
+def pick_actual_case_date(primary_date_text: str, fallback_date_text: str) -> str:
+    primary_dt = parse_date(primary_date_text)
+    fallback_dt = parse_date(fallback_date_text)
+    today = datetime.now().date()
+
+    if primary_dt and primary_dt.date() <= today:
+        return primary_dt.strftime("%Y/%m/%d")
+    if fallback_dt and fallback_dt.date() <= today:
+        return fallback_dt.strftime("%Y/%m/%d")
+    if primary_dt:
+        return primary_dt.strftime("%Y/%m/%d")
+    if fallback_dt:
+        return fallback_dt.strftime("%Y/%m/%d")
+    return ""
+
+
+def extract_collected_date_from_text(base_date_text: str, *texts: object) -> str:
+    base_dt = parse_date(base_date_text)
+    for text in texts:
+        raw_text = normalize_text(text)
+        if not raw_text:
+            continue
+        full_date = normalize_date(raw_text)
+        if full_date:
+            return full_date
+        if not base_dt:
+            continue
+        month_day_matches = MONTH_DAY_RE.findall(raw_text)
+        if not month_day_matches:
+            continue
+        month, day = month_day_matches[-1]
+        try:
+            inferred_dt = datetime(base_dt.year, int(month), int(day))
+        except ValueError:
+            continue
+        if inferred_dt - base_dt > timedelta(days=45):
+            inferred_dt = datetime(base_dt.year - 1, int(month), int(day))
+        return inferred_dt.strftime("%Y/%m/%d")
+    return ""
+
+
+def pick_claim_collected_date(primary_date_text: str, fallback_date_text: str, *texts: object) -> str:
+    base_date_text = fallback_date_text or primary_date_text
+    explicit_date = extract_collected_date_from_text(base_date_text, *texts)
+    if explicit_date:
+        return explicit_date
+    return pick_actual_case_date(primary_date_text, fallback_date_text)
+
+
 def parse_amount(raw: object) -> int:
     text = normalize_text(raw)
     if not text:
@@ -674,23 +724,33 @@ def worksheet_write_with_retry(description: str, func) -> None:
     run_write_with_retry(description, func)
 
 
-def get_all_values_with_retry(ws) -> List[List[str]]:
+def run_read_with_retry(description: str, func):
+    last_error = None
     for attempt in range(4):
         try:
-            return ws.get_all_values()
+            return func()
         except Exception as exc:
             message = str(exc)
             if not is_retryable_sheets_message(message) or attempt == 3:
                 raise
+            last_error = exc
             wait_seconds = 65 * (attempt + 1)
-            print(f"読み取り一時エラー: {ws.title} を {wait_seconds} 秒待って再試行")
+            print(f"{description}: Sheets の一時読み取りエラーのため {wait_seconds} 秒後に再試行します。")
             time.sleep(wait_seconds)
-    return []
+    if last_error:
+        raise last_error
+
+
+def get_all_values_with_retry(ws) -> List[List[str]]:
+    return run_read_with_retry(f"読み取り一時エラー: {ws.title}", ws.get_all_values)
 
 
 def get_or_create_target_spreadsheet(gc) -> gspread.Spreadsheet:
     try:
-        spreadsheet = gc.open_by_key(TARGET_SPREADSHEET_ID)
+        spreadsheet = run_read_with_retry(
+            "スキルプラス着金データ（加工）シートの取得",
+            lambda: gc.open_by_key(TARGET_SPREADSHEET_ID),
+        )
     except SpreadsheetNotFound:
         spreadsheet = run_write_with_retry(
             "スキルプラス着金データ（加工）シートの作成",
@@ -701,7 +761,10 @@ def get_or_create_target_spreadsheet(gc) -> gspread.Spreadsheet:
 
 
 def ensure_spreadsheet_title(spreadsheet) -> None:
-    metadata = spreadsheet.fetch_sheet_metadata({"fields": "properties.title"})
+    metadata = run_read_with_retry(
+        "スキルプラス着金データ（加工）シートのメタデータ取得",
+        lambda: spreadsheet.fetch_sheet_metadata({"fields": "properties.title"}),
+    )
     title = metadata.get("properties", {}).get("title", "")
     if title == TARGET_SPREADSHEET_TITLE:
         return
@@ -1099,11 +1162,14 @@ def apply_status_cell_colors(spreadsheet, ws, rows: List[List[object]], status_c
 def apply_protections(spreadsheet, tabs) -> None:
     protected_names = list(TAB_SPECS.keys())
     target_sheet_ids = {tabs[name].id for name in protected_names}
-    metadata = spreadsheet.fetch_sheet_metadata(
-        {
-            "includeGridData": False,
-            "fields": "sheets(properties.sheetId,protectedRanges(protectedRangeId,description,range(sheetId,startRowIndex,endRowIndex,startColumnIndex,endColumnIndex)))",
-        }
+    metadata = run_read_with_retry(
+        "スキルプラス着金データ（加工）の保護メタデータ取得",
+        lambda: spreadsheet.fetch_sheet_metadata(
+            {
+                "includeGridData": False,
+                "fields": "sheets(properties.sheetId,protectedRanges(protectedRangeId,description,range(sheetId,startRowIndex,endRowIndex,startColumnIndex,endColumnIndex)))",
+            }
+        ),
     )
 
     requests = []
@@ -1689,11 +1755,6 @@ def collect_cs_refund_and_claims(
             if amount == 0:
                 continue
 
-            event_date = normalize_date(padded[cfg["date_col"]]) or normalize_date(padded[1])
-            event_dt = parse_date(event_date)
-            if not event_dt or event_dt < START_DATE:
-                continue
-
             email = normalize_email(padded[cfg["email_col"]])
             phone = normalize_phone("")
             full_name = normalize_name_key(padded[cfg["full_name_col"]])
@@ -1701,6 +1762,18 @@ def collect_cs_refund_and_claims(
             explicit_code = normalize_text(padded[cfg["product_col"]])
             contract_date = normalize_date(padded[30])
             text_blob = " / ".join(normalize_text(padded[col]) for col in cfg["text_cols"])
+
+            primary_date = normalize_date(padded[cfg["date_col"]])
+            completed_date = normalize_date(padded[1])
+            if amount > 0:
+                event_date = pick_actual_case_date(primary_date, completed_date)
+            else:
+                event_date = pick_claim_collected_date(primary_date, completed_date, padded[32], padded[33], padded[34])
+
+            event_dt = parse_date(event_date)
+            if not event_dt or event_dt < START_DATE:
+                continue
+
             if not case_is_skillplus(
                 explicit_code=explicit_code,
                 text_blob=text_blob,
