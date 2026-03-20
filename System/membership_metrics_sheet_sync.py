@@ -105,6 +105,25 @@ class FileLock:
         self.lock_path = Path(lock_path)
         self.timeout_seconds = timeout_seconds
 
+    @staticmethod
+    def _extract_pid(lock_data: dict) -> int | None:
+        locked_by = str(lock_data.get("locked_by", ""))
+        match = re.search(r"PID:\s*(\d+)", locked_by)
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _pid_is_running(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
     def acquire(self) -> None:
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
         if self.lock_path.exists():
@@ -112,7 +131,10 @@ class FileLock:
                 lock_data = json.loads(self.lock_path.read_text())
                 locked_at = datetime.fromisoformat(lock_data.get("locked_at", ""))
                 elapsed = (datetime.now() - locked_at).total_seconds()
-                if elapsed < self.timeout_seconds:
+                locked_pid = self._extract_pid(lock_data)
+                if locked_pid and not self._pid_is_running(locked_pid):
+                    self.lock_path.unlink(missing_ok=True)
+                elif elapsed < self.timeout_seconds:
                     raise RuntimeError(
                         f"会員データ（加工）の更新はロック中です: {lock_data.get('locked_by', '不明')} "
                         f"({int(elapsed)}秒前に開始)"
@@ -248,9 +270,30 @@ def normalize_phone(value: object) -> str:
     return re.sub(r"\D", "", text)
 
 
-def is_quota_error(exc: APIError) -> bool:
-    status_code = getattr(getattr(exc, "response", None), "status_code", None)
-    return status_code == 429 or "Quota exceeded" in str(exc)
+TRANSIENT_SHEETS_STATUS_CODES = {429, 500, 502, 503, 504}
+TRANSIENT_SHEETS_ERROR_MARKERS = (
+    "quota exceeded",
+    "resource_exhausted",
+    "service is currently unavailable",
+    "backend error",
+    "internal error",
+    "try again later",
+)
+
+
+def is_retryable_sheets_error(exc: APIError) -> bool:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if status_code in TRANSIENT_SHEETS_STATUS_CODES:
+        return True
+    return any(marker in str(exc).lower() for marker in TRANSIENT_SHEETS_ERROR_MARKERS)
+
+
+def is_retryable_sheets_message(message: str) -> bool:
+    normalized = str(message).lower()
+    if any(code in normalized for code in ("429", "500", "502", "503", "504")):
+        return True
+    return any(marker in normalized for marker in TRANSIENT_SHEETS_ERROR_MARKERS)
 
 
 def run_write_with_retry(description: str, func):
@@ -262,10 +305,10 @@ def run_write_with_retry(description: str, func):
         try:
             return func()
         except APIError as exc:
-            if not is_quota_error(exc) or attempt == len(waits):
+            if not is_retryable_sheets_error(exc) or attempt == len(waits):
                 raise
             last_error = exc
-            print(f"{description}: Sheets の書き込み回数制限に当たったため再試行します。")
+            print(f"{description}: Sheets の一時エラーのため再試行します。")
     if last_error:
         raise last_error
 
@@ -284,11 +327,10 @@ def get_all_values_with_retry(ws) -> List[List[str]]:
             return ws.get_all_values()
         except Exception as exc:
             message = str(exc)
-            is_quota = "429" in message or "Quota exceeded" in message
-            if not is_quota or attempt == 3:
+            if not is_retryable_sheets_message(message) or attempt == 3:
                 raise
             wait_seconds = 65 * (attempt + 1)
-            print(f"読み取り上限に到達: {ws.title} を {wait_seconds} 秒待って再試行")
+            print(f"読み取り一時エラー: {ws.title} を {wait_seconds} 秒待って再試行")
             time.sleep(wait_seconds)
     return []
 

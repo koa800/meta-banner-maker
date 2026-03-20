@@ -11,9 +11,12 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List
+
+from gspread.exceptions import APIError
 
 from sheets_manager import get_client
 
@@ -26,6 +29,16 @@ EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[A-Za-z]{2,}$")
 RULE_CONTAINS_RE = re.compile(r"(.+?)\s*を含む")
 RULE_EXACT_RE = re.compile(r"(.+?)\s*と一致")
 RULE_PREFIX_RE = re.compile(r"(.+?)\s*で始まる")
+READ_RETRY_SECONDS = (0, 5, 10, 20, 40)
+TRANSIENT_SHEETS_STATUS_CODES = {429, 500, 502, 503, 504}
+TRANSIENT_SHEETS_ERROR_MARKERS = (
+    "quota exceeded",
+    "resource_exhausted",
+    "service is currently unavailable",
+    "backend error",
+    "internal error",
+    "try again later",
+)
 
 
 def normalize_email(value: str) -> str:
@@ -60,6 +73,30 @@ def normalize_date(value: str) -> str:
 
 def normalize_text(value: str) -> str:
     return str(value or "").strip().lower()
+
+
+def is_retryable_sheets_error(exc: Exception) -> bool:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if status_code in TRANSIENT_SHEETS_STATUS_CODES:
+        return True
+    return any(marker in str(exc).lower() for marker in TRANSIENT_SHEETS_ERROR_MARKERS)
+
+
+def run_sheets_read_with_retry(action, description: str):
+    last_error = None
+    for wait_seconds in READ_RETRY_SECONDS:
+        if wait_seconds:
+            time.sleep(wait_seconds)
+        try:
+            return action()
+        except Exception as exc:
+            last_error = exc
+            if not is_retryable_sheets_error(exc) or wait_seconds == READ_RETRY_SECONDS[-1]:
+                raise
+    if last_error:
+        raise last_error
+    raise RuntimeError(f"{description} に失敗しました")
 
 
 def scope_matches(rule_scope: str, target_scope: str) -> bool:
@@ -122,12 +159,24 @@ class CommonExclusionMaster:
             return _CACHE[cache_key]
 
         gc = get_client(account)
-        spreadsheet = gc.open_by_key(COMMON_EXCLUSION_MASTER_SHEET_ID)
-        exclusion_ws = spreadsheet.worksheet(EXCLUSION_TAB_NAME)
-        unconditional_ws = spreadsheet.worksheet(UNCONDITIONAL_RULE_TAB_NAME)
+        spreadsheet = run_sheets_read_with_retry(
+            lambda: gc.open_by_key(COMMON_EXCLUSION_MASTER_SHEET_ID),
+            "共通除外マスタ取得",
+        )
+        exclusion_ws = run_sheets_read_with_retry(
+            lambda: spreadsheet.worksheet(EXCLUSION_TAB_NAME),
+            f"{EXCLUSION_TAB_NAME} 取得",
+        )
+        unconditional_ws = run_sheets_read_with_retry(
+            lambda: spreadsheet.worksheet(UNCONDITIONAL_RULE_TAB_NAME),
+            f"{UNCONDITIONAL_RULE_TAB_NAME} 取得",
+        )
 
-        exclusion_rows = exclusion_ws.get_all_values()
-        unconditional_rows = unconditional_ws.get_all_values()
+        exclusion_rows = run_sheets_read_with_retry(lambda: exclusion_ws.get_all_values(), f"{EXCLUSION_TAB_NAME} 読み取り")
+        unconditional_rows = run_sheets_read_with_retry(
+            lambda: unconditional_ws.get_all_values(),
+            f"{UNCONDITIONAL_RULE_TAB_NAME} 読み取り",
+        )
 
         entries: List[ExclusionEntry] = []
         for row in exclusion_rows[1:]:
@@ -253,4 +302,3 @@ class CommonExclusionMaster:
             scope=scope,
             event_date=event_date,
         ).excluded
-

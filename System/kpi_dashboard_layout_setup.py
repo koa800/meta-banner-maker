@@ -294,9 +294,30 @@ def normalize_date(raw: str) -> str:
     return ""
 
 
-def is_quota_error(exc: APIError) -> bool:
-    status_code = getattr(getattr(exc, "response", None), "status_code", None)
-    return status_code == 429 or "Quota exceeded" in str(exc)
+TRANSIENT_SHEETS_STATUS_CODES = {429, 500, 502, 503, 504}
+TRANSIENT_SHEETS_ERROR_MARKERS = (
+    "quota exceeded",
+    "resource_exhausted",
+    "service is currently unavailable",
+    "backend error",
+    "internal error",
+    "try again later",
+)
+
+
+def is_retryable_sheets_error(exc: APIError) -> bool:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if status_code in TRANSIENT_SHEETS_STATUS_CODES:
+        return True
+    return any(marker in str(exc).lower() for marker in TRANSIENT_SHEETS_ERROR_MARKERS)
+
+
+def is_retryable_sheets_message(message: str) -> bool:
+    normalized = str(message).lower()
+    if any(code in normalized for code in ("429", "500", "502", "503", "504")):
+        return True
+    return any(marker in normalized for marker in TRANSIENT_SHEETS_ERROR_MARKERS)
 
 
 def run_write_with_retry(description: str, func):
@@ -308,11 +329,11 @@ def run_write_with_retry(description: str, func):
         try:
             return func()
         except APIError as exc:
-            if not is_quota_error(exc) or attempt == len(waits):
+            if not is_retryable_sheets_error(exc) or attempt == len(waits):
                 raise
             last_error = exc
             print(
-                f"{description}: Sheets の書き込み回数制限に当たったため "
+                f"{description}: Sheets の一時エラーのため "
                 f"{wait_seconds or 0}秒後に再試行します。"
             )
     if last_error:
@@ -344,6 +365,9 @@ def get_all_values_with_retry(ws) -> List[List[str]]:
             return ws.get_all_values()
         except Exception as exc:
             last_error = exc
+            if not is_retryable_sheets_message(str(exc)):
+                raise
+            time.sleep(5)
     raise last_error
 
 

@@ -190,9 +190,47 @@ def normalize_datetime(raw: str) -> datetime | None:
     return None
 
 
-def is_quota_error(exc: APIError) -> bool:
-    status_code = getattr(getattr(exc, "response", None), "status_code", None)
-    return status_code == 429 or "Quota exceeded" in str(exc)
+TRANSIENT_SHEETS_STATUS_CODES = {429, 500, 502, 503, 504}
+TRANSIENT_SHEETS_ERROR_MARKERS = (
+    "quota exceeded",
+    "resource_exhausted",
+    "service is currently unavailable",
+    "backend error",
+    "internal error",
+    "try again later",
+)
+
+
+def is_retryable_sheets_error(exc: APIError) -> bool:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if status_code in TRANSIENT_SHEETS_STATUS_CODES:
+        return True
+    return any(marker in str(exc).lower() for marker in TRANSIENT_SHEETS_ERROR_MARKERS)
+
+
+def is_retryable_sheets_message(message: str) -> bool:
+    normalized = str(message).lower()
+    if any(code in normalized for code in ("429", "500", "502", "503", "504")):
+        return True
+    return any(marker in normalized for marker in TRANSIENT_SHEETS_ERROR_MARKERS)
+
+
+def run_read_with_retry(description: str, func):
+    last_error = None
+    waits = (0, 5, 10, 20, 40)
+    for attempt, wait_seconds in enumerate(waits, start=1):
+        if wait_seconds:
+            time.sleep(wait_seconds)
+        try:
+            return func()
+        except Exception as exc:
+            if not is_retryable_sheets_message(str(exc)) or attempt == len(waits):
+                raise
+            last_error = exc
+            print(f"{description}: Sheets の一時エラーのため再試行します。")
+    if last_error:
+        raise last_error
 
 
 def run_write_with_retry(description: str, func):
@@ -204,11 +242,11 @@ def run_write_with_retry(description: str, func):
         try:
             return func()
         except APIError as exc:
-            if not is_quota_error(exc) or attempt == len(waits):
+            if not is_retryable_sheets_error(exc) or attempt == len(waits):
                 raise
             last_error = exc
             print(
-                f"{description}: Sheets の書き込み回数制限に当たったため "
+                f"{description}: Sheets の一時エラーのため "
                 f"{wait_seconds or 0}秒後に再試行します。"
             )
     if last_error:
@@ -556,14 +594,17 @@ def notification_identity_key(event: NotificationEvent) -> str:
 
 def load_notification_events() -> List[NotificationEvent]:
     gc = get_client()
-    target = gc.open_by_key(COLLECTION_SHEET_ID)
+    target = run_read_with_retry("個別予約収集シート取得", lambda: gc.open_by_key(COLLECTION_SHEET_ID))
     try:
-        ws = target.worksheet(COLLECTION_NOTIFICATION_LOG_TAB_NAME)
+        ws = run_read_with_retry(
+            f"{COLLECTION_NOTIFICATION_LOG_TAB_NAME} 取得",
+            lambda: target.worksheet(COLLECTION_NOTIFICATION_LOG_TAB_NAME),
+        )
     except Exception:
         return []
 
     events: List[NotificationEvent] = []
-    values = ws.get_all_values()
+    values = run_read_with_retry(f"{COLLECTION_NOTIFICATION_LOG_TAB_NAME} 読み取り", lambda: ws.get_all_values())
     for raw in values[1:]:
         row = raw + [""] * max(0, 7 - len(raw))
         event_at = normalize_datetime(row[0])
@@ -715,8 +756,11 @@ def build_summary_rows(stats: Dict[str, object]) -> List[List[str]]:
 
 def load_notification_log_stats(target) -> Dict[str, str]:
     try:
-        collection = get_client().open_by_key(COLLECTION_SHEET_ID)
-        ws = collection.worksheet(COLLECTION_NOTIFICATION_LOG_TAB_NAME)
+        collection = run_read_with_retry("個別予約収集シート取得", lambda: get_client().open_by_key(COLLECTION_SHEET_ID))
+        ws = run_read_with_retry(
+            f"{COLLECTION_NOTIFICATION_LOG_TAB_NAME} 取得",
+            lambda: collection.worksheet(COLLECTION_NOTIFICATION_LOG_TAB_NAME),
+        )
     except Exception:
         return {
             "ステータス": "停止",
@@ -726,7 +770,7 @@ def load_notification_log_stats(target) -> Dict[str, str]:
             "メモ": "収集シートに接続できない",
         }
 
-    values = ws.get_all_values()
+    values = run_read_with_retry(f"{COLLECTION_NOTIFICATION_LOG_TAB_NAME} 読み取り", lambda: ws.get_all_values())
     event_count = 0
     for row in values[1:]:
         row = row + [""] * max(0, 7 - len(row))

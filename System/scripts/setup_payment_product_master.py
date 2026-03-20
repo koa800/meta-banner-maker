@@ -125,14 +125,29 @@ class PaymentAggregate:
     amount: int = 0
 
 
-def is_quota_error(exc: APIError) -> bool:
-    payload = getattr(exc, "response", None)
+TRANSIENT_SHEETS_STATUS_CODES = {429, 500, 502, 503, 504}
+TRANSIENT_SHEETS_ERROR_MARKERS = (
+    "quota exceeded",
+    "resource_exhausted",
+    "service is currently unavailable",
+    "backend error",
+    "internal error",
+    "try again later",
+)
+
+
+def is_retryable_sheets_error(exc: APIError) -> bool:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if status_code in TRANSIENT_SHEETS_STATUS_CODES:
+        return True
+    payload = {}
     try:
-        data = payload.json()
+        payload = response.json() if response is not None else {}
     except Exception:
-        data = {}
-    message = str(data)
-    return "Quota exceeded" in message or "RESOURCE_EXHAUSTED" in message or "429" in message
+        payload = {}
+    message = f"{exc} {payload}".lower()
+    return any(marker in message for marker in TRANSIENT_SHEETS_ERROR_MARKERS)
 
 
 def with_sheets_retry(action, description: str):
@@ -144,7 +159,7 @@ def with_sheets_retry(action, description: str):
             return action()
         except APIError as exc:
             last_exc = exc
-            if not is_quota_error(exc) or wait_seconds == RETRY_SECONDS[-1]:
+            if not is_retryable_sheets_error(exc) or wait_seconds == RETRY_SECONDS[-1]:
                 raise
     if last_exc:
         raise last_exc
@@ -384,6 +399,9 @@ PRICE_VARIANT_MONITORED_SOURCES = {
 
 ALLOWED_RAW_NAME_PRICE_VARIANTS = {
     ("UnivaPay", "みかみの秘密合宿 - オフライン版 -"): {59800, 148000},
+    ("UnivaPay", "【15分限定特典付き】デザイン限界突破3日間合宿"): {500, 2980},
+    ("UnivaPay", "【脱・無駄な努力】月商1.9億を支えるテンプレ大全"): {2980, 4980},
+    ("UnivaPay", "最速1分でバズ投稿を量産できる禁断のAIテンプレパック"): {4980, 7980},
 }
 
 
