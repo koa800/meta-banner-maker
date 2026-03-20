@@ -84,15 +84,15 @@
   - `日別売上数値` の列は `日付 / 着金売上 / 返金額 / 純着金売上 / 解約請求額 / 着金件数 / 返金件数 / 解約請求件数`
   - `売上サマリー` では `累計着金売上 / 累計返金額 / 累計純着金売上 / 累計解約請求額 / 完全不明金額 / 完全不明件数` を監視する
   - `完全不明` は日別売上数値に入れず、売上サマリーだけで監視する
-  - `商品名空欄` のうち `日本プラム / きらぼし銀行 / CBS / 京都信販 / CREDIX` の成功売上は `スキルプラス事業のプラン未特定売上` とみなして着金売上へ含める
+  - `商品名空欄` のうち `日本プラム / きらぼし銀行 / CBS / 京都信販 / CREDIX` の成功売上は、`顧客マスタでスキルプラス顧客と確認できたものだけ` を `プラン未特定売上` として着金売上へ含める
   - `UnivaPay / INVOY` の商品名空欄は、まだ事業まで確定できないため `完全不明` として残す
-  - 2026-03-20 03:32 時点の state:
-    - 累計着金売上 `4,946,371,031`
-    - 累計返金額 `805,107,069`
-    - 累計純着金売上 `4,141,263,962`
+  - 2026-03-20 11:00 時点の state:
+    - 累計着金売上 `3,881,277,556`
+    - 累計返金額 `805,081,509`
+    - 累計純着金売上 `3,076,196,047`
     - 累計解約請求額 `75,218,484`
-    - 完全不明金額 `912,002,527`
-    - 完全不明件数 `18,629`
+    - 完全不明金額 `1,977,096,002`
+    - 完全不明件数 `20,063`
     - 補完返金件数 `4,316`
   - スクリプト: `System/payment_metrics_sheet_sync.py`
   - `payment_daily_sync.py` の最後で毎回再生成するよう接続済み。Drive に新規CSVがない run でも、相談窓口シート側の返金更新は加工へ反映される
@@ -141,7 +141,7 @@
   - 現在は甲原さんの判断を受けて、generic な `スキルプラス請求名` は `スキルプラススタンダードプラン` へ寄せる
 - 現時点の結論
   - 自動で埋めてよいのは `明示エイリアス`、`商品名が明示されているキーワード一致`、`スキルプラス請求名`、`参照金額 ÷ 参照件数 = 798,000` の条件まで
-  - `商品名空欄` は、`銀行振込 / 信販で事業まで確定できるもの` と `完全不明` を加工で分ける
+  - `商品名空欄` は、`顧客マスタでスキルプラス顧客と確認できる銀行振込 / 信販` と `完全不明` を加工で分ける
 
 ### 広告費データ（加工）— 暫定版
 
@@ -220,11 +220,11 @@
 ## 参照先
 
 - `【アドネス株式会社】決済データ（収集）`: https://docs.google.com/spreadsheets/d/1FfGM0HpofM8yayhJniArXp_vQ6-4JRvlp6rxDt-eHTI/edit
+- `【アドネス株式会社】決済データ（加工）`: https://docs.google.com/spreadsheets/d/1eh8X_dsRitFDKAJVE-dbr75ycGfMffMsvJYI-Gtlv_Q/edit
 - `【アドネス株式会社】広告データ（収集）`: https://docs.google.com/spreadsheets/d/11lVHxkA0geY7TEVKoujYrv1JyxWhzxqSepNhFxnFZlo/edit
 - `【アドネス株式会社】広告費データ（加工）`: https://docs.google.com/spreadsheets/d/1-dEYsY6KB0GF2XRf7PvoxVxhICCamdCBPKxHJRJdUOE/edit
 - `【アドネス株式会社】KPIダッシュボード`: https://docs.google.com/spreadsheets/d/1utCt9ex0puEi3-oxcjq9v37Jt-9X_dpSjPowZBsHeqA/edit
 - 決済統合ロジック: https://docs.google.com/spreadsheets/d/1o9ylfSVXd_SzcUdoT1t-hGM9x1TPtwZ4-FpwPgr0EpY/edit
-- 顧客管理シート（銀行振込・信販決済の生データ）: https://docs.google.com/spreadsheets/d/1l2gHhdUMfRANEDmZNfgpjx8KZi0yVCEknckjtpvYwBo/edit
 - 決済システム定義: `Master/knowledge/payment_systems_definitions.md`
 - KPIダッシュボード完成形設計: `Project/4_AI基盤/KPIダッシュボード完成形設計.md`
 - スプレッドシート設計スキル: `Skills/6_システム/スプレッドシート設計ルール.md`

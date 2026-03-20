@@ -92,7 +92,6 @@ SKILLPLUS_CASE_CODES = {"STD", "PRM", "ELT", "SPS"}
 NON_SKILLPLUS_CASE_CODES = {"デザジュク", "アドネス", "ギブセル", "その他"}
 REFUND_MATCH_LOOKBACK_DAYS = 30
 REFUND_MATCH_LOOKAHEAD_DAYS = 120
-SKILLPLUS_UNKNOWN_PRODUCT_LABEL = "スキルプラス本体（プラン不明）"
 SKILLPLUS_BLANK_SOURCE_CONFIRMED_SOURCES = {
     "日本プラム",
     "きらぼし銀行",
@@ -466,9 +465,8 @@ def style_daily_tab(spreadsheet, ws) -> None:
                 "verticalAlignment": "MIDDLE",
                 "wrapStrategy": "CLIP",
                 "textFormat": {"foregroundColor": {"red": 0, "green": 0, "blue": 0}, "fontSize": 10},
-                "numberFormat": {"type": "NUMBER", "pattern": "#,##0"},
             },
-            "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,wrapStrategy,textFormat,numberFormat)",
+            "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,wrapStrategy,textFormat)",
         ),
         repeat_cell_request(
             ws.id,
@@ -481,6 +479,28 @@ def style_daily_tab(spreadsheet, ws) -> None:
                 "numberFormat": {"type": "DATE", "pattern": "yyyy/mm/dd"},
             },
             "userEnteredFormat(horizontalAlignment,numberFormat)",
+        ),
+        repeat_cell_request(
+            ws.id,
+            1,
+            ws.row_count,
+            1,
+            5,
+            {
+                "numberFormat": {"type": "CURRENCY", "pattern": "¥#,##0"},
+            },
+            "userEnteredFormat.numberFormat",
+        ),
+        repeat_cell_request(
+            ws.id,
+            1,
+            ws.row_count,
+            5,
+            len(widths),
+            {
+                "numberFormat": {"type": "NUMBER", "pattern": "#,##0"},
+            },
+            "userEnteredFormat.numberFormat",
         ),
         set_row_height_request(ws.id, 0, 1, 34),
         set_row_height_request(ws.id, 1, ws.row_count, 24),
@@ -858,16 +878,11 @@ def build_skillplus_sale_indexes(payment_rows: list[list[str]], mapping: Dict[tu
 
         raw_name = normalize_text(padded[idx["商品名"]]) or "(空欄)"
         mapping_entry = mapping.get((source, raw_name))
-        product_name = ""
-        if mapping_entry and mapping_entry.status == "変換済み":
-            if mapping_entry.business != BUSINESS_SKILLPLUS:
-                continue
-            product_name = mapping_entry.product_name
-        elif raw_name == "(空欄)" and source in SKILLPLUS_BLANK_SOURCE_CONFIRMED_SOURCES:
-            product_name = SKILLPLUS_UNKNOWN_PRODUCT_LABEL
-        else:
+        if not mapping_entry or mapping_entry.status != "変換済み":
             unknown_counter["amount"] += abs(parse_amount(padded[idx["イベント金額"]]))
             unknown_counter["count"] += 1
+            continue
+        if mapping_entry.business != BUSINESS_SKILLPLUS:
             continue
 
         amount = abs(parse_amount(padded[idx["イベント金額"]]))
@@ -882,8 +897,8 @@ def build_skillplus_sale_indexes(payment_rows: list[list[str]], mapping: Dict[tu
             full_name=normalize_name_key(full_name),
             line_name=normalize_name_key(line_name),
             phone=normalize_phone(padded[idx["電話番号"]]),
-            product_name=product_name,
-            business=BUSINESS_SKILLPLUS,
+            product_name=mapping_entry.product_name,
+            business=mapping_entry.business,
         )
         sale_events.append(sale_event)
         if sale_event.email:
@@ -1160,7 +1175,22 @@ def collect_raw_refund_supplements(payment_rows: list[list[str]], mapping: Dict[
     return daily, stats
 
 
-def build_daily_rows(payment_rows: list[list[str]], mapping: Dict[tuple[str, str], MappingEntry], refund_daily: dict[str, Counter], refund_stats: Counter, claim_stats: Counter) -> tuple[List[List[object]], dict]:
+def sale_matches_skillplus_customer(row: list[str], idx: dict[str, int], cdp_index: dict[str, set[str]]) -> bool:
+    email = normalize_email(row[idx["メールアドレス"]])
+    phone = normalize_phone(row[idx["電話番号"]])
+    full_name = normalize_name_key(
+        normalize_text(row[idx["名前（原本）"]]) or normalize_text(f"{row[idx['姓']]}{row[idx['名']]}")
+    )
+    if email and email in cdp_index["emails"]:
+        return True
+    if phone and phone in cdp_index["phones"]:
+        return True
+    if full_name and full_name in cdp_index["names"]:
+        return True
+    return False
+
+
+def build_daily_rows(payment_rows: list[list[str]], mapping: Dict[tuple[str, str], MappingEntry], refund_daily: dict[str, Counter], refund_stats: Counter, claim_stats: Counter, cdp_index: dict[str, set[str]]) -> tuple[List[List[object]], dict]:
     headers = payment_rows[0]
     idx = {header: i for i, header in enumerate(headers)}
     daily = defaultdict(Counter)
@@ -1186,7 +1216,11 @@ def build_daily_rows(payment_rows: list[list[str]], mapping: Dict[tuple[str, str
         if mapping_entry and mapping_entry.status == "変換済み":
             if mapping_entry.business != BUSINESS_SKILLPLUS:
                 continue
-        elif not (raw_name == "(空欄)" and source in SKILLPLUS_BLANK_SOURCE_CONFIRMED_SOURCES):
+        elif not (
+            raw_name == "(空欄)"
+            and source in SKILLPLUS_BLANK_SOURCE_CONFIRMED_SOURCES
+            and sale_matches_skillplus_customer(padded, idx, cdp_index)
+        ):
             complete_unknown_amount += abs(parse_amount(padded[idx["イベント金額"]]))
             complete_unknown_count += 1
             continue
@@ -1298,7 +1332,7 @@ def build_summary_rows(stats: dict, checked_at: str) -> List[List[object]]:
         ["最終更新日時", checked_at, "このシートを最後に再生成した日時"],
         ["集計開始日", START_DATE_TEXT, "2025/01/01 以降だけを集計対象にする"],
         ["最新計上日", stats["latest_date"], "日別売上数値で最後に値を持つ日付"],
-        ["累計着金売上", normalize_display_amount(stats["sales_amount_total"]), "スキルプラス事業の成功売上 + 商品未特定だが事業は確定した売上"],
+        ["累計着金売上", normalize_display_amount(stats["sales_amount_total"]), "スキルプラス事業の成功売上 + 顧客マスタで確認できたプラン未特定売上"],
         ["累計返金額", normalize_display_amount(stats["refund_amount_total"]), "相談窓口シート案件正本 + raw 補完の返金合計"],
         ["累計純着金売上", normalize_display_amount(stats["net_sales_total"]), "着金売上 - 返金額"],
         ["累計解約請求額", normalize_display_amount(stats["claim_amount_total"]), "中途解約タブの請求確定額"],
@@ -1329,7 +1363,7 @@ def build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats: dict, che
             f'=HYPERLINK("{payment_url}","【アドネス株式会社】決済データ（収集）")',
             PAYMENT_COLLECTION_TAB,
             "イベント日時 / イベント金額 / 商品名",
-            "成功売上のみ + 決済商品変換マスタ確定行 + 銀振/信販の空欄成功売上のうちスキルプラス事業と確定できる行",
+            "成功売上のみ + 決済商品変換マスタ確定行 + 顧客マスタでスキルプラスと確認できた銀振/信販の空欄成功売上",
             status,
             f"'{checked_at}",
             stats["sales_count_total"],
@@ -1390,7 +1424,7 @@ def build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats: dict, che
             f"'{checked_at}",
             stats["source_row_count"],
             1 if status != "正常" else 0,
-            "商品名空欄でも銀行振込・信販の専用チャネルは着金売上へ含め、完全不明だけ除外する",
+            "商品名空欄でも、顧客マスタで確認できた銀行振込・信販売上だけを着金売上へ含める",
         ],
     ]
     return rows
@@ -1400,12 +1434,12 @@ def build_rule_rows() -> List[List[object]]:
     return [
         ["項目", "ルール", "補足"],
         ["日別売上数値", "手入力で直さず、元データから再生成する", "数字の理由を後から追えるようにする"],
-        ["着金売上", "決済データ（収集）の成功売上だけを集計する", "スキルプラス事業と確定した商品 + 銀振/信販のプラン未特定売上を対象にする"],
+        ["着金売上", "決済データ（収集）の成功売上だけを集計する", "スキルプラス事業と確定した商品 + 顧客マスタで確認できた銀振/信販のプラン未特定売上を対象にする"],
         ["返金額", "相談窓口シートの返金案件を正本にする", "相談窓口に載っていない raw 返金だけを補完採用する"],
         ["返金件数", "返金イベント件数ではなく返金案件数で持つ", "分割返金でも1案件として扱う"],
         ["解約請求額", "中途解約タブの負値を請求額として持つ", "通常の着金売上には混ぜない"],
         ["日付", "実入出金日ではなく、確定日を使う", "着金売上はイベント日時、返金額と解約請求額は相談窓口上の確定日"],
-        ["商品未特定", "銀行振込・信販の空欄成功売上はスキルプラス事業売上へ含める", "どのプランか不明でも事業までは確定できる前提で扱う"],
+        ["商品未特定", "銀行振込・信販の空欄成功売上は、顧客マスタでスキルプラス顧客と確認できたものだけ着金売上へ含める", "どのプランか不明でも、顧客起点の根拠があるものだけ採用する"],
         ["完全不明", "スキルプラス事業と確定できない売上は日別に入れない", "売上サマリーで金額と件数だけ監視する"],
         ["プラン不明", "スキルプラス事業とだけ言える売上は将来の加工拡張で扱う", "今は完全不明として残すより、根拠が固まってから昇格させる"],
     ]
@@ -1459,7 +1493,7 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
         payment_rows = get_all_values_with_retry(payment_ws)
         mapping = load_payment_mapping(mapping_ws)
         skillplus_product_names, non_skillplus_product_names = load_product_business_map(product_ws)
-        sale_events, sale_index, unknown_counter = build_skillplus_sale_indexes(payment_rows, mapping)
+        sale_events, sale_index, _ = build_skillplus_sale_indexes(payment_rows, mapping)
         cdp_index = load_cdp_skillplus_identifiers(cdp_ws, skillplus_product_names)
         skillplus_markers = build_text_markers(skillplus_product_names)
         non_skillplus_markers = build_text_markers(non_skillplus_product_names)
@@ -1493,9 +1527,8 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
             refund_daily,
             refund_case_stats,
             refund_case_stats,
+            cdp_index,
         )
-        stats["complete_unknown_amount"] = unknown_counter["amount"]
-        stats["complete_unknown_count"] = unknown_counter["count"]
         checked_at = datetime.now().strftime("%Y/%m/%d %H:%M")
         stats["updated_at"] = checked_at
 
