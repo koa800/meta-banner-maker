@@ -51,7 +51,7 @@ SOURCE_MANAGEMENT_TAB_NAME = "データソース管理"
 RULE_TAB_NAME = "データ追加ルール"
 
 TAB_SPECS = {
-    DAILY_TAB_NAME: (1200, 14),
+    DAILY_TAB_NAME: (1200, 16),
     SUMMARY_TAB_NAME: (50, 3),
     SOURCE_MANAGEMENT_TAB_NAME: (80, 12),
     RULE_TAB_NAME: (60, 3),
@@ -89,6 +89,21 @@ START_DATE = datetime(2025, 1, 1)
 START_DATE_TEXT = START_DATE.strftime("%Y/%m/%d")
 DATE_RE = re.compile(r"(\d{4})[/-](\d{1,2})[/-](\d{1,2})")
 AMOUNT_CONDITION_RE = re.compile(r"(?:イベント金額|1件あたり)\s*=\s*¥?([\d,]+)")
+BLANK_SKILLPLUS_RECURRING_PRODUCT_NAME = "スキルプラス継続利用"
+INSTALLMENT_RECOVERY_AMOUNTS = {
+    15180,
+    16280,
+    14800,
+    19580,
+    19900,
+    21300,
+    21400,
+    21700,
+    21800,
+    21900,
+    24985,
+    32780,
+}
 
 SKILLPLUS_CASE_CODES = {"STD", "PRM", "ELT", "SPS"}
 NON_SKILLPLUS_CASE_CODES = {"デザジュク", "アドネス", "ギブセル", "その他"}
@@ -237,6 +252,7 @@ class OtherBusinessEvidence:
 class SaleContext:
     source: str
     raw_name: str
+    amount: int
     event_date: str
     event_dt: datetime
     mapping_entry: Optional[MappingEntry]
@@ -484,6 +500,17 @@ def charge_is_recurring(charge_type: str, recurring_id: str) -> bool:
     return normalized in {"リカーリング", "定期課金"}
 
 
+def mapped_product_is_recurring(product_name: str, product_meta: dict[str, dict[str, str]]) -> bool:
+    meta = product_meta.get(product_name, {})
+    purchase_type = normalize_text(meta.get("purchase_type", ""))
+    normalized_name = normalize_text(product_name)
+    if "月額" in purchase_type:
+        return True
+    if "継続" in normalized_name:
+        return True
+    return product_name == BLANK_SKILLPLUS_RECURRING_PRODUCT_NAME
+
+
 def claim_is_collected(*texts: object) -> bool:
     normalized = normalize_compact_text(" / ".join(normalize_text(text) for text in texts))
     if not normalized:
@@ -678,7 +705,7 @@ def write_rows(spreadsheet, ws, rows: List[List[object]]) -> None:
 
 
 def style_daily_tab(spreadsheet, ws) -> None:
-    widths = [120, 140, 140, 150, 135, 130, 135, 150, 110, 110, 120, 110, 110, 130]
+    widths = [120, 140, 140, 140, 150, 135, 130, 135, 150, 110, 110, 110, 120, 110, 110, 130]
     requests = [
         repeat_cell_request(
             ws.id,
@@ -727,7 +754,7 @@ def style_daily_tab(spreadsheet, ws) -> None:
             1,
             ws.row_count,
             1,
-            7,
+            9,
             {
                 "numberFormat": {"type": "CURRENCY", "pattern": "¥#,##0"},
             },
@@ -737,7 +764,7 @@ def style_daily_tab(spreadsheet, ws) -> None:
             ws.id,
             1,
             ws.row_count,
-            7,
+            9,
             len(widths),
             {
                 "numberFormat": {"type": "NUMBER", "pattern": "#,##0"},
@@ -1787,6 +1814,7 @@ def build_sale_context(
         return SaleContext(
             source=source,
             raw_name=raw_name,
+            amount=0,
             event_date=event_date,
             event_dt=event_dt,
             mapping_entry=None,
@@ -1824,6 +1852,7 @@ def build_sale_context(
     return SaleContext(
         source=source,
         raw_name=raw_name,
+        amount=amount,
         event_date=event_date,
         event_dt=event_dt,
         mapping_entry=mapping_entry,
@@ -1841,9 +1870,7 @@ def sale_bucket(context: SaleContext, product_meta: dict[str, dict[str, str]]) -
 
     mapping_entry = context.mapping_entry
     if mapping_entry and mapping_entry.status == "変換済み" and mapping_entry.product_name:
-        meta = product_meta.get(mapping_entry.product_name, {})
-        purchase_type = normalize_text(meta.get("purchase_type", ""))
-        if "月額" in purchase_type or "継続" in normalize_text(mapping_entry.product_name):
+        if mapped_product_is_recurring(mapping_entry.product_name, product_meta):
             return "recurring"
         if mapping_entry.target == "会員向け":
             return "member_one_time"
@@ -1853,6 +1880,8 @@ def sale_bucket(context: SaleContext, product_meta: dict[str, dict[str, str]]) -
         return "new"
 
     if charge_is_recurring(context.charge_type, context.recurring_id):
+        if context.source == "UnivaPay" and context.raw_name == "(空欄)" and context.amount in INSTALLMENT_RECOVERY_AMOUNTS:
+            return "installment"
         return "recurring"
 
     return "new"
@@ -1902,6 +1931,9 @@ def build_daily_rows(
         if bucket == "new":
             daily[context.event_date]["new_sales_amount"] += amount
             daily[context.event_date]["new_sales_count"] += 1
+        elif bucket == "installment":
+            daily[context.event_date]["installment_sales_amount"] += amount
+            daily[context.event_date]["installment_sales_count"] += 1
         elif bucket == "recurring":
             daily[context.event_date]["recurring_sales_amount"] += amount
             daily[context.event_date]["recurring_sales_count"] += 1
@@ -1915,6 +1947,7 @@ def build_daily_rows(
         rows = [[
             "日付",
             "新規着金売上",
+            "分割回収売上",
             "継続課金売上",
             "会員向け単発売上",
             "着金売上",
@@ -1922,6 +1955,7 @@ def build_daily_rows(
             "純着金売上",
             "解約請求回収額",
             "新規着金件数",
+            "分割回収件数",
             "継続課金件数",
             "会員向け単発件数",
             "着金件数",
@@ -1930,6 +1964,7 @@ def build_daily_rows(
         ]]
         stats = {
             "new_sales_amount_total": 0,
+            "installment_sales_amount_total": 0,
             "recurring_sales_amount_total": 0,
             "member_one_time_sales_amount_total": 0,
             "sales_amount_total": 0,
@@ -1937,6 +1972,7 @@ def build_daily_rows(
             "net_sales_total": 0,
             "claim_amount_total": 0,
             "new_sales_count_total": 0,
+            "installment_sales_count_total": 0,
             "recurring_sales_count_total": 0,
             "member_one_time_sales_count_total": 0,
             "sales_count_total": 0,
@@ -1957,6 +1993,7 @@ def build_daily_rows(
     rows = [[
         "日付",
         "新規着金売上",
+        "分割回収売上",
         "継続課金売上",
         "会員向け単発売上",
         "着金売上",
@@ -1964,6 +2001,7 @@ def build_daily_rows(
         "純着金売上",
         "解約請求回収額",
         "新規着金件数",
+        "分割回収件数",
         "継続課金件数",
         "会員向け単発件数",
         "着金件数",
@@ -1972,12 +2010,14 @@ def build_daily_rows(
     ]]
 
     new_sales_amount_total = 0
+    installment_sales_amount_total = 0
     recurring_sales_amount_total = 0
     member_one_time_sales_amount_total = 0
     sales_amount_total = 0
     refund_amount_total = 0
     claim_amount_total = 0
     new_sales_count_total = 0
+    installment_sales_count_total = 0
     recurring_sales_count_total = 0
     member_one_time_sales_count_total = 0
     sales_count_total = 0
@@ -1988,12 +2028,14 @@ def build_daily_rows(
     while cursor <= end_dt:
         date_text = cursor.strftime("%Y/%m/%d")
         new_sales_amount = daily[date_text]["new_sales_amount"]
+        installment_sales_amount = daily[date_text]["installment_sales_amount"]
         recurring_sales_amount = daily[date_text]["recurring_sales_amount"]
         member_one_time_sales_amount = daily[date_text]["member_one_time_sales_amount"]
         sales_amount = daily[date_text]["sales_amount"]
         refund_amount = refund_daily[date_text]["refund_amount"]
         claim_amount = refund_daily[date_text]["claim_amount"]
         new_sales_count = daily[date_text]["new_sales_count"]
+        installment_sales_count = daily[date_text]["installment_sales_count"]
         recurring_sales_count = daily[date_text]["recurring_sales_count"]
         member_one_time_sales_count = daily[date_text]["member_one_time_sales_count"]
         sales_count = daily[date_text]["sales_count"]
@@ -2002,6 +2044,7 @@ def build_daily_rows(
         rows.append([
             date_text,
             new_sales_amount,
+            installment_sales_amount,
             recurring_sales_amount,
             member_one_time_sales_amount,
             sales_amount,
@@ -2009,6 +2052,7 @@ def build_daily_rows(
             sales_amount - refund_amount,
             claim_amount,
             new_sales_count,
+            installment_sales_count,
             recurring_sales_count,
             member_one_time_sales_count,
             sales_count,
@@ -2016,12 +2060,14 @@ def build_daily_rows(
             claim_count,
         ])
         new_sales_amount_total += new_sales_amount
+        installment_sales_amount_total += installment_sales_amount
         recurring_sales_amount_total += recurring_sales_amount
         member_one_time_sales_amount_total += member_one_time_sales_amount
         sales_amount_total += sales_amount
         refund_amount_total += refund_amount
         claim_amount_total += claim_amount
         new_sales_count_total += new_sales_count
+        installment_sales_count_total += installment_sales_count
         recurring_sales_count_total += recurring_sales_count
         member_one_time_sales_count_total += member_one_time_sales_count
         sales_count_total += sales_count
@@ -2031,6 +2077,7 @@ def build_daily_rows(
 
     stats = {
         "new_sales_amount_total": new_sales_amount_total,
+        "installment_sales_amount_total": installment_sales_amount_total,
         "recurring_sales_amount_total": recurring_sales_amount_total,
         "member_one_time_sales_amount_total": member_one_time_sales_amount_total,
         "sales_amount_total": sales_amount_total,
@@ -2038,6 +2085,7 @@ def build_daily_rows(
         "net_sales_total": sales_amount_total - refund_amount_total,
         "claim_amount_total": claim_amount_total,
         "new_sales_count_total": new_sales_count_total,
+        "installment_sales_count_total": installment_sales_count_total,
         "recurring_sales_count_total": recurring_sales_count_total,
         "member_one_time_sales_count_total": member_one_time_sales_count_total,
         "sales_count_total": sales_count_total,
@@ -2061,16 +2109,18 @@ def build_summary_rows(stats: dict, checked_at: str) -> List[List[object]]:
         ["集計開始日", START_DATE_TEXT, "2025/01/01 以降だけを集計対象にする"],
         ["最新計上日", stats["latest_date"], "日別売上数値で最後に値を持つ日付"],
         ["累計新規着金売上", normalize_display_amount(stats["new_sales_amount_total"]), "広告判断やP/Lの基準にする新規契約の着金売上"],
+        ["累計分割回収売上", normalize_display_amount(stats["installment_sales_amount_total"]), "スキルプラス本体の分割金として回収した着金売上"],
         ["累計継続課金売上", normalize_display_amount(stats["recurring_sales_amount_total"]), "サブスク、月額継続、継続利用料などの継続課金"],
         ["累計会員向け単発売上", normalize_display_amount(stats["member_one_time_sales_amount_total"]), "会員向けイベント、追加販売、ツール協業などの単発売上"],
-        ["累計着金売上", normalize_display_amount(stats["sales_amount_total"]), "新規着金売上 + 継続課金売上 + 会員向け単発売上"],
+        ["累計着金売上", normalize_display_amount(stats["sales_amount_total"]), "新規着金売上 + 分割回収売上 + 継続課金売上 + 会員向け単発売上"],
         ["累計返金額", normalize_display_amount(stats["refund_amount_total"]), "相談窓口シート案件正本 + raw 補完の返金合計"],
         ["累計純着金売上", normalize_display_amount(stats["net_sales_total"]), "着金売上 - 返金額"],
         ["累計解約請求回収額", normalize_display_amount(stats["claim_amount_total"]), "中途解約タブのうち回収済みと確認できた請求額"],
         ["累計新規着金件数", normalize_display_count(stats["new_sales_count_total"]), "新規契約として扱う着金件数"],
+        ["累計分割回収件数", normalize_display_count(stats["installment_sales_count_total"]), "分割金として扱う着金件数"],
         ["累計継続課金件数", normalize_display_count(stats["recurring_sales_count_total"]), "継続課金として扱う着金件数"],
         ["累計会員向け単発件数", normalize_display_count(stats["member_one_time_sales_count_total"]), "会員向け単発売上として扱う着金件数"],
-        ["累計着金件数", normalize_display_count(stats["sales_count_total"]), "新規着金件数 + 継続課金件数 + 会員向け単発件数"],
+        ["累計着金件数", normalize_display_count(stats["sales_count_total"]), "新規着金件数 + 分割回収件数 + 継続課金件数 + 会員向け単発件数"],
         ["累計返金件数", normalize_display_count(stats["refund_count_total"]), "返金案件数 + raw 補完件数"],
         ["累計解約請求回収件数", normalize_display_count(stats["claim_count_total"]), "回収済みと確認できた解約請求案件数"],
         ["完全不明金額", normalize_display_amount(stats["complete_unknown_amount"]), "スキルプラス事業と確定できず日別へ入れていない売上"],
@@ -2091,12 +2141,12 @@ def build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats: dict, che
         ["加工タブ", "対象カラム", "優先度", "ソース元", "参照タブ", "参照列", "取得条件", "ステータス", "最終同期日", "更新数", "エラー数", "備考"],
         [
             DAILY_TAB_NAME,
-            "新規着金売上 / 継続課金売上 / 会員向け単発売上 / 着金売上",
+            "新規着金売上 / 分割回収売上 / 継続課金売上 / 会員向け単発売上 / 着金売上",
             "1",
             f'=HYPERLINK("{payment_url}","【アドネス株式会社】決済データ（収集）")',
             PAYMENT_COLLECTION_TAB,
             "イベント日時 / イベント金額 / 商品名 / 課金タイプ / 支払回数 / 定期課金ID",
-            "成功売上のみ。商品マスタの購入形態が月額、または recurring_id があるものは継続課金。会員向けかつ買切り/イベント系は会員向け単発売上。非会員向け商品と頭金・信販・銀行振込の初回着金は新規",
+            "成功売上のみ。商品マスタの購入形態が月額、または exact に継続課金と確認できたものは継続課金。分割金の回収は分割回収売上。会員向けかつ買切り/イベント系は会員向け単発売上。非会員向け商品と頭金・信販・銀行振込の初回着金は新規",
             status,
             f"'{checked_at}",
             stats["sales_count_total"],
@@ -2168,9 +2218,10 @@ def build_rule_rows() -> List[List[object]]:
         ["項目", "ルール", "補足"],
         ["日別売上数値", "手入力で直さず、元データから再生成する", "数字の理由を後から追えるようにする"],
         ["新規着金売上", "新規契約として扱う着金だけを集計する", "非会員向け商品、頭金お支払い、銀行振込・信販の初回承認/振込を含める。プライム合宿の148,000円はここへ含める"],
-        ["継続課金売上", "月額課金や継続利用料など、積み上がる継続課金を集計する", "商品マスタの購入形態が月額、または recurring_id がある売上をここへ寄せる。センサーズ継続、AIカレッジ継続、iステップ、動画広告分析Pro など"],
+        ["分割回収売上", "スキルプラス本体の分割金回収を集計する", "UnivaPay の空欄 recurring のうち、分割金パターンとして確定した金額帯をここへ寄せる"],
+        ["継続課金売上", "月額課金や継続利用料など、積み上がる継続課金を集計する", "商品マスタの購入形態が月額、または UTAGE detail で継続課金と exact に確認できた売上をここへ寄せる。センサーズ継続、AIカレッジ継続、スキルプラス継続利用 など"],
         ["会員向け単発売上", "会員向けの単発売上を継続課金とは分けて集計する", "会員向けかつ買切り/イベント系の商品をここへ寄せる。プライム合宿の59,800円、スキルプラスイベント、みかみとお茶会 など"],
-        ["着金売上", "新規着金売上と継続課金売上と会員向け単発売上の合計を持つ", "総額は保持するが、広告判断では新規着金売上を優先して使う"],
+        ["着金売上", "新規着金売上と分割回収売上と継続課金売上と会員向け単発売上の合計を持つ", "総額は保持するが、広告判断では新規着金売上を優先して使う"],
         ["返金額", "相談窓口シートの返金案件を正本にする", "相談窓口に載っていない raw 返金だけを補完採用する"],
         ["返金件数", "返金イベント件数ではなく返金案件数で持つ", "分割返金でも1案件として扱う"],
         ["解約請求回収額", "中途解約タブの負値のうち、入金済み・振込済みなど回収済みと確認できた請求だけを持つ", "通常の着金売上には混ぜない"],
@@ -2197,6 +2248,7 @@ def save_run_state(stats: Dict[str, int]) -> None:
         "updated_at": stats["updated_at"],
         "metrics_start_date": START_DATE_TEXT,
         "new_sales_amount_total": stats["new_sales_amount_total"],
+        "installment_sales_amount_total": stats["installment_sales_amount_total"],
         "recurring_sales_amount_total": stats["recurring_sales_amount_total"],
         "member_one_time_sales_amount_total": stats["member_one_time_sales_amount_total"],
         "sales_amount_total": stats["sales_amount_total"],
@@ -2204,6 +2256,7 @@ def save_run_state(stats: Dict[str, int]) -> None:
         "net_sales_total": stats["net_sales_total"],
         "claim_amount_total": stats["claim_amount_total"],
         "new_sales_count_total": stats["new_sales_count_total"],
+        "installment_sales_count_total": stats["installment_sales_count_total"],
         "recurring_sales_count_total": stats["recurring_sales_count_total"],
         "member_one_time_sales_count_total": stats["member_one_time_sales_count_total"],
         "sales_count_total": stats["sales_count_total"],
@@ -2283,6 +2336,7 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
 
         if dry_run:
             print("【dry-run】累計新規着金売上:", stats["new_sales_amount_total"])
+            print("【dry-run】累計分割回収売上:", stats["installment_sales_amount_total"])
             print("【dry-run】累計継続課金売上:", stats["recurring_sales_amount_total"])
             print("【dry-run】累計会員向け単発売上:", stats["member_one_time_sales_amount_total"])
             print("【dry-run】累計着金売上:", stats["sales_amount_total"])
@@ -2290,6 +2344,7 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
             print("【dry-run】累計純着金売上:", stats["net_sales_total"])
             print("【dry-run】累計解約請求回収額:", stats["claim_amount_total"])
             print("【dry-run】累計新規着金件数:", stats["new_sales_count_total"])
+            print("【dry-run】累計分割回収件数:", stats["installment_sales_count_total"])
             print("【dry-run】累計継続課金件数:", stats["recurring_sales_count_total"])
             print("【dry-run】累計会員向け単発件数:", stats["member_one_time_sales_count_total"])
             print("【dry-run】完全不明金額:", stats["complete_unknown_amount"])
