@@ -80,7 +80,7 @@ DATETIME_FORMATS = (
     "%Y-%m-%d %H:%M:%S",
     "%Y-%m-%d %H:%M",
 )
-SKILLPLUS_STUDENT_EXCLUDED_TABS = {"最新元データ一覧"}
+SKILLPLUS_STUDENT_EXCLUDED_TABS = {"最新元データ一覧", "ライト/秘密（加工）"}
 PLAN_GROUPS = ["SPS", "STD/オールインワン", "プライム", "エリート", "ライト/秘密", "その他"]
 PROCESSED_SOURCE_EXCLUDED_TABS = {
     STUDENT_TAB_NAME,
@@ -88,6 +88,8 @@ PROCESSED_SOURCE_EXCLUDED_TABS = {
     SOURCE_MANAGEMENT_TAB_NAME,
     RULE_TAB_NAME,
 }
+TEST_MARKERS = ("test", "テスト", "てすと", "dummy", "sample", "サンプル", "確認用")
+DUMMY_EMAIL_LOCALS = {"a", "abc", "i", "test", "testo", "dummy", "sample"}
 
 
 class FileLock:
@@ -239,6 +241,10 @@ def normalize_name_key(value: object) -> str:
     return "".join(ch for ch in text if ch.isalnum() or ch == "ー")
 
 
+def normalize_marker_text(value: object) -> str:
+    return unicodedata.normalize("NFKC", normalize_text(value)).lower()
+
+
 def normalize_header_key(value: object) -> str:
     return re.sub(r"[\s\u3000]+", "", normalize_text(value))
 
@@ -267,6 +273,52 @@ def normalize_datetime(raw: object) -> str:
     if date_only:
         return f"{date_only} 00:00:00"
     return ""
+
+
+def email_local_part(email: str) -> str:
+    if "@" not in email:
+        return ""
+    return email.split("@", 1)[0].strip().lower()
+
+
+def contains_test_marker(*values: str) -> bool:
+    for value in values:
+        normalized = normalize_marker_text(value)
+        if not normalized:
+            continue
+        compact = re.sub(r"[\s\u3000]+", "", normalized)
+        if any(marker in compact for marker in TEST_MARKERS):
+            return True
+    return False
+
+
+def is_sparse_identity(
+    email: str,
+    phone: str,
+    full_name_source: str,
+    furigana_source: str,
+    display_name_source: str,
+) -> bool:
+    identity_fields = [email, phone, full_name_source, furigana_source, display_name_source]
+    populated = sum(1 for value in identity_fields if normalize_text(value))
+    return populated <= 1
+
+
+def should_exclude_student_row(
+    email: str,
+    phone: str,
+    full_name_source: str,
+    furigana_source: str,
+    display_name_source: str,
+) -> bool:
+    if contains_test_marker(full_name_source, furigana_source, display_name_source):
+        return True
+    email_local = email_local_part(email)
+    if email_local in DUMMY_EMAIL_LOCALS and contains_test_marker(email_local):
+        return True
+    if is_sparse_identity(email, phone, full_name_source, furigana_source, display_name_source):
+        return True
+    return False
 
 
 def parse_datetime(raw: object) -> Optional[datetime]:
@@ -752,7 +804,8 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
     source_rows_by_group: Counter[str] = Counter()
     source_tabs_by_group: defaultdict[str, set[str]] = defaultdict(set)
     skipped_tabs: list[str] = []
-    raw_row_count = 0
+    source_row_count = 0
+    excluded_row_count = 0
 
     for ws in source_ss.worksheets():
         if not is_skillplus_student_raw_tab(ws.title):
@@ -774,19 +827,28 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
             if not any(normalize_text(cell) for cell in row):
                 continue
 
-            raw_row_count += 1
-            source_rows_by_group[plan_group] += 1
-            email = normalize_email(pick_first_value(row, spec["email_indexes"]))
-            phone = normalize_phone(pick_first_value(row, spec["phone_indexes"]))
+            email_raw = pick_first_value(row, spec["email_indexes"])
+            phone_raw = pick_first_value(row, spec["phone_indexes"])
             full_name_source = pick_first_value(row, spec["full_name_indexes"])
             if not full_name_source and spec["surname_index"] is not None and spec["given_name_index"] is not None:
                 surname = normalize_text(row[spec["surname_index"]]) if spec["surname_index"] < len(row) else ""
                 given_name = normalize_text(row[spec["given_name_index"]]) if spec["given_name_index"] < len(row) else ""
                 full_name_source = f"{surname}{given_name}"
+            furigana_source = pick_first_value(row, spec["furigana_indexes"])
+            display_name_source = pick_first_value(row, spec["display_name_indexes"]) or pick_first_value(row, spec["nickname_indexes"])
+
+            email = normalize_email(email_raw)
+            phone = normalize_phone(phone_raw)
+            if should_exclude_student_row(email, phone, full_name_source, furigana_source, display_name_source):
+                excluded_row_count += 1
+                continue
+
+            source_row_count += 1
+            source_rows_by_group[plan_group] += 1
 
             full_name = normalize_name_key(full_name_source)
-            furigana = normalize_name_key(pick_first_value(row, spec["furigana_indexes"]))
-            display_name = normalize_name_key(pick_first_value(row, spec["display_name_indexes"]) or pick_first_value(row, spec["nickname_indexes"]))
+            furigana = normalize_name_key(furigana_source)
+            display_name = normalize_name_key(display_name_source)
             response_at = normalize_datetime(pick_first_value(row, spec["response_at_indexes"]))
             admission_date = normalize_date(pick_first_value(row, spec["admission_indexes"]))
             admission_basis_date = build_response_date(response_at, admission_date)
@@ -888,7 +950,8 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
     )
 
     stats = {
-        "source_row_count": raw_row_count,
+        "source_row_count": source_row_count,
+        "excluded_row_count": excluded_row_count,
         "student_count": len(students),
         "source_rows_by_group": dict(source_rows_by_group),
         "source_tabs_by_group": {key: sorted(value) for key, value in source_tabs_by_group.items()},
@@ -899,11 +962,9 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
 
 def build_student_rows(students: list[dict[str, object]]) -> List[List[object]]:
     rows: List[List[object]] = [[
-        "受講生キー",
-        "プラン区分",
+        "プラン",
         "入会判定日",
-        "入会判定方法",
-        "入会日",
+        "入会判定根拠",
         "初回回答日時",
         "最終回答日時",
         "メールアドレス",
@@ -911,21 +972,15 @@ def build_student_rows(students: list[dict[str, object]]) -> List[List[object]]:
         "お名前",
         "ふりがな",
         "表示名",
-        "照合キー種別",
-        "照合キー値",
-        "回答件数",
-        "元タブ一覧",
         "最初の回答ID",
         "最初の回答者ID",
     ]]
     for student in students:
         rows.append(
             [
-                student["student_key"],
                 student["plan_group"],
                 student["admission_basis_date"],
                 student["admission_basis_type"],
-                student["admission_date"],
                 student["first_response_at"],
                 student["last_response_at"],
                 student["email"],
@@ -933,10 +988,6 @@ def build_student_rows(students: list[dict[str, object]]) -> List[List[object]]:
                 student["full_name"],
                 student["furigana"],
                 student["display_name"],
-                student["identity_method"],
-                student["identity_value"],
-                student["response_count"],
-                " / ".join(student["raw_tabs"]),
                 student["answer_id"],
                 student["answerer_id"],
             ]
@@ -968,7 +1019,8 @@ def build_summary_rows(students: list[dict[str, object]], stats: dict[str, objec
         ["集計開始日", METRICS_START_DATE.strftime("%Y/%m/%d"), "受講生加工で主要に扱う起点日"],
         ["最新入会判定日", admission_stats.get("latest_basis_date", ""), "入会日優先。空なら初回回答日"],
         ["受講生数", len(students), "受講生キー単位で正規化した件数"],
-        ["元回答件数", stats.get("source_row_count", 0), "raw の元タブ行数の合計"],
+        ["採用元回答件数", stats.get("source_row_count", 0), "テスト入力と極端に情報不足な行を除外した件数"],
+        ["除外件数", stats.get("excluded_row_count", 0), "明確なテスト入力、または照合に使えない極端な疎データ"],
         ["入会判定日空欄件数", admission_stats.get("missing_basis_count", 0), "受講生一覧には残し、入会日ベースの集計には使わない"],
         ["SPS受講生数", plan_counts.get("SPS", 0), ""],
         ["STD/オールインワン受講生数", plan_counts.get("STD/オールインワン", 0), ""],
@@ -1008,12 +1060,12 @@ def build_source_management_rows(source_ss, stats: dict[str, object], checked_at
     rows.append(
         [
             STUDENT_TAB_NAME,
-            "受講生キー / プラン区分 / 入会判定日 / 入会日 / メールアドレス / 電話番号 / お名前 / ふりがな / 表示名 / 照合キー",
+            "プラン / 入会判定日 / 入会判定根拠 / メールアドレス / 電話番号 / お名前 / ふりがな / 表示名 / 回答ID",
             "1",
             f'=HYPERLINK("{source_url}","スキルプラス受講生データ")',
             "（元）タブ群",
             "メールアドレス / 電話番号 / お名前 / ふりがな / 回答者名 / 入会日 / 回答日時",
-            "同一プランかつ同一受講生とみなせる回答を受講生キー単位で統合する",
+            "同一プランかつ同一受講生とみなせる回答を内部キーで統合し、表示上は最小列だけ残す",
             base_status,
             f"'{checked_at}",
             stats.get("student_count", 0),
@@ -1070,11 +1122,12 @@ def build_source_management_rows(source_ss, stats: dict[str, object], checked_at
 def build_rule_rows() -> List[List[object]]:
     return [
         ["項目", "ルール", "補足"],
-        ["受講生一覧", "手入力で直さず、raw 形式のヘッダーを持つタブ群から再生成する", "名称が `（加工）` でも raw 回答データなら対象に含める"],
-        ["raw タブ判定", "タイトルではなくヘッダー構造で判定する", "`最新元データ一覧` と processed の管理タブだけを除外する"],
-        ["受講生キー", "メール -> 電話番号 -> 氏名+ふりがな -> 氏名 -> 表示名 -> 回答者ID -> 回答ID の順で主識別子を作る", "同一プランかつ同一受講生と判断できる回答を統合する"],
-        ["入会判定日", "入会日があれば入会日、なければ初回回答日を使う", "受講生一覧では入会判定日の根拠も残す"],
-        ["プラン区分", "タブ名から `SPS / STD/オールインワン / プライム / エリート / ライト/秘密` を判定する", "どれにも当たらない raw タブは `その他` に残す"],
+        ["受講生一覧", "手入力で直さず、raw 形式のヘッダーを持つタブ群から再生成する", "表示列は入会判定と決済照合に必要な項目だけに絞る"],
+        ["raw タブ判定", "タイトルではなくヘッダー構造で判定する", "`最新元データ一覧` と `ライト/秘密（加工）` と processed の管理タブを除外する"],
+        ["内部識別", "メール -> 電話番号 -> 氏名+ふりがな -> 氏名 -> 表示名 -> 回答者ID -> 回答ID の順で内部キーを作る", "内部キーはシートに出さず、重複統合だけに使う"],
+        ["入会判定日", "入会日があれば入会日、なければ初回回答日を使う", "`入会判定根拠` にどちらを使ったか残す"],
+        ["プラン", "タブ名から `SPS / STD/オールインワン / プライム / エリート / ライト/秘密` を判定する", "どれにも当たらない raw タブは `その他` に残す"],
+        ["除外ルール", "明確なテスト入力、または照合に使えない極端な疎データは取り込まない", "一文字名だけでは除外しない"],
         ["決済との接続", "決済加工はこの processed の `受講生一覧` を正の証拠に使う", "raw の受講生シートを直接読まない"],
         ["要確認", "値があるのにヘッダー検出できない raw タブは `要確認` に残す", "新しい raw タブ追加時の確認を簡単にする"],
     ]
@@ -1130,6 +1183,7 @@ def save_run_state(stats: Dict[str, object]) -> None:
         "updated_at": stats["updated_at"],
         "student_count": stats["student_count"],
         "source_row_count": stats["source_row_count"],
+        "excluded_row_count": stats.get("excluded_row_count", 0),
         "latest_basis_date": stats["latest_basis_date"],
         "missing_basis_count": stats["missing_basis_count"],
         "skipped_tabs": stats["skipped_tabs"],
@@ -1154,6 +1208,7 @@ def sync_skillplus_student_metrics_sheet(dry_run: bool = False, gc=None) -> dict
             "updated_at": checked_at,
             "student_count": len(students),
             "source_row_count": source_stats["source_row_count"],
+            "excluded_row_count": source_stats.get("excluded_row_count", 0),
             "latest_basis_date": admission_stats.get("latest_basis_date", ""),
             "missing_basis_count": admission_stats.get("missing_basis_count", 0),
             "skipped_tabs": source_stats.get("skipped_tabs", []),
@@ -1165,7 +1220,8 @@ def sync_skillplus_student_metrics_sheet(dry_run: bool = False, gc=None) -> dict
 
         if dry_run:
             print("【dry-run】受講生数:", stats["student_count"])
-            print("【dry-run】raw 回答件数:", stats["source_row_count"])
+            print("【dry-run】採用元回答件数:", stats["source_row_count"])
+            print("【dry-run】除外件数:", stats["excluded_row_count"])
             print("【dry-run】最新入会判定日:", stats["latest_basis_date"])
             print("【dry-run】入会判定日空欄件数:", stats["missing_basis_count"])
             if stats["skipped_tabs"]:
@@ -1176,10 +1232,10 @@ def sync_skillplus_student_metrics_sheet(dry_run: bool = False, gc=None) -> dict
         style_table(
             target,
             tabs[STUDENT_TAB_NAME],
-            widths=[240, 150, 105, 105, 105, 150, 150, 220, 120, 120, 120, 120, 110, 220, 90, 260, 120, 120],
-            center_cols=[1, 2, 3, 4, 14],
-            date_cols=[2, 4],
-            left_cols=[0, 15],
+            widths=[150, 105, 120, 150, 150, 220, 120, 120, 120, 120, 120, 120],
+            center_cols=[0, 1, 2],
+            date_cols=[1],
+            left_cols=[5, 7, 8, 9],
         )
         write_rows(target, tabs[SUMMARY_TAB_NAME], summary_rows)
         style_table(
