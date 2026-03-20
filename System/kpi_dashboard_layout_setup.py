@@ -43,7 +43,7 @@ PAYMENT_DAILY_TAB = "日別売上数値"
 PAYMENT_SOURCE_TAB = "データソース管理"
 
 TAB_SPECS = [
-    ("スキルプラス事業サマリー", 120, 31),
+    ("スキルプラス事業サマリー", 120, 60),
     ("日別数値", 600, 22),
     ("データソース管理", 80, 14),
 ]
@@ -162,9 +162,12 @@ def add_line_chart_request(
     title: str,
     domain_col: int,
     series_cols: Sequence[int],
+    source_sheet_id: int | None = None,
+    end_row_index: int = 120,
     width: int = 620,
     height: int = 260,
 ) -> dict:
+    source_id = source_sheet_id if source_sheet_id is not None else sheet_id
     return {
         "addChart": {
             "chart": {
@@ -184,9 +187,9 @@ def add_line_chart_request(
                                     "sourceRange": {
                                         "sources": [
                                             {
-                                                "sheetId": sheet_id,
+                                                "sheetId": source_id,
                                                 "startRowIndex": 0,
-                                                "endRowIndex": 120,
+                                                "endRowIndex": end_row_index,
                                                 "startColumnIndex": domain_col,
                                                 "endColumnIndex": domain_col + 1,
                                             }
@@ -201,9 +204,9 @@ def add_line_chart_request(
                                     "sourceRange": {
                                         "sources": [
                                             {
-                                                "sheetId": sheet_id,
+                                                "sheetId": source_id,
                                                 "startRowIndex": 0,
-                                                "endRowIndex": 120,
+                                                "endRowIndex": end_row_index,
                                                 "startColumnIndex": col,
                                                 "endColumnIndex": col + 1,
                                             }
@@ -241,6 +244,42 @@ def set_sheet_properties_request(sheet_id: int, props: dict, fields: str) -> dic
             "fields": fields,
         }
     }
+
+
+def build_recent_day_formula(column_letter: str, offset: int, date_col_letter: str = "G") -> str:
+    return (
+        f'=IF(${date_col_letter}{offset + 3}="","",'
+        f'INDEX(\'日別数値\'!${column_letter}$2:${column_letter},'
+        f'MATCH(${date_col_letter}{offset + 3},\'日別数値\'!$A$2:$A,0)))'
+    )
+
+
+def build_recent_date_formula(offset: int) -> str:
+    return (
+        '=IFERROR(INDEX(SORT(FILTER(\'日別数値\'!$A$2:$A,'
+        '\'日別数値\'!$A$2:$A<>""),1,FALSE),'
+        f'{offset + 1}),"")'
+    )
+
+
+def list_chart_delete_requests(spreadsheet, sheet_id: int) -> List[dict]:
+    metadata = spreadsheet.fetch_sheet_metadata(
+        {
+            "includeGridData": False,
+            "fields": "sheets(properties.sheetId,charts(chartId,spec.title))",
+        }
+    )
+    requests: List[dict] = []
+    for sheet in metadata.get("sheets", []):
+        properties = sheet.get("properties", {})
+        if properties.get("sheetId") != sheet_id:
+            continue
+        for chart in sheet.get("charts", []):
+            chart_id = chart.get("chartId")
+            if chart_id is None:
+                continue
+            requests.append({"deleteEmbeddedObject": {"objectId": chart_id}})
+    return requests
 
 
 def normalize_date(raw: str) -> str:
@@ -817,8 +856,8 @@ def build_definition_master_rows() -> List[List[str]]:
         ["広告費", "対象媒体の消化金額"],
         ["CPA", "広告費を集客数で割った数値"],
         ["個別予約CPO", "広告費を個別予約数で割った数値"],
-        ["新規着金ROAS", "新規着金売上を広告費で割った数値"],
-        ["着金ROAS", "着金売上を広告費で割った数値"],
+        ["ROAS（新規）", "新規着金売上を広告費で割った数値"],
+        ["ROAS（合計）", "着金売上を広告費で割った数値"],
         ["契約数", "スキルプラスの契約書を締結したユーザー数"],
         ["クーリングオフ数", "入金あり契約から7日以内に契約解除を申し出たユーザー数"],
         ["中途解約数", "サポート期間が終了する前に契約解除が確定した会員数"],
@@ -885,7 +924,7 @@ def build_summary_rows(
     payment_state = payment_status.get("ステータス", "接続中") or "接続中"
     payment_note = payment_status.get("メモ", "スキルプラス着金データ（加工）の日別売上数値を参照する")
 
-    rows = [[""] * 31 for _ in range(120)]
+    rows = [[""] * 60 for _ in range(120)]
     visible_rows = [
         ["項目", "値", "正本シート", "状態", "メモ"],
         ["集計開始日", '''=IFERROR(EOMONTH(MAX(FILTER('日別数値'!A:A,'日別数値'!A:A<>"")),-1)+1,"")''', "", "", "手入力で上書き可"],
@@ -907,8 +946,8 @@ def build_summary_rows(
         ["広告費", '''=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS('日別数値'!O:O,"<>",'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)=0,"",SUMIFS('日別数値'!O:O,'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)))''', "【アドネス株式会社】広告費データ（加工） / 日別広告費", "接続中", "数値管理シートのカテゴリ=広告の日別合計。2025/07/01以降"],
         ["CPA", '''=IF(OR(N(B18)=0,N(B5)=0),"",B18/B5)''', "", "接続中", "広告費 / 集客数"],
         ["個別予約CPO", '''=IF(OR(N(B18)=0,N(B7)=0),"",B18/B7)''', "", "接続中", "広告費 / 個別予約数"],
-        ["新規着金ROAS", '''=IF(OR(N(B18)=0,N(B10)=0),"",B10/B18)''', "", "接続中", "新規着金売上 / 広告費"],
-        ["着金ROAS", '''=IF(OR(N(B18)=0,N(B14)=0),"",B14/B18)''', "", "接続中", "着金売上 / 広告費"],
+        ["ROAS（新規）", '''=IF(OR(N(B18)=0,N(B10)=0),"",B10/B18)''', "", "接続中", "新規着金売上 / 広告費"],
+        ["ROAS（合計）", '''=IF(OR(N(B18)=0,N(B14)=0),"",B14/B18)''', "", "接続中", "着金売上 / 広告費"],
         ["会員数", '''=IF(OR($B$2="",$B$3=""),"",IFERROR(INDEX(FILTER('日別数値'!T:T,'日別数値'!A:A>=$B$2,'日別数値'!A:A<=$B$3,'日別数値'!T:T<>""),ROWS(FILTER('日別数値'!T:T,'日別数値'!A:A>=$B$2,'日別数値'!A:A<=$B$3,'日別数値'!T:T<>""))),""))''', "【アドネス株式会社】会員データ（加工） / 日別会員数値", member_state, member_note],
         ["中途解約数", '''=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS('日別数値'!U:U,"<>",'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)=0,"",SUMIFS('日別数値'!U:U,'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)))''', "【アドネス株式会社】会員データ（加工） / 日別会員数値", mid_term_state, mid_term_note],
         ["クーリングオフ数", '''=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS('日別数値'!V:V,"<>",'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)=0,"",SUMIFS('日別数値'!V:V,'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)))''', "【アドネス株式会社】会員データ（加工） / 日別会員数値", cooling_off_state, cooling_off_note],
@@ -916,15 +955,53 @@ def build_summary_rows(
     for row_index, row in enumerate(visible_rows):
         rows[row_index][:5] = row
 
-    helper_headers = [
-        "日付", "集客数", "集客数（UU）", "個別予約数", "個別予約数（UU）", "個別実施数",
-        "新規着金売上", "分割回収売上", "継続課金売上", "会員向け単発売上",
-        "着金売上", "返金額", "純着金売上", "解約請求回収額",
-        "広告費", "CPA", "個別予約CPO", "新規着金ROAS", "着金ROAS",
-        "会員数", "中途解約数", "クーリングオフ数",
+    rows[0][6] = "直近7日"
+    rows[1][6:17] = [
+        "日付",
+        "新規着金売上",
+        "分割回収売上",
+        "継続課金売上",
+        "会員向け単発売上",
+        "着金売上",
+        "返金額",
+        "純着金売上",
+        "広告費",
+        "ROAS（新規）",
+        "ROAS（合計）",
     ]
-    rows[0][9:31] = helper_headers
-    rows[1][9] = '''=IFERROR(FILTER('日別数値'!A2:V,'日別数値'!A2:A>=$B$2,'日別数値'!A2:A<=$B$3),"")'''
+    for offset in range(7):
+        row_index = offset + 2
+        rows[row_index][6] = build_recent_date_formula(offset)
+        rows[row_index][7] = build_recent_day_formula("G", offset)
+        rows[row_index][8] = build_recent_day_formula("H", offset)
+        rows[row_index][9] = build_recent_day_formula("I", offset)
+        rows[row_index][10] = build_recent_day_formula("J", offset)
+        rows[row_index][11] = build_recent_day_formula("K", offset)
+        rows[row_index][12] = build_recent_day_formula("L", offset)
+        rows[row_index][13] = build_recent_day_formula("M", offset)
+        rows[row_index][14] = build_recent_day_formula("O", offset)
+        rows[row_index][15] = build_recent_day_formula("R", offset)
+        rows[row_index][16] = build_recent_day_formula("S", offset)
+
+    rows[0][19:25] = [
+        "週開始日",
+        "新規着金売上",
+        "着金売上",
+        "広告費",
+        "ROAS（新規）",
+        "ROAS（合計）",
+    ]
+    rows[1][19] = '''=IFERROR(MAX(FILTER('日別数値'!$A$2:$A,'日別数値'!$A$2:$A<>""))-WEEKDAY(MAX(FILTER('日別数値'!$A$2:$A,'日別数値'!$A$2:$A<>"")),2)+1-77,"")'''
+    for offset in range(12):
+        row_index = offset + 1
+        row_number = row_index + 1
+        if offset > 0:
+            rows[row_index][19] = f'=IF($T{row_number - 1}="","",$T{row_number - 1}+7)'
+        rows[row_index][20] = f'=IF($T{row_number}="","",SUMIFS(\'日別数値\'!$G:$G,\'日別数値\'!$A:$A,">="&$T{row_number},\'日別数値\'!$A:$A,"<"&$T{row_number}+7))'
+        rows[row_index][21] = f'=IF($T{row_number}="","",SUMIFS(\'日別数値\'!$K:$K,\'日別数値\'!$A:$A,">="&$T{row_number},\'日別数値\'!$A:$A,"<"&$T{row_number}+7))'
+        rows[row_index][22] = f'=IF($T{row_number}="","",SUMIFS(\'日別数値\'!$O:$O,\'日別数値\'!$A:$A,">="&$T{row_number},\'日別数値\'!$A:$A,"<"&$T{row_number}+7))'
+        rows[row_index][23] = f'=IF(OR($T{row_number}="",N($W{row_number})=0,N($U{row_number})=0),"",$U{row_number}/$W{row_number})'
+        rows[row_index][24] = f'=IF(OR($T{row_number}="",N($W{row_number})=0,N($V{row_number})=0),"",$V{row_number}/$W{row_number})'
     return rows
 
 
@@ -973,8 +1050,8 @@ def build_daily_rows(
         "広告費",
         "CPA",
         "個別予約CPO",
-        "新規着金ROAS",
-        "着金ROAS",
+        "ROAS（新規）",
+        "ROAS（合計）",
         "会員数",
         "中途解約数",
         "クーリングオフ数",
@@ -1136,8 +1213,8 @@ def build_data_source_rows(
         ["広告費", "広告費", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{AD_SPEND_METRICS_SHEET_ID}/edit","【アドネス株式会社】広告費データ（加工）")', AD_SPEND_DAILY_TAB, "B列", "数値管理シートのカテゴリ=広告の日別合計", "2025/07/01以降", ad_spend_state, ad_spend_updated_at, ad_spend_updates, ad_spend_errors, ad_spend_memo],
         ["CPA", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "P列", "広告費 / 集客数", "広告費と集客数が入力済み", "接続中", "", "", "", "広告費と集客数が入力された日だけ自動計算"],
         ["個別予約CPO", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "Q列", "広告費 / 個別予約数", "広告費と個別予約数が入力済み", "接続中", "", "", "", "広告費と個別予約数が入力された日だけ自動計算"],
-        ["新規着金ROAS", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "R列", "新規着金売上 / 広告費", "新規着金売上と広告費が入力済み", "接続中", "", "", "", "広告判断用の新規着金ROAS"],
-        ["着金ROAS", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "S列", "着金売上 / 広告費", "着金売上と広告費が入力済み", "接続中", "", "", "", "全体像を見るための着金ROAS"],
+        ["ROAS（新規）", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "R列", "新規着金売上 / 広告費", "新規着金売上と広告費が入力済み", "接続中", "", "", "", "広告判断用の新規着金ROAS"],
+        ["ROAS（合計）", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "S列", "着金売上 / 広告費", "着金売上と広告費が入力済み", "接続中", "", "", "", "全体像を見るための着金ROAS"],
         ["会員数", "会員", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{MEMBERSHIP_METRICS_SHEET_ID}/edit","【アドネス株式会社】会員データ（加工）")', MEMBERSHIP_DAILY_TAB, "D列", "契約締結日から7日経過した会員の日次残高", "2025/01/01以降", membership_member.get("ステータス", "確認待ち"), membership_member.get("最終同期日", ""), membership_member.get("更新数", str(membership_daily_row_count)), membership_member.get("エラー数", "0"), membership_member.get("メモ", "会員データ（加工）の日別会員数値を参照する")],
         ["中途解約数", "会員", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{MEMBERSHIP_METRICS_SHEET_ID}/edit","【アドネス株式会社】会員データ（加工）")', MEMBERSHIP_DAILY_TAB, "E列", "日別件数", "2025/01/01以降", membership_mid_term.get("ステータス", "確認待ち"), membership_mid_term.get("最終同期日", ""), membership_mid_term.get("更新数", str(membership_daily_row_count)), membership_mid_term.get("エラー数", "0"), membership_mid_term.get("メモ", "会員データ（加工）の日別会員数値を参照する")],
         ["クーリングオフ数", "会員", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{MEMBERSHIP_METRICS_SHEET_ID}/edit","【アドネス株式会社】会員データ（加工）")', MEMBERSHIP_DAILY_TAB, "C列", "日別件数", "2025/01/01以降", membership_cooling_off.get("ステータス", "確認待ち"), membership_cooling_off.get("最終同期日", ""), membership_cooling_off.get("更新数", str(membership_daily_row_count)), membership_cooling_off.get("エラー数", "0"), membership_cooling_off.get("メモ", "会員データ（加工）の日別会員数値を参照する")],
@@ -1188,10 +1265,19 @@ def main() -> None:
             repeat_cell_request(
                 tabs["スキルプラス事業サマリー"].id,
                 4,
-                25,
+                9,
                 1,
                 2,
                 {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}},
+                "userEnteredFormat.numberFormat",
+            ),
+            repeat_cell_request(
+                tabs["スキルプラス事業サマリー"].id,
+                9,
+                20,
+                1,
+                2,
+                {"numberFormat": {"type": "CURRENCY", "pattern": "¥#,##0"}},
                 "userEnteredFormat.numberFormat",
             ),
             repeat_cell_request(
@@ -1205,28 +1291,64 @@ def main() -> None:
             ),
             repeat_cell_request(
                 tabs["スキルプラス事業サマリー"].id,
+                22,
+                25,
                 1,
-                len(summary_rows),
+                2,
+                {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}},
+                "userEnteredFormat.numberFormat",
+            ),
+            repeat_cell_request(
+                tabs["スキルプラス事業サマリー"].id,
+                2,
                 9,
-                10,
+                6,
+                7,
+                {"numberFormat": {"type": "DATE", "pattern": "yyyy/mm/dd"}},
+                "userEnteredFormat.numberFormat",
+            ),
+            repeat_cell_request(
+                tabs["スキルプラス事業サマリー"].id,
+                2,
+                9,
+                7,
+                15,
+                {"numberFormat": {"type": "CURRENCY", "pattern": "¥#,##0"}},
+                "userEnteredFormat.numberFormat",
+            ),
+            repeat_cell_request(
+                tabs["スキルプラス事業サマリー"].id,
+                2,
+                9,
+                15,
+                17,
+                {"numberFormat": {"type": "NUMBER", "pattern": "0.00"}},
+                "userEnteredFormat.numberFormat",
+            ),
+            repeat_cell_request(
+                tabs["スキルプラス事業サマリー"].id,
+                1,
+                13,
+                19,
+                20,
                 {"numberFormat": {"type": "DATE", "pattern": "yyyy/mm/dd"}},
                 "userEnteredFormat.numberFormat",
             ),
             repeat_cell_request(
                 tabs["スキルプラス事業サマリー"].id,
                 1,
-                len(summary_rows),
-                10,
-                31,
-                {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}},
+                13,
+                20,
+                23,
+                {"numberFormat": {"type": "CURRENCY", "pattern": "¥#,##0"}},
                 "userEnteredFormat.numberFormat",
             ),
             repeat_cell_request(
                 tabs["スキルプラス事業サマリー"].id,
                 1,
-                len(summary_rows),
-                26,
-                28,
+                13,
+                23,
+                25,
                 {"numberFormat": {"type": "NUMBER", "pattern": "0.00"}},
                 "userEnteredFormat.numberFormat",
             ),
@@ -1238,45 +1360,88 @@ def main() -> None:
         summary_rows,
         3,
     )
+    summary_section_requests = [
+        repeat_cell_request(
+            tabs["スキルプラス事業サマリー"].id,
+            0,
+            1,
+            6,
+            17,
+            {
+                "backgroundColor": {"red": 0.89, "green": 0.95, "blue": 0.99},
+                "textFormat": {"bold": True, "fontSize": 11},
+                "horizontalAlignment": "LEFT",
+                "verticalAlignment": "MIDDLE",
+            },
+            "userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment",
+        ),
+        repeat_cell_request(
+            tabs["スキルプラス事業サマリー"].id,
+            1,
+            2,
+            6,
+            17,
+            {
+                "backgroundColor": HEADER_BG,
+                "textFormat": HEADER_TEXT,
+                "horizontalAlignment": "CENTER",
+                "verticalAlignment": "MIDDLE",
+                "wrapStrategy": "CLIP",
+            },
+            "userEnteredFormat.backgroundColor,userEnteredFormat.textFormat,userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment,userEnteredFormat.wrapStrategy",
+        ),
+        repeat_cell_request(
+            tabs["スキルプラス事業サマリー"].id,
+            2,
+            9,
+            6,
+            17,
+            {
+                "verticalAlignment": "MIDDLE",
+                "wrapStrategy": "CLIP",
+            },
+            "userEnteredFormat.verticalAlignment,userEnteredFormat.wrapStrategy",
+        ),
+        set_column_width_request(tabs["スキルプラス事業サマリー"].id, 6, 7, 105),
+        set_column_width_request(tabs["スキルプラス事業サマリー"].id, 7, 15, 118),
+        set_column_width_request(tabs["スキルプラス事業サマリー"].id, 15, 17, 98),
+        set_column_hidden_request(tabs["スキルプラス事業サマリー"].id, 19, 25, True),
+    ]
     batch_update_with_retry(
         spreadsheet,
-        {
-            "requests": [
-                set_column_hidden_request(tabs["スキルプラス事業サマリー"].id, 9, 31, True),
-                add_line_chart_request(
-                    tabs["スキルプラス事業サマリー"].id,
-                    0,
-                    6,
-                    "日別集客推移",
-                    9,
-                    [10, 11],
-                ),
-                add_line_chart_request(
-                    tabs["スキルプラス事業サマリー"].id,
-                    18,
-                    6,
-                    "日別予約・実施推移",
-                    9,
-                    [12, 13, 14],
-                ),
-                add_line_chart_request(
-                    tabs["スキルプラス事業サマリー"].id,
-                    36,
-                    6,
-                    "日別売上・広告費推移",
-                    9,
-                    [15, 19, 23],
-                ),
-                add_line_chart_request(
-                    tabs["スキルプラス事業サマリー"].id,
-                    54,
-                    6,
-                    "日別会員推移",
-                    9,
-                    [28, 29, 30],
-                ),
-            ]
-        },
+        {"requests": summary_section_requests},
+        "スキルプラス事業サマリーの直近表示更新",
+    )
+    chart_requests = list_chart_delete_requests(spreadsheet, tabs["スキルプラス事業サマリー"].id)
+    chart_requests.extend(
+        [
+            add_line_chart_request(
+                tabs["スキルプラス事業サマリー"].id,
+                11,
+                6,
+                "直近12週間 着金・広告費推移",
+                19,
+                [20, 21, 22],
+                end_row_index=13,
+                width=940,
+                height=260,
+            ),
+            add_line_chart_request(
+                tabs["スキルプラス事業サマリー"].id,
+                29,
+                6,
+                "直近12週間 ROAS推移",
+                19,
+                [23, 24],
+                end_row_index=13,
+                width=940,
+                height=260,
+            ),
+        ]
+    )
+    batch_update_with_retry(
+        spreadsheet,
+        {"requests": chart_requests},
         "スキルプラス事業サマリーのグラフ更新",
     )
 
@@ -1322,8 +1487,17 @@ def main() -> None:
                 1,
                 len(daily_rows),
                 1,
-                22,
+                6,
                 {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}},
+                "userEnteredFormat.numberFormat",
+            ),
+            repeat_cell_request(
+                tabs["日別数値"].id,
+                1,
+                len(daily_rows),
+                6,
+                17,
+                {"numberFormat": {"type": "CURRENCY", "pattern": "¥#,##0"}},
                 "userEnteredFormat.numberFormat",
             ),
             repeat_cell_request(
@@ -1333,6 +1507,15 @@ def main() -> None:
                 17,
                 19,
                 {"numberFormat": {"type": "NUMBER", "pattern": "0.00"}},
+                "userEnteredFormat.numberFormat",
+            ),
+            repeat_cell_request(
+                tabs["日別数値"].id,
+                1,
+                len(daily_rows),
+                19,
+                22,
+                {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}},
                 "userEnteredFormat.numberFormat",
             ),
         ],
