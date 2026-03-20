@@ -46,12 +46,14 @@ CS_SHEET_ID = "1XOkJsXzEx4iV9h8F-cywg0FOS4Knf7IfekN78RZAr6I"
 SKILLPLUS_STUDENT_SHEET_ID = "1zL8LV9CF8RLKiNDNqsYO6UXxuhBW32NcDaPJ5FqB17M"
 
 DAILY_TAB_NAME = "日別売上数値"
+MONTHLY_RECON_TAB_NAME = "月次照合"
 SUMMARY_TAB_NAME = "売上サマリー"
 SOURCE_MANAGEMENT_TAB_NAME = "データソース管理"
 RULE_TAB_NAME = "データ追加ルール"
 
 TAB_SPECS = {
     DAILY_TAB_NAME: (1200, 16),
+    MONTHLY_RECON_TAB_NAME: (320, 7),
     SUMMARY_TAB_NAME: (50, 3),
     SOURCE_MANAGEMENT_TAB_NAME: (80, 12),
     RULE_TAB_NAME: (60, 3),
@@ -69,6 +71,7 @@ HEADER_TEXT = {
 }
 TAB_COLORS = {
     DAILY_TAB_NAME: "#1A73E8",
+    MONTHLY_RECON_TAB_NAME: "#9334E6",
     SUMMARY_TAB_NAME: "#FBBC04",
     SOURCE_MANAGEMENT_TAB_NAME: "#34A853",
     RULE_TAB_NAME: "#9E9E9E",
@@ -678,7 +681,7 @@ def ensure_tabs(spreadsheet):
             tabs.pop(title, None)
 
     requests = []
-    ordered_names = [DAILY_TAB_NAME, SUMMARY_TAB_NAME, SOURCE_MANAGEMENT_TAB_NAME, RULE_TAB_NAME]
+    ordered_names = [DAILY_TAB_NAME, MONTHLY_RECON_TAB_NAME, SUMMARY_TAB_NAME, SOURCE_MANAGEMENT_TAB_NAME, RULE_TAB_NAME]
     for idx, name in enumerate(ordered_names):
         ws = tabs[name]
         requests.append(set_sheet_properties_request(ws.id, {"index": idx, "hidden": False}, "index,hidden"))
@@ -1904,10 +1907,11 @@ def build_daily_rows(
     student_index: dict[str, set[str]],
     other_business_index: dict[str, dict[str, list[OtherBusinessEvidence]]],
     product_meta: dict[str, dict[str, str]],
-) -> tuple[List[List[object]], dict]:
+) -> tuple[List[List[object]], dict, dict[str, Counter]]:
     headers = payment_rows[0]
     idx = {header: i for i, header in enumerate(headers)}
     daily = defaultdict(Counter)
+    source_monthly = defaultdict(Counter)
     complete_unknown_amount = 0
     complete_unknown_count = 0
     sale_source_counts = Counter()
@@ -1934,20 +1938,31 @@ def build_daily_rows(
 
         amount = abs(parse_amount(padded[idx["イベント金額"]]))
         bucket = sale_bucket(context, product_meta)
+        month_text = context.event_date[:7]
         daily[context.event_date]["sales_amount"] += amount
         daily[context.event_date]["sales_count"] += 1
+        source_monthly[month_text]["sales_amount"] += amount
+        source_monthly[month_text]["sales_count"] += 1
         if bucket == "new":
             daily[context.event_date]["new_sales_amount"] += amount
             daily[context.event_date]["new_sales_count"] += 1
+            source_monthly[month_text]["new_sales_amount"] += amount
+            source_monthly[month_text]["new_sales_count"] += 1
         elif bucket == "installment":
             daily[context.event_date]["installment_sales_amount"] += amount
             daily[context.event_date]["installment_sales_count"] += 1
+            source_monthly[month_text]["installment_sales_amount"] += amount
+            source_monthly[month_text]["installment_sales_count"] += 1
         elif bucket == "recurring":
             daily[context.event_date]["recurring_sales_amount"] += amount
             daily[context.event_date]["recurring_sales_count"] += 1
+            source_monthly[month_text]["recurring_sales_amount"] += amount
+            source_monthly[month_text]["recurring_sales_count"] += 1
         else:
             daily[context.event_date]["member_one_time_sales_amount"] += amount
             daily[context.event_date]["member_one_time_sales_count"] += 1
+            source_monthly[month_text]["member_one_time_sales_amount"] += amount
+            source_monthly[month_text]["member_one_time_sales_count"] += 1
         sale_source_counts[context.source] += 1
 
     all_dates = set(daily.keys()) | set(refund_daily.keys())
@@ -1994,7 +2009,7 @@ def build_daily_rows(
             "sale_source_counts": dict(sale_source_counts),
             "supplement_refund_count": refund_stats.get("supplement_count", 0),
         }
-        return rows, stats
+        return rows, stats, source_monthly
 
     start_dt = START_DATE
     end_dt = max(parse_date(date_text) for date_text in all_dates if parse_date(date_text))
@@ -2081,6 +2096,11 @@ def build_daily_rows(
         sales_count_total += sales_count
         refund_count_total += refund_count
         claim_count_total += claim_count
+        month_text = date_text[:7]
+        source_monthly[month_text]["refund_amount"] += refund_amount
+        source_monthly[month_text]["refund_count"] += refund_count
+        source_monthly[month_text]["claim_amount"] += claim_amount
+        source_monthly[month_text]["claim_count"] += claim_count
         cursor += timedelta(days=1)
 
     stats = {
@@ -2107,7 +2127,7 @@ def build_daily_rows(
         "sale_source_counts": dict(sale_source_counts),
         "supplement_refund_count": refund_stats.get("supplement_count", 0),
     }
-    return rows, stats
+    return rows, stats, source_monthly
 
 
 def build_summary_rows(stats: dict, checked_at: str) -> List[List[object]]:
@@ -2131,9 +2151,72 @@ def build_summary_rows(stats: dict, checked_at: str) -> List[List[object]]:
         ["累計着金件数", normalize_display_count(stats["sales_count_total"]), "新規着金件数 + 分割回収件数 + 継続課金件数 + 会員向け単発件数"],
         ["累計返金件数", normalize_display_count(stats["refund_count_total"]), "返金案件数 + raw 補完件数"],
         ["累計解約請求回収件数", normalize_display_count(stats["claim_count_total"]), "回収済みと確認できた解約請求案件数"],
+        ["月次照合要確認件数", normalize_display_count(stats.get("monthly_reconcile_issue_count", 0)), "月次照合タブで差分が残っている指標件数"],
         ["完全不明金額", normalize_display_amount(stats["complete_unknown_amount"]), "スキルプラス事業と確定できず日別へ入れていない売上"],
         ["完全不明件数", normalize_display_count(stats["complete_unknown_count"]), "完全不明として除外した売上件数"],
     ]
+
+
+def build_monthly_reconciliation_rows(daily_rows: List[List[object]], source_monthly: dict[str, Counter]) -> tuple[List[List[object]], int]:
+    headers = daily_rows[0] if daily_rows else []
+    idx = {header: i for i, header in enumerate(headers)}
+    processed_monthly = defaultdict(Counter)
+
+    for row in daily_rows[1:]:
+        date_text = normalize_date(row[idx["日付"]]) if len(row) > idx.get("日付", 0) else ""
+        if not date_text:
+            continue
+        month_text = date_text[:7]
+        processed_monthly[month_text]["new_sales_amount"] += parse_amount(row[idx["新規着金売上"]])
+        processed_monthly[month_text]["installment_sales_amount"] += parse_amount(row[idx["分割回収売上"]])
+        processed_monthly[month_text]["recurring_sales_amount"] += parse_amount(row[idx["継続課金売上"]])
+        processed_monthly[month_text]["member_one_time_sales_amount"] += parse_amount(row[idx["会員向け単発売上"]])
+        processed_monthly[month_text]["sales_amount"] += parse_amount(row[idx["着金売上"]])
+        processed_monthly[month_text]["refund_amount"] += parse_amount(row[idx["返金額"]])
+        processed_monthly[month_text]["net_sales_total"] += parse_amount(row[idx["純着金売上"]])
+        processed_monthly[month_text]["claim_amount"] += parse_amount(row[idx["解約請求回収額"]])
+        processed_monthly[month_text]["new_sales_count"] += parse_amount(row[idx["新規着金件数"]])
+        processed_monthly[month_text]["installment_sales_count"] += parse_amount(row[idx["分割回収件数"]])
+        processed_monthly[month_text]["recurring_sales_count"] += parse_amount(row[idx["継続課金件数"]])
+        processed_monthly[month_text]["member_one_time_sales_count"] += parse_amount(row[idx["会員向け単発件数"]])
+        processed_monthly[month_text]["sales_count"] += parse_amount(row[idx["着金件数"]])
+        processed_monthly[month_text]["refund_count"] += parse_amount(row[idx["返金件数"]])
+        processed_monthly[month_text]["claim_count"] += parse_amount(row[idx["解約請求回収件数"]])
+
+    rows = [["月", "指標", "加工値", "元値", "差分", "判定", "補足"]]
+    issue_count = 0
+    metric_defs = [
+        ("新規着金売上", "new_sales_amount", "決済収集シートの成功売上を新規着金ルールで月次集計"),
+        ("分割回収売上", "installment_sales_amount", "決済収集シートの成功売上を分割回収ルールで月次集計"),
+        ("継続課金売上", "recurring_sales_amount", "決済収集シートの成功売上を継続課金ルールで月次集計"),
+        ("会員向け単発売上", "member_one_time_sales_amount", "決済収集シートの成功売上を会員向け単発ルールで月次集計"),
+        ("着金売上", "sales_amount", "新規着金売上 + 分割回収売上 + 継続課金売上 + 会員向け単発売上"),
+        ("返金額", "refund_amount", "相談窓口シート案件正本 + raw 補完の月次集計"),
+        ("純着金売上", "net_sales_total", "着金売上 - 返金額"),
+        ("解約請求回収額", "claim_amount", "中途解約タブの回収済み請求の月次集計"),
+        ("新規着金件数", "new_sales_count", "新規着金売上として扱う件数"),
+        ("分割回収件数", "installment_sales_count", "分割回収売上として扱う件数"),
+        ("継続課金件数", "recurring_sales_count", "継続課金売上として扱う件数"),
+        ("会員向け単発件数", "member_one_time_sales_count", "会員向け単発売上として扱う件数"),
+        ("着金件数", "sales_count", "新規着金件数 + 分割回収件数 + 継続課金件数 + 会員向け単発件数"),
+        ("返金件数", "refund_count", "返金案件数 + raw 補完件数"),
+        ("解約請求回収件数", "claim_count", "回収済みと確認できた解約請求案件数"),
+    ]
+
+    month_keys = sorted(set(processed_monthly.keys()) | set(source_monthly.keys()))
+    for month_text in month_keys:
+        source_counter = Counter(source_monthly.get(month_text, {}))
+        source_counter["net_sales_total"] = source_counter["sales_amount"] - source_counter["refund_amount"]
+        for label, key, note in metric_defs:
+            processed_value = processed_monthly[month_text].get(key, 0)
+            source_value = source_counter.get(key, 0)
+            diff = processed_value - source_value
+            status = "正常" if diff == 0 else "要確認"
+            if diff != 0:
+                issue_count += 1
+            rows.append([month_text, label, processed_value, source_value, diff, status, note])
+
+    return rows, issue_count
 
 
 def build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats: dict, checked_at: str) -> List[List[object]]:
@@ -2142,7 +2225,7 @@ def build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats: dict, che
     refund_ws = cs_ss.worksheet("管理用_2025.1.25-クーオフ")
     midterm_ws = cs_ss.worksheet("管理用_20250125-中途解約")
     status = "正常"
-    if stats["complete_unknown_amount"] > 0:
+    if stats["complete_unknown_amount"] > 0 or stats.get("monthly_reconcile_issue_count", 0) > 0:
         status = "要確認"
 
     rows = [
@@ -2159,7 +2242,7 @@ def build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats: dict, che
             f"'{checked_at}",
             stats["sales_count_total"],
             1 if status != "正常" else 0,
-            "完全不明は日別に入れず売上サマリーで監視する。他事業成約リストは除外根拠として使う",
+            "完全不明は日別に入れず売上サマリーで監視する。他事業成約リストは除外根拠として使う。月次照合タブで差分ゼロを確認する",
         ],
         [
             DAILY_TAB_NAME,
@@ -2225,6 +2308,7 @@ def build_rule_rows() -> List[List[object]]:
     return [
         ["項目", "ルール", "補足"],
         ["日別売上数値", "手入力で直さず、元データから再生成する", "数字の理由を後から追えるようにする"],
+        ["月次照合", "月ごとの加工値と元値の差分がゼロかを確認する", "日別売上数値の月次合計と、元ソースの月次集計を同時に見る"],
         ["新規着金売上", "新規契約として扱う着金だけを集計する", "非会員向け商品、頭金お支払い、銀行振込・信販の初回承認/振込を含める。プライム合宿の148,000円はここへ含める"],
         ["分割回収売上", "スキルプラス本体の分割金回収を集計する", "UnivaPay の空欄 recurring のうち、分割金パターンとして確定した金額帯と、動画広告分析Pro の `初回3ヶ月間` をここへ寄せる"],
         ["継続課金売上", "月額課金や継続利用料など、積み上がる継続課金を集計する", "商品マスタの購入形態が月額、または UTAGE detail で継続課金と exact に確認できた売上をここへ寄せる。センサーズ継続、AIカレッジ継続、スキルプラス継続利用は 21,780円/月。動画広告分析Pro は `4ヶ月目以降` をここへ寄せる"],
@@ -2270,6 +2354,7 @@ def save_run_state(stats: Dict[str, int]) -> None:
         "sales_count_total": stats["sales_count_total"],
         "refund_count_total": stats["refund_count_total"],
         "claim_count_total": stats["claim_count_total"],
+        "monthly_reconcile_issue_count": stats.get("monthly_reconcile_issue_count", 0),
         "complete_unknown_amount": stats["complete_unknown_amount"],
         "complete_unknown_count": stats["complete_unknown_count"],
         "latest_date": stats["latest_date"],
@@ -2325,7 +2410,7 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
         refund_case_stats["refund_count"] += refund_supplement_stats["refund_count"]
         refund_case_stats["supplement_count"] = refund_supplement_stats["refund_count"]
 
-        daily_rows, stats = build_daily_rows(
+        daily_rows, stats, source_monthly = build_daily_rows(
             payment_rows,
             mapping,
             refund_daily,
@@ -2337,6 +2422,8 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
         )
         checked_at = datetime.now().strftime("%Y/%m/%d %H:%M")
         stats["updated_at"] = checked_at
+        monthly_rows, monthly_issue_count = build_monthly_reconciliation_rows(daily_rows, source_monthly)
+        stats["monthly_reconcile_issue_count"] = monthly_issue_count
 
         summary_rows = build_summary_rows(stats, checked_at)
         source_rows = build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats, checked_at)
@@ -2355,6 +2442,7 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
             print("【dry-run】累計分割回収件数:", stats["installment_sales_count_total"])
             print("【dry-run】累計継続課金件数:", stats["recurring_sales_count_total"])
             print("【dry-run】累計会員向け単発件数:", stats["member_one_time_sales_count_total"])
+            print("【dry-run】月次照合要確認件数:", stats["monthly_reconcile_issue_count"])
             print("【dry-run】完全不明金額:", stats["complete_unknown_amount"])
             print("【dry-run】完全不明件数:", stats["complete_unknown_count"])
             print("【dry-run】補完返金件数:", refund_case_stats.get("supplement_count", 0))
@@ -2363,6 +2451,17 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
 
         write_rows(target, tabs[DAILY_TAB_NAME], daily_rows)
         style_daily_tab(target, tabs[DAILY_TAB_NAME])
+
+        write_rows(target, tabs[MONTHLY_RECON_TAB_NAME], monthly_rows)
+        style_meta_tab(
+            target,
+            tabs[MONTHLY_RECON_TAB_NAME],
+            widths=[100, 170, 140, 140, 120, 90, 320],
+            center_cols=[0, 5],
+            status_col=5,
+            number_cols=[2, 3, 4],
+        )
+        apply_status_cell_colors(target, tabs[MONTHLY_RECON_TAB_NAME], monthly_rows, 5)
 
         write_rows(target, tabs[SUMMARY_TAB_NAME], summary_rows)
         style_meta_tab(target, tabs[SUMMARY_TAB_NAME], widths=[180, 180, 420])
