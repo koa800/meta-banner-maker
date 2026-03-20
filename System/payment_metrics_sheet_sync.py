@@ -31,6 +31,12 @@ from gspread.exceptions import APIError, SpreadsheetNotFound
 
 from line_notify import send as send_line_notify
 from sheets_manager import get_client
+from skillplus_student_metrics_sheet_sync import (
+    STUDENT_TAB_NAME as SKILLPLUS_STUDENT_PROCESSED_TAB_NAME,
+    TARGET_SHEET_ID as SKILLPLUS_STUDENT_PROCESSED_SHEET_ID,
+    load_skillplus_student_identifiers_from_processed,
+    sync_skillplus_student_metrics_sheet,
+)
 from scripts.setup_payment_product_master import (
     BUSINESS_SKILLPLUS,
     MASTER_SHEET_ID,
@@ -47,7 +53,6 @@ from scripts.setup_payment_product_master import (
 TARGET_SPREADSHEET_TITLE = "【アドネス株式会社】スキルプラス着金データ（加工）"
 TARGET_SPREADSHEET_ID = "1eh8X_dsRitFDKAJVE-dbr75ycGfMffMsvJYI-Gtlv_Q"
 CS_SHEET_ID = "1XOkJsXzEx4iV9h8F-cywg0FOS4Knf7IfekN78RZAr6I"
-SKILLPLUS_STUDENT_SHEET_ID = "1zL8LV9CF8RLKiNDNqsYO6UXxuhBW32NcDaPJ5FqB17M"
 
 DAILY_TAB_NAME = "日別売上数値"
 MONTHLY_RECON_TAB_NAME = "月次照合"
@@ -169,7 +174,6 @@ CLAIM_COLLECTED_NEGATIVE_MARKERS = (
     "振り込まれておりません",
     "振り込まれていません",
 )
-SKILLPLUS_STUDENT_EXCLUDED_TABS = {"最新元データ一覧"}
 OTHER_BUSINESS_MATCH_LOOKBACK_DAYS = 30
 OTHER_BUSINESS_MATCH_LOOKAHEAD_DAYS = 120
 OTHER_BUSINESS_EVIDENCE_CONFIGS = [
@@ -1301,85 +1305,6 @@ def text_contains_any_marker(text: str, markers: Iterable[str]) -> bool:
     return any(marker and marker in normalized for marker in markers)
 
 
-def is_skillplus_student_raw_tab(title: str) -> bool:
-    normalized = normalize_text(title)
-    return "（加工）" not in normalized and normalized not in SKILLPLUS_STUDENT_EXCLUDED_TABS
-
-
-def detect_student_header_row(rows: list[list[str]]) -> Optional[int]:
-    for index, row in enumerate(rows[:5]):
-        joined = " / ".join(normalize_text(cell) for cell in row if normalize_text(cell))
-        if not joined:
-            continue
-        if any(keyword in joined for keyword in ("メールアドレス", "電話番号", "お電話番号", "ご入会日", "入会日", "回答者名", "表示名")):
-            return index
-    return None
-
-
-def build_student_header_spec(headers: list[str]) -> dict[str, object]:
-    return {
-        "email_indexes": header_indexes_by_contains(headers, ["メールアドレス"]),
-        "phone_indexes": header_indexes_by_contains(headers, ["電話番号", "お電話番号"]),
-        "full_name_indexes": header_indexes_by_contains(headers, ["お名前", "本名"]),
-        "display_name_indexes": header_indexes_by_contains(headers, ["回答者名", "表示名"]),
-        "nickname_indexes": header_indexes_by_contains(headers, ["ニックネーム"]),
-        "furigana_indexes": header_indexes_by_contains(headers, ["ふりがな"]),
-        "surname_index": header_index_by_exact(headers, ["姓", "姓（せい）"]),
-        "given_name_index": header_index_by_exact(headers, ["名"]),
-    }
-
-
-def load_skillplus_student_identifiers(student_ss) -> dict[str, set[str]]:
-    emails: set[str] = set()
-    phones: set[str] = set()
-    names: set[str] = set()
-
-    for ws in student_ss.worksheets():
-        if not is_skillplus_student_raw_tab(ws.title):
-            continue
-
-        rows = get_all_values_with_retry(ws)
-        header_row_index = detect_student_header_row(rows)
-        if header_row_index is None:
-            continue
-
-        headers = rows[header_row_index]
-        spec = build_student_header_spec(headers)
-        surname_index = spec["surname_index"]
-        given_name_index = spec["given_name_index"]
-
-        for row in rows[header_row_index + 1 :]:
-            if not any(normalize_text(cell) for cell in row):
-                continue
-
-            email = normalize_email(pick_first_value(row, spec["email_indexes"]))
-            phone = normalize_phone(pick_first_value(row, spec["phone_indexes"]))
-
-            full_name_source = pick_first_value(row, spec["full_name_indexes"])
-            if not full_name_source and surname_index is not None and given_name_index is not None:
-                surname = normalize_text(row[surname_index]) if surname_index < len(row) else ""
-                given_name = normalize_text(row[given_name_index]) if given_name_index < len(row) else ""
-                full_name_source = f"{surname}{given_name}"
-
-            name_candidates = [
-                normalize_name_key(full_name_source),
-                normalize_name_key(pick_first_value(row, spec["display_name_indexes"])),
-                normalize_name_key(pick_first_value(row, spec["nickname_indexes"])),
-                normalize_name_key(pick_first_value(row, spec["furigana_indexes"])),
-            ]
-            name_candidates = [candidate for candidate in name_candidates if candidate]
-
-            if not email and not phone and not name_candidates:
-                continue
-
-            if email:
-                emails.add(email)
-            if phone:
-                phones.add(phone)
-            names.update(name_candidates)
-    return {"emails": emails, "phones": phones, "names": names}
-
-
 def detect_other_business_header_row(rows: list[list[str]], config: dict) -> Optional[int]:
     candidate_keys = {
         normalize_header_key(header)
@@ -2507,9 +2432,10 @@ def build_product_monthly_rows(
     return rows
 
 
-def build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats: dict, checked_at: str) -> List[List[object]]:
+def build_source_management_rows(payment_ws, mapping_ws, cs_ss, student_ws, stats: dict, checked_at: str) -> List[List[object]]:
     payment_url = get_tab_url(PAYMENT_COLLECTION_SHEET_ID, payment_ws)
     mapping_url = get_tab_url(MASTER_SHEET_ID, mapping_ws)
+    student_url = get_tab_url(SKILLPLUS_STUDENT_PROCESSED_SHEET_ID, student_ws)
     refund_ws = cs_ss.worksheet("管理用_2025.1.25-クーオフ")
     midterm_ws = cs_ss.worksheet("管理用_20250125-中途解約")
     status = "正常"
@@ -2562,6 +2488,20 @@ def build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats: dict, che
         ],
         [
             DAILY_TAB_NAME,
+            "商品未特定の事業判定",
+            "1",
+            f'=HYPERLINK("{student_url}","【アドネス株式会社】スキルプラス受講生データ（加工）")',
+            SKILLPLUS_STUDENT_PROCESSED_TAB_NAME,
+            "メールアドレス / 電話番号 / お名前 / ふりがな / 表示名 / ご入会日",
+            "商品名空欄の銀行振込・信販売上の正の証拠として参照する",
+            "正常",
+            f"'{checked_at}",
+            stats.get("student_count", 0),
+            0,
+            "収集シートの元タブ群を正規化した受講生一覧を参照する。商品やプランはここで持たず、決済側の事業判定だけに使う",
+        ],
+        [
+            DAILY_TAB_NAME,
             "純着金売上",
             "1",
             "この加工シート",
@@ -2586,7 +2526,7 @@ def build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats: dict, che
             f"'{checked_at}",
             stats["source_row_count"],
             1 if status != "正常" else 0,
-            f"スキルプラス受講生データ（元）を正の証拠にし、他事業成約リストを負の証拠にする。商品名空欄でも両条件を満たした銀行振込・信販売上だけを着金売上へ含める",
+            "スキルプラス受講生データ（加工）の受講生一覧を正の証拠にし、他事業成約リストを負の証拠にする。商品名空欄でも両条件を満たした銀行振込・信販売上だけを着金売上へ含める",
         ],
     ]
     return rows
@@ -2607,7 +2547,7 @@ def build_rule_rows() -> List[List[object]]:
         ["返金件数", "返金イベント件数ではなく返金案件数で持つ", "分割返金でも1案件として扱う"],
         ["解約請求回収額", "中途解約タブの負値のうち、入金済み・振込済みなど回収済みと確認できた請求だけを持つ", "通常の着金売上には混ぜない"],
         ["日付", "実入出金日ではなく、確定日を使う", "着金売上はイベント日時、返金額は相談窓口上の確定日、解約請求回収額は回収済みと確認できた案件の日付を使う"],
-        ["商品未特定", "銀行振込・信販の空欄成功売上は、受講生データ元タブでスキルプラス受講生と確認でき、かつ他事業成約リストと競合しないものだけ着金売上へ含める", "どのプランか不明でも、一次データ起点の根拠があるものだけ採用する"],
+        ["商品未特定", "銀行振込・信販の空欄成功売上は、受講生データ（加工）の受講生一覧でスキルプラス受講生と確認でき、かつ他事業成約リストと競合しないものだけ着金売上へ含める", "どのプランか不明でも、一次データを正規化した加工一覧を根拠に採用する"],
         ["頭金お支払い", "UnivaPay の空欄でもメタデータに `頭金お支払い` があるものはスキルプラス販売として新規着金売上へ入れる", "過去運用上 100% スキルプラス販売とみなす"],
         ["完全不明", "スキルプラス事業と確定できない売上は日別に入れない", "他事業成約リストと競合する売上、または一次データ根拠が弱い売上は売上サマリーでだけ監視する"],
         ["プラン不明", "スキルプラス事業とだけ言える売上は着金売上に含める", "商品別やプラン別に配賦できないものは内部的にプラン未特定として扱う"],
@@ -2726,26 +2666,29 @@ def maybe_notify_monthly_reconcile_issues(summary: dict[str, object]) -> None:
         pass
 
 
-def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
+def sync_payment_metrics_sheet(dry_run: bool = False, refresh_masters: bool = False) -> dict:
     with FileLock():
         gc = get_client()
-        if not dry_run:
+        if not dry_run and refresh_masters:
             sync_payment_product_master_structure(gc)
+        if not dry_run:
+            sync_skillplus_student_metrics_sheet(dry_run=False, gc=gc)
         target = get_or_create_target_spreadsheet(gc)
         source = gc.open_by_key(PAYMENT_COLLECTION_SHEET_ID)
         master = gc.open_by_key(MASTER_SHEET_ID)
         cs_ss = gc.open_by_key(CS_SHEET_ID)
-        student_ss = gc.open_by_key(SKILLPLUS_STUDENT_SHEET_ID)
+        student_processed_ss = gc.open_by_key(SKILLPLUS_STUDENT_PROCESSED_SHEET_ID)
         tabs = ensure_tabs(target)
 
         payment_ws = source.worksheet(PAYMENT_COLLECTION_TAB)
         mapping_ws = master.worksheet(PAYMENT_MAPPING_TAB)
         product_ws = master.worksheet(MASTER_PRODUCT_TAB)
+        student_ws = student_processed_ss.worksheet(SKILLPLUS_STUDENT_PROCESSED_TAB_NAME)
         payment_rows = get_all_values_with_retry(payment_ws)
         mapping = load_payment_mapping(mapping_ws)
         skillplus_product_names, non_skillplus_product_names, product_meta = load_product_business_map(product_ws)
         sale_events, sale_index, _ = build_skillplus_sale_indexes(payment_rows, mapping)
-        student_index = load_skillplus_student_identifiers(student_ss)
+        student_index, student_count = load_skillplus_student_identifiers_from_processed(student_ws)
         other_business_index = load_other_business_evidence(gc)
         skillplus_markers = build_text_markers(skillplus_product_names)
         non_skillplus_markers = build_text_markers(non_skillplus_product_names)
@@ -2786,6 +2729,7 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
         )
         checked_at = datetime.now().strftime("%Y/%m/%d %H:%M")
         stats["updated_at"] = checked_at
+        stats["student_count"] = student_count
         monthly_rows, monthly_issue_count = build_monthly_reconciliation_rows(daily_rows, source_monthly)
         monthly_alert_summary = build_monthly_reconcile_alert_summary(monthly_rows)
         product_monthly_rows = build_product_monthly_rows(
@@ -2798,7 +2742,7 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
         stats["monthly_reconcile_issue_count"] = monthly_issue_count
 
         summary_rows = build_summary_rows(stats, checked_at)
-        source_rows = build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats, checked_at)
+        source_rows = build_source_management_rows(payment_ws, mapping_ws, cs_ss, student_ws, stats, checked_at)
         rule_rows = build_rule_rows()
 
         if dry_run:
@@ -2867,8 +2811,13 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description="スキルプラス着金データ（加工）を更新する")
     parser.add_argument("--dry-run", action="store_true", help="Sheets へ書き込まず集計だけ行う")
+    parser.add_argument(
+        "--refresh-masters",
+        action="store_true",
+        help="決済商品変換マスタも同期してから加工シートを再生成する",
+    )
     args = parser.parse_args()
-    sync_payment_metrics_sheet(dry_run=args.dry_run)
+    sync_payment_metrics_sheet(dry_run=args.dry_run, refresh_masters=args.refresh_masters)
 
 
 if __name__ == "__main__":

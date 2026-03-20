@@ -37,6 +37,7 @@ from sheets_manager import get_client
 import payment_metrics_sheet_sync
 from scripts import payment_csv_to_sheet as payment_import
 from scripts import payment_collection_audit
+from scripts.setup_payment_product_master import sync_payment_product_master_structure
 
 try:
     from mac_mini.agent_orchestrator.notifier import send_line_notify
@@ -563,7 +564,8 @@ def main():
         }
         save_state(state)
         payment_collection_audit.sync_payment_collection_audit(spreadsheet=spreadsheet if unresolved_source_issues else None, state=state)
-        payment_metrics_sheet_sync.sync_payment_metrics_sheet()
+        sync_payment_product_master_structure(gc=get_client(), notify_if_pending=True)
+        payment_metrics_sheet_sync.sync_payment_metrics_sheet(refresh_masters=False)
         print("\n新しい取込対象ファイルはありません。")
         return
 
@@ -702,7 +704,8 @@ def main():
     }
     save_state(state)
     payment_collection_audit.sync_payment_collection_audit(spreadsheet=spreadsheet, state=state)
-    payment_metrics_sheet_sync.sync_payment_metrics_sheet()
+    sync_payment_product_master_structure(gc=gc, notify_if_pending=True)
+    payment_metrics_sheet_sync.sync_payment_metrics_sheet(refresh_masters=False)
 
     print("\n実行結果:")
     print(f"  処理成功ファイル: {processed_count}件")
