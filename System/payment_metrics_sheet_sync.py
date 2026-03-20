@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-【アドネス株式会社】決済データ（加工）を再生成する。
+【アドネス株式会社】スキルプラス着金データ（加工）を再生成する。
 
 方針:
 - visible なタブは `日別売上数値 / 売上サマリー / データソース管理 / データ追加ルール` の4つだけに絞る
@@ -40,7 +40,8 @@ from scripts.setup_payment_product_master import (
 )
 
 
-TARGET_SPREADSHEET_TITLE = "【アドネス株式会社】決済データ（加工）"
+TARGET_SPREADSHEET_TITLE = "【アドネス株式会社】スキルプラス着金データ（加工）"
+TARGET_SPREADSHEET_ID = "1eh8X_dsRitFDKAJVE-dbr75ycGfMffMsvJYI-Gtlv_Q"
 CS_SHEET_ID = "1XOkJsXzEx4iV9h8F-cywg0FOS4Knf7IfekN78RZAr6I"
 SKILLPLUS_STUDENT_SHEET_ID = "1zL8LV9CF8RLKiNDNqsYO6UXxuhBW32NcDaPJ5FqB17M"
 
@@ -50,7 +51,7 @@ SOURCE_MANAGEMENT_TAB_NAME = "データソース管理"
 RULE_TAB_NAME = "データ追加ルール"
 
 TAB_SPECS = {
-    DAILY_TAB_NAME: (1200, 12),
+    DAILY_TAB_NAME: (1200, 14),
     SUMMARY_TAB_NAME: (50, 3),
     SOURCE_MANAGEMENT_TAB_NAME: (80, 12),
     RULE_TAB_NAME: (60, 3),
@@ -82,7 +83,7 @@ PROTECTED_EDITOR_EMAILS = [
     "kohara.kaito@team.addness.co.jp",
     "gwsadmin@team.addness.co.jp",
 ]
-PROTECTION_PREFIX = "決済データ（加工）自動生成"
+PROTECTION_PREFIX = "スキルプラス着金データ（加工）自動生成"
 WRITE_RETRY_SECONDS = (5, 10, 20, 40)
 START_DATE = datetime(2025, 1, 1)
 START_DATE_TEXT = START_DATE.strftime("%Y/%m/%d")
@@ -258,7 +259,7 @@ class FileLock:
                 elapsed = (datetime.now() - locked_at).total_seconds()
                 if elapsed < self.timeout_seconds:
                     raise RuntimeError(
-                        f"決済データ（加工）の更新はロック中です: "
+                        f"スキルプラス着金データ（加工）の更新はロック中です: "
                         f"{lock_data.get('locked_by', '不明')} ({int(elapsed)}秒前に開始)"
                     )
             except RuntimeError:
@@ -575,10 +576,10 @@ def get_all_values_with_retry(ws) -> List[List[str]]:
 
 def get_or_create_target_spreadsheet(gc) -> gspread.Spreadsheet:
     try:
-        spreadsheet = gc.open(TARGET_SPREADSHEET_TITLE)
+        spreadsheet = gc.open_by_key(TARGET_SPREADSHEET_ID)
     except SpreadsheetNotFound:
         spreadsheet = run_write_with_retry(
-            "決済データ（加工）シートの作成",
+            "スキルプラス着金データ（加工）シートの作成",
             lambda: gc.create(TARGET_SPREADSHEET_TITLE),
         )
     ensure_spreadsheet_title(spreadsheet)
@@ -602,7 +603,7 @@ def ensure_spreadsheet_title(spreadsheet) -> None:
                 }
             ]
         },
-        "決済データ（加工）のシート名更新",
+        "スキルプラス着金データ（加工）のシート名更新",
     )
 
 
@@ -644,7 +645,7 @@ def ensure_tabs(spreadsheet):
                 "tabColorStyle",
             )
         )
-    batch_update_with_retry(spreadsheet, {"requests": requests}, "決済データ（加工）のタブ整列")
+    batch_update_with_retry(spreadsheet, {"requests": requests}, "スキルプラス着金データ（加工）のタブ整列")
     return {ws.title: ws for ws in spreadsheet.worksheets()}
 
 
@@ -665,7 +666,7 @@ def write_rows(spreadsheet, ws, rows: List[List[object]]) -> None:
 
 
 def style_daily_tab(spreadsheet, ws) -> None:
-    widths = [120, 135, 135, 130, 130, 130, 130, 120, 120, 110, 110]
+    widths = [120, 140, 140, 150, 135, 130, 135, 150, 110, 110, 120, 110, 110, 130]
     requests = [
         repeat_cell_request(
             ws.id,
@@ -965,7 +966,7 @@ def apply_protections(spreadsheet, tabs) -> None:
         )
 
     if requests:
-        batch_update_with_retry(spreadsheet, {"requests": requests}, "決済データ（加工）の保護設定")
+        batch_update_with_retry(spreadsheet, {"requests": requests}, "スキルプラス着金データ（加工）の保護設定")
 
 
 def get_tab_url(spreadsheet_id: str, ws) -> str:
@@ -1788,22 +1789,17 @@ def sale_bucket(context: SaleContext, earliest_recurring_dates: dict[str, dateti
         return "new"
 
     mapping_entry = context.mapping_entry
-    if mapping_entry and mapping_entry.target == "会員向け":
-        return "continuing"
-
-    if context.raw_name == "(空欄)":
-        if context.source in {"日本プラム", "CBS", "京都信販", "きらぼし銀行", "CREDIX", "INVOY"}:
-            return "new"
-        if context.source == "UnivaPay" and charge_is_recurring(context.charge_type, context.recurring_id):
-            return "continuing"
-
     if charge_is_recurring(context.charge_type, context.recurring_id):
-        return "continuing"
+        return "recurring"
 
-    if context.recurring_id:
-        earliest_dt = earliest_recurring_dates.get(context.recurring_id)
-        if earliest_dt and context.event_dt > earliest_dt:
-            return "continuing"
+    if mapping_entry and "継続" in normalize_text(mapping_entry.product_name):
+        return "recurring"
+
+    if mapping_entry and mapping_entry.target == "会員向け":
+        return "member_one_time"
+
+    if context.raw_name == "(空欄)" and context.source in {"日本プラム", "CBS", "京都信販", "きらぼし銀行", "CREDIX", "INVOY"}:
+        return "new"
 
     return "new"
 
@@ -1857,9 +1853,12 @@ def build_daily_rows(
         if bucket == "new":
             daily[context.event_date]["new_sales_amount"] += amount
             daily[context.event_date]["new_sales_count"] += 1
+        elif bucket == "recurring":
+            daily[context.event_date]["recurring_sales_amount"] += amount
+            daily[context.event_date]["recurring_sales_count"] += 1
         else:
-            daily[context.event_date]["continuing_sales_amount"] += amount
-            daily[context.event_date]["continuing_sales_count"] += 1
+            daily[context.event_date]["member_one_time_sales_amount"] += amount
+            daily[context.event_date]["member_one_time_sales_count"] += 1
         sale_source_counts[context.source] += 1
 
     all_dates = set(daily.keys()) | set(refund_daily.keys())
@@ -1867,26 +1866,30 @@ def build_daily_rows(
         rows = [[
             "日付",
             "新規着金売上",
-            "継続売上",
+            "継続課金売上",
+            "会員向け単発売上",
             "着金売上",
             "返金額",
             "純着金売上",
             "解約請求回収額",
             "新規着金件数",
-            "継続売上件数",
+            "継続課金件数",
+            "会員向け単発件数",
             "着金件数",
             "返金件数",
             "解約請求回収件数",
         ]]
         stats = {
             "new_sales_amount_total": 0,
-            "continuing_sales_amount_total": 0,
+            "recurring_sales_amount_total": 0,
+            "member_one_time_sales_amount_total": 0,
             "sales_amount_total": 0,
             "refund_amount_total": 0,
             "net_sales_total": 0,
             "claim_amount_total": 0,
             "new_sales_count_total": 0,
-            "continuing_sales_count_total": 0,
+            "recurring_sales_count_total": 0,
+            "member_one_time_sales_count_total": 0,
             "sales_count_total": 0,
             "refund_count_total": 0,
             "claim_count_total": 0,
@@ -1905,25 +1908,29 @@ def build_daily_rows(
     rows = [[
         "日付",
         "新規着金売上",
-        "継続売上",
+        "継続課金売上",
+        "会員向け単発売上",
         "着金売上",
         "返金額",
         "純着金売上",
         "解約請求回収額",
         "新規着金件数",
-        "継続売上件数",
+        "継続課金件数",
+        "会員向け単発件数",
         "着金件数",
         "返金件数",
         "解約請求回収件数",
     ]]
 
     new_sales_amount_total = 0
-    continuing_sales_amount_total = 0
+    recurring_sales_amount_total = 0
+    member_one_time_sales_amount_total = 0
     sales_amount_total = 0
     refund_amount_total = 0
     claim_amount_total = 0
     new_sales_count_total = 0
-    continuing_sales_count_total = 0
+    recurring_sales_count_total = 0
+    member_one_time_sales_count_total = 0
     sales_count_total = 0
     refund_count_total = 0
     claim_count_total = 0
@@ -1932,36 +1939,42 @@ def build_daily_rows(
     while cursor <= end_dt:
         date_text = cursor.strftime("%Y/%m/%d")
         new_sales_amount = daily[date_text]["new_sales_amount"]
-        continuing_sales_amount = daily[date_text]["continuing_sales_amount"]
+        recurring_sales_amount = daily[date_text]["recurring_sales_amount"]
+        member_one_time_sales_amount = daily[date_text]["member_one_time_sales_amount"]
         sales_amount = daily[date_text]["sales_amount"]
         refund_amount = refund_daily[date_text]["refund_amount"]
         claim_amount = refund_daily[date_text]["claim_amount"]
         new_sales_count = daily[date_text]["new_sales_count"]
-        continuing_sales_count = daily[date_text]["continuing_sales_count"]
+        recurring_sales_count = daily[date_text]["recurring_sales_count"]
+        member_one_time_sales_count = daily[date_text]["member_one_time_sales_count"]
         sales_count = daily[date_text]["sales_count"]
         refund_count = refund_daily[date_text]["refund_count"]
         claim_count = refund_daily[date_text]["claim_count"]
         rows.append([
             date_text,
             new_sales_amount,
-            continuing_sales_amount,
+            recurring_sales_amount,
+            member_one_time_sales_amount,
             sales_amount,
             refund_amount,
             sales_amount - refund_amount,
             claim_amount,
             new_sales_count,
-            continuing_sales_count,
+            recurring_sales_count,
+            member_one_time_sales_count,
             sales_count,
             refund_count,
             claim_count,
         ])
         new_sales_amount_total += new_sales_amount
-        continuing_sales_amount_total += continuing_sales_amount
+        recurring_sales_amount_total += recurring_sales_amount
+        member_one_time_sales_amount_total += member_one_time_sales_amount
         sales_amount_total += sales_amount
         refund_amount_total += refund_amount
         claim_amount_total += claim_amount
         new_sales_count_total += new_sales_count
-        continuing_sales_count_total += continuing_sales_count
+        recurring_sales_count_total += recurring_sales_count
+        member_one_time_sales_count_total += member_one_time_sales_count
         sales_count_total += sales_count
         refund_count_total += refund_count
         claim_count_total += claim_count
@@ -1969,13 +1982,15 @@ def build_daily_rows(
 
     stats = {
         "new_sales_amount_total": new_sales_amount_total,
-        "continuing_sales_amount_total": continuing_sales_amount_total,
+        "recurring_sales_amount_total": recurring_sales_amount_total,
+        "member_one_time_sales_amount_total": member_one_time_sales_amount_total,
         "sales_amount_total": sales_amount_total,
         "refund_amount_total": refund_amount_total,
         "net_sales_total": sales_amount_total - refund_amount_total,
         "claim_amount_total": claim_amount_total,
         "new_sales_count_total": new_sales_count_total,
-        "continuing_sales_count_total": continuing_sales_count_total,
+        "recurring_sales_count_total": recurring_sales_count_total,
+        "member_one_time_sales_count_total": member_one_time_sales_count_total,
         "sales_count_total": sales_count_total,
         "refund_count_total": refund_count_total,
         "claim_count_total": claim_count_total,
@@ -1997,14 +2012,16 @@ def build_summary_rows(stats: dict, checked_at: str) -> List[List[object]]:
         ["集計開始日", START_DATE_TEXT, "2025/01/01 以降だけを集計対象にする"],
         ["最新計上日", stats["latest_date"], "日別売上数値で最後に値を持つ日付"],
         ["累計新規着金売上", normalize_display_amount(stats["new_sales_amount_total"]), "広告判断やP/Lの基準にする新規契約の着金売上"],
-        ["累計継続売上", normalize_display_amount(stats["continuing_sales_amount_total"]), "継続課金、会員向け追加販売、2回目以降の定期課金"],
-        ["累計着金売上", normalize_display_amount(stats["sales_amount_total"]), "新規着金売上 + 継続売上"],
+        ["累計継続課金売上", normalize_display_amount(stats["recurring_sales_amount_total"]), "サブスク、月額継続、継続利用料などの継続課金"],
+        ["累計会員向け単発売上", normalize_display_amount(stats["member_one_time_sales_amount_total"]), "会員向けイベント、追加販売、ツール協業などの単発売上"],
+        ["累計着金売上", normalize_display_amount(stats["sales_amount_total"]), "新規着金売上 + 継続課金売上 + 会員向け単発売上"],
         ["累計返金額", normalize_display_amount(stats["refund_amount_total"]), "相談窓口シート案件正本 + raw 補完の返金合計"],
         ["累計純着金売上", normalize_display_amount(stats["net_sales_total"]), "着金売上 - 返金額"],
         ["累計解約請求回収額", normalize_display_amount(stats["claim_amount_total"]), "中途解約タブのうち回収済みと確認できた請求額"],
         ["累計新規着金件数", normalize_display_count(stats["new_sales_count_total"]), "新規契約として扱う着金件数"],
-        ["累計継続売上件数", normalize_display_count(stats["continuing_sales_count_total"]), "継続売上として扱う着金件数"],
-        ["累計着金件数", normalize_display_count(stats["sales_count_total"]), "新規着金件数 + 継続売上件数"],
+        ["累計継続課金件数", normalize_display_count(stats["recurring_sales_count_total"]), "継続課金として扱う着金件数"],
+        ["累計会員向け単発件数", normalize_display_count(stats["member_one_time_sales_count_total"]), "会員向け単発売上として扱う着金件数"],
+        ["累計着金件数", normalize_display_count(stats["sales_count_total"]), "新規着金件数 + 継続課金件数 + 会員向け単発件数"],
         ["累計返金件数", normalize_display_count(stats["refund_count_total"]), "返金案件数 + raw 補完件数"],
         ["累計解約請求回収件数", normalize_display_count(stats["claim_count_total"]), "回収済みと確認できた解約請求案件数"],
         ["完全不明金額", normalize_display_amount(stats["complete_unknown_amount"]), "スキルプラス事業と確定できず日別へ入れていない売上"],
@@ -2025,12 +2042,12 @@ def build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats: dict, che
         ["加工タブ", "対象カラム", "優先度", "ソース元", "参照タブ", "参照列", "取得条件", "ステータス", "最終同期日", "更新数", "エラー数", "備考"],
         [
             DAILY_TAB_NAME,
-            "新規着金売上 / 継続売上 / 着金売上",
+            "新規着金売上 / 継続課金売上 / 会員向け単発売上 / 着金売上",
             "1",
             f'=HYPERLINK("{payment_url}","【アドネス株式会社】決済データ（収集）")',
             PAYMENT_COLLECTION_TAB,
             "イベント日時 / イベント金額 / 商品名 / 課金タイプ / 支払回数 / 定期課金ID",
-            "成功売上のみ。非会員向け商品と頭金・信販・銀行振込の初回着金は新規、会員向け商品と2回目以降の定期課金は継続",
+            "成功売上のみ。非会員向け商品と頭金・信販・銀行振込の初回着金は新規、2回目以降の定期課金は継続課金、会員向け単発商品は会員向け単発売上へ分ける",
             status,
             f"'{checked_at}",
             stats["sales_count_total"],
@@ -2102,8 +2119,9 @@ def build_rule_rows() -> List[List[object]]:
         ["項目", "ルール", "補足"],
         ["日別売上数値", "手入力で直さず、元データから再生成する", "数字の理由を後から追えるようにする"],
         ["新規着金売上", "新規契約として扱う着金だけを集計する", "非会員向け商品、頭金お支払い、銀行振込・信販の初回承認/振込を含める"],
-        ["継続売上", "継続課金と既存会員向けの着金を別で集計する", "会員向け商品、2回目以降の定期課金、既存向け追加販売をここへ寄せる"],
-        ["着金売上", "新規着金売上と継続売上の合計を持つ", "総額は保持するが、広告判断では新規着金売上を優先して使う"],
+        ["継続課金売上", "月額課金や継続利用料など、積み上がる継続課金を集計する", "センサーズ 継続、AIカレッジ 継続、2回目以降の定期課金などをここへ寄せる"],
+        ["会員向け単発売上", "会員向けの単発売上を継続課金とは分けて集計する", "イベント、追加販売、ツール協業などをここへ寄せる"],
+        ["着金売上", "新規着金売上と継続課金売上と会員向け単発売上の合計を持つ", "総額は保持するが、広告判断では新規着金売上を優先して使う"],
         ["返金額", "相談窓口シートの返金案件を正本にする", "相談窓口に載っていない raw 返金だけを補完採用する"],
         ["返金件数", "返金イベント件数ではなく返金案件数で持つ", "分割返金でも1案件として扱う"],
         ["解約請求回収額", "中途解約タブの負値のうち、入金済み・振込済みなど回収済みと確認できた請求だけを持つ", "通常の着金売上には混ぜない"],
@@ -2130,13 +2148,15 @@ def save_run_state(stats: Dict[str, int]) -> None:
         "updated_at": stats["updated_at"],
         "metrics_start_date": START_DATE_TEXT,
         "new_sales_amount_total": stats["new_sales_amount_total"],
-        "continuing_sales_amount_total": stats["continuing_sales_amount_total"],
+        "recurring_sales_amount_total": stats["recurring_sales_amount_total"],
+        "member_one_time_sales_amount_total": stats["member_one_time_sales_amount_total"],
         "sales_amount_total": stats["sales_amount_total"],
         "refund_amount_total": stats["refund_amount_total"],
         "net_sales_total": stats["net_sales_total"],
         "claim_amount_total": stats["claim_amount_total"],
         "new_sales_count_total": stats["new_sales_count_total"],
-        "continuing_sales_count_total": stats["continuing_sales_count_total"],
+        "recurring_sales_count_total": stats["recurring_sales_count_total"],
+        "member_one_time_sales_count_total": stats["member_one_time_sales_count_total"],
         "sales_count_total": stats["sales_count_total"],
         "refund_count_total": stats["refund_count_total"],
         "claim_count_total": stats["claim_count_total"],
@@ -2213,13 +2233,15 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
 
         if dry_run:
             print("【dry-run】累計新規着金売上:", stats["new_sales_amount_total"])
-            print("【dry-run】累計継続売上:", stats["continuing_sales_amount_total"])
+            print("【dry-run】累計継続課金売上:", stats["recurring_sales_amount_total"])
+            print("【dry-run】累計会員向け単発売上:", stats["member_one_time_sales_amount_total"])
             print("【dry-run】累計着金売上:", stats["sales_amount_total"])
             print("【dry-run】累計返金額:", stats["refund_amount_total"])
             print("【dry-run】累計純着金売上:", stats["net_sales_total"])
             print("【dry-run】累計解約請求回収額:", stats["claim_amount_total"])
             print("【dry-run】累計新規着金件数:", stats["new_sales_count_total"])
-            print("【dry-run】累計継続売上件数:", stats["continuing_sales_count_total"])
+            print("【dry-run】累計継続課金件数:", stats["recurring_sales_count_total"])
+            print("【dry-run】累計会員向け単発件数:", stats["member_one_time_sales_count_total"])
             print("【dry-run】完全不明金額:", stats["complete_unknown_amount"])
             print("【dry-run】完全不明件数:", stats["complete_unknown_count"])
             print("【dry-run】補完返金件数:", refund_case_stats.get("supplement_count", 0))
@@ -2254,7 +2276,7 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="決済データ（加工）を更新する")
+    parser = argparse.ArgumentParser(description="スキルプラス着金データ（加工）を更新する")
     parser.add_argument("--dry-run", action="store_true", help="Sheets へ書き込まず集計だけ行う")
     args = parser.parse_args()
     sync_payment_metrics_sheet(dry_run=args.dry_run)
