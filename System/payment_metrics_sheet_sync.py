@@ -973,25 +973,32 @@ def get_tab_url(spreadsheet_id: str, ws) -> str:
     return f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit#gid={ws.id}"
 
 
-def load_product_business_map(ws) -> tuple[set[str], set[str]]:
+def load_product_business_map(ws) -> tuple[set[str], set[str], dict[str, dict[str, str]]]:
     rows = get_all_values_with_retry(ws)
     if not rows:
-        return set(), set()
+        return set(), set(), {}
     headers = rows[0]
     idx = {header: i for i, header in enumerate(headers)}
     skillplus_names = set()
     non_skillplus_names = set()
+    product_meta: dict[str, dict[str, str]] = {}
     for row in rows[1:]:
         padded = row + [""] * (len(headers) - len(row))
         name = normalize_text(padded[idx["商品名"]])
         business = normalize_text(padded[idx["事業区分"]])
         if not name:
             continue
+        product_meta[name] = {
+            "business": business,
+            "target": normalize_text(padded[idx["対象顧客"]]),
+            "purchase_type": normalize_text(padded[idx["購入形態"]]),
+            "customer_attr": normalize_text(padded[idx["顧客属性区分"]]),
+        }
         if business == BUSINESS_SKILLPLUS:
             skillplus_names.add(name)
         else:
             non_skillplus_names.add(name)
-    return skillplus_names, non_skillplus_names
+    return skillplus_names, non_skillplus_names, product_meta
 
 
 def load_payment_mapping(ws) -> Dict[tuple[str, str], MappingEntry]:
@@ -1784,22 +1791,25 @@ def build_sale_context(
     )
 
 
-def sale_bucket(context: SaleContext, earliest_recurring_dates: dict[str, datetime]) -> str:
+def sale_bucket(context: SaleContext, product_meta: dict[str, dict[str, str]]) -> str:
     if context.is_univapay_head_payment:
         return "new"
 
     mapping_entry = context.mapping_entry
-    if charge_is_recurring(context.charge_type, context.recurring_id):
-        return "recurring"
-
-    if mapping_entry and "継続" in normalize_text(mapping_entry.product_name):
-        return "recurring"
-
-    if mapping_entry and mapping_entry.target == "会員向け":
-        return "member_one_time"
+    if mapping_entry and mapping_entry.status == "変換済み" and mapping_entry.product_name:
+        meta = product_meta.get(mapping_entry.product_name, {})
+        purchase_type = normalize_text(meta.get("purchase_type", ""))
+        if "月額" in purchase_type or "継続" in normalize_text(mapping_entry.product_name):
+            return "recurring"
+        if mapping_entry.target == "会員向け":
+            return "member_one_time"
+        return "new"
 
     if context.raw_name == "(空欄)" and context.source in {"日本プラム", "CBS", "京都信販", "きらぼし銀行", "CREDIX", "INVOY"}:
         return "new"
+
+    if charge_is_recurring(context.charge_type, context.recurring_id):
+        return "recurring"
 
     return "new"
 
@@ -1812,6 +1822,7 @@ def build_daily_rows(
     claim_stats: Counter,
     student_index: dict[str, set[str]],
     other_business_index: dict[str, dict[str, list[OtherBusinessEvidence]]],
+    product_meta: dict[str, dict[str, str]],
 ) -> tuple[List[List[object]], dict]:
     headers = payment_rows[0]
     idx = {header: i for i, header in enumerate(headers)}
@@ -1819,7 +1830,6 @@ def build_daily_rows(
     complete_unknown_amount = 0
     complete_unknown_count = 0
     sale_source_counts = Counter()
-    earliest_recurring_dates: dict[str, datetime] = {}
     seen_rows: set[tuple[str, ...]] = set()
 
     contexts: list[tuple[list[str], SaleContext]] = []
@@ -1833,11 +1843,6 @@ def build_daily_rows(
         if context is None:
             continue
         contexts.append((padded, context))
-        if context.classification == "included" and context.recurring_id:
-            current = earliest_recurring_dates.get(context.recurring_id)
-            if current is None or context.event_dt < current:
-                earliest_recurring_dates[context.recurring_id] = context.event_dt
-
     for padded, context in contexts:
         if context.classification == "excluded":
             continue
@@ -1847,7 +1852,7 @@ def build_daily_rows(
             continue
 
         amount = abs(parse_amount(padded[idx["イベント金額"]]))
-        bucket = sale_bucket(context, earliest_recurring_dates)
+        bucket = sale_bucket(context, product_meta)
         daily[context.event_date]["sales_amount"] += amount
         daily[context.event_date]["sales_count"] += 1
         if bucket == "new":
@@ -2047,7 +2052,7 @@ def build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats: dict, che
             f'=HYPERLINK("{payment_url}","【アドネス株式会社】決済データ（収集）")',
             PAYMENT_COLLECTION_TAB,
             "イベント日時 / イベント金額 / 商品名 / 課金タイプ / 支払回数 / 定期課金ID",
-            "成功売上のみ。非会員向け商品と頭金・信販・銀行振込の初回着金は新規、2回目以降の定期課金は継続課金、会員向け単発商品は会員向け単発売上へ分ける",
+            "成功売上のみ。商品マスタの購入形態が月額、または recurring_id があるものは継続課金。会員向けかつ買切り/イベント系は会員向け単発売上。非会員向け商品と頭金・信販・銀行振込の初回着金は新規",
             status,
             f"'{checked_at}",
             stats["sales_count_total"],
@@ -2119,8 +2124,8 @@ def build_rule_rows() -> List[List[object]]:
         ["項目", "ルール", "補足"],
         ["日別売上数値", "手入力で直さず、元データから再生成する", "数字の理由を後から追えるようにする"],
         ["新規着金売上", "新規契約として扱う着金だけを集計する", "非会員向け商品、頭金お支払い、銀行振込・信販の初回承認/振込を含める"],
-        ["継続課金売上", "月額課金や継続利用料など、積み上がる継続課金を集計する", "センサーズ 継続、AIカレッジ 継続、2回目以降の定期課金などをここへ寄せる"],
-        ["会員向け単発売上", "会員向けの単発売上を継続課金とは分けて集計する", "イベント、追加販売、ツール協業などをここへ寄せる"],
+        ["継続課金売上", "月額課金や継続利用料など、積み上がる継続課金を集計する", "商品マスタの購入形態が月額、または recurring_id がある売上をここへ寄せる。センサーズ継続、AIカレッジ継続、iステップ、動画広告分析Pro など"],
+        ["会員向け単発売上", "会員向けの単発売上を継続課金とは分けて集計する", "会員向けかつ買切り/イベント系の商品をここへ寄せる。プライム合宿、スキルプラスイベント、みかみとお茶会 など"],
         ["着金売上", "新規着金売上と継続課金売上と会員向け単発売上の合計を持つ", "総額は保持するが、広告判断では新規着金売上を優先して使う"],
         ["返金額", "相談窓口シートの返金案件を正本にする", "相談窓口に載っていない raw 返金だけを補完採用する"],
         ["返金件数", "返金イベント件数ではなく返金案件数で持つ", "分割返金でも1案件として扱う"],
@@ -2184,7 +2189,7 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
         product_ws = master.worksheet(MASTER_PRODUCT_TAB)
         payment_rows = get_all_values_with_retry(payment_ws)
         mapping = load_payment_mapping(mapping_ws)
-        skillplus_product_names, non_skillplus_product_names = load_product_business_map(product_ws)
+        skillplus_product_names, non_skillplus_product_names, product_meta = load_product_business_map(product_ws)
         sale_events, sale_index, _ = build_skillplus_sale_indexes(payment_rows, mapping)
         student_index = load_skillplus_student_identifiers(student_ss)
         other_business_index = load_other_business_evidence(gc)
@@ -2223,6 +2228,7 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
             refund_case_stats,
             student_index,
             other_business_index,
+            product_meta,
         )
         checked_at = datetime.now().strftime("%Y/%m/%d %H:%M")
         stats["updated_at"] = checked_at
