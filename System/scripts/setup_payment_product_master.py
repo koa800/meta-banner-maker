@@ -95,6 +95,7 @@ class ProductRule:
     business: str = ""
     target: str = ""
     customer_attr: str = ""
+    product_type: str = ""
     note: str = ""
 
 
@@ -126,10 +127,10 @@ PRODUCT_RULES: dict[str, ProductRule] = {
     "月商1.9億を支えるテンプレ大全": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "最速1分でバズ投稿を量産できる禁断のAIテンプレパック": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "パラダイムシフト": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
-    "iステップ": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
-    "スレップ": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
-    "動画広告分析Pro　1媒体": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
-    "動画広告分析Pro　3媒体": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL),
+    "iステップ": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL, "他社商品"),
+    "スレップ": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL, "他社商品"),
+    "動画広告分析Pro　1媒体": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL, "他社商品"),
+    "動画広告分析Pro　3媒体": ProductRule(BUSINESS_SKILLPLUS, TARGET_MEMBER, ATTR_INDIVIDUAL, "他社商品"),
     "生成AIキャンプ": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "生成AIキャンプアフターサポート": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
     "スキルプラスフリープラン": ProductRule(BUSINESS_SKILLPLUS, TARGET_NON_MEMBER, ATTR_INDIVIDUAL),
@@ -599,6 +600,8 @@ def sync_product_master_structure(
         record["事業区分"] = rule.business
         record["対象顧客"] = rule.target
         record["顧客属性区分"] = rule.customer_attr
+        if rule.product_type:
+            record["商品種類"] = rule.product_type
 
         normalized_rows.append([record.get(header, "") for header in PRODUCT_MASTER_HEADERS])
         product_index[name] = ProductMeta(
