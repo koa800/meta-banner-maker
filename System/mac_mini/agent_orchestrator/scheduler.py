@@ -82,8 +82,9 @@ _TELEAPO_SHEET_ID = "12RGMUfU8Wj0CCdcRfY7kI56kdATV7wDXjvYmGdQb_Nk"
 _TELEAPO_TARGET_TAB = "架電一覧"
 _ADS_COLLECTION_SHEET_ID = "11lVHxkA0geY7TEVKoujYrv1JyxWhzxqSepNhFxnFZlo"
 _ADS_COLLECTION_META_TAB = "Meta"
-_ADS_COLLECTION_META_STATUS_TAB = "Meta収集状況"
+_ADS_COLLECTION_META_STATUS_TAB = "Metaアカウント監視"
 _ADS_COLLECTION_TIKTOK_TAB = "TikTok"
+_ADS_COLLECTION_X_TAB = "X"
 _CLAUDE_CHROME_EXTENSION_ID = "fcoeoabgfenejglbffodgkkbkcdhcgfn"
 _CLAUDE_CHROME_CDP_ORIGIN = "http://127.0.0.1:9224"
 _CLAUDE_SECRETARY_EMAIL = "koa800.secretary@gmail.com"
@@ -543,6 +544,7 @@ class TaskScheduler:
             "meta_ads_collection": self._run_meta_ads_collection,
             "tiktok_token_health_check": self._run_tiktok_token_health_check,
             "tiktok_ads_collection": self._run_tiktok_ads_collection,
+            "x_ads_collection": self._run_x_ads_collection,
             "monthly_invoice_submission": self._run_monthly_invoice_submission,
             "ds_insight_biweekly_report": self._run_ds_insight_biweekly_report,
             "ds_insight_mail_collect": self._run_ds_insight_mail_collect,
@@ -5257,10 +5259,10 @@ head -3 "{csv_dir}/{csv_filename}"
                     "Meta広告の定期収集がタイムアウトしました",
                     summary_lines=["30分経っても差分取得が完了しませんでした"],
                     action_lines=[
-                        "まず Meta収集状況 を開いて、稼働中のアカウントで最終取得日が古いものがないか確認してください",
+                        "まず Metaアカウント監視 を開いて、稼働中のアカウントで最終取得日が古いものがないか確認してください",
                     ],
                     links=[
-                        ("広告データ（収集） / Meta収集状況", _build_sheet_url(_ADS_COLLECTION_SHEET_ID, _ADS_COLLECTION_META_STATUS_TAB)),
+                        ("広告データ（収集） / Metaアカウント監視", _build_sheet_url(_ADS_COLLECTION_SHEET_ID, _ADS_COLLECTION_META_STATUS_TAB)),
                         ("広告データ（収集） / Meta", _build_sheet_url(_ADS_COLLECTION_SHEET_ID, _ADS_COLLECTION_META_TAB)),
                     ],
                 )
@@ -5278,11 +5280,11 @@ head -3 "{csv_dir}/{csv_filename}"
                 "Meta広告の定期収集が止まりました",
                 summary_lines=[(output or "詳細エラーを取得できませんでした")[:220]],
                 action_lines=[
-                    "まず Meta収集状況 を開いて、取得状態と稼働状態を確認してください",
+                    "まず Metaアカウント監視 を開いて、取得状態と稼働状態を確認してください",
                     "必要なら Meta タブで直近日の行が増えているか確認してください",
                 ],
                 links=[
-                    ("広告データ（収集） / Meta収集状況", _build_sheet_url(_ADS_COLLECTION_SHEET_ID, _ADS_COLLECTION_META_STATUS_TAB)),
+                    ("広告データ（収集） / Metaアカウント監視", _build_sheet_url(_ADS_COLLECTION_SHEET_ID, _ADS_COLLECTION_META_STATUS_TAB)),
                     ("広告データ（収集） / Meta", _build_sheet_url(_ADS_COLLECTION_SHEET_ID, _ADS_COLLECTION_META_TAB)),
                 ],
             )
@@ -5488,6 +5490,96 @@ head -3 "{csv_dir}/{csv_filename}"
                 ],
                 links=[
                     ("広告データ（収集） / TikTok", _build_sheet_url(_ADS_COLLECTION_SHEET_ID, _ADS_COLLECTION_TIKTOK_TAB)),
+                ],
+            )
+        )
+
+    async def _run_x_ads_collection(self):
+        """毎朝: X広告 raw を昨日分だけ追記する。"""
+        import subprocess
+        from .notifier import send_line_notify
+
+        script = self.system_dir / "scripts" / "fetch_x_ads_report.py"
+        env = self._build_python_task_env()
+        target_date = (datetime.now(_SCHEDULER_TIMEZONE).date() - timedelta(days=1)).isoformat()
+        command = [
+            "python3",
+            str(script),
+            "--start-date",
+            target_date,
+            "--end-date",
+            target_date,
+            "--write-sheet",
+        ]
+
+        try:
+            proc = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=1800,
+                cwd=str(self.project_root),
+                env=env,
+            )
+        except subprocess.TimeoutExpired:
+            send_line_notify(
+                _format_line_message(
+                    "X広告の定期収集がタイムアウトしました",
+                    summary_lines=["30分経っても収集が終わりませんでした"],
+                    action_lines=[
+                        "X タブを開いて、昨日分の行が増えていないか確認してください",
+                    ],
+                    links=[
+                        ("広告データ（収集） / X", _build_sheet_url(_ADS_COLLECTION_SHEET_ID, _ADS_COLLECTION_X_TAB)),
+                    ],
+                )
+            )
+            return
+
+        output = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+        summary_path = self._extract_prefixed_value(output, "サマリー:")
+        summary = self._load_json_file(summary_path) or {}
+        missing_url_count = int(summary.get("missing_landing_page_url_rows") or 0)
+
+        if proc.returncode == 0:
+            logger.info(
+                "X ads collection completed: "
+                f"rows={summary.get('total_rows', 0)} appended={summary.get('appended_rows', 0)} "
+                f"missing_urls={missing_url_count}"
+            )
+            self._record_schedule_success("x_ads_collection")
+
+            if missing_url_count > 0:
+                details = summary.get("missing_landing_page_details") or []
+                summary_lines = [f"遷移先URL未取得が {missing_url_count} 行あります"]
+                if details:
+                    first = details[0]
+                    summary_lines.append(
+                        f"例: {first.get('広告アカウント名', '')} / {first.get('広告名', '')} / {first.get('広告ID', '')}"
+                    )
+                send_line_notify(
+                    _format_line_message(
+                        "X広告の遷移先URLで未取得があります",
+                        summary_lines=summary_lines,
+                        action_lines=[
+                            "X タブを開いて、遷移先URL が空の行を確認してください",
+                        ],
+                        links=[
+                            ("広告データ（収集） / X", _build_sheet_url(_ADS_COLLECTION_SHEET_ID, _ADS_COLLECTION_X_TAB)),
+                        ],
+                    )
+                )
+            return
+
+        send_line_notify(
+            _format_line_message(
+                "X広告の定期収集が止まりました",
+                summary_lines=[(output or "詳細エラーを取得できませんでした")[:220]],
+                action_lines=[
+                    "X タブを開いて、昨日分の行が増えていないか確認してください",
+                ],
+                links=[
+                    ("広告データ（収集） / X", _build_sheet_url(_ADS_COLLECTION_SHEET_ID, _ADS_COLLECTION_X_TAB)),
                 ],
             )
         )

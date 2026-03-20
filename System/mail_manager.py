@@ -46,11 +46,13 @@ CREDENTIALS_DIR = BASE_DIR / "credentials"
 ACCOUNTS = {
     "personal": CREDENTIALS_DIR / "token_gmail_personal.json",
     "kohara": CREDENTIALS_DIR / "token_gmail.json",
+    "adteam": CREDENTIALS_DIR / "token_gmail_adteam.json",
     "gwsadmin": CREDENTIALS_DIR / "token_gmail_gwsadmin.json",
 }
 CLIENT_SECRETS = {
     "personal": CREDENTIALS_DIR / "client_secret_personal.json",
     "kohara": CREDENTIALS_DIR / "client_secret.json",
+    "adteam": CREDENTIALS_DIR / "client_secret_personal.json",
     "gwsadmin": CREDENTIALS_DIR / "client_secret.json",
 }
 DEFAULT_ACCOUNT = "personal"

@@ -34,7 +34,7 @@ BASE_URL = f"https://graph.facebook.com/{API_VERSION}"
 
 SHEET_ID = "11lVHxkA0geY7TEVKoujYrv1JyxWhzxqSepNhFxnFZlo"
 TAB_NAME = "Meta"
-STATUS_TAB_NAME = "Meta収集状況"
+STATUS_TAB_NAME = "Metaアカウント監視"
 MASTER_SHEET_ID = "1kxUbLqhnzLC1Pg0ASVgU135bnx4Rsv_jP0pqGC0R69w"
 MASTER_TAB_NAME = "広告アカウント"
 TARGET_BUSINESS_NAMES = {"スキルプラス"}
@@ -1525,7 +1525,7 @@ def main():
     parser.add_argument(
         "--update-status-sheet",
         action="store_true",
-        help="Meta収集状況タブを現在の raw と progress から再生成して終了",
+        help="Metaアカウント監視タブを現在の raw と progress から再生成して終了",
     )
     parser.add_argument(
         "--refresh-running-gaps",
@@ -1576,7 +1576,7 @@ def main():
             account_activity_map=account_activity_map,
             recent_insights_map=recent_insights_map,
         )
-        print("Meta収集状況タブを更新しました")
+        print("Metaアカウント監視タブを更新しました")
         return
 
     if args.refresh_running_gaps:

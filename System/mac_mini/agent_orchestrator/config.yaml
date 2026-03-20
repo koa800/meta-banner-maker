@@ -87,6 +87,9 @@ schedule:
   tiktok_ads_collection:
     cron: "22 7 * * *"           # 07:22  TikTok広告 raw を直近3日ぶん再取得して収集シートへ追記
     enabled: true
+  x_ads_collection:
+    cron: "30 7 * * *"           # 07:30  X広告 raw を昨日分だけ収集シートへ追記
+    enabled: true
   oauth_health_check:
     cron: "25 8 * * *"           # 08:25  認証チェック（Google + Claude Code OAuth）※日報入力(08:40)の前に実行
     enabled: true
