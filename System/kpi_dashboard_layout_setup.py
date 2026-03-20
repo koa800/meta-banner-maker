@@ -38,10 +38,13 @@ AD_SPEND_METRICS_SHEET_ID = "1-dEYsY6KB0GF2XRf7PvoxVxhICCamdCBPKxHJRJdUOE"
 AD_SPEND_DAILY_TAB = "日別広告費"
 AD_SPEND_SUMMARY_TAB = "広告費サマリー"
 AD_SPEND_SOURCE_TAB = "データソース管理"
+PAYMENT_METRICS_SHEET_ID = "1eh8X_dsRitFDKAJVE-dbr75ycGfMffMsvJYI-Gtlv_Q"
+PAYMENT_DAILY_TAB = "日別売上数値"
+PAYMENT_SOURCE_TAB = "データソース管理"
 
 TAB_SPECS = [
-    ("スキルプラス事業サマリー", 120, 23),
-    ("日別数値", 600, 14),
+    ("スキルプラス事業サマリー", 120, 31),
+    ("日別数値", 600, 22),
     ("データソース管理", 80, 14),
 ]
 
@@ -286,7 +289,7 @@ def worksheet_write_with_retry(description: str, func) -> None:
 
 
 def parse_int(raw: str) -> int:
-    value = str(raw or "").replace(",", "").strip()
+    value = str(raw or "").replace(",", "").replace("¥", "").replace("円", "").strip()
     if not value:
         return 0
     try:
@@ -416,6 +419,31 @@ def load_ad_spend_daily_metrics(gc) -> List[dict]:
     return metrics
 
 
+def load_payment_daily_metrics(gc) -> List[dict]:
+    spreadsheet = gc.open_by_key(PAYMENT_METRICS_SHEET_ID)
+    rows = get_all_values_with_retry(spreadsheet.worksheet(PAYMENT_DAILY_TAB))
+
+    metrics: List[dict] = []
+    for row in rows[1:]:
+        date = normalize_date(row[0] if len(row) > 0 else "")
+        if not date:
+            continue
+        metrics.append(
+            {
+                "date": date,
+                "new_cash_sales": parse_int(row[1] if len(row) > 1 else ""),
+                "installment_sales": parse_int(row[2] if len(row) > 2 else ""),
+                "recurring_sales": parse_int(row[3] if len(row) > 3 else ""),
+                "member_single_sales": parse_int(row[4] if len(row) > 4 else ""),
+                "cash_sales": parse_int(row[5] if len(row) > 5 else ""),
+                "refunds": parse_int(row[6] if len(row) > 6 else ""),
+                "net_cash_sales": parse_int(row[7] if len(row) > 7 else ""),
+                "recovery_sales": parse_int(row[8] if len(row) > 8 else ""),
+            }
+        )
+    return metrics
+
+
 def load_ad_spend_status(gc) -> Dict[str, str]:
     spreadsheet = gc.open_by_key(AD_SPEND_METRICS_SHEET_ID)
     source_rows = get_all_values_with_retry(spreadsheet.worksheet(AD_SPEND_SOURCE_TAB))
@@ -441,6 +469,24 @@ def load_ad_spend_status(gc) -> Dict[str, str]:
         value = str(row[1]).strip()
         if key:
             result[key] = value
+    return result
+
+
+def load_payment_status(gc) -> Dict[str, str]:
+    spreadsheet = gc.open_by_key(PAYMENT_METRICS_SHEET_ID)
+    rows = get_all_values_with_retry(spreadsheet.worksheet(PAYMENT_SOURCE_TAB))
+
+    result: Dict[str, str] = {}
+    for row in rows[1:]:
+        tab_name = str(row[0]).strip() if len(row) > 0 else ""
+        target = str(row[1]).strip() if len(row) > 1 else ""
+        if tab_name == PAYMENT_DAILY_TAB and "着金売上" in target:
+            result["ステータス"] = str(row[7]).strip() if len(row) > 7 else ""
+            result["最終同期日"] = str(row[8]).strip().lstrip("'") if len(row) > 8 else ""
+            result["更新数"] = str(row[9]).strip() if len(row) > 9 else ""
+            result["エラー数"] = str(row[10]).strip() if len(row) > 10 else ""
+            result["メモ"] = str(row[11]).strip() if len(row) > 11 else ""
+            break
     return result
 
 
@@ -760,11 +806,19 @@ def build_definition_master_rows() -> List[List[str]]:
         ["個別予約数", "ユーザーが個別予約を完了した予約イベント数"],
         ["個別予約数（UU）", "ユーザーが個別予約を完了したユニークユーザー数"],
         ["個別実施数", "オンライン面談でZoomに接続したユーザー数"],
-        ["着金売上", "銀行口座に入金することが確定した金額"],
+        ["新規着金売上", "非会員向け商品の初回着金、頭金、信販初回承認・初回振込などの新規着金金額"],
+        ["分割回収売上", "スキルプラス本体や対象商品の分割回収として着金した金額"],
+        ["継続課金売上", "月額継続利用やサブスクリプションの継続課金として着金した金額"],
+        ["会員向け単発売上", "会員向けイベントや単発販売として着金した金額"],
+        ["着金売上", "新規着金売上・分割回収売上・継続課金売上・会員向け単発売上の合計"],
+        ["返金額", "返金が確定した日に計上する返金案件の金額"],
+        ["純着金売上", "着金売上から返金額を引いた金額"],
+        ["解約請求回収額", "中途解約の請求で、実際に回収済みと確認できた金額"],
         ["広告費", "対象媒体の消化金額"],
         ["CPA", "広告費を集客数で割った数値"],
         ["個別予約CPO", "広告費を個別予約数で割った数値"],
-        ["ROAS", "着金売上を広告費で割った数値"],
+        ["新規着金ROAS", "新規着金売上を広告費で割った数値"],
+        ["着金ROAS", "着金売上を広告費で割った数値"],
         ["契約数", "スキルプラスの契約書を締結したユーザー数"],
         ["クーリングオフ数", "入金あり契約から7日以内に契約解除を申し出たユーザー数"],
         ["中途解約数", "サポート期間が終了する前に契約解除が確定した会員数"],
@@ -814,9 +868,12 @@ def sync_master_definition_tab(gc) -> None:
     set_tab_color(ws, "#9E9E9E")
 
 
+
+
 def build_summary_rows(
     booking_status: Dict[str, str],
     membership_status: Dict[str, Dict[str, str]],
+    payment_status: Dict[str, str],
 ) -> List[List[str]]:
     booking_state = booking_status.get("ステータス", "接続中") or "接続中"
     member_state = membership_status.get("会員数", {}).get("ステータス", "確認待ち") or "確認待ち"
@@ -825,42 +882,51 @@ def build_summary_rows(
     mid_term_note = membership_status.get("中途解約数", {}).get("メモ", "お客様相談窓口_進捗管理シートの中途解約完了を日別件数へ集計する")
     cooling_off_state = membership_status.get("クーリングオフ数", {}).get("ステータス", "確認待ち") or "確認待ち"
     cooling_off_note = membership_status.get("クーリングオフ数", {}).get("メモ", "お客様相談窓口_進捗管理シートのクーリングオフ完了を日別件数へ集計する")
-    rows = [[""] * 23 for _ in range(120)]
+    payment_state = payment_status.get("ステータス", "接続中") or "接続中"
+    payment_note = payment_status.get("メモ", "スキルプラス着金データ（加工）の日別売上数値を参照する")
+
+    rows = [[""] * 31 for _ in range(120)]
     visible_rows = [
         ["項目", "値", "正本シート", "状態", "メモ"],
-        ["集計開始日", '=IFERROR(EOMONTH(MAX(FILTER(\'日別数値\'!A:A,\'日別数値\'!A:A<>"")),-1)+1,"")', "", "", "手入力で上書き可"],
-        ["集計終了日", '=IFERROR(MAX(FILTER(\'日別数値\'!A:A,\'日別数値\'!A:A<>"")),"")', "", "", "手入力で上書き可"],
-        ["最終更新日", '=IFERROR(MAX(FILTER(\'日別数値\'!A:A,\'日別数値\'!A:A<>"")),"")', "【アドネス株式会社】KPIダッシュボード / 日別数値", "接続中", ""],
-        ["集客数", '=IF(OR($B$2="",$B$3=""),"",SUMIFS(\'日別数値\'!B:B,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3))', "【アドネス株式会社】集客データ_メール集計（加工） / 日別メール登録件数", "一部接続", "現状はメールのみ。LINE未接続"],
-        ["集客数（UU）", '=IF(OR($B$2="",$B$3=""),"",SUMIFS(\'日別数値\'!C:C,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3))', "【アドネス株式会社】集客データ_メール集計（加工） / 日別メール登録件数（UU）", "一部接続", "現状はメールのみ。LINE未接続"],
-        ["個別予約数", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3,\'日別数値\'!D:D,"<>")=0,"",SUMIFS(\'日別数値\'!D:D,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "【アドネス株式会社】個別面談データ（加工） / 日別個別予約数", booking_state, "現行は botログ。継続体制では Slack #個別予約通知 から作る 個別予約通知ログへ移行する"],
-        ["個別予約数（UU）", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3,\'日別数値\'!E:E,"<>")=0,"",SUMIFS(\'日別数値\'!E:E,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "【アドネス株式会社】個別面談データ（加工） / 日別個別予約数（UU）", "確認待ち", "個別予約完了タグの通知ログとLINE統合後に接続"],
-        ["個別実施数", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3,\'日別数値\'!F:F,"<>")=0,"",SUMIFS(\'日別数値\'!F:F,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "Zoom接続ログ または 面談ダッシュボード", "確認待ち", "正本未確定。今は未接続"],
-        ["着金売上", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!G:G,"<>",\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)=0,"",SUMIFS(\'日別数値\'!G:G,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "決済履歴シート + お客様相談窓口_進捗管理シート", "確認待ち", "着金の正本を日別で固める必要あり"],
-        ["広告費", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!H:H,"<>",\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)=0,"",SUMIFS(\'日別数値\'!H:H,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "【アドネス株式会社】広告費データ（加工） / 日別広告費", "接続中", "数値管理シートのカテゴリ=広告の日別合計。2025/07/01以降"],
-        ["CPA", '=IF(OR(N(B11)=0,N(B5)=0),"",B11/B5)', "", "接続中", "広告費 / 集客数"],
-        ["個別予約CPO", '=IF(OR(N(B11)=0,N(B7)=0),"",B11/B7)', "", "接続中", "広告費 / 個別予約数"],
-        ["ROAS", '=IF(OR(N(B11)=0,N(B10)=0),"",B10/B11)', "", "未接続", "着金売上が未接続のため保留"],
-        ["会員数", '=IF(OR($B$2="",$B$3=""),"",IFERROR(INDEX(FILTER(\'日別数値\'!L:L,\'日別数値\'!A:A>=$B$2,\'日別数値\'!A:A<=$B$3,\'日別数値\'!L:L<>""),ROWS(FILTER(\'日別数値\'!L:L,\'日別数値\'!A:A>=$B$2,\'日別数値\'!A:A<=$B$3,\'日別数値\'!L:L<>""))),""))', "【アドネス株式会社】会員データ（加工） / 日別会員数値", member_state, member_note],
-        ["中途解約数", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!M:M,"<>",\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)=0,"",SUMIFS(\'日別数値\'!M:M,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "【アドネス株式会社】会員データ（加工） / 日別会員数値", mid_term_state, mid_term_note],
-        ["クーリングオフ数", '=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS(\'日別数値\'!N:N,"<>",\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)=0,"",SUMIFS(\'日別数値\'!N:N,\'日別数値\'!A:A,">="&$B$2,\'日別数値\'!A:A,"<="&$B$3)))', "【アドネス株式会社】会員データ（加工） / 日別会員数値", cooling_off_state, cooling_off_note],
+        ["集計開始日", '''=IFERROR(EOMONTH(MAX(FILTER('日別数値'!A:A,'日別数値'!A:A<>"")),-1)+1,"")''', "", "", "手入力で上書き可"],
+        ["集計終了日", '''=IFERROR(MAX(FILTER('日別数値'!A:A,'日別数値'!A:A<>"")),"")''', "", "", "手入力で上書き可"],
+        ["最終更新日", '''=IFERROR(MAX(FILTER('日別数値'!A:A,'日別数値'!A:A<>"")),"")''', "【アドネス株式会社】KPIダッシュボード / 日別数値", "接続中", ""],
+        ["集客数", '''=IF(OR($B$2="",$B$3=""),"",SUMIFS('日別数値'!B:B,'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3))''', "【アドネス株式会社】集客データ_メール集計（加工） / 日別メール登録件数", "一部接続", "現状はメールのみ。LINE未接続"],
+        ["集客数（UU）", '''=IF(OR($B$2="",$B$3=""),"",SUMIFS('日別数値'!C:C,'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3))''', "【アドネス株式会社】集客データ_メール集計（加工） / 日別メール登録件数（UU）", "一部接続", "現状はメールのみ。LINE未接続"],
+        ["個別予約数", '''=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS('日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3,'日別数値'!D:D,"<>")=0,"",SUMIFS('日別数値'!D:D,'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)))''', "【アドネス株式会社】個別面談データ（加工） / 日別個別予約数", booking_state, "現行は botログ。継続体制では Slack #個別予約通知 から作る 個別予約通知ログへ移行する"],
+        ["個別予約数（UU）", '''=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS('日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3,'日別数値'!E:E,"<>")=0,"",SUMIFS('日別数値'!E:E,'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)))''', "【アドネス株式会社】個別面談データ（加工） / 日別個別予約数（UU）", "確認待ち", "個別予約完了タグの通知ログとLINE統合後に接続"],
+        ["個別実施数", '''=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS('日別数値'!F:F,"<>",'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)=0,"",SUMIFS('日別数値'!F:F,'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)))''', "Zoom接続ログ または 面談ダッシュボード", "確認待ち", "正本未確定。今は未接続"],
+        ["新規着金売上", '''=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS('日別数値'!G:G,"<>",'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)=0,"",SUMIFS('日別数値'!G:G,'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)))''', "【アドネス株式会社】スキルプラス着金データ（加工） / 日別売上数値", payment_state, payment_note],
+        ["分割回収売上", '''=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS('日別数値'!H:H,"<>",'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)=0,"",SUMIFS('日別数値'!H:H,'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)))''', "【アドネス株式会社】スキルプラス着金データ（加工） / 日別売上数値", payment_state, "スキルプラス本体や対象商品の分割回収を集計する"],
+        ["継続課金売上", '''=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS('日別数値'!I:I,"<>",'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)=0,"",SUMIFS('日別数値'!I:I,'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)))''', "【アドネス株式会社】スキルプラス着金データ（加工） / 日別売上数値", payment_state, "月額継続利用やサブスクの継続課金"],
+        ["会員向け単発売上", '''=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS('日別数値'!J:J,"<>",'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)=0,"",SUMIFS('日別数値'!J:J,'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)))''', "【アドネス株式会社】スキルプラス着金データ（加工） / 日別売上数値", payment_state, "会員向けイベントや買切りの単発売上"],
+        ["着金売上", '''=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS('日別数値'!K:K,"<>",'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)=0,"",SUMIFS('日別数値'!K:K,'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)))''', "【アドネス株式会社】スキルプラス着金データ（加工） / 日別売上数値", payment_state, payment_note],
+        ["返金額", '''=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS('日別数値'!L:L,"<>",'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)=0,"",SUMIFS('日別数値'!L:L,'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)))''', "【アドネス株式会社】スキルプラス着金データ（加工） / 日別売上数値", payment_state, "返金が確定した日に計上する返金額"],
+        ["純着金売上", '''=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS('日別数値'!M:M,"<>",'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)=0,"",SUMIFS('日別数値'!M:M,'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)))''', "【アドネス株式会社】スキルプラス着金データ（加工） / 日別売上数値", payment_state, "着金売上から返金額を引いた金額"],
+        ["解約請求回収額", '''=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS('日別数値'!N:N,"<>",'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)=0,"",SUMIFS('日別数値'!N:N,'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)))''', "【アドネス株式会社】スキルプラス着金データ（加工） / 日別売上数値", payment_state, "回収済みの解約請求金額"],
+        ["広告費", '''=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS('日別数値'!O:O,"<>",'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)=0,"",SUMIFS('日別数値'!O:O,'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)))''', "【アドネス株式会社】広告費データ（加工） / 日別広告費", "接続中", "数値管理シートのカテゴリ=広告の日別合計。2025/07/01以降"],
+        ["CPA", '''=IF(OR(N(B18)=0,N(B5)=0),"",B18/B5)''', "", "接続中", "広告費 / 集客数"],
+        ["個別予約CPO", '''=IF(OR(N(B18)=0,N(B7)=0),"",B18/B7)''', "", "接続中", "広告費 / 個別予約数"],
+        ["新規着金ROAS", '''=IF(OR(N(B18)=0,N(B10)=0),"",B10/B18)''', "", "接続中", "新規着金売上 / 広告費"],
+        ["着金ROAS", '''=IF(OR(N(B18)=0,N(B14)=0),"",B14/B18)''', "", "接続中", "着金売上 / 広告費"],
+        ["会員数", '''=IF(OR($B$2="",$B$3=""),"",IFERROR(INDEX(FILTER('日別数値'!T:T,'日別数値'!A:A>=$B$2,'日別数値'!A:A<=$B$3,'日別数値'!T:T<>""),ROWS(FILTER('日別数値'!T:T,'日別数値'!A:A>=$B$2,'日別数値'!A:A<=$B$3,'日別数値'!T:T<>""))),""))''', "【アドネス株式会社】会員データ（加工） / 日別会員数値", member_state, member_note],
+        ["中途解約数", '''=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS('日別数値'!U:U,"<>",'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)=0,"",SUMIFS('日別数値'!U:U,'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)))''', "【アドネス株式会社】会員データ（加工） / 日別会員数値", mid_term_state, mid_term_note],
+        ["クーリングオフ数", '''=IF(OR($B$2="",$B$3=""),"",IF(COUNTIFS('日別数値'!V:V,"<>",'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)=0,"",SUMIFS('日別数値'!V:V,'日別数値'!A:A,">="&$B$2,'日別数値'!A:A,"<="&$B$3)))''', "【アドネス株式会社】会員データ（加工） / 日別会員数値", cooling_off_state, cooling_off_note],
     ]
-    for row in visible_rows:
-        if len(row) > 4 and "現行は botログ。将来は個別予約完了タグの通知ログへ切替候補" in str(row[4]):
-            row[4] = str(row[4]).replace(
-                "現行は botログ。将来は個別予約完了タグの通知ログへ切替候補",
-                "現行は botログ。継続体制では Slack #個別予約通知 から作る 個別予約通知ログへ移行する",
-            )
     for row_index, row in enumerate(visible_rows):
         rows[row_index][:5] = row
 
     helper_headers = [
         "日付", "集客数", "集客数（UU）", "個別予約数", "個別予約数（UU）", "個別実施数",
-        "着金売上", "広告費", "CPA", "個別予約CPO", "ROAS", "会員数", "中途解約数", "クーリングオフ数",
+        "新規着金売上", "分割回収売上", "継続課金売上", "会員向け単発売上",
+        "着金売上", "返金額", "純着金売上", "解約請求回収額",
+        "広告費", "CPA", "個別予約CPO", "新規着金ROAS", "着金ROAS",
+        "会員数", "中途解約数", "クーリングオフ数",
     ]
-    rows[0][9:23] = helper_headers
-    rows[1][9] = '=IFERROR(FILTER(\'日別数値\'!A2:N,\'日別数値\'!A2:A>=$B$2,\'日別数値\'!A2:A<=$B$3),"")'
+    rows[0][9:31] = helper_headers
+    rows[1][9] = '''=IFERROR(FILTER('日別数値'!A2:V,'日別数値'!A2:A>=$B$2,'日別数値'!A2:A<=$B$3),"")'''
     return rows
+
 
 
 def header_only_rows(headers: Sequence[str], min_rows: int) -> List[List[str]]:
@@ -870,20 +936,24 @@ def header_only_rows(headers: Sequence[str], min_rows: int) -> List[List[str]]:
     return rows
 
 
+
 def build_daily_rows(
     metrics: Sequence[dict],
     booking_metrics: Sequence[dict],
     membership_metrics: Sequence[dict],
+    payment_metrics: Sequence[dict],
     ad_spend_metrics: Sequence[dict] = (),
 ) -> List[List[str]]:
     email_map = {item["date"]: item for item in metrics}
     booking_map = {item["date"]: item for item in booking_metrics}
     membership_map = {item["date"]: item for item in membership_metrics}
+    payment_map = {item["date"]: item for item in payment_metrics}
     ad_spend_map = {item["date"]: item for item in ad_spend_metrics}
     booking_latest_date = max(booking_map.keys()) if booking_map else ""
     membership_latest_date = max(membership_map.keys()) if membership_map else ""
+    payment_latest_date = max(payment_map.keys()) if payment_map else ""
     ad_spend_latest_date = max(ad_spend_map.keys()) if ad_spend_map else ""
-    all_dates = sorted(set(email_map.keys()) | set(booking_map.keys()) | set(membership_map.keys()) | set(ad_spend_map.keys()))
+    all_dates = sorted(set(email_map.keys()) | set(booking_map.keys()) | set(membership_map.keys()) | set(payment_map.keys()) | set(ad_spend_map.keys()))
 
     rows = [[
         "日付",
@@ -892,15 +962,43 @@ def build_daily_rows(
         "個別予約数",
         "個別予約数（UU）",
         "個別実施数",
+        "新規着金売上",
+        "分割回収売上",
+        "継続課金売上",
+        "会員向け単発売上",
         "着金売上",
+        "返金額",
+        "純着金売上",
+        "解約請求回収額",
         "広告費",
         "CPA",
         "個別予約CPO",
-        "ROAS",
+        "新規着金ROAS",
+        "着金ROAS",
         "会員数",
         "中途解約数",
         "クーリングオフ数",
     ]]
+    blank_payment = {
+        "new_cash_sales": "",
+        "installment_sales": "",
+        "recurring_sales": "",
+        "member_single_sales": "",
+        "cash_sales": "",
+        "refunds": "",
+        "net_cash_sales": "",
+        "recovery_sales": "",
+    }
+    zero_payment = {
+        "new_cash_sales": 0,
+        "installment_sales": 0,
+        "recurring_sales": 0,
+        "member_single_sales": 0,
+        "cash_sales": 0,
+        "refunds": 0,
+        "net_cash_sales": 0,
+        "recovery_sales": 0,
+    }
     for date in all_dates:
         email_item = email_map.get(date, {"count": "", "uu_count": ""})
         if date in booking_map:
@@ -922,26 +1020,42 @@ def build_daily_rows(
             member_count = ""
             mid_term_cancel_count = ""
             cooling_off_count = ""
+        if date in payment_map:
+            payment_item = payment_map[date]
+        elif payment_latest_date and date <= payment_latest_date:
+            payment_item = zero_payment
+        else:
+            payment_item = blank_payment
         if date in ad_spend_map:
             ad_spend = ad_spend_map[date]["spend"]
         elif ad_spend_latest_date and date <= ad_spend_latest_date:
             ad_spend = 0
         else:
             ad_spend = ""
-        # CPA = 広告費 / 集客数
         cpa = ""
         if ad_spend != "" and email_item["count"] not in ("", 0, None):
             try:
                 cpa = round(int(ad_spend) / int(email_item["count"]))
             except (ZeroDivisionError, ValueError, TypeError):
                 cpa = ""
-        # 個別予約CPO = 広告費 / 個別予約数
         cpo = ""
         if ad_spend != "" and booking_count not in ("", 0, None):
             try:
                 cpo = round(int(ad_spend) / int(booking_count))
             except (ZeroDivisionError, ValueError, TypeError):
                 cpo = ""
+        new_cash_roas = ""
+        if ad_spend not in ("", 0, None) and payment_item["new_cash_sales"] not in ("", 0, None):
+            try:
+                new_cash_roas = round(int(payment_item["new_cash_sales"]) / int(ad_spend), 2)
+            except (ZeroDivisionError, ValueError, TypeError):
+                new_cash_roas = ""
+        cash_roas = ""
+        if ad_spend not in ("", 0, None) and payment_item["cash_sales"] not in ("", 0, None):
+            try:
+                cash_roas = round(int(payment_item["cash_sales"]) / int(ad_spend), 2)
+            except (ZeroDivisionError, ValueError, TypeError):
+                cash_roas = ""
         rows.append([
             date,
             email_item["count"],
@@ -949,18 +1063,27 @@ def build_daily_rows(
             booking_count,
             "",
             "",
-            "",
+            payment_item["new_cash_sales"],
+            payment_item["installment_sales"],
+            payment_item["recurring_sales"],
+            payment_item["member_single_sales"],
+            payment_item["cash_sales"],
+            payment_item["refunds"],
+            payment_item["net_cash_sales"],
+            payment_item["recovery_sales"],
             ad_spend,
             cpa,
             cpo,
-            "",
+            new_cash_roas,
+            cash_roas,
             member_count,
             mid_term_cancel_count,
             cooling_off_count,
         ])
     while len(rows) < 120:
-        rows.append([""] * 14)
+        rows.append([""] * 22)
     return rows
+
 
 
 def build_data_source_rows(
@@ -970,6 +1093,8 @@ def build_data_source_rows(
     booking_daily_row_count: int,
     membership_status: Dict[str, Dict[str, str]],
     membership_daily_row_count: int,
+    payment_status: Dict[str, str],
+    payment_daily_row_count: int,
     ad_spend_status: Dict[str, str] = None,
     ad_spend_daily_row_count: int = 0,
 ) -> List[List[str]]:
@@ -982,6 +1107,11 @@ def build_data_source_rows(
     membership_member = membership_status.get("会員数", {})
     membership_mid_term = membership_status.get("中途解約数", {})
     membership_cooling_off = membership_status.get("クーリングオフ数", {})
+    payment_state = payment_status.get("ステータス", "確認待ち")
+    payment_updated_at = payment_status.get("最終同期日", "")
+    payment_updates = payment_status.get("更新数", str(payment_daily_row_count))
+    payment_errors = payment_status.get("エラー数", "0")
+    payment_memo = payment_status.get("メモ", "スキルプラス着金データ（加工）の日別売上数値を参照する")
     ad_spend_status = ad_spend_status or {}
     ad_spend_state = ad_spend_status.get("ステータス", "確認待ち")
     ad_spend_updated_at = ad_spend_status.get("最終同期日") or ad_spend_status.get("更新日時", "")
@@ -995,16 +1125,24 @@ def build_data_source_rows(
         ["個別予約数", "個別予約", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{BOOKING_METRICS_SHEET_ID}/edit","【アドネス株式会社】個別面談データ（加工）")', "日別個別予約数", "B列", "キャンセルではない個別予約イベント数", "2025/01/01以降", booking_state, booking_updated_at, booking_updates, booking_errors, booking_memo],
         ["個別予約数（UU）", "個別予約", "加工データ", "2", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{BOOKING_METRICS_SHEET_ID}/edit","【アドネス株式会社】個別面談データ（加工）")', "日別個別予約数（UU）", "B列", "将来接続。ユニークユーザー数", "個別予約完了タグの通知ログとLINE統合後", "確認待ち", "", "", "", "現時点ではユニーク判定が弱いため未接続"],
         ["個別実施数", "個別予約", "収集データ候補", "2", "", "Zoom接続ログ または 面談ダッシュボード", "", "接続ユーザー数", "正本未確定", "確認待ち", "", "", "", "今は未接続"],
-        ["着金売上", "売上", "収集データ候補", "1", "", "決済履歴シート + お客様相談窓口_進捗管理シート", "", "日別着金額", "着金日と返金処理の確定", "確認待ち", "", "", "", "日別正本の集計シートが未作成"],
+        ["新規着金売上", "売上", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{PAYMENT_METRICS_SHEET_ID}/edit","【アドネス株式会社】スキルプラス着金データ（加工）")', PAYMENT_DAILY_TAB, "B列", "新規契約に紐づく初回着金", "2025/01/01以降", payment_state, payment_updated_at, payment_updates, payment_errors, payment_memo],
+        ["分割回収売上", "売上", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{PAYMENT_METRICS_SHEET_ID}/edit","【アドネス株式会社】スキルプラス着金データ（加工）")', PAYMENT_DAILY_TAB, "C列", "スキルプラス本体の分割回収", "2025/01/01以降", payment_state, payment_updated_at, payment_updates, payment_errors, "スキルプラス本体や対象商品の分割回収を集計する"],
+        ["継続課金売上", "売上", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{PAYMENT_METRICS_SHEET_ID}/edit","【アドネス株式会社】スキルプラス着金データ（加工）")', PAYMENT_DAILY_TAB, "D列", "月額継続利用・サブスクの継続課金", "2025/01/01以降", payment_state, payment_updated_at, payment_updates, payment_errors, "スキルプラス継続利用や継続商品を集計する"],
+        ["会員向け単発売上", "売上", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{PAYMENT_METRICS_SHEET_ID}/edit","【アドネス株式会社】スキルプラス着金データ（加工）")', PAYMENT_DAILY_TAB, "E列", "会員向けイベントや買切りの単発売上", "2025/01/01以降", payment_state, payment_updated_at, payment_updates, payment_errors, "会員向けイベント・合宿・単発販売を集計する"],
+        ["着金売上", "売上", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{PAYMENT_METRICS_SHEET_ID}/edit","【アドネス株式会社】スキルプラス着金データ（加工）")', PAYMENT_DAILY_TAB, "F列", "新規・分割・継続・会員向け単発の合計", "2025/01/01以降", payment_state, payment_updated_at, payment_updates, payment_errors, payment_memo],
+        ["返金額", "売上", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{PAYMENT_METRICS_SHEET_ID}/edit","【アドネス株式会社】スキルプラス着金データ（加工）")', PAYMENT_DAILY_TAB, "G列", "返金確定日の返金案件金額", "2025/01/01以降", payment_state, payment_updated_at, payment_updates, payment_errors, "相談窓口シートを案件正本にした返金額"],
+        ["純着金売上", "売上", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{PAYMENT_METRICS_SHEET_ID}/edit","【アドネス株式会社】スキルプラス着金データ（加工）")', PAYMENT_DAILY_TAB, "H列", "着金売上 - 返金額", "2025/01/01以降", payment_state, payment_updated_at, payment_updates, payment_errors, "スキルプラス事業の純着金売上"],
+        ["解約請求回収額", "売上", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{PAYMENT_METRICS_SHEET_ID}/edit","【アドネス株式会社】スキルプラス着金データ（加工）")', PAYMENT_DAILY_TAB, "I列", "回収済みの解約請求金額", "2025/01/01以降", payment_state, payment_updated_at, payment_updates, payment_errors, "中途解約タブの回収済み案件のみ集計する"],
         ["広告費", "広告費", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{AD_SPEND_METRICS_SHEET_ID}/edit","【アドネス株式会社】広告費データ（加工）")', AD_SPEND_DAILY_TAB, "B列", "数値管理シートのカテゴリ=広告の日別合計", "2025/07/01以降", ad_spend_state, ad_spend_updated_at, ad_spend_updates, ad_spend_errors, ad_spend_memo],
-        ["CPA", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "I列", "広告費 / 集客数", "広告費と集客数が入力済み", "接続中", "", "", "", "広告費と集客数が入力された日だけ自動計算"],
-        ["個別予約CPO", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "J列", "広告費 / 個別予約数", "広告費と個別予約数が入力済み", "接続中", "", "", "", "広告費と個別予約数が入力された日だけ自動計算"],
-        ["ROAS", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "K列", "着金売上 / 広告費", "着金売上と広告費が入力済み", "未接続", "", "", "", "着金売上が未接続のため保留"],
+        ["CPA", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "P列", "広告費 / 集客数", "広告費と集客数が入力済み", "接続中", "", "", "", "広告費と集客数が入力された日だけ自動計算"],
+        ["個別予約CPO", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "Q列", "広告費 / 個別予約数", "広告費と個別予約数が入力済み", "接続中", "", "", "", "広告費と個別予約数が入力された日だけ自動計算"],
+        ["新規着金ROAS", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "R列", "新規着金売上 / 広告費", "新規着金売上と広告費が入力済み", "接続中", "", "", "", "広告判断用の新規着金ROAS"],
+        ["着金ROAS", "計算値", "計算式", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{DASHBOARD_SHEET_ID}/edit","【アドネス株式会社】KPIダッシュボード")', "日別数値", "S列", "着金売上 / 広告費", "着金売上と広告費が入力済み", "接続中", "", "", "", "全体像を見るための着金ROAS"],
         ["会員数", "会員", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{MEMBERSHIP_METRICS_SHEET_ID}/edit","【アドネス株式会社】会員データ（加工）")', MEMBERSHIP_DAILY_TAB, "D列", "契約締結日から7日経過した会員の日次残高", "2025/01/01以降", membership_member.get("ステータス", "確認待ち"), membership_member.get("最終同期日", ""), membership_member.get("更新数", str(membership_daily_row_count)), membership_member.get("エラー数", "0"), membership_member.get("メモ", "会員データ（加工）の日別会員数値を参照する")],
         ["中途解約数", "会員", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{MEMBERSHIP_METRICS_SHEET_ID}/edit","【アドネス株式会社】会員データ（加工）")', MEMBERSHIP_DAILY_TAB, "E列", "日別件数", "2025/01/01以降", membership_mid_term.get("ステータス", "確認待ち"), membership_mid_term.get("最終同期日", ""), membership_mid_term.get("更新数", str(membership_daily_row_count)), membership_mid_term.get("エラー数", "0"), membership_mid_term.get("メモ", "会員データ（加工）の日別会員数値を参照する")],
         ["クーリングオフ数", "会員", "加工データ", "1", f'=HYPERLINK("https://docs.google.com/spreadsheets/d/{MEMBERSHIP_METRICS_SHEET_ID}/edit","【アドネス株式会社】会員データ（加工）")', MEMBERSHIP_DAILY_TAB, "C列", "日別件数", "2025/01/01以降", membership_cooling_off.get("ステータス", "確認待ち"), membership_cooling_off.get("最終同期日", ""), membership_cooling_off.get("更新数", str(membership_daily_row_count)), membership_cooling_off.get("エラー数", "0"), membership_cooling_off.get("メモ", "会員データ（加工）の日別会員数値を参照する")],
     ]
-    while len(rows) < 30:
+    while len(rows) < 40:
         rows.append([""] * 14)
     return rows
 
@@ -1023,8 +1161,9 @@ def main() -> None:
     tabs = ensure_target_tabs(spreadsheet)
     booking_status = load_booking_status(gc)
     membership_status = load_membership_status(gc)
+    payment_status = load_payment_status(gc)
 
-    summary_rows = build_summary_rows(booking_status, membership_status)
+    summary_rows = build_summary_rows(booking_status, membership_status, payment_status)
     write_rows(spreadsheet, tabs["スキルプラス事業サマリー"], summary_rows)
     apply_table_style(
         spreadsheet,
@@ -1049,10 +1188,19 @@ def main() -> None:
             repeat_cell_request(
                 tabs["スキルプラス事業サマリー"].id,
                 4,
-                17,
+                25,
                 1,
                 2,
                 {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}},
+                "userEnteredFormat.numberFormat",
+            ),
+            repeat_cell_request(
+                tabs["スキルプラス事業サマリー"].id,
+                20,
+                22,
+                1,
+                2,
+                {"numberFormat": {"type": "NUMBER", "pattern": "0.00"}},
                 "userEnteredFormat.numberFormat",
             ),
             repeat_cell_request(
@@ -1069,8 +1217,17 @@ def main() -> None:
                 1,
                 len(summary_rows),
                 10,
-                23,
+                31,
                 {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}},
+                "userEnteredFormat.numberFormat",
+            ),
+            repeat_cell_request(
+                tabs["スキルプラス事業サマリー"].id,
+                1,
+                len(summary_rows),
+                26,
+                28,
+                {"numberFormat": {"type": "NUMBER", "pattern": "0.00"}},
                 "userEnteredFormat.numberFormat",
             ),
         ],
@@ -1085,7 +1242,7 @@ def main() -> None:
         spreadsheet,
         {
             "requests": [
-                set_column_hidden_request(tabs["スキルプラス事業サマリー"].id, 9, 23, True),
+                set_column_hidden_request(tabs["スキルプラス事業サマリー"].id, 9, 31, True),
                 add_line_chart_request(
                     tabs["スキルプラス事業サマリー"].id,
                     0,
@@ -1108,7 +1265,7 @@ def main() -> None:
                     6,
                     "日別売上・広告費推移",
                     9,
-                    [15, 16],
+                    [15, 19, 23],
                 ),
                 add_line_chart_request(
                     tabs["スキルプラス事業サマリー"].id,
@@ -1116,7 +1273,7 @@ def main() -> None:
                     6,
                     "日別会員推移",
                     9,
-                    [20, 21, 22],
+                    [28, 29, 30],
                 ),
             ]
         },
@@ -1126,17 +1283,18 @@ def main() -> None:
     daily_metrics = load_email_daily_metrics(gc)
     booking_metrics = load_booking_daily_metrics(gc)
     membership_metrics = load_membership_daily_metrics(gc)
+    payment_metrics = load_payment_daily_metrics(gc)
     ad_spend_metrics = load_ad_spend_daily_metrics(gc)
-    daily_rows = build_daily_rows(daily_metrics, booking_metrics, membership_metrics, ad_spend_metrics)
+    daily_rows = build_daily_rows(daily_metrics, booking_metrics, membership_metrics, payment_metrics, ad_spend_metrics)
     write_rows(spreadsheet, tabs["日別数値"], daily_rows)
     apply_table_style(
         spreadsheet,
         tabs["日別数値"],
         len(daily_rows),
-        14,
-        widths=[120, 120, 145, 135, 150, 125, 125, 120, 110, 145, 105, 120, 120, 135],
+        22,
+        widths=[120, 120, 145, 135, 150, 125, 135, 135, 135, 145, 135, 120, 135, 145, 120, 110, 145, 120, 120, 120, 120, 135],
     )
-    apply_single_line_header(spreadsheet, tabs["日別数値"], 14)
+    apply_single_line_header(spreadsheet, tabs["日別数値"], 22)
     apply_number_formats(
         spreadsheet,
         tabs["日別数値"],
@@ -1164,8 +1322,17 @@ def main() -> None:
                 1,
                 len(daily_rows),
                 1,
-                14,
+                22,
                 {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}},
+                "userEnteredFormat.numberFormat",
+            ),
+            repeat_cell_request(
+                tabs["日別数値"].id,
+                1,
+                len(daily_rows),
+                17,
+                19,
+                {"numberFormat": {"type": "NUMBER", "pattern": "0.00"}},
                 "userEnteredFormat.numberFormat",
             ),
         ],
@@ -1180,6 +1347,8 @@ def main() -> None:
         max(len(booking_metrics), 0),
         membership_status,
         max(len(membership_metrics), 0),
+        payment_status,
+        max(len(payment_metrics), 0),
         ad_spend_status,
         max(len(ad_spend_metrics), 0),
     )
