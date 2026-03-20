@@ -41,8 +41,7 @@ from scripts.setup_payment_product_master import (
 
 TARGET_SPREADSHEET_TITLE = "【アドネス株式会社】決済データ（加工）"
 CS_SHEET_ID = "1XOkJsXzEx4iV9h8F-cywg0FOS4Knf7IfekN78RZAr6I"
-CDP_SHEET_ID = "1qjU279OVD0i4h2AdQzkYIsZCfA1BeiUKLHNg7i2a2fk"
-CDP_CUSTOMER_TAB = "顧客マスタ"
+SKILLPLUS_STUDENT_SHEET_ID = "1zL8LV9CF8RLKiNDNqsYO6UXxuhBW32NcDaPJ5FqB17M"
 
 DAILY_TAB_NAME = "日別売上数値"
 SUMMARY_TAB_NAME = "売上サマリー"
@@ -99,6 +98,7 @@ SKILLPLUS_BLANK_SOURCE_CONFIRMED_SOURCES = {
     "京都信販",
     "CREDIX",
 }
+SKILLPLUS_STUDENT_EXCLUDED_TABS = {"最新元データ一覧"}
 
 
 @dataclass(frozen=True)
@@ -262,6 +262,10 @@ def normalize_name_key(value: object) -> str:
     return "".join(ch for ch in text if ch.isalnum() or ch == "ー")
 
 
+def normalize_header_key(value: object) -> str:
+    return re.sub(r"[\s\u3000]+", "", normalize_text(value))
+
+
 def normalize_date(raw: str) -> str:
     value = normalize_text(raw)
     if not value:
@@ -297,6 +301,33 @@ def normalize_display_amount(value: int) -> str:
 
 def normalize_display_count(value: int) -> str:
     return f"{value:,}"
+
+
+def header_index_by_exact(headers: list[str], candidates: Iterable[str]) -> Optional[int]:
+    candidate_keys = {normalize_header_key(candidate) for candidate in candidates if normalize_text(candidate)}
+    for index, header in enumerate(headers):
+        if normalize_header_key(header) in candidate_keys:
+            return index
+    return None
+
+
+def header_indexes_by_contains(headers: list[str], keywords: Iterable[str]) -> list[int]:
+    normalized_keywords = [normalize_text(keyword) for keyword in keywords if normalize_text(keyword)]
+    matches: list[int] = []
+    for index, header in enumerate(headers):
+        header_text = normalize_text(header)
+        if any(keyword in header_text for keyword in normalized_keywords):
+            matches.append(index)
+    return matches
+
+
+def pick_first_value(row: list[str], indexes: Iterable[int]) -> str:
+    for index in indexes:
+        if index < len(row):
+            value = normalize_text(row[index])
+            if value:
+                return value
+    return ""
 
 
 def is_quota_error(exc: APIError) -> bool:
@@ -805,49 +836,82 @@ def text_contains_any_marker(text: str, markers: Iterable[str]) -> bool:
     return any(marker and marker in normalized for marker in markers)
 
 
-def load_cdp_skillplus_identifiers(ws, skillplus_product_names: set[str]) -> dict[str, set[str]]:
-    rows = get_all_values_with_retry(ws)
-    if len(rows) < 2:
-        return {"emails": set(), "phones": set(), "names": set()}
+def is_skillplus_student_raw_tab(title: str) -> bool:
+    normalized = normalize_text(title)
+    return "（加工）" not in normalized and normalized not in SKILLPLUS_STUDENT_EXCLUDED_TABS
 
-    headers = rows[1]
-    idx = {header: i for i, header in enumerate(headers)}
+
+def detect_student_header_row(rows: list[list[str]]) -> Optional[int]:
+    for index, row in enumerate(rows[:5]):
+        joined = " / ".join(normalize_text(cell) for cell in row if normalize_text(cell))
+        if not joined:
+            continue
+        if any(keyword in joined for keyword in ("メールアドレス", "電話番号", "お電話番号", "ご入会日", "入会日", "回答者名", "表示名")):
+            return index
+    return None
+
+
+def build_student_header_spec(headers: list[str]) -> dict[str, object]:
+    return {
+        "email_indexes": header_indexes_by_contains(headers, ["メールアドレス"]),
+        "phone_indexes": header_indexes_by_contains(headers, ["電話番号", "お電話番号"]),
+        "full_name_indexes": header_indexes_by_contains(headers, ["お名前", "本名"]),
+        "display_name_indexes": header_indexes_by_contains(headers, ["回答者名", "表示名"]),
+        "nickname_indexes": header_indexes_by_contains(headers, ["ニックネーム"]),
+        "furigana_indexes": header_indexes_by_contains(headers, ["ふりがな"]),
+        "surname_index": header_index_by_exact(headers, ["姓", "姓（せい）"]),
+        "given_name_index": header_index_by_exact(headers, ["名"]),
+    }
+
+
+def load_skillplus_student_identifiers(student_ss) -> dict[str, set[str]]:
     emails: set[str] = set()
     phones: set[str] = set()
     names: set[str] = set()
-    markers = build_text_markers(skillplus_product_names)
 
-    def pick(row: list[str], header: str) -> str:
-        col = idx.get(header)
-        if col is None or col >= len(row):
-            return ""
-        return normalize_text(row[col])
-
-    for row in rows[2:]:
-        if not any(normalize_text(cell) for cell in row):
-            continue
-        plan = pick(row, "プラン")
-        purchase_fields = [
-            pick(row, "初回購入商品"),
-            pick(row, "最新購入商品"),
-            pick(row, "購入商品"),
-        ]
-        is_skillplus = bool(plan) or any(text_contains_any_marker(value, markers) for value in purchase_fields)
-        if not is_skillplus:
+    for ws in student_ss.worksheets():
+        if not is_skillplus_student_raw_tab(ws.title):
             continue
 
-        email = normalize_email(pick(row, "メールアドレス"))
-        phone = normalize_phone(pick(row, "電話番号"))
-        line_name = normalize_name_key(pick(row, "LINE名"))
-        full_name = normalize_name_key(f"{pick(row, '姓')}{pick(row, '名')}")
-        if email:
-            emails.add(email)
-        if phone:
-            phones.add(phone)
-        if line_name:
-            names.add(line_name)
-        if full_name:
-            names.add(full_name)
+        rows = get_all_values_with_retry(ws)
+        header_row_index = detect_student_header_row(rows)
+        if header_row_index is None:
+            continue
+
+        headers = rows[header_row_index]
+        spec = build_student_header_spec(headers)
+        surname_index = spec["surname_index"]
+        given_name_index = spec["given_name_index"]
+
+        for row in rows[header_row_index + 1 :]:
+            if not any(normalize_text(cell) for cell in row):
+                continue
+
+            email = normalize_email(pick_first_value(row, spec["email_indexes"]))
+            phone = normalize_phone(pick_first_value(row, spec["phone_indexes"]))
+
+            full_name_source = pick_first_value(row, spec["full_name_indexes"])
+            if not full_name_source and surname_index is not None and given_name_index is not None:
+                surname = normalize_text(row[surname_index]) if surname_index < len(row) else ""
+                given_name = normalize_text(row[given_name_index]) if given_name_index < len(row) else ""
+                full_name_source = f"{surname}{given_name}"
+
+            name_candidates = [
+                normalize_name_key(full_name_source),
+                normalize_name_key(pick_first_value(row, spec["display_name_indexes"])),
+                normalize_name_key(pick_first_value(row, spec["nickname_indexes"])),
+                normalize_name_key(pick_first_value(row, spec["furigana_indexes"])),
+            ]
+            name_candidates = [candidate for candidate in name_candidates if candidate]
+
+            if not email and not phone and not name_candidates:
+                continue
+
+            if email:
+                emails.add(email)
+            if phone:
+                phones.add(phone)
+            names.update(name_candidates)
     return {"emails": emails, "phones": phones, "names": names}
 
 
@@ -925,19 +989,19 @@ def explicit_case_code_is_skillplus(code: str) -> Optional[bool]:
     return None
 
 
-def identifiers_hit_skillplus(email: str, phone: str, full_name: str, line_name: str, sale_index: dict[str, set[str]], cdp_index: dict[str, set[str]]) -> bool:
-    if email and (email in sale_index["emails"] or email in cdp_index["emails"]):
+def identifiers_hit_skillplus(email: str, phone: str, full_name: str, line_name: str, sale_index: dict[str, set[str]], student_index: dict[str, set[str]]) -> bool:
+    if email and (email in sale_index["emails"] or email in student_index["emails"]):
         return True
-    if phone and (phone in sale_index["phones"] or phone in cdp_index["phones"]):
+    if phone and (phone in sale_index["phones"] or phone in student_index["phones"]):
         return True
-    if full_name and (full_name in sale_index["names"] or full_name in cdp_index["names"]):
+    if full_name and (full_name in sale_index["names"] or full_name in student_index["names"]):
         return True
-    if line_name and (line_name in sale_index["names"] or line_name in cdp_index["names"]):
+    if line_name and (line_name in sale_index["names"] or line_name in student_index["names"]):
         return True
     return False
 
 
-def case_is_skillplus(*, explicit_code: str, text_blob: str, email: str, phone: str, full_name: str, line_name: str, skillplus_markers: list[str], non_skillplus_markers: list[str], sale_index: dict[str, set[str]], cdp_index: dict[str, set[str]]) -> bool:
+def case_is_skillplus(*, explicit_code: str, text_blob: str, email: str, phone: str, full_name: str, line_name: str, skillplus_markers: list[str], non_skillplus_markers: list[str], sale_index: dict[str, set[str]], student_index: dict[str, set[str]]) -> bool:
     explicit = explicit_case_code_is_skillplus(explicit_code)
     if explicit is not None:
         return explicit
@@ -945,10 +1009,10 @@ def case_is_skillplus(*, explicit_code: str, text_blob: str, email: str, phone: 
         return False
     if text_contains_any_marker(text_blob, skillplus_markers):
         return True
-    return identifiers_hit_skillplus(email, phone, full_name, line_name, sale_index, cdp_index)
+    return identifiers_hit_skillplus(email, phone, full_name, line_name, sale_index, student_index)
 
 
-def collect_cs_refund_and_claims(cs_ss, sale_index: dict[str, set[str]], cdp_index: dict[str, set[str]], skillplus_markers: list[str], non_skillplus_markers: list[str]) -> tuple[dict[str, Counter], list[RefundCase], Counter]:
+def collect_cs_refund_and_claims(cs_ss, sale_index: dict[str, set[str]], student_index: dict[str, set[str]], skillplus_markers: list[str], non_skillplus_markers: list[str]) -> tuple[dict[str, Counter], list[RefundCase], Counter]:
     tab_configs = [
         {
             "tab": "管理用_クーオフ・中途解約以外",
@@ -1029,7 +1093,7 @@ def collect_cs_refund_and_claims(cs_ss, sale_index: dict[str, set[str]], cdp_ind
                 skillplus_markers=skillplus_markers,
                 non_skillplus_markers=non_skillplus_markers,
                 sale_index=sale_index,
-                cdp_index=cdp_index,
+                student_index=student_index,
             ):
                 continue
 
@@ -1101,7 +1165,7 @@ def build_refund_case_indexes(refund_cases: list[RefundCase]) -> dict[str, dict[
     return indexes
 
 
-def collect_raw_refund_supplements(payment_rows: list[list[str]], mapping: Dict[tuple[str, str], MappingEntry], refund_cases: list[RefundCase], sale_index: dict[str, set[str]], cdp_index: dict[str, set[str]], skillplus_markers: list[str], non_skillplus_markers: list[str]) -> tuple[dict[str, Counter], Counter]:
+def collect_raw_refund_supplements(payment_rows: list[list[str]], mapping: Dict[tuple[str, str], MappingEntry], refund_cases: list[RefundCase], sale_index: dict[str, set[str]], student_index: dict[str, set[str]], skillplus_markers: list[str], non_skillplus_markers: list[str]) -> tuple[dict[str, Counter], Counter]:
     if not payment_rows:
         return defaultdict(Counter), Counter()
 
@@ -1141,7 +1205,7 @@ def collect_raw_refund_supplements(payment_rows: list[list[str]], mapping: Dict[
             continue
         if mapping_entry.business != BUSINESS_SKILLPLUS:
             continue
-        if not identifiers_hit_skillplus(email, phone, full_name, line_name, sale_index, cdp_index):
+        if not identifiers_hit_skillplus(email, phone, full_name, line_name, sale_index, student_index):
             continue
 
         candidate_cases: list[RefundCase] = []
@@ -1175,22 +1239,25 @@ def collect_raw_refund_supplements(payment_rows: list[list[str]], mapping: Dict[
     return daily, stats
 
 
-def sale_matches_skillplus_customer(row: list[str], idx: dict[str, int], cdp_index: dict[str, set[str]]) -> bool:
+def sale_matches_skillplus_student(row: list[str], idx: dict[str, int], student_index: dict[str, set[str]]) -> bool:
     email = normalize_email(row[idx["メールアドレス"]])
     phone = normalize_phone(row[idx["電話番号"]])
     full_name = normalize_name_key(
         normalize_text(row[idx["名前（原本）"]]) or normalize_text(f"{row[idx['姓']]}{row[idx['名']]}")
     )
-    if email and email in cdp_index["emails"]:
+    furigana = normalize_name_key(row[idx["フリガナ"]])
+    if email and email in student_index["emails"]:
         return True
-    if phone and phone in cdp_index["phones"]:
+    if phone and phone in student_index["phones"]:
         return True
-    if full_name and full_name in cdp_index["names"]:
+    if full_name and full_name in student_index["names"]:
+        return True
+    if furigana and furigana in student_index["names"]:
         return True
     return False
 
 
-def build_daily_rows(payment_rows: list[list[str]], mapping: Dict[tuple[str, str], MappingEntry], refund_daily: dict[str, Counter], refund_stats: Counter, claim_stats: Counter, cdp_index: dict[str, set[str]]) -> tuple[List[List[object]], dict]:
+def build_daily_rows(payment_rows: list[list[str]], mapping: Dict[tuple[str, str], MappingEntry], refund_daily: dict[str, Counter], refund_stats: Counter, claim_stats: Counter, student_index: dict[str, set[str]]) -> tuple[List[List[object]], dict]:
     headers = payment_rows[0]
     idx = {header: i for i, header in enumerate(headers)}
     daily = defaultdict(Counter)
@@ -1219,7 +1286,7 @@ def build_daily_rows(payment_rows: list[list[str]], mapping: Dict[tuple[str, str
         elif not (
             raw_name == "(空欄)"
             and source in SKILLPLUS_BLANK_SOURCE_CONFIRMED_SOURCES
-            and sale_matches_skillplus_customer(padded, idx, cdp_index)
+            and sale_matches_skillplus_student(padded, idx, student_index)
         ):
             complete_unknown_amount += abs(parse_amount(padded[idx["イベント金額"]]))
             complete_unknown_count += 1
@@ -1332,7 +1399,7 @@ def build_summary_rows(stats: dict, checked_at: str) -> List[List[object]]:
         ["最終更新日時", checked_at, "このシートを最後に再生成した日時"],
         ["集計開始日", START_DATE_TEXT, "2025/01/01 以降だけを集計対象にする"],
         ["最新計上日", stats["latest_date"], "日別売上数値で最後に値を持つ日付"],
-        ["累計着金売上", normalize_display_amount(stats["sales_amount_total"]), "スキルプラス事業の成功売上 + 顧客マスタで確認できたプラン未特定売上"],
+        ["累計着金売上", normalize_display_amount(stats["sales_amount_total"]), "スキルプラス事業の成功売上 + 受講生データ元タブで確認できたプラン未特定売上"],
         ["累計返金額", normalize_display_amount(stats["refund_amount_total"]), "相談窓口シート案件正本 + raw 補完の返金合計"],
         ["累計純着金売上", normalize_display_amount(stats["net_sales_total"]), "着金売上 - 返金額"],
         ["累計解約請求額", normalize_display_amount(stats["claim_amount_total"]), "中途解約タブの請求確定額"],
@@ -1349,7 +1416,6 @@ def build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats: dict, che
     mapping_url = get_tab_url(MASTER_SHEET_ID, mapping_ws)
     refund_ws = cs_ss.worksheet("管理用_2025.1.25-クーオフ")
     midterm_ws = cs_ss.worksheet("管理用_20250125-中途解約")
-    other_refund_ws = cs_ss.worksheet("管理用_クーオフ・中途解約以外")
     status = "正常"
     if stats["complete_unknown_amount"] > 0:
         status = "要確認"
@@ -1363,7 +1429,7 @@ def build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats: dict, che
             f'=HYPERLINK("{payment_url}","【アドネス株式会社】決済データ（収集）")',
             PAYMENT_COLLECTION_TAB,
             "イベント日時 / イベント金額 / 商品名",
-            "成功売上のみ + 決済商品変換マスタ確定行 + 顧客マスタでスキルプラスと確認できた銀振/信販の空欄成功売上",
+            "成功売上のみ + 決済商品変換マスタ確定行 + 受講生データ元タブで確認できた銀振/信販の空欄成功売上",
             status,
             f"'{checked_at}",
             stats["sales_count_total"],
@@ -1382,7 +1448,7 @@ def build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats: dict, che
             f"'{checked_at}",
             stats["refund_count_total"],
             0,
-            f'=HYPERLINK("{get_tab_url(CS_SHEET_ID, other_refund_ws)}","一般返金"), HYPERLINK("{get_tab_url(CS_SHEET_ID, refund_ws)}","クーオフ"), HYPERLINK("{get_tab_url(CS_SHEET_ID, midterm_ws)}","中途解約")',
+            "一般返金 / クーオフ / 中途解約 の3タブを案件正本として見る",
         ],
         [
             DAILY_TAB_NAME,
@@ -1424,7 +1490,7 @@ def build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats: dict, che
             f"'{checked_at}",
             stats["source_row_count"],
             1 if status != "正常" else 0,
-            "商品名空欄でも、顧客マスタで確認できた銀行振込・信販売上だけを着金売上へ含める",
+            f"スキルプラス受講生データ（元）を正の証拠にし、商品名空欄でも受講生データで確認できた銀行振込・信販売上だけを着金売上へ含める",
         ],
     ]
     return rows
@@ -1434,12 +1500,12 @@ def build_rule_rows() -> List[List[object]]:
     return [
         ["項目", "ルール", "補足"],
         ["日別売上数値", "手入力で直さず、元データから再生成する", "数字の理由を後から追えるようにする"],
-        ["着金売上", "決済データ（収集）の成功売上だけを集計する", "スキルプラス事業と確定した商品 + 顧客マスタで確認できた銀振/信販のプラン未特定売上を対象にする"],
+        ["着金売上", "決済データ（収集）の成功売上だけを集計する", "スキルプラス事業と確定した商品 + 受講生データ元タブで確認できた銀振/信販のプラン未特定売上を対象にする"],
         ["返金額", "相談窓口シートの返金案件を正本にする", "相談窓口に載っていない raw 返金だけを補完採用する"],
         ["返金件数", "返金イベント件数ではなく返金案件数で持つ", "分割返金でも1案件として扱う"],
         ["解約請求額", "中途解約タブの負値を請求額として持つ", "通常の着金売上には混ぜない"],
         ["日付", "実入出金日ではなく、確定日を使う", "着金売上はイベント日時、返金額と解約請求額は相談窓口上の確定日"],
-        ["商品未特定", "銀行振込・信販の空欄成功売上は、顧客マスタでスキルプラス顧客と確認できたものだけ着金売上へ含める", "どのプランか不明でも、顧客起点の根拠があるものだけ採用する"],
+        ["商品未特定", "銀行振込・信販の空欄成功売上は、受講生データ元タブでスキルプラス受講生と確認できたものだけ着金売上へ含める", "どのプランか不明でも、一次データ起点の根拠があるものだけ採用する"],
         ["完全不明", "スキルプラス事業と確定できない売上は日別に入れない", "売上サマリーで金額と件数だけ監視する"],
         ["プラン不明", "スキルプラス事業とだけ言える売上は将来の加工拡張で扱う", "今は完全不明として残すより、根拠が固まってから昇格させる"],
     ]
@@ -1482,26 +1548,24 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
         source = gc.open_by_key(PAYMENT_COLLECTION_SHEET_ID)
         master = gc.open_by_key(MASTER_SHEET_ID)
         cs_ss = gc.open_by_key(CS_SHEET_ID)
-        cdp_ss = gc.open_by_key(CDP_SHEET_ID)
+        student_ss = gc.open_by_key(SKILLPLUS_STUDENT_SHEET_ID)
         tabs = ensure_tabs(target)
 
         payment_ws = source.worksheet(PAYMENT_COLLECTION_TAB)
         mapping_ws = master.worksheet(PAYMENT_MAPPING_TAB)
         product_ws = master.worksheet(MASTER_PRODUCT_TAB)
-        cdp_ws = cdp_ss.worksheet(CDP_CUSTOMER_TAB)
-
         payment_rows = get_all_values_with_retry(payment_ws)
         mapping = load_payment_mapping(mapping_ws)
         skillplus_product_names, non_skillplus_product_names = load_product_business_map(product_ws)
         sale_events, sale_index, _ = build_skillplus_sale_indexes(payment_rows, mapping)
-        cdp_index = load_cdp_skillplus_identifiers(cdp_ws, skillplus_product_names)
+        student_index = load_skillplus_student_identifiers(student_ss)
         skillplus_markers = build_text_markers(skillplus_product_names)
         non_skillplus_markers = build_text_markers(non_skillplus_product_names)
 
         refund_daily, refund_cases, refund_case_stats = collect_cs_refund_and_claims(
             cs_ss,
             sale_index=sale_index,
-            cdp_index=cdp_index,
+            student_index=student_index,
             skillplus_markers=skillplus_markers,
             non_skillplus_markers=non_skillplus_markers,
         )
@@ -1510,7 +1574,7 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
             mapping,
             refund_cases=refund_cases,
             sale_index=sale_index,
-            cdp_index=cdp_index,
+            student_index=student_index,
             skillplus_markers=skillplus_markers,
             non_skillplus_markers=non_skillplus_markers,
         )
@@ -1527,7 +1591,7 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
             refund_daily,
             refund_case_stats,
             refund_case_stats,
-            cdp_index,
+            student_index,
         )
         checked_at = datetime.now().strftime("%Y/%m/%d %H:%M")
         stats["updated_at"] = checked_at
