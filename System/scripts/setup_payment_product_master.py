@@ -792,9 +792,9 @@ def build_mapping_rows(
                 reason_parts.append("平均79.8万円ルール")
                 extra_condition = "参照金額÷参照件数=798,000"
             else:
-                status = "不明"
+                status = "加工側で分類"
                 extra_condition = "イベント金額・課金タイプ・メール照合で個別判定"
-                note = "空欄商品のため自動確定しない"
+                note = "商品名空欄のため変換マスタでは確定せず、加工ロジック側で新規/分割/継続/除外へ分類する"
         else:
             amount_specific_name = infer_amount_specific_alias(aggregate)
             if amount_specific_name in exact_product_names:
