@@ -189,6 +189,20 @@ class OtherBusinessEvidence:
     source_tab: str
 
 
+@dataclass(frozen=True)
+class SaleContext:
+    source: str
+    raw_name: str
+    event_date: str
+    event_dt: datetime
+    mapping_entry: Optional[MappingEntry]
+    included: bool
+    is_blank_confirmed: bool
+    is_univapay_head_payment: bool
+    recurring_id: str
+    charge_type: str
+
+
 class FileLock:
     def __init__(self, lock_path: Path = LOCK_PATH, timeout_seconds: int = 1800):
         self.lock_path = Path(lock_path)
@@ -356,6 +370,42 @@ def normalize_display_count(value: int) -> str:
     return f"{value:,}"
 
 
+def parse_meta_json(meta_json: str) -> list[dict]:
+    text = normalize_text(meta_json)
+    if not text:
+        return []
+    try:
+        payload = json.loads(text)
+    except Exception:
+        return []
+
+    parts: list[dict] = []
+    for key in ("charge_metadata", "token_metadata"):
+        part = payload.get(key)
+        if isinstance(part, str):
+            try:
+                part = json.loads(part)
+            except Exception:
+                part = {}
+        if isinstance(part, dict):
+            parts.append(part)
+    return parts
+
+
+def extract_univapay_product_hints(meta_json: str) -> list[str]:
+    hints: list[str] = []
+    for part in parse_meta_json(meta_json):
+        for key in ("product_detail_name", "univapay-product-names"):
+            value = normalize_text(part.get(key))
+            if value:
+                hints.append(value)
+    return hints
+
+
+def is_univapay_head_payment(meta_json: str) -> bool:
+    return any("頭金お支払い" in hint for hint in extract_univapay_product_hints(meta_json))
+
+
 def header_index_by_exact(headers: list[str], candidates: Iterable[str]) -> Optional[int]:
     candidate_keys = {normalize_header_key(candidate) for candidate in candidates if normalize_text(candidate)}
     for index, header in enumerate(headers):
@@ -520,7 +570,7 @@ def write_rows(spreadsheet, ws, rows: List[List[object]]) -> None:
 
 
 def style_daily_tab(spreadsheet, ws) -> None:
-    widths = [120, 130, 120, 130, 130, 110, 110, 120]
+    widths = [120, 135, 135, 130, 130, 130, 130, 120, 120, 110, 110]
     requests = [
         repeat_cell_request(
             ws.id,
@@ -569,7 +619,7 @@ def style_daily_tab(spreadsheet, ws) -> None:
             1,
             ws.row_count,
             1,
-            5,
+            7,
             {
                 "numberFormat": {"type": "CURRENCY", "pattern": "¥#,##0"},
             },
@@ -579,7 +629,7 @@ def style_daily_tab(spreadsheet, ws) -> None:
             ws.id,
             1,
             ws.row_count,
-            5,
+            7,
             len(widths),
             {
                 "numberFormat": {"type": "NUMBER", "pattern": "#,##0"},
@@ -1542,6 +1592,76 @@ def sale_matches_other_business(
     )
 
 
+def build_sale_context(
+    row: list[str],
+    idx: dict[str, int],
+    mapping: Dict[tuple[str, str], MappingEntry],
+    student_index: dict[str, set[str]],
+    other_business_index: dict[str, dict[str, list[OtherBusinessEvidence]]],
+) -> Optional[SaleContext]:
+    source = normalize_text(row[idx["参照システム"]])
+    event = normalize_text(row[idx["イベント"]])
+    status = normalize_text(row[idx["課金ステータス"]])
+    if not source_sale_is_success(source, event, status):
+        return None
+
+    event_date = normalize_date(row[idx["イベント日時"]])
+    event_dt = parse_date(event_date)
+    if not event_dt or event_dt < START_DATE:
+        return None
+
+    raw_name = normalize_text(row[idx["商品名"]]) or "(空欄)"
+    mapping_entry = mapping.get((source, raw_name))
+    recurring_id = normalize_text(row[idx["定期課金ID"]])
+    charge_type = normalize_text(row[idx["課金タイプ"]])
+    included = False
+    is_blank_confirmed = False
+    is_head_payment = False
+
+    if mapping_entry and mapping_entry.status == "変換済み":
+        included = mapping_entry.business == BUSINESS_SKILLPLUS
+    else:
+        student_hit = raw_name == "(空欄)" and sale_matches_skillplus_student(row, idx, student_index)
+        other_hit = raw_name == "(空欄)" and sale_matches_other_business(row, idx, event_dt, other_business_index)
+        is_head_payment = source == "UnivaPay" and raw_name == "(空欄)" and is_univapay_head_payment(row[idx["メタデータ（JSON）"]])
+        is_blank_confirmed = (
+            raw_name == "(空欄)"
+            and source in SKILLPLUS_BLANK_SOURCE_CONFIRMED_SOURCES
+            and student_hit
+            and not other_hit
+        )
+        included = is_blank_confirmed or is_head_payment
+
+    return SaleContext(
+        source=source,
+        raw_name=raw_name,
+        event_date=event_date,
+        event_dt=event_dt,
+        mapping_entry=mapping_entry,
+        included=included,
+        is_blank_confirmed=is_blank_confirmed,
+        is_univapay_head_payment=is_head_payment,
+        recurring_id=recurring_id,
+        charge_type=charge_type,
+    )
+
+
+def sale_bucket(context: SaleContext, earliest_recurring_dates: dict[str, datetime]) -> str:
+    if context.is_blank_confirmed or context.is_univapay_head_payment:
+        return "new"
+
+    mapping_entry = context.mapping_entry
+    if mapping_entry and mapping_entry.target == "会員向け":
+        return "continuing"
+
+    if context.recurring_id:
+        earliest_dt = earliest_recurring_dates.get(context.recurring_id)
+        if earliest_dt and context.event_dt > earliest_dt:
+            return "continuing"
+
+    return "new"
+
+
 def build_daily_rows(
     payment_rows: list[list[str]],
     mapping: Dict[tuple[str, str], MappingEntry],
@@ -1557,57 +1677,63 @@ def build_daily_rows(
     complete_unknown_amount = 0
     complete_unknown_count = 0
     sale_source_counts = Counter()
+    earliest_recurring_dates: dict[str, datetime] = {}
 
+    contexts: list[tuple[list[str], SaleContext]] = []
     for row in payment_rows[1:]:
         padded = row + [""] * (len(headers) - len(row))
-        source = normalize_text(padded[idx["参照システム"]])
-        event = normalize_text(padded[idx["イベント"]])
-        status = normalize_text(padded[idx["課金ステータス"]])
-        if not source_sale_is_success(source, event, status):
+        context = build_sale_context(padded, idx, mapping, student_index, other_business_index)
+        if context is None:
             continue
+        contexts.append((padded, context))
+        if context.included and context.recurring_id:
+            current = earliest_recurring_dates.get(context.recurring_id)
+            if current is None or context.event_dt < current:
+                earliest_recurring_dates[context.recurring_id] = context.event_dt
 
-        event_date = normalize_date(padded[idx["イベント日時"]])
-        event_dt = parse_date(event_date)
-        if not event_dt or event_dt < START_DATE:
-            continue
-
-        raw_name = normalize_text(padded[idx["商品名"]]) or "(空欄)"
-        mapping_entry = mapping.get((source, raw_name))
-        if mapping_entry and mapping_entry.status == "変換済み":
-            if mapping_entry.business != BUSINESS_SKILLPLUS:
-                continue
-        elif not (
-            raw_name == "(空欄)"
-            and source in SKILLPLUS_BLANK_SOURCE_CONFIRMED_SOURCES
-            and sale_matches_skillplus_student(padded, idx, student_index)
-            and not sale_matches_other_business(padded, idx, event_dt, other_business_index)
-        ):
+    for padded, context in contexts:
+        if not context.included:
             complete_unknown_amount += abs(parse_amount(padded[idx["イベント金額"]]))
             complete_unknown_count += 1
             continue
 
         amount = abs(parse_amount(padded[idx["イベント金額"]]))
-        daily[event_date]["sales_amount"] += amount
-        daily[event_date]["sales_count"] += 1
-        sale_source_counts[source] += 1
+        bucket = sale_bucket(context, earliest_recurring_dates)
+        daily[context.event_date]["sales_amount"] += amount
+        daily[context.event_date]["sales_count"] += 1
+        if bucket == "new":
+            daily[context.event_date]["new_sales_amount"] += amount
+            daily[context.event_date]["new_sales_count"] += 1
+        else:
+            daily[context.event_date]["continuing_sales_amount"] += amount
+            daily[context.event_date]["continuing_sales_count"] += 1
+        sale_source_counts[context.source] += 1
 
     all_dates = set(daily.keys()) | set(refund_daily.keys())
     if not all_dates:
         rows = [[
             "日付",
+            "新規着金売上",
+            "継続売上",
             "着金売上",
             "返金額",
             "純着金売上",
             "解約請求額",
+            "新規着金件数",
+            "継続売上件数",
             "着金件数",
             "返金件数",
             "解約請求件数",
         ]]
         stats = {
+            "new_sales_amount_total": 0,
+            "continuing_sales_amount_total": 0,
             "sales_amount_total": 0,
             "refund_amount_total": 0,
             "net_sales_total": 0,
             "claim_amount_total": 0,
+            "new_sales_count_total": 0,
+            "continuing_sales_count_total": 0,
             "sales_count_total": 0,
             "refund_count_total": 0,
             "claim_count_total": 0,
@@ -1625,18 +1751,26 @@ def build_daily_rows(
     end_dt = max(parse_date(date_text) for date_text in all_dates if parse_date(date_text))
     rows = [[
         "日付",
+        "新規着金売上",
+        "継続売上",
         "着金売上",
         "返金額",
         "純着金売上",
         "解約請求額",
+        "新規着金件数",
+        "継続売上件数",
         "着金件数",
         "返金件数",
         "解約請求件数",
     ]]
 
+    new_sales_amount_total = 0
+    continuing_sales_amount_total = 0
     sales_amount_total = 0
     refund_amount_total = 0
     claim_amount_total = 0
+    new_sales_count_total = 0
+    continuing_sales_count_total = 0
     sales_count_total = 0
     refund_count_total = 0
     claim_count_total = 0
@@ -1644,35 +1778,51 @@ def build_daily_rows(
     cursor = start_dt
     while cursor <= end_dt:
         date_text = cursor.strftime("%Y/%m/%d")
+        new_sales_amount = daily[date_text]["new_sales_amount"]
+        continuing_sales_amount = daily[date_text]["continuing_sales_amount"]
         sales_amount = daily[date_text]["sales_amount"]
         refund_amount = refund_daily[date_text]["refund_amount"]
         claim_amount = refund_daily[date_text]["claim_amount"]
+        new_sales_count = daily[date_text]["new_sales_count"]
+        continuing_sales_count = daily[date_text]["continuing_sales_count"]
         sales_count = daily[date_text]["sales_count"]
         refund_count = refund_daily[date_text]["refund_count"]
         claim_count = refund_daily[date_text]["claim_count"]
         rows.append([
             date_text,
+            new_sales_amount,
+            continuing_sales_amount,
             sales_amount,
             refund_amount,
             sales_amount - refund_amount,
             claim_amount,
+            new_sales_count,
+            continuing_sales_count,
             sales_count,
             refund_count,
             claim_count,
         ])
+        new_sales_amount_total += new_sales_amount
+        continuing_sales_amount_total += continuing_sales_amount
         sales_amount_total += sales_amount
         refund_amount_total += refund_amount
         claim_amount_total += claim_amount
+        new_sales_count_total += new_sales_count
+        continuing_sales_count_total += continuing_sales_count
         sales_count_total += sales_count
         refund_count_total += refund_count
         claim_count_total += claim_count
         cursor += timedelta(days=1)
 
     stats = {
+        "new_sales_amount_total": new_sales_amount_total,
+        "continuing_sales_amount_total": continuing_sales_amount_total,
         "sales_amount_total": sales_amount_total,
         "refund_amount_total": refund_amount_total,
         "net_sales_total": sales_amount_total - refund_amount_total,
         "claim_amount_total": claim_amount_total,
+        "new_sales_count_total": new_sales_count_total,
+        "continuing_sales_count_total": continuing_sales_count_total,
         "sales_count_total": sales_count_total,
         "refund_count_total": refund_count_total,
         "claim_count_total": claim_count_total,
@@ -1693,11 +1843,15 @@ def build_summary_rows(stats: dict, checked_at: str) -> List[List[object]]:
         ["最終更新日時", checked_at, "このシートを最後に再生成した日時"],
         ["集計開始日", START_DATE_TEXT, "2025/01/01 以降だけを集計対象にする"],
         ["最新計上日", stats["latest_date"], "日別売上数値で最後に値を持つ日付"],
-        ["累計着金売上", normalize_display_amount(stats["sales_amount_total"]), "スキルプラス事業の成功売上 + 受講生データ元タブで確認でき、かつ他事業成約リストと競合しないプラン未特定売上"],
+        ["累計新規着金売上", normalize_display_amount(stats["new_sales_amount_total"]), "広告判断やP/Lの基準にする新規契約の着金売上"],
+        ["累計継続売上", normalize_display_amount(stats["continuing_sales_amount_total"]), "継続課金、会員向け追加販売、2回目以降の定期課金"],
+        ["累計着金売上", normalize_display_amount(stats["sales_amount_total"]), "新規着金売上 + 継続売上"],
         ["累計返金額", normalize_display_amount(stats["refund_amount_total"]), "相談窓口シート案件正本 + raw 補完の返金合計"],
         ["累計純着金売上", normalize_display_amount(stats["net_sales_total"]), "着金売上 - 返金額"],
         ["累計解約請求額", normalize_display_amount(stats["claim_amount_total"]), "中途解約タブの請求確定額"],
-        ["累計着金件数", normalize_display_count(stats["sales_count_total"]), "成功売上イベント件数"],
+        ["累計新規着金件数", normalize_display_count(stats["new_sales_count_total"]), "新規契約として扱う着金件数"],
+        ["累計継続売上件数", normalize_display_count(stats["continuing_sales_count_total"]), "継続売上として扱う着金件数"],
+        ["累計着金件数", normalize_display_count(stats["sales_count_total"]), "新規着金件数 + 継続売上件数"],
         ["累計返金件数", normalize_display_count(stats["refund_count_total"]), "返金案件数 + raw 補完件数"],
         ["累計解約請求件数", normalize_display_count(stats["claim_count_total"]), "解約請求案件数"],
         ["完全不明金額", normalize_display_amount(stats["complete_unknown_amount"]), "スキルプラス事業と確定できず日別へ入れていない売上"],
@@ -1718,12 +1872,12 @@ def build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats: dict, che
         ["加工タブ", "対象カラム", "優先度", "ソース元", "参照タブ", "参照列", "取得条件", "ステータス", "最終同期日", "更新数", "エラー数", "備考"],
         [
             DAILY_TAB_NAME,
-            "着金売上 / 着金件数",
+            "新規着金売上 / 継続売上 / 着金売上",
             "1",
             f'=HYPERLINK("{payment_url}","【アドネス株式会社】決済データ（収集）")',
             PAYMENT_COLLECTION_TAB,
-            "イベント日時 / イベント金額 / 商品名",
-            "成功売上のみ + 決済商品変換マスタ確定行 + 受講生データ元タブで確認でき、かつ他事業成約リストと競合しない銀振/信販の空欄成功売上",
+            "イベント日時 / イベント金額 / 商品名 / 課金タイプ / 支払回数 / 定期課金ID",
+            "成功売上のみ。非会員向け商品と頭金・信販・銀行振込の初回着金は新規、会員向け商品と2回目以降の定期課金は継続",
             status,
             f"'{checked_at}",
             stats["sales_count_total"],
@@ -1794,14 +1948,17 @@ def build_rule_rows() -> List[List[object]]:
     return [
         ["項目", "ルール", "補足"],
         ["日別売上数値", "手入力で直さず、元データから再生成する", "数字の理由を後から追えるようにする"],
-        ["着金売上", "決済データ（収集）の成功売上だけを集計する", "スキルプラス事業と確定した商品 + 受講生データ元タブで確認でき、かつ他事業成約リストと競合しない銀振/信販のプラン未特定売上を対象にする"],
+        ["新規着金売上", "新規契約として扱う着金だけを集計する", "非会員向け商品、頭金お支払い、銀行振込・信販の初回承認/振込を含める"],
+        ["継続売上", "継続課金と既存会員向けの着金を別で集計する", "会員向け商品、2回目以降の定期課金、既存向け追加販売をここへ寄せる"],
+        ["着金売上", "新規着金売上と継続売上の合計を持つ", "総額は保持するが、広告判断では新規着金売上を優先して使う"],
         ["返金額", "相談窓口シートの返金案件を正本にする", "相談窓口に載っていない raw 返金だけを補完採用する"],
         ["返金件数", "返金イベント件数ではなく返金案件数で持つ", "分割返金でも1案件として扱う"],
         ["解約請求額", "中途解約タブの負値を請求額として持つ", "通常の着金売上には混ぜない"],
         ["日付", "実入出金日ではなく、確定日を使う", "着金売上はイベント日時、返金額と解約請求額は相談窓口上の確定日"],
         ["商品未特定", "銀行振込・信販の空欄成功売上は、受講生データ元タブでスキルプラス受講生と確認でき、かつ他事業成約リストと競合しないものだけ着金売上へ含める", "どのプランか不明でも、一次データ起点の根拠があるものだけ採用する"],
+        ["頭金お支払い", "UnivaPay の空欄でもメタデータに `頭金お支払い` があるものはスキルプラス販売として新規着金売上へ入れる", "過去運用上 100% スキルプラス販売とみなす"],
         ["完全不明", "スキルプラス事業と確定できない売上は日別に入れない", "他事業成約リストと競合する売上、または一次データ根拠が弱い売上は売上サマリーでだけ監視する"],
-        ["プラン不明", "スキルプラス事業とだけ言える売上は将来の加工拡張で扱う", "今は完全不明として残すより、根拠が固まってから昇格させる"],
+        ["プラン不明", "スキルプラス事業とだけ言える売上は着金売上に含める", "商品別やプラン別に配賦できないものは内部的にプラン未特定として扱う"],
     ]
 
 
@@ -1819,10 +1976,14 @@ def save_run_state(stats: Dict[str, int]) -> None:
     payload = {
         "updated_at": stats["updated_at"],
         "metrics_start_date": START_DATE_TEXT,
+        "new_sales_amount_total": stats["new_sales_amount_total"],
+        "continuing_sales_amount_total": stats["continuing_sales_amount_total"],
         "sales_amount_total": stats["sales_amount_total"],
         "refund_amount_total": stats["refund_amount_total"],
         "net_sales_total": stats["net_sales_total"],
         "claim_amount_total": stats["claim_amount_total"],
+        "new_sales_count_total": stats["new_sales_count_total"],
+        "continuing_sales_count_total": stats["continuing_sales_count_total"],
         "sales_count_total": stats["sales_count_total"],
         "refund_count_total": stats["refund_count_total"],
         "claim_count_total": stats["claim_count_total"],
@@ -1898,10 +2059,14 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
         rule_rows = build_rule_rows()
 
         if dry_run:
+            print("【dry-run】累計新規着金売上:", stats["new_sales_amount_total"])
+            print("【dry-run】累計継続売上:", stats["continuing_sales_amount_total"])
             print("【dry-run】累計着金売上:", stats["sales_amount_total"])
             print("【dry-run】累計返金額:", stats["refund_amount_total"])
             print("【dry-run】累計純着金売上:", stats["net_sales_total"])
             print("【dry-run】累計解約請求額:", stats["claim_amount_total"])
+            print("【dry-run】累計新規着金件数:", stats["new_sales_count_total"])
+            print("【dry-run】累計継続売上件数:", stats["continuing_sales_count_total"])
             print("【dry-run】完全不明金額:", stats["complete_unknown_amount"])
             print("【dry-run】完全不明件数:", stats["complete_unknown_count"])
             print("【dry-run】補完返金件数:", refund_case_stats.get("supplement_count", 0))
