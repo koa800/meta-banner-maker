@@ -99,6 +99,46 @@ SKILLPLUS_BLANK_SOURCE_CONFIRMED_SOURCES = {
     "CREDIX",
 }
 SKILLPLUS_STUDENT_EXCLUDED_TABS = {"最新元データ一覧"}
+OTHER_BUSINESS_MATCH_LOOKBACK_DAYS = 30
+OTHER_BUSINESS_MATCH_LOOKAHEAD_DAYS = 120
+OTHER_BUSINESS_EVIDENCE_CONFIGS = [
+    {
+        "sheet_id": "1KGhnTUSDi0MqgTujvQmVSihzINpXTdo8vcmRVJUwL9k",
+        "tab": "成約済み",
+        "date_headers": ["初回着金日", "成約日", "初着座日"],
+        "email_headers": ["メールアドレス"],
+        "phone_headers": ["電話番号"],
+        "name_headers": ["お名前", "名前", "回答者名"],
+        "product_headers": ["商品"],
+    },
+    {
+        "sheet_id": "1KGhnTUSDi0MqgTujvQmVSihzINpXTdo8vcmRVJUwL9k",
+        "tab": "ｲﾚｷﾞｭﾗｰ",
+        "date_headers": ["初回着金日", "初成約日", "登録日"],
+        "email_headers": ["メール", "メールアドレス"],
+        "phone_headers": ["電話番号"],
+        "name_headers": ["名前", "お名前"],
+        "product_headers": ["商品"],
+    },
+    {
+        "sheet_id": "1LoJoCMKqd_L2yJpztdpnBE80PXL_rQvmtnpETQ8I7Dg",
+        "tab": "全社_クライアント台帳",
+        "date_headers": ["入金日(着金)", "契約締結日"],
+        "email_headers": ["メールアドレス"],
+        "phone_headers": ["電話番号"],
+        "name_headers": ["代表者名", "担当者名"],
+        "product_headers": ["商品"],
+    },
+    {
+        "sheet_id": "1bmeTRnznd-2PuIfMLs27Vx2SuijIcfbxbq90vfKNx9M",
+        "tab": "受注クライアント管理",
+        "date_headers": ["入金日(着金)", "契約締結日", "成約日"],
+        "email_headers": ["メールアドレス"],
+        "phone_headers": ["電話番号"],
+        "name_headers": ["企業担当名", "代表者名"],
+        "product_headers": ["商品名"],
+    },
+]
 
 
 @dataclass(frozen=True)
@@ -137,6 +177,16 @@ class RefundCase:
     phone: str
     source_tab: str
     sheet_row: int
+
+
+@dataclass(frozen=True)
+class OtherBusinessEvidence:
+    date: str
+    email: str
+    phone: str
+    full_name: str
+    product_name: str
+    source_tab: str
 
 
 class FileLock:
@@ -249,7 +299,10 @@ def normalize_text(value: object) -> str:
 
 
 def normalize_email(value: object) -> str:
-    return normalize_text(value).lower()
+    email = normalize_text(value).lower()
+    if email.startswith("mailto:"):
+        email = email.split("mailto:", 1)[1]
+    return email
 
 
 def normalize_phone(value: object) -> str:
@@ -915,6 +968,185 @@ def load_skillplus_student_identifiers(student_ss) -> dict[str, set[str]]:
     return {"emails": emails, "phones": phones, "names": names}
 
 
+def detect_other_business_header_row(rows: list[list[str]], config: dict) -> Optional[int]:
+    candidate_keys = {
+        normalize_header_key(header)
+        for header in (
+            config["date_headers"]
+            + config["email_headers"]
+            + config["phone_headers"]
+            + config["name_headers"]
+            + config["product_headers"]
+        )
+        if normalize_text(header)
+    }
+    best_index: Optional[int] = None
+    best_score = 0
+    for index, row in enumerate(rows[:8]):
+        score = sum(1 for cell in row if normalize_header_key(cell) in candidate_keys)
+        if score > best_score:
+            best_score = score
+            best_index = index
+    if best_score >= 2:
+        return best_index
+    return None
+
+
+def build_other_business_header_spec(headers: list[str], config: dict) -> dict[str, list[int]]:
+    return {
+        "date_indexes": [
+            index
+            for index in (
+                header_index_by_exact(headers, [candidate]) for candidate in config["date_headers"]
+            )
+            if index is not None
+        ],
+        "email_indexes": [
+            index
+            for index in (
+                header_index_by_exact(headers, [candidate]) for candidate in config["email_headers"]
+            )
+            if index is not None
+        ],
+        "phone_indexes": [
+            index
+            for index in (
+                header_index_by_exact(headers, [candidate]) for candidate in config["phone_headers"]
+            )
+            if index is not None
+        ],
+        "name_indexes": [
+            index
+            for index in (
+                header_index_by_exact(headers, [candidate]) for candidate in config["name_headers"]
+            )
+            if index is not None
+        ],
+        "product_indexes": [
+            index
+            for index in (
+                header_index_by_exact(headers, [candidate]) for candidate in config["product_headers"]
+            )
+            if index is not None
+        ],
+    }
+
+
+def load_other_business_evidence(gc: gspread.Client) -> dict[str, dict[str, list[OtherBusinessEvidence]]]:
+    indexes = {
+        "emails": defaultdict(list),
+        "phones": defaultdict(list),
+        "names": defaultdict(list),
+    }
+    spreadsheet_cache: dict[str, gspread.Spreadsheet] = {}
+
+    for config in OTHER_BUSINESS_EVIDENCE_CONFIGS:
+        sheet_id = config["sheet_id"]
+        if sheet_id not in spreadsheet_cache:
+            spreadsheet_cache[sheet_id] = gc.open_by_key(sheet_id)
+        ws = spreadsheet_cache[sheet_id].worksheet(config["tab"])
+        rows = get_all_values_with_retry(ws)
+        if not rows:
+            continue
+
+        header_row_index = detect_other_business_header_row(rows, config)
+        if header_row_index is None:
+            continue
+
+        headers = rows[header_row_index]
+        spec = build_other_business_header_spec(headers, config)
+        if not (spec["date_indexes"] or spec["email_indexes"] or spec["phone_indexes"] or spec["name_indexes"]):
+            continue
+
+        for row in rows[header_row_index + 1 :]:
+            if not any(normalize_text(cell) for cell in row):
+                continue
+
+            event_date = ""
+            for date_index in spec["date_indexes"]:
+                if date_index < len(row):
+                    event_date = normalize_date(row[date_index])
+                    if event_date:
+                        break
+            if not event_date:
+                continue
+
+            email = normalize_email(pick_first_value(row, spec["email_indexes"]))
+            phone = normalize_phone(pick_first_value(row, spec["phone_indexes"]))
+            full_name = normalize_name_key(pick_first_value(row, spec["name_indexes"]))
+            product_name = normalize_text(pick_first_value(row, spec["product_indexes"]))
+            if not email and not phone and not full_name:
+                continue
+
+            evidence = OtherBusinessEvidence(
+                date=event_date,
+                email=email,
+                phone=phone,
+                full_name=full_name,
+                product_name=product_name,
+                source_tab=f"{spreadsheet_cache[sheet_id].title} / {config['tab']}",
+            )
+            if evidence.email:
+                indexes["emails"][evidence.email].append(evidence)
+            if evidence.phone:
+                indexes["phones"][evidence.phone].append(evidence)
+            if evidence.full_name:
+                indexes["names"][evidence.full_name].append(evidence)
+
+    return indexes
+
+
+def other_business_evidence_matches_event(evidence: OtherBusinessEvidence, event_dt: datetime | None) -> bool:
+    if event_dt is None:
+        return False
+    evidence_dt = parse_date(evidence.date)
+    if evidence_dt is None:
+        return False
+    if event_dt < evidence_dt - timedelta(days=OTHER_BUSINESS_MATCH_LOOKBACK_DAYS):
+        return False
+    if event_dt > evidence_dt + timedelta(days=OTHER_BUSINESS_MATCH_LOOKAHEAD_DAYS):
+        return False
+    return True
+
+
+def identifiers_hit_other_business(
+    *,
+    email: str,
+    phone: str,
+    full_name: str,
+    line_name: str,
+    event_dt: datetime | None,
+    other_business_index: dict[str, dict[str, list[OtherBusinessEvidence]]],
+) -> bool:
+    candidate_groups: list[list[OtherBusinessEvidence]] = []
+    if email and email in other_business_index["emails"]:
+        candidate_groups.append(other_business_index["emails"][email])
+    if phone and phone in other_business_index["phones"]:
+        candidate_groups.append(other_business_index["phones"][phone])
+    if full_name and full_name in other_business_index["names"]:
+        candidate_groups.append(other_business_index["names"][full_name])
+    if line_name and line_name in other_business_index["names"]:
+        candidate_groups.append(other_business_index["names"][line_name])
+
+    seen_keys: set[tuple[str, str, str, str, str, str]] = set()
+    for candidates in candidate_groups:
+        for evidence in candidates:
+            dedupe_key = (
+                evidence.date,
+                evidence.email,
+                evidence.phone,
+                evidence.full_name,
+                evidence.product_name,
+                evidence.source_tab,
+            )
+            if dedupe_key in seen_keys:
+                continue
+            seen_keys.add(dedupe_key)
+            if other_business_evidence_matches_event(evidence, event_dt):
+                return True
+    return False
+
+
 def build_skillplus_sale_indexes(payment_rows: list[list[str]], mapping: Dict[tuple[str, str], MappingEntry]) -> tuple[list[PaymentSaleEvent], dict[str, set[str]], Counter]:
     if not payment_rows:
         return [], {"emails": set(), "phones": set(), "names": set()}, Counter()
@@ -1001,7 +1233,21 @@ def identifiers_hit_skillplus(email: str, phone: str, full_name: str, line_name:
     return False
 
 
-def case_is_skillplus(*, explicit_code: str, text_blob: str, email: str, phone: str, full_name: str, line_name: str, skillplus_markers: list[str], non_skillplus_markers: list[str], sale_index: dict[str, set[str]], student_index: dict[str, set[str]]) -> bool:
+def case_is_skillplus(
+    *,
+    explicit_code: str,
+    text_blob: str,
+    email: str,
+    phone: str,
+    full_name: str,
+    line_name: str,
+    event_dt: datetime | None,
+    skillplus_markers: list[str],
+    non_skillplus_markers: list[str],
+    sale_index: dict[str, set[str]],
+    student_index: dict[str, set[str]],
+    other_business_index: dict[str, dict[str, list[OtherBusinessEvidence]]],
+) -> bool:
     explicit = explicit_case_code_is_skillplus(explicit_code)
     if explicit is not None:
         return explicit
@@ -1009,10 +1255,26 @@ def case_is_skillplus(*, explicit_code: str, text_blob: str, email: str, phone: 
         return False
     if text_contains_any_marker(text_blob, skillplus_markers):
         return True
+    if identifiers_hit_other_business(
+        email=email,
+        phone=phone,
+        full_name=full_name,
+        line_name=line_name,
+        event_dt=event_dt,
+        other_business_index=other_business_index,
+    ):
+        return False
     return identifiers_hit_skillplus(email, phone, full_name, line_name, sale_index, student_index)
 
 
-def collect_cs_refund_and_claims(cs_ss, sale_index: dict[str, set[str]], student_index: dict[str, set[str]], skillplus_markers: list[str], non_skillplus_markers: list[str]) -> tuple[dict[str, Counter], list[RefundCase], Counter]:
+def collect_cs_refund_and_claims(
+    cs_ss,
+    sale_index: dict[str, set[str]],
+    student_index: dict[str, set[str]],
+    skillplus_markers: list[str],
+    non_skillplus_markers: list[str],
+    other_business_index: dict[str, dict[str, list[OtherBusinessEvidence]]],
+) -> tuple[dict[str, Counter], list[RefundCase], Counter]:
     tab_configs = [
         {
             "tab": "管理用_クーオフ・中途解約以外",
@@ -1090,10 +1352,12 @@ def collect_cs_refund_and_claims(cs_ss, sale_index: dict[str, set[str]], student
                 phone=phone,
                 full_name=full_name,
                 line_name=line_name,
+                event_dt=event_dt,
                 skillplus_markers=skillplus_markers,
                 non_skillplus_markers=non_skillplus_markers,
                 sale_index=sale_index,
                 student_index=student_index,
+                other_business_index=other_business_index,
             ):
                 continue
 
@@ -1257,7 +1521,36 @@ def sale_matches_skillplus_student(row: list[str], idx: dict[str, int], student_
     return False
 
 
-def build_daily_rows(payment_rows: list[list[str]], mapping: Dict[tuple[str, str], MappingEntry], refund_daily: dict[str, Counter], refund_stats: Counter, claim_stats: Counter, student_index: dict[str, set[str]]) -> tuple[List[List[object]], dict]:
+def sale_matches_other_business(
+    row: list[str],
+    idx: dict[str, int],
+    event_dt: datetime | None,
+    other_business_index: dict[str, dict[str, list[OtherBusinessEvidence]]],
+) -> bool:
+    email = normalize_email(row[idx["メールアドレス"]])
+    phone = normalize_phone(row[idx["電話番号"]])
+    full_name = normalize_name_key(
+        normalize_text(row[idx["名前（原本）"]]) or normalize_text(f"{row[idx['姓']]}{row[idx['名']]}")
+    )
+    return identifiers_hit_other_business(
+        email=email,
+        phone=phone,
+        full_name=full_name,
+        line_name=full_name,
+        event_dt=event_dt,
+        other_business_index=other_business_index,
+    )
+
+
+def build_daily_rows(
+    payment_rows: list[list[str]],
+    mapping: Dict[tuple[str, str], MappingEntry],
+    refund_daily: dict[str, Counter],
+    refund_stats: Counter,
+    claim_stats: Counter,
+    student_index: dict[str, set[str]],
+    other_business_index: dict[str, dict[str, list[OtherBusinessEvidence]]],
+) -> tuple[List[List[object]], dict]:
     headers = payment_rows[0]
     idx = {header: i for i, header in enumerate(headers)}
     daily = defaultdict(Counter)
@@ -1287,6 +1580,7 @@ def build_daily_rows(payment_rows: list[list[str]], mapping: Dict[tuple[str, str
             raw_name == "(空欄)"
             and source in SKILLPLUS_BLANK_SOURCE_CONFIRMED_SOURCES
             and sale_matches_skillplus_student(padded, idx, student_index)
+            and not sale_matches_other_business(padded, idx, event_dt, other_business_index)
         ):
             complete_unknown_amount += abs(parse_amount(padded[idx["イベント金額"]]))
             complete_unknown_count += 1
@@ -1399,7 +1693,7 @@ def build_summary_rows(stats: dict, checked_at: str) -> List[List[object]]:
         ["最終更新日時", checked_at, "このシートを最後に再生成した日時"],
         ["集計開始日", START_DATE_TEXT, "2025/01/01 以降だけを集計対象にする"],
         ["最新計上日", stats["latest_date"], "日別売上数値で最後に値を持つ日付"],
-        ["累計着金売上", normalize_display_amount(stats["sales_amount_total"]), "スキルプラス事業の成功売上 + 受講生データ元タブで確認できたプラン未特定売上"],
+        ["累計着金売上", normalize_display_amount(stats["sales_amount_total"]), "スキルプラス事業の成功売上 + 受講生データ元タブで確認でき、かつ他事業成約リストと競合しないプラン未特定売上"],
         ["累計返金額", normalize_display_amount(stats["refund_amount_total"]), "相談窓口シート案件正本 + raw 補完の返金合計"],
         ["累計純着金売上", normalize_display_amount(stats["net_sales_total"]), "着金売上 - 返金額"],
         ["累計解約請求額", normalize_display_amount(stats["claim_amount_total"]), "中途解約タブの請求確定額"],
@@ -1429,12 +1723,12 @@ def build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats: dict, che
             f'=HYPERLINK("{payment_url}","【アドネス株式会社】決済データ（収集）")',
             PAYMENT_COLLECTION_TAB,
             "イベント日時 / イベント金額 / 商品名",
-            "成功売上のみ + 決済商品変換マスタ確定行 + 受講生データ元タブで確認できた銀振/信販の空欄成功売上",
+            "成功売上のみ + 決済商品変換マスタ確定行 + 受講生データ元タブで確認でき、かつ他事業成約リストと競合しない銀振/信販の空欄成功売上",
             status,
             f"'{checked_at}",
             stats["sales_count_total"],
             1 if status != "正常" else 0,
-            "完全不明は日別に入れず売上サマリーで監視する",
+            "完全不明は日別に入れず売上サマリーで監視する。他事業成約リストは除外根拠として使う",
         ],
         [
             DAILY_TAB_NAME,
@@ -1490,7 +1784,7 @@ def build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats: dict, che
             f"'{checked_at}",
             stats["source_row_count"],
             1 if status != "正常" else 0,
-            f"スキルプラス受講生データ（元）を正の証拠にし、商品名空欄でも受講生データで確認できた銀行振込・信販売上だけを着金売上へ含める",
+            f"スキルプラス受講生データ（元）を正の証拠にし、他事業成約リストを負の証拠にする。商品名空欄でも両条件を満たした銀行振込・信販売上だけを着金売上へ含める",
         ],
     ]
     return rows
@@ -1500,13 +1794,13 @@ def build_rule_rows() -> List[List[object]]:
     return [
         ["項目", "ルール", "補足"],
         ["日別売上数値", "手入力で直さず、元データから再生成する", "数字の理由を後から追えるようにする"],
-        ["着金売上", "決済データ（収集）の成功売上だけを集計する", "スキルプラス事業と確定した商品 + 受講生データ元タブで確認できた銀振/信販のプラン未特定売上を対象にする"],
+        ["着金売上", "決済データ（収集）の成功売上だけを集計する", "スキルプラス事業と確定した商品 + 受講生データ元タブで確認でき、かつ他事業成約リストと競合しない銀振/信販のプラン未特定売上を対象にする"],
         ["返金額", "相談窓口シートの返金案件を正本にする", "相談窓口に載っていない raw 返金だけを補完採用する"],
         ["返金件数", "返金イベント件数ではなく返金案件数で持つ", "分割返金でも1案件として扱う"],
         ["解約請求額", "中途解約タブの負値を請求額として持つ", "通常の着金売上には混ぜない"],
         ["日付", "実入出金日ではなく、確定日を使う", "着金売上はイベント日時、返金額と解約請求額は相談窓口上の確定日"],
-        ["商品未特定", "銀行振込・信販の空欄成功売上は、受講生データ元タブでスキルプラス受講生と確認できたものだけ着金売上へ含める", "どのプランか不明でも、一次データ起点の根拠があるものだけ採用する"],
-        ["完全不明", "スキルプラス事業と確定できない売上は日別に入れない", "売上サマリーで金額と件数だけ監視する"],
+        ["商品未特定", "銀行振込・信販の空欄成功売上は、受講生データ元タブでスキルプラス受講生と確認でき、かつ他事業成約リストと競合しないものだけ着金売上へ含める", "どのプランか不明でも、一次データ起点の根拠があるものだけ採用する"],
+        ["完全不明", "スキルプラス事業と確定できない売上は日別に入れない", "他事業成約リストと競合する売上、または一次データ根拠が弱い売上は売上サマリーでだけ監視する"],
         ["プラン不明", "スキルプラス事業とだけ言える売上は将来の加工拡張で扱う", "今は完全不明として残すより、根拠が固まってから昇格させる"],
     ]
 
@@ -1559,6 +1853,7 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
         skillplus_product_names, non_skillplus_product_names = load_product_business_map(product_ws)
         sale_events, sale_index, _ = build_skillplus_sale_indexes(payment_rows, mapping)
         student_index = load_skillplus_student_identifiers(student_ss)
+        other_business_index = load_other_business_evidence(gc)
         skillplus_markers = build_text_markers(skillplus_product_names)
         non_skillplus_markers = build_text_markers(non_skillplus_product_names)
 
@@ -1568,6 +1863,7 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
             student_index=student_index,
             skillplus_markers=skillplus_markers,
             non_skillplus_markers=non_skillplus_markers,
+            other_business_index=other_business_index,
         )
         refund_supplement_daily, refund_supplement_stats = collect_raw_refund_supplements(
             payment_rows,
@@ -1592,6 +1888,7 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
             refund_case_stats,
             refund_case_stats,
             student_index,
+            other_business_index,
         )
         checked_at = datetime.now().strftime("%Y/%m/%d %H:%M")
         stats["updated_at"] = checked_at
