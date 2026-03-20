@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gzip
 import json
 import math
 import os
@@ -76,6 +77,10 @@ PAGE_SIZE = 1000
 APPEND_CHUNK_SIZE = 500
 ENTITY_CACHE_TTL_SECONDS = 6 * 60 * 60
 REQUEST_TIMEOUT_SECONDS = 30
+SYNC_STATS_DATE_CHUNK_DAYS = 7
+ASYNC_STATS_DATE_CHUNK_DAYS = 90
+ASYNC_JOB_POLL_SECONDS = 5
+ASYNC_JOB_TIMEOUT_SECONDS = 600
 
 
 @dataclass
@@ -201,13 +206,14 @@ def request_json(
     auth: OAuth1,
     path: str,
     params: dict[str, Any] | None = None,
+    method: str = "GET",
     retries: int = 4,
 ) -> dict[str, Any]:
     url = f"{API_BASE_URL}{path}"
     last_error: Exception | None = None
     for attempt in range(retries):
         try:
-            response = session.get(url, params=params, auth=auth, timeout=REQUEST_TIMEOUT_SECONDS)
+            response = session.request(method, url, params=params, auth=auth, timeout=REQUEST_TIMEOUT_SECONDS)
         except Exception as exc:  # pragma: no cover - network/runtime dependent
             last_error = exc
             time.sleep(2 * (attempt + 1))
@@ -338,35 +344,182 @@ def build_local_day_window(target_day: str, timezone_name: str) -> tuple[str, st
     return start_utc, end_utc
 
 
+def build_local_range_window(start_date: str, end_date: str, timezone_name: str) -> tuple[str, str, list[str]]:
+    tz = ZoneInfo(timezone_name)
+    start_day = date.fromisoformat(start_date)
+    end_day = date.fromisoformat(end_date)
+    local_start = datetime(start_day.year, start_day.month, start_day.day, 0, 0, 0, tzinfo=tz)
+    local_end = datetime(end_day.year, end_day.month, end_day.day, 0, 0, 0, tzinfo=tz) + timedelta(days=1)
+    start_utc = local_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_utc = local_end.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    local_days: list[str] = []
+    current_day = start_day
+    while current_day <= end_day:
+        local_days.append(current_day.isoformat())
+        current_day += timedelta(days=1)
+    return start_utc, end_utc, local_days
+
+
+def iter_date_chunks(start_date: str, end_date: str, chunk_days: int) -> Iterable[tuple[str, str]]:
+    current_start = date.fromisoformat(start_date)
+    final_end = date.fromisoformat(end_date)
+    while current_start <= final_end:
+        current_end = min(current_start + timedelta(days=chunk_days - 1), final_end)
+        yield current_start.isoformat(), current_end.isoformat()
+        current_start = current_end + timedelta(days=1)
+
+
+def expand_metrics_by_local_day(metrics: dict[str, Any], local_days: list[str]) -> dict[str, dict[str, Any]]:
+    per_day_metrics: dict[str, dict[str, Any]] = {}
+    for index, local_day in enumerate(local_days):
+        day_metrics: dict[str, Any] = {}
+        has_value = False
+        for metric_name, metric_value in metrics.items():
+            value_for_day = None
+            if isinstance(metric_value, list):
+                if index < len(metric_value):
+                    value_for_day = metric_value[index]
+            else:
+                value_for_day = metric_value
+            day_metrics[metric_name] = value_for_day
+            if value_for_day is not None:
+                has_value = True
+        if has_value:
+            per_day_metrics[local_day] = day_metrics
+    return per_day_metrics
+
+
+def download_async_payload(session: requests.Session, url: str) -> dict[str, Any]:
+    response = session.get(url, timeout=120, headers={"Accept-Encoding": "identity"})
+    response.raise_for_status()
+    content = response.content
+    if content[:2] == b"\x1f\x8b":
+        content = gzip.decompress(content)
+    return json.loads(content.decode("utf-8"))
+
+
+def fetch_stats_for_promoted_tweets_sync(
+    session: requests.Session,
+    auth: OAuth1,
+    account_id: str,
+    promoted_tweet_ids: list[str],
+    start_date: str,
+    end_date: str,
+    timezone_name: str,
+) -> dict[str, dict[str, dict[str, Any]]]:
+    if not promoted_tweet_ids:
+        return {}
+    stats_by_id: dict[str, dict[str, dict[str, Any]]] = {}
+    for chunk_start_date, chunk_end_date in iter_date_chunks(start_date, end_date, SYNC_STATS_DATE_CHUNK_DAYS):
+        start_time, end_time, local_days = build_local_range_window(chunk_start_date, chunk_end_date, timezone_name)
+        for chunk in chunked(promoted_tweet_ids, STATS_BATCH_SIZE):
+            params = {
+                "entity": "PROMOTED_TWEET",
+                "entity_ids": ",".join(chunk),
+                "start_time": start_time,
+                "end_time": end_time,
+                "granularity": "DAY",
+                "placement": "ALL_ON_TWITTER",
+                "metric_groups": ",".join(DEFAULT_METRIC_GROUPS),
+            }
+            payload = request_json(session, auth, f"/stats/accounts/{account_id}", params)
+            for row in payload.get("data", []):
+                item_id = normalize_lookup_id(row.get("id"))
+                id_data = row.get("id_data") or []
+                metrics = ((id_data[0] if id_data else {}).get("metrics")) or {}
+                per_day_metrics = stats_by_id.setdefault(item_id, {})
+                per_day_metrics.update(expand_metrics_by_local_day(metrics, local_days))
+    return stats_by_id
+
+
+def fetch_async_stats_job_payload(
+    session: requests.Session,
+    auth: OAuth1,
+    account_id: str,
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    job_payload = request_json(session, auth, f"/stats/jobs/accounts/{account_id}", params, method="POST")
+    job = job_payload.get("data") or {}
+    job_id = str(job.get("id") or "").strip()
+    if not job_id:
+        raise RuntimeError(f"X Ads async job_id が取得できませんでした: {account_id}")
+
+    deadline = time.time() + ASYNC_JOB_TIMEOUT_SECONDS
+    while time.time() < deadline:
+        poll_payload = request_json(session, auth, f"/stats/jobs/accounts/{account_id}", {"job_ids": job_id})
+        data = (poll_payload.get("data") or [{}])[0]
+        status = str(data.get("status") or "").strip().upper()
+        if status == "SUCCESS" and data.get("url"):
+            return download_async_payload(session, str(data["url"]))
+        if status in {"FAILED", "CANCELED"}:
+            raise RuntimeError(f"X Ads async job failed: {account_id} / {job_id} / {status}")
+        time.sleep(ASYNC_JOB_POLL_SECONDS)
+    raise RuntimeError(f"X Ads async job timeout: {account_id} / {job_id}")
+
+
+def fetch_stats_for_promoted_tweets_async(
+    session: requests.Session,
+    auth: OAuth1,
+    account_id: str,
+    promoted_tweet_ids: list[str],
+    start_date: str,
+    end_date: str,
+    timezone_name: str,
+) -> dict[str, dict[str, dict[str, Any]]]:
+    if not promoted_tweet_ids:
+        return {}
+    stats_by_id: dict[str, dict[str, dict[str, Any]]] = {}
+    for chunk_start_date, chunk_end_date in iter_date_chunks(start_date, end_date, ASYNC_STATS_DATE_CHUNK_DAYS):
+        start_time, end_time, local_days = build_local_range_window(chunk_start_date, chunk_end_date, timezone_name)
+        for chunk in chunked(promoted_tweet_ids, STATS_BATCH_SIZE):
+            params = {
+                "entity": "PROMOTED_TWEET",
+                "entity_ids": ",".join(chunk),
+                "start_time": start_time,
+                "end_time": end_time,
+                "granularity": "DAY",
+                "placement": "ALL_ON_TWITTER",
+                "metric_groups": ",".join(DEFAULT_METRIC_GROUPS),
+            }
+            payload = fetch_async_stats_job_payload(session, auth, account_id, params)
+            for row in payload.get("data", []):
+                item_id = normalize_lookup_id(row.get("id"))
+                id_data = row.get("id_data") or []
+                metrics = ((id_data[0] if id_data else {}).get("metrics")) or {}
+                per_day_metrics = stats_by_id.setdefault(item_id, {})
+                per_day_metrics.update(expand_metrics_by_local_day(metrics, local_days))
+    return stats_by_id
+
+
 def fetch_stats_for_promoted_tweets(
     session: requests.Session,
     auth: OAuth1,
     account_id: str,
     promoted_tweet_ids: list[str],
-    target_day: str,
+    start_date: str,
+    end_date: str,
     timezone_name: str,
-) -> dict[str, dict[str, Any]]:
-    if not promoted_tweet_ids:
-        return {}
-    start_time, end_time = build_local_day_window(target_day, timezone_name)
-    stats_by_id: dict[str, dict[str, Any]] = {}
-    for chunk in chunked(promoted_tweet_ids, STATS_BATCH_SIZE):
-        params = {
-            "entity": "PROMOTED_TWEET",
-            "entity_ids": ",".join(chunk),
-            "start_time": start_time,
-            "end_time": end_time,
-            "granularity": "DAY",
-            "placement": "ALL_ON_TWITTER",
-            "metric_groups": ",".join(DEFAULT_METRIC_GROUPS),
-        }
-        payload = request_json(session, auth, f"/stats/accounts/{account_id}", params)
-        for row in payload.get("data", []):
-            item_id = normalize_lookup_id(row.get("id"))
-            id_data = row.get("id_data") or []
-            metrics = ((id_data[0] if id_data else {}).get("metrics")) or {}
-            stats_by_id[item_id] = metrics
-    return stats_by_id
+) -> dict[str, dict[str, dict[str, Any]]]:
+    total_days = (date.fromisoformat(end_date) - date.fromisoformat(start_date)).days + 1
+    if total_days <= SYNC_STATS_DATE_CHUNK_DAYS:
+        return fetch_stats_for_promoted_tweets_sync(
+            session=session,
+            auth=auth,
+            account_id=account_id,
+            promoted_tweet_ids=promoted_tweet_ids,
+            start_date=start_date,
+            end_date=end_date,
+            timezone_name=timezone_name,
+        )
+    return fetch_stats_for_promoted_tweets_async(
+        session=session,
+        auth=auth,
+        account_id=account_id,
+        promoted_tweet_ids=promoted_tweet_ids,
+        start_date=start_date,
+        end_date=end_date,
+        timezone_name=timezone_name,
+    )
 
 
 def fetch_account_entities(
@@ -649,6 +802,7 @@ def build_summary(
     skipped_existing_rows: int,
     per_account_row_counts: dict[str, int],
     account_catalog: dict[str, dict[str, Any]],
+    failed_accounts: list[dict[str, str]],
 ) -> dict[str, Any]:
     missing_url_details = []
     missing_url_count = 0
@@ -687,6 +841,7 @@ def build_summary(
         "total_rows": len(collected_rows),
         "appended_rows": appended_rows,
         "skipped_existing_rows": skipped_existing_rows,
+        "failed_accounts": failed_accounts,
         "missing_landing_page_url_rows": missing_url_count,
         "missing_landing_page_details": missing_url_details,
     }
@@ -722,30 +877,39 @@ def main() -> None:
     print(f"[X] 対象アカウント数: {len(targets)}")
     all_rows: list[list[str]] = []
     per_account_row_counts: dict[str, int] = {}
-    current_day = date.fromisoformat(args.start_date)
-    end_day = date.fromisoformat(args.end_date)
+    failed_accounts: list[dict[str, str]] = []
 
     entities_by_account = {
         target.account_id: get_account_entities(session, auth, target)
         for target in targets
     }
 
-    while current_day <= end_day:
-        target_day = current_day.isoformat()
-        print(f"[X] 集計日: {target_day}")
-        for target in targets:
-            entities = entities_by_account[target.account_id]
-            promoted_tweet_ids = list(entities["promoted_tweets"].keys())
+    print(f"[X] 集計期間: {args.start_date} -> {args.end_date}")
+    for target in targets:
+        entities = entities_by_account[target.account_id]
+        promoted_tweet_ids = list(entities["promoted_tweets"].keys())
+        try:
             stats_by_id = fetch_stats_for_promoted_tweets(
                 session=session,
                 auth=auth,
                 account_id=target.account_id,
                 promoted_tweet_ids=promoted_tweet_ids,
-                target_day=target_day,
+                start_date=args.start_date,
+                end_date=args.end_date,
                 timezone_name=target.timezone_name,
             )
-            for promoted_tweet_id, promoted_tweet in entities["promoted_tweets"].items():
-                metrics = stats_by_id.get(promoted_tweet_id, {})
+        except Exception as exc:
+            failed_accounts.append(
+                {
+                    "account_id": target.account_id,
+                    "account_name": target.account_name,
+                    "reason": str(exc),
+                }
+            )
+            print(f"[X] 取得失敗: {target.account_name} ({target.account_id}) / {exc}")
+            continue
+        for promoted_tweet_id, promoted_tweet in entities["promoted_tweets"].items():
+            for target_day, metrics in sorted(stats_by_id.get(promoted_tweet_id, {}).items()):
                 row = build_row_for_promoted_tweet(
                     target_day=target_day,
                     target=target,
@@ -760,7 +924,6 @@ def main() -> None:
                     continue
                 all_rows.append(row)
                 per_account_row_counts[target.account_id] = per_account_row_counts.get(target.account_id, 0) + 1
-        current_day += timedelta(days=1)
 
     csv_path = build_output_path(args.start_date, args.end_date, "csv")
     summary_path = build_output_path(args.start_date, args.end_date, "summary.json")
@@ -802,6 +965,7 @@ def main() -> None:
         skipped_existing_rows=skipped_existing_rows,
         per_account_row_counts=per_account_row_counts,
         account_catalog=account_catalog,
+        failed_accounts=failed_accounts,
     )
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
 
@@ -810,6 +974,8 @@ def main() -> None:
     if args.write_sheet:
         print(f"追記行数: {appended_rows}")
         print(f"重複スキップ: {skipped_existing_rows}")
+    if failed_accounts:
+        print(f"失敗アカウント数: {len(failed_accounts)}")
     print(f"CSV: {csv_path}")
     print(f"サマリー: {summary_path}")
 
