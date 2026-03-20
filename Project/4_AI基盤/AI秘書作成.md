@@ -196,6 +196,7 @@
 37. **bypassPermissions**: `~/.claude-secretary/settings.json`でBash/WebSearch/Read等の全ツール解放。rm/sudo/kill/force-push等の破壊的操作のみask制限
 38. **人名ハルシネーション防止**: profiles.jsonから全メンバー名を抽出し「社内メンバー一覧」としてプロンプトに注入。「人名ルール: profiles.jsonに存在する正確な名前のみ使用」を出力ルールに追加
 39. **Claude CLI / OAuth fallback**: `claude` は `shutil.which` / `~/.local/bin/claude` / app support 配下まで検出する。`~/.claude-secretary/` に OAuth 実体がない端末では `~/.claude/` を fallback として使い、`.credentials.json` が無い場合も CLI 起動チェックで事前確認する。認証が切れた場合は `claude auth login --email koa800.secretary@gmail.com` を Mac mini 側で自動起動し、本人には承認だけ依頼する
+40. **Chrome 9224 の永続化**: 秘書用 Chrome CDP（9224）は一時プロファイルではなく `System/data/secretary_chrome_profile` を正本 user-data-dir として使い、`koa800.secretary@gmail.com` のログイン状態と拡張状態を保持する
 - **Cursorワークスペース優先**: 秘書のClaude Codeプロンプトに、`cursor/` 配下の `AGENTS.md` / `CLAUDE.md` / `Skills/` / `Project/` / `Master/` / `System/` を正本として読むルールを追加。MacBookのCursorで作業するのと同じ流れで、調査→修復→検証→報告まで一気通貫で行う
 - **legacy `auto_mode` の扱い**: `auto_mode=claude` は後方互換のため残すが、実行時は `codex` に正規化する。Cursor強制送信は `auto_mode=cursor` のときだけ使う
 - **既知エラーの先回り修復**: ルールが固まっていて可逆な修復は、報告の前に秘書が自分で実行する方針に変更。CDPの列名揺れ補正のような定型エラーは、まず自動修復を試みる

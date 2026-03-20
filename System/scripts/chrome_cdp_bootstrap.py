@@ -14,7 +14,8 @@ from urllib.request import urlopen
 
 
 CDP_VERSION_URL = "http://127.0.0.1:9224/json/version"
-DEFAULT_USER_DATA_DIR = Path("/tmp/cursor-chrome-cdp-9224")
+SYSTEM_DIR = Path(__file__).resolve().parents[1]
+DEFAULT_USER_DATA_DIR = SYSTEM_DIR / "data" / "secretary_chrome_profile"
 CHROME_BINARY_CANDIDATES = [
     Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
     Path("/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"),
