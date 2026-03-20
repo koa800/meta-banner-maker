@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import re
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
 
 import gspread
+from gspread.exceptions import APIError
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
@@ -88,6 +90,7 @@ PRODUCT_REVIEW_WIDTHS = [100, 130, 320, 130, 120, 120, 260]
 PAYMENT_MAPPING_WIDTHS = [120, 360, 90, 130, 260, 100, 140, 130, 120, 120, 110, 220, 220, 240]
 
 ID_PATTERN = re.compile(r"^PRD-(\d{4,})$")
+RETRY_SECONDS = (0, 5, 10, 20, 40)
 
 
 @dataclass(frozen=True)
@@ -115,6 +118,32 @@ class PaymentAggregate:
     unit_amount: int = 0
     count: int = 0
     amount: int = 0
+
+
+def is_quota_error(exc: APIError) -> bool:
+    payload = getattr(exc, "response", None)
+    try:
+        data = payload.json()
+    except Exception:
+        data = {}
+    message = str(data)
+    return "Quota exceeded" in message or "RESOURCE_EXHAUSTED" in message or "429" in message
+
+
+def with_sheets_retry(action, description: str):
+    last_exc = None
+    for wait_seconds in RETRY_SECONDS:
+        if wait_seconds:
+            time.sleep(wait_seconds)
+        try:
+            return action()
+        except APIError as exc:
+            last_exc = exc
+            if not is_quota_error(exc) or wait_seconds == RETRY_SECONDS[-1]:
+                raise
+    if last_exc:
+        raise last_exc
+    raise RuntimeError(f"{description} に失敗しました")
 
 
 PRODUCT_RULES: dict[str, ProductRule] = {
@@ -316,12 +345,18 @@ ATTR_CODE = {
 
 def ensure_worksheet(spreadsheet: gspread.Spreadsheet, title: str, rows: int, cols: int) -> gspread.Worksheet:
     try:
-        ws = spreadsheet.worksheet(title)
+        ws = with_sheets_retry(lambda: spreadsheet.worksheet(title), f"{title} シート取得")
         if ws.row_count < rows or ws.col_count < cols:
-            ws.resize(rows=max(ws.row_count, rows), cols=max(ws.col_count, cols))
+            with_sheets_retry(
+                lambda: ws.resize(rows=max(ws.row_count, rows), cols=max(ws.col_count, cols)),
+                f"{title} シートのリサイズ",
+            )
         return ws
     except gspread.WorksheetNotFound:
-        return spreadsheet.add_worksheet(title=title, rows=rows, cols=cols)
+        return with_sheets_retry(
+            lambda: spreadsheet.add_worksheet(title=title, rows=rows, cols=cols),
+            f"{title} シート作成",
+        )
 
 
 def parse_amount(value: str) -> int:
@@ -444,7 +479,7 @@ def infer_business_from_legacy(code: str, name: str, current: str) -> str:
 
 
 def load_product_master_rows(ws: gspread.Worksheet) -> tuple[list[str], list[list[str]]]:
-    values = ws.get_all_values()
+    values = with_sheets_retry(lambda: ws.get_all_values(), f"{ws.title} 読み取り")
     if not values:
         return PRODUCT_MASTER_HEADERS[:], []
     headers = values[0]
@@ -655,14 +690,20 @@ def build_review_rows(master_rows: list[list[str]], product_headers: list[str], 
 
 
 def write_review_rows(ws: gspread.Worksheet, rows: list[list[str]]) -> None:
-    ws.clear()
-    ws.resize(rows=max(len(rows) + 30, 120), cols=len(PRODUCT_REVIEW_HEADERS))
-    ws.update(range_name="A1", values=rows, value_input_option="USER_ENTERED")
+    with_sheets_retry(lambda: ws.clear(), f"{ws.title} クリア")
+    with_sheets_retry(
+        lambda: ws.resize(rows=max(len(rows) + 30, 120), cols=len(PRODUCT_REVIEW_HEADERS)),
+        f"{ws.title} リサイズ",
+    )
+    with_sheets_retry(
+        lambda: ws.update(range_name="A1", values=rows, value_input_option="USER_ENTERED"),
+        f"{ws.title} 更新",
+    )
     apply_basic_formatting(ws, PRODUCT_REVIEW_WIDTHS)
 
 
 def load_reference_mapping(ws: gspread.Worksheet) -> dict[str, str]:
-    rows = ws.get_all_values()
+    rows = with_sheets_retry(lambda: ws.get_all_values(), f"{ws.title} 読み取り")
     mapping: dict[str, str] = {}
     for row in rows[1:]:
         if len(row) < 3:
@@ -675,7 +716,7 @@ def load_reference_mapping(ws: gspread.Worksheet) -> dict[str, str]:
 
 
 def aggregate_live_payment_products(ws: gspread.Worksheet) -> list[PaymentAggregate]:
-    rows = ws.get_all_values()
+    rows = with_sheets_retry(lambda: ws.get_all_values(), f"{ws.title} 読み取り")
     if not rows:
         return []
 
@@ -811,30 +852,36 @@ def build_mapping_rows(
 
 
 def apply_basic_formatting(ws: gspread.Worksheet, widths: list[int]) -> None:
-    ws.freeze(rows=1)
-    ws.set_basic_filter()
+    with_sheets_retry(lambda: ws.freeze(rows=1), f"{ws.title} freeze")
+    with_sheets_retry(lambda: ws.set_basic_filter(), f"{ws.title} filter")
     end_col = max(len(widths), ws.col_count)
-    ws.format(
-        f"A1:{gspread.utils.rowcol_to_a1(1, end_col)}",
-        {
-            "backgroundColor": {"red": 0.247, "green": 0.42, "blue": 0.878},
-            "textFormat": {
-                "foregroundColor": {"red": 1, "green": 1, "blue": 1},
-                "bold": True,
-                "fontSize": 10,
+    with_sheets_retry(
+        lambda: ws.format(
+            f"A1:{gspread.utils.rowcol_to_a1(1, end_col)}",
+            {
+                "backgroundColor": {"red": 0.247, "green": 0.42, "blue": 0.878},
+                "textFormat": {
+                    "foregroundColor": {"red": 1, "green": 1, "blue": 1},
+                    "bold": True,
+                    "fontSize": 10,
+                },
+                "horizontalAlignment": "CENTER",
+                "verticalAlignment": "MIDDLE",
+                "wrapStrategy": "CLIP",
             },
-            "horizontalAlignment": "CENTER",
-            "verticalAlignment": "MIDDLE",
-            "wrapStrategy": "CLIP",
-        },
+        ),
+        f"{ws.title} ヘッダー書式",
     )
-    ws.format(
-        f"A2:{gspread.utils.rowcol_to_a1(max(ws.row_count, 2), end_col)}",
-        {
-            "textFormat": {"fontSize": 10},
-            "verticalAlignment": "MIDDLE",
-            "wrapStrategy": "CLIP",
-        },
+    with_sheets_retry(
+        lambda: ws.format(
+            f"A2:{gspread.utils.rowcol_to_a1(max(ws.row_count, 2), end_col)}",
+            {
+                "textFormat": {"fontSize": 10},
+                "verticalAlignment": "MIDDLE",
+                "wrapStrategy": "CLIP",
+            },
+        ),
+        f"{ws.title} 本文書式",
     )
 
     requests = []
@@ -881,13 +928,19 @@ def apply_basic_formatting(ws: gspread.Worksheet, widths: list[int]) -> None:
             },
         ]
     )
-    ws.spreadsheet.batch_update({"requests": requests})
+    with_sheets_retry(lambda: ws.spreadsheet.batch_update({"requests": requests}), f"{ws.title} 寸法調整")
 
 
 def write_mapping_rows(ws: gspread.Worksheet, rows: list[list[str]]) -> None:
-    ws.clear()
-    ws.resize(rows=max(len(rows) + 50, 500), cols=len(PAYMENT_MAPPING_HEADERS))
-    ws.update(range_name="A1", values=rows, value_input_option="USER_ENTERED")
+    with_sheets_retry(lambda: ws.clear(), f"{ws.title} クリア")
+    with_sheets_retry(
+        lambda: ws.resize(rows=max(len(rows) + 50, 500), cols=len(PAYMENT_MAPPING_HEADERS)),
+        f"{ws.title} リサイズ",
+    )
+    with_sheets_retry(
+        lambda: ws.update(range_name="A1", values=rows, value_input_option="USER_ENTERED"),
+        f"{ws.title} 更新",
+    )
     apply_basic_formatting(ws, PAYMENT_MAPPING_WIDTHS)
     apply_mapping_status_formatting(ws, rows)
 
@@ -953,22 +1006,21 @@ def apply_mapping_status_formatting(ws: gspread.Worksheet, rows: list[list[str]]
         {"red": 0.973, "green": 0.839, "blue": 0.839},
     )
 
-    ws.spreadsheet.batch_update({"requests": requests})
+    with_sheets_retry(lambda: ws.spreadsheet.batch_update({"requests": requests}), f"{ws.title} ステータス色反映")
 
 
-def main() -> None:
-    gc = get_client()
-
-    master_ss = gc.open_by_key(MASTER_SHEET_ID)
-    product_ws = master_ss.worksheet(MASTER_PRODUCT_TAB)
+def sync_payment_product_master_structure(gc: Optional[gspread.Client] = None) -> dict[str, int]:
+    gc = gc or get_client()
+    master_ss = with_sheets_retry(lambda: gc.open_by_key(MASTER_SHEET_ID), "マスタデータ取得")
+    product_ws = with_sheets_retry(lambda: master_ss.worksheet(MASTER_PRODUCT_TAB), f"{MASTER_PRODUCT_TAB} 取得")
     review_ws = ensure_worksheet(master_ss, PRODUCT_REVIEW_TAB, 120, len(PRODUCT_REVIEW_HEADERS))
     mapping_ws = ensure_worksheet(master_ss, PAYMENT_MAPPING_TAB, 500, len(PAYMENT_MAPPING_HEADERS))
 
-    reference_ss = gc.open_by_key(REFERENCE_SHEET_ID)
-    reference_ws = reference_ss.worksheet(REFERENCE_TAB)
+    reference_ss = with_sheets_retry(lambda: gc.open_by_key(REFERENCE_SHEET_ID), "参照シート取得")
+    reference_ws = with_sheets_retry(lambda: reference_ss.worksheet(REFERENCE_TAB), f"{REFERENCE_TAB} 取得")
 
-    payment_ss = gc.open_by_key(PAYMENT_COLLECTION_SHEET_ID)
-    payment_ws = payment_ss.worksheet(PAYMENT_COLLECTION_TAB)
+    payment_ss = with_sheets_retry(lambda: gc.open_by_key(PAYMENT_COLLECTION_SHEET_ID), "決済収集シート取得")
+    payment_ws = with_sheets_retry(lambda: payment_ss.worksheet(PAYMENT_COLLECTION_TAB), f"{PAYMENT_COLLECTION_TAB} 取得")
 
     source_rows = load_source_product_rows(product_ws)
     product_index, normalized_rows, review_notes = sync_product_master_structure(product_ws, source_rows)
@@ -980,9 +1032,18 @@ def main() -> None:
     mapping_rows = build_mapping_rows(aggregates, product_index, reference_mapping)
     write_mapping_rows(mapping_ws, mapping_rows)
 
-    print(f"商品マスタ更新: {len(product_index):,} 商品")
-    print(f"商品区分たたき台更新: {len(review_rows) - 1:,} 行")
-    print(f"決済商品変換マスタ更新: {len(mapping_rows) - 1:,} 行")
+    return {
+        "product_count": len(product_index),
+        "review_row_count": max(len(review_rows) - 1, 0),
+        "mapping_row_count": max(len(mapping_rows) - 1, 0),
+    }
+
+
+def main() -> None:
+    result = sync_payment_product_master_structure()
+    print(f"商品マスタ更新: {result['product_count']:,} 商品")
+    print(f"商品区分たたき台更新: {result['review_row_count']:,} 行")
+    print(f"決済商品変換マスタ更新: {result['mapping_row_count']:,} 行")
 
 
 if __name__ == "__main__":

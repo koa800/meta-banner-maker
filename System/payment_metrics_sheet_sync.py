@@ -3,11 +3,12 @@
 【アドネス株式会社】スキルプラス着金データ（加工）を再生成する。
 
 方針:
-- visible なタブは `日別売上数値 / 売上サマリー / データソース管理 / データ追加ルール` の4つだけに絞る
+- visible なタブは `日別売上数値 / 月次照合 / 商品別売上一覧 / 売上サマリー / データソース管理 / データ追加ルール` の6つに絞る
 - 内部ロジックでは 1資金イベント単位で正規化するが、明細タブは常設しない
 - 日別タブにはスキルプラス事業だけを出し、`完全不明` は入れない
 - `返金額` は相談窓口シートを案件正本にし、raw 決済は突合と補完にだけ使う
 - `解約請求回収額` は中途解約タブの負値のうち、回収済みと確認できたものだけを正本にする
+- 再生成前に `商品マスタ / 商品区分たたき台 / 決済商品変換マスタ` も同期し、新商品追加や変換ルール修正が次回 run で自動反映されるようにする
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ from scripts.setup_payment_product_master import (
     PAYMENT_COLLECTION_TAB,
     PAYMENT_MAPPING_TAB,
     source_sale_is_success,
+    sync_payment_product_master_structure,
 )
 
 
@@ -47,6 +49,7 @@ SKILLPLUS_STUDENT_SHEET_ID = "1zL8LV9CF8RLKiNDNqsYO6UXxuhBW32NcDaPJ5FqB17M"
 
 DAILY_TAB_NAME = "日別売上数値"
 MONTHLY_RECON_TAB_NAME = "月次照合"
+PRODUCT_MONTHLY_TAB_NAME = "商品別売上一覧"
 SUMMARY_TAB_NAME = "売上サマリー"
 SOURCE_MANAGEMENT_TAB_NAME = "データソース管理"
 RULE_TAB_NAME = "データ追加ルール"
@@ -54,6 +57,7 @@ RULE_TAB_NAME = "データ追加ルール"
 TAB_SPECS = {
     DAILY_TAB_NAME: (1200, 16),
     MONTHLY_RECON_TAB_NAME: (320, 7),
+    PRODUCT_MONTHLY_TAB_NAME: (200, 24),
     SUMMARY_TAB_NAME: (50, 3),
     SOURCE_MANAGEMENT_TAB_NAME: (80, 12),
     RULE_TAB_NAME: (60, 3),
@@ -72,6 +76,7 @@ HEADER_TEXT = {
 TAB_COLORS = {
     DAILY_TAB_NAME: "#1A73E8",
     MONTHLY_RECON_TAB_NAME: "#9334E6",
+    PRODUCT_MONTHLY_TAB_NAME: "#00ACC1",
     SUMMARY_TAB_NAME: "#FBBC04",
     SOURCE_MANAGEMENT_TAB_NAME: "#34A853",
     RULE_TAB_NAME: "#9E9E9E",
@@ -93,6 +98,7 @@ START_DATE_TEXT = START_DATE.strftime("%Y/%m/%d")
 DATE_RE = re.compile(r"(\d{4})[/-](\d{1,2})[/-](\d{1,2})")
 AMOUNT_CONDITION_RE = re.compile(r"(?:イベント金額|1件あたり)\s*=\s*¥?([\d,]+)")
 BLANK_SKILLPLUS_RECURRING_PRODUCT_NAME = "スキルプラス継続利用"
+UNKNOWN_SKILLPLUS_MAIN_PRODUCT_NAME = "スキルプラス本体（プラン不明）"
 INSTALLMENT_RECOVERY_AMOUNTS = {
     15180,
     16280,
@@ -271,6 +277,25 @@ class FileLock:
         self.lock_path = Path(lock_path)
         self.timeout_seconds = timeout_seconds
 
+    @staticmethod
+    def _extract_pid(lock_data: dict) -> Optional[int]:
+        locked_by = str(lock_data.get("locked_by", ""))
+        match = re.search(r"PID:\s*(\d+)", locked_by)
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _pid_is_running(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
     def acquire(self) -> None:
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
         if self.lock_path.exists():
@@ -278,7 +303,10 @@ class FileLock:
                 lock_data = json.loads(self.lock_path.read_text())
                 locked_at = datetime.fromisoformat(lock_data.get("locked_at", ""))
                 elapsed = (datetime.now() - locked_at).total_seconds()
-                if elapsed < self.timeout_seconds:
+                locked_pid = self._extract_pid(lock_data)
+                if locked_pid and not self._pid_is_running(locked_pid):
+                    self.lock_path.unlink(missing_ok=True)
+                elif elapsed < self.timeout_seconds:
                     raise RuntimeError(
                         f"スキルプラス着金データ（加工）の更新はロック中です: "
                         f"{lock_data.get('locked_by', '不明')} ({int(elapsed)}秒前に開始)"
@@ -519,6 +547,22 @@ def raw_name_is_dpro_installment(raw_name: str) -> bool:
     return "動画広告分析Pro" in normalized and "初回3ヶ月間" in normalized
 
 
+def month_range_from_dates(date_texts: Iterable[str]) -> list[str]:
+    parsed_dates = sorted(dt for dt in (parse_date(text) for text in date_texts if text) if dt)
+    if not parsed_dates:
+        return []
+    cursor = datetime(parsed_dates[0].year, parsed_dates[0].month, 1)
+    end_dt = datetime(parsed_dates[-1].year, parsed_dates[-1].month, 1)
+    months: list[str] = []
+    while cursor <= end_dt:
+        months.append(cursor.strftime("%Y/%m"))
+        if cursor.month == 12:
+            cursor = datetime(cursor.year + 1, 1, 1)
+        else:
+            cursor = datetime(cursor.year, cursor.month + 1, 1)
+    return months
+
+
 def claim_is_collected(*texts: object) -> bool:
     normalized = normalize_compact_text(" / ".join(normalize_text(text) for text in texts))
     if not normalized:
@@ -681,7 +725,7 @@ def ensure_tabs(spreadsheet):
             tabs.pop(title, None)
 
     requests = []
-    ordered_names = [DAILY_TAB_NAME, MONTHLY_RECON_TAB_NAME, SUMMARY_TAB_NAME, SOURCE_MANAGEMENT_TAB_NAME, RULE_TAB_NAME]
+    ordered_names = [DAILY_TAB_NAME, MONTHLY_RECON_TAB_NAME, PRODUCT_MONTHLY_TAB_NAME, SUMMARY_TAB_NAME, SOURCE_MANAGEMENT_TAB_NAME, RULE_TAB_NAME]
     for idx, name in enumerate(ordered_names):
         ws = tabs[name]
         requests.append(set_sheet_properties_request(ws.id, {"index": idx, "hidden": False}, "index,hidden"))
@@ -803,6 +847,65 @@ def style_daily_tab(spreadsheet, ws) -> None:
     ]
     for idx, width in enumerate(widths):
         requests.append(set_column_width_request(ws.id, idx, idx + 1, width))
+    batch_update_with_retry(spreadsheet, {"requests": requests}, f"{ws.title} の体裁適用")
+
+
+def style_product_monthly_tab(spreadsheet, ws, month_count: int) -> None:
+    fixed_widths = [280, 130, 120, 120, 120]
+    requests = [
+        repeat_cell_request(
+            ws.id,
+            0,
+            1,
+            0,
+            5 + month_count,
+            {
+                "backgroundColor": HEADER_BG,
+                "horizontalAlignment": "CENTER",
+                "verticalAlignment": "MIDDLE",
+                "textFormat": HEADER_TEXT,
+                "wrapStrategy": "CLIP",
+            },
+            "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,textFormat,wrapStrategy)",
+        ),
+        repeat_cell_request(
+            ws.id,
+            1,
+            ws.row_count,
+            0,
+            4,
+            {
+                "horizontalAlignment": "LEFT",
+                "verticalAlignment": "MIDDLE",
+            },
+            "userEnteredFormat(horizontalAlignment,verticalAlignment)",
+        ),
+        repeat_cell_request(
+            ws.id,
+            1,
+            ws.row_count,
+            4,
+            5 + month_count,
+            {
+                "horizontalAlignment": "RIGHT",
+                "numberFormat": {"type": "CURRENCY", "pattern": '"¥"#,##0'},
+            },
+            "userEnteredFormat(horizontalAlignment,numberFormat)",
+        ),
+        {
+            "updateSheetProperties": {
+                "properties": {
+                    "sheetId": ws.id,
+                    "gridProperties": {"frozenRowCount": 1, "frozenColumnCount": 5},
+                },
+                "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
+            }
+        },
+    ]
+    for idx, width in enumerate(fixed_widths):
+        requests.append(set_column_width_request(ws.id, idx, idx + 1, width))
+    for idx in range(month_count):
+        requests.append(set_column_width_request(ws.id, 5 + idx, 6 + idx, 120))
     batch_update_with_retry(spreadsheet, {"requests": requests}, f"{ws.title} の体裁適用")
 
 
@@ -2219,6 +2322,95 @@ def build_monthly_reconciliation_rows(daily_rows: List[List[object]], source_mon
     return rows, issue_count
 
 
+def resolve_sale_product_for_view(context: SaleContext) -> tuple[str, str, str, str]:
+    mapping_entry = context.mapping_entry
+    if mapping_entry and mapping_entry.status == "変換済み" and mapping_entry.product_name:
+        return (
+            mapping_entry.product_name,
+            mapping_entry.business,
+            mapping_entry.target,
+            mapping_entry.customer_attr,
+        )
+
+    if context.raw_name == "(空欄)":
+        if charge_is_recurring(context.charge_type, context.recurring_id) and not context.is_univapay_head_payment:
+            return (
+                BLANK_SKILLPLUS_RECURRING_PRODUCT_NAME,
+                BUSINESS_SKILLPLUS,
+                "会員向け",
+                "個人",
+            )
+        return (
+            UNKNOWN_SKILLPLUS_MAIN_PRODUCT_NAME,
+            BUSINESS_SKILLPLUS,
+            "非会員向け",
+            "個人",
+        )
+
+    return (
+        context.raw_name,
+        BUSINESS_SKILLPLUS,
+        "",
+        "",
+    )
+
+
+def build_product_monthly_rows(
+    payment_rows: list[list[str]],
+    mapping: Dict[tuple[str, str], List[MappingEntry]],
+    student_index: dict[str, set[str]],
+    other_business_index: dict[str, dict[str, list[OtherBusinessEvidence]]],
+    product_meta: dict[str, dict[str, str]],
+) -> List[List[object]]:
+    headers = payment_rows[0] if payment_rows else []
+    if not headers:
+        return [["商品名", "事業区分", "対象顧客", "顧客属性区分", "合計"]]
+
+    idx = {header: i for i, header in enumerate(headers)}
+    seen_rows: set[tuple[str, ...]] = set()
+    monthly = defaultdict(Counter)
+    product_info: dict[str, tuple[str, str, str]] = {}
+    all_dates: list[str] = []
+
+    for row in payment_rows[1:]:
+        padded = row + [""] * (len(headers) - len(row))
+        dedupe_key = payment_row_dedupe_key(padded)
+        if dedupe_key in seen_rows:
+            continue
+        seen_rows.add(dedupe_key)
+
+        context = build_sale_context(padded, idx, mapping, student_index, other_business_index)
+        if context is None or context.classification != "included":
+            continue
+
+        amount = abs(parse_amount(padded[idx["イベント金額"]]))
+        if amount <= 0:
+            continue
+
+        product_name, business, target, customer_attr = resolve_sale_product_for_view(context)
+        month_text = context.event_date[:7]
+        all_dates.append(context.event_date)
+        monthly[product_name][month_text] += amount
+        monthly[product_name]["__total__"] += amount
+        product_info[product_name] = (business, target, customer_attr)
+
+    months = month_range_from_dates(all_dates)
+    rows: List[List[object]] = [["商品名", "事業区分", "対象顧客", "顧客属性区分", "合計", *months]]
+
+    for product_name, counter in sorted(monthly.items(), key=lambda item: (-item[1]["__total__"], item[0])):
+        business, target, customer_attr = product_info.get(product_name, ("", "", ""))
+        rows.append([
+            product_name,
+            business,
+            target,
+            customer_attr,
+            counter["__total__"],
+            *[counter.get(month_text, 0) for month_text in months],
+        ])
+
+    return rows
+
+
 def build_source_management_rows(payment_ws, mapping_ws, cs_ss, stats: dict, checked_at: str) -> List[List[object]]:
     payment_url = get_tab_url(PAYMENT_COLLECTION_SHEET_ID, payment_ws)
     mapping_url = get_tab_url(MASTER_SHEET_ID, mapping_ws)
@@ -2309,6 +2501,7 @@ def build_rule_rows() -> List[List[object]]:
         ["項目", "ルール", "補足"],
         ["日別売上数値", "手入力で直さず、元データから再生成する", "数字の理由を後から追えるようにする"],
         ["月次照合", "月ごとの加工値と元値の差分がゼロかを確認する", "日別売上数値の月次合計と、元ソースの月次集計を同時に見る"],
+        ["商品別売上一覧", "商品ごとの月次着金売上を横持ちで一覧化する", "行に商品、列に月を並べる。商品未特定は `スキルプラス本体（プラン不明）` で別行にする"],
         ["新規着金売上", "新規契約として扱う着金だけを集計する", "非会員向け商品、頭金お支払い、銀行振込・信販の初回承認/振込を含める。プライム合宿の148,000円はここへ含める"],
         ["分割回収売上", "スキルプラス本体の分割金回収を集計する", "UnivaPay の空欄 recurring のうち、分割金パターンとして確定した金額帯と、動画広告分析Pro の `初回3ヶ月間` をここへ寄せる"],
         ["継続課金売上", "月額課金や継続利用料など、積み上がる継続課金を集計する", "商品マスタの購入形態が月額、または UTAGE detail で継続課金と exact に確認できた売上をここへ寄せる。センサーズ継続、AIカレッジ継続、スキルプラス継続利用は 21,780円/月。動画広告分析Pro は `4ヶ月目以降` をここへ寄せる"],
@@ -2367,6 +2560,8 @@ def save_run_state(stats: Dict[str, int]) -> None:
 def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
     with FileLock():
         gc = get_client()
+        if not dry_run:
+            sync_payment_product_master_structure(gc)
         target = get_or_create_target_spreadsheet(gc)
         source = gc.open_by_key(PAYMENT_COLLECTION_SHEET_ID)
         master = gc.open_by_key(MASTER_SHEET_ID)
@@ -2423,6 +2618,13 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
         checked_at = datetime.now().strftime("%Y/%m/%d %H:%M")
         stats["updated_at"] = checked_at
         monthly_rows, monthly_issue_count = build_monthly_reconciliation_rows(daily_rows, source_monthly)
+        product_monthly_rows = build_product_monthly_rows(
+            payment_rows,
+            mapping,
+            student_index,
+            other_business_index,
+            product_meta,
+        )
         stats["monthly_reconcile_issue_count"] = monthly_issue_count
 
         summary_rows = build_summary_rows(stats, checked_at)
@@ -2446,6 +2648,7 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
             print("【dry-run】完全不明金額:", stats["complete_unknown_amount"])
             print("【dry-run】完全不明件数:", stats["complete_unknown_count"])
             print("【dry-run】補完返金件数:", refund_case_stats.get("supplement_count", 0))
+            print("【dry-run】商品別売上一覧 行数:", len(product_monthly_rows) - 1)
             print("【dry-run】対象日数:", stats["daily_row_count"])
             return stats
 
@@ -2462,6 +2665,9 @@ def sync_payment_metrics_sheet(dry_run: bool = False) -> dict:
             number_cols=[2, 3, 4],
         )
         apply_status_cell_colors(target, tabs[MONTHLY_RECON_TAB_NAME], monthly_rows, 5)
+
+        write_rows(target, tabs[PRODUCT_MONTHLY_TAB_NAME], product_monthly_rows)
+        style_product_monthly_tab(target, tabs[PRODUCT_MONTHLY_TAB_NAME], max(len(product_monthly_rows[0]) - 5, 0))
 
         write_rows(target, tabs[SUMMARY_TAB_NAME], summary_rows)
         style_meta_tab(target, tabs[SUMMARY_TAB_NAME], widths=[180, 180, 420])
