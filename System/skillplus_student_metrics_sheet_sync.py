@@ -5,7 +5,7 @@
 方針:
 - raw の `（元）` タブ群を正本にし、`（加工）` タブ群は読まない
 - processed では `受講生単位` に正規化し、決済加工の正の証拠として再利用できる形にする
-- `受講生一覧 / 受講生サマリー / データソース管理 / データ追加ルール` の4タブだけを持つ
+- このシートは `受講生一覧 / 受講生サマリー / 自動生成一覧 / 自動生成サマリー / データソース管理 / データ追加ルール` を同居させる
 - 決済側は processed の `受講生一覧` を読む。raw シートを直接読まない
 """
 
@@ -37,6 +37,10 @@ STUDENT_TAB_NAME = "受講生一覧"
 SUMMARY_TAB_NAME = "受講生サマリー"
 SOURCE_MANAGEMENT_TAB_NAME = "データソース管理"
 RULE_TAB_NAME = "データ追加ルール"
+AUTO_TAB_NAME = "自動生成一覧"
+AUTO_SUMMARY_TAB_NAME = "自動生成サマリー"
+AUTO_SOURCE_MANAGEMENT_TAB_NAME = "自動生成_データソース管理"
+AUTO_RULE_TAB_NAME = "自動生成_データ追加ルール"
 
 TAB_SPECS = {
     STUDENT_TAB_NAME: (8000, 18),
@@ -60,6 +64,10 @@ TAB_COLORS = {
     SUMMARY_TAB_NAME: "#FBBC04",
     SOURCE_MANAGEMENT_TAB_NAME: "#34A853",
     RULE_TAB_NAME: "#9E9E9E",
+    AUTO_TAB_NAME: "#8E24AA",
+    AUTO_SUMMARY_TAB_NAME: "#F57C00",
+    AUTO_SOURCE_MANAGEMENT_TAB_NAME: "#0F9D58",
+    AUTO_RULE_TAB_NAME: "#616161",
 }
 STATUS_FORMATS = {
     "正常": {"backgroundColor": {"red": 0.851, "green": 0.918, "blue": 0.827}},
@@ -87,6 +95,20 @@ PROCESSED_SOURCE_EXCLUDED_TABS = {
     SUMMARY_TAB_NAME,
     SOURCE_MANAGEMENT_TAB_NAME,
     RULE_TAB_NAME,
+    AUTO_TAB_NAME,
+    AUTO_SUMMARY_TAB_NAME,
+    AUTO_SOURCE_MANAGEMENT_TAB_NAME,
+    AUTO_RULE_TAB_NAME,
+}
+PRESERVED_TAB_NAMES = {
+    STUDENT_TAB_NAME,
+    SUMMARY_TAB_NAME,
+    SOURCE_MANAGEMENT_TAB_NAME,
+    RULE_TAB_NAME,
+    AUTO_TAB_NAME,
+    AUTO_SUMMARY_TAB_NAME,
+    AUTO_SOURCE_MANAGEMENT_TAB_NAME,
+    AUTO_RULE_TAB_NAME,
 }
 TEST_MARKERS = ("test", "テスト", "てすと", "dummy", "sample", "サンプル", "確認用")
 DUMMY_EMAIL_LOCALS = {"a", "abc", "i", "test", "testo", "dummy", "sample"}
@@ -524,7 +546,7 @@ def ensure_tabs(spreadsheet):
             lambda name=name, rows=rows, cols=cols: spreadsheet.add_worksheet(title=name, rows=rows, cols=cols),
         )
 
-    target_names = set(TAB_SPECS.keys())
+    target_names = set(PRESERVED_TAB_NAMES)
     for title, ws in list(tabs.items()):
         if title not in target_names:
             batch_update_with_retry(
@@ -535,10 +557,22 @@ def ensure_tabs(spreadsheet):
             tabs.pop(title, None)
 
     requests = []
-    ordered_names = [STUDENT_TAB_NAME, SUMMARY_TAB_NAME, SOURCE_MANAGEMENT_TAB_NAME, RULE_TAB_NAME]
+    ordered_names = [
+        STUDENT_TAB_NAME,
+        SUMMARY_TAB_NAME,
+        AUTO_TAB_NAME,
+        AUTO_SUMMARY_TAB_NAME,
+        SOURCE_MANAGEMENT_TAB_NAME,
+        RULE_TAB_NAME,
+        AUTO_SOURCE_MANAGEMENT_TAB_NAME,
+        AUTO_RULE_TAB_NAME,
+    ]
     for idx, name in enumerate(ordered_names):
+        if name not in tabs:
+            continue
         ws = tabs[name]
-        requests.append(set_sheet_properties_request(ws.id, {"index": idx, "hidden": False}, "index,hidden"))
+        is_hidden = name in {AUTO_SOURCE_MANAGEMENT_TAB_NAME, AUTO_RULE_TAB_NAME}
+        requests.append(set_sheet_properties_request(ws.id, {"index": idx, "hidden": is_hidden}, "index,hidden"))
         requests.append(
             set_sheet_properties_request(
                 ws.id,
@@ -1314,7 +1348,10 @@ def save_run_state(stats: Dict[str, object]) -> None:
 def sync_skillplus_student_metrics_sheet(dry_run: bool = False, gc=None) -> dict:
     with FileLock():
         gc = gc or get_client()
-        source_ss = gc.open_by_key(SOURCE_SHEET_ID)
+        source_ss = run_read_with_retry(
+            "スキルプラス受講生データの元シート取得",
+            lambda: gc.open_by_key(SOURCE_SHEET_ID),
+        )
         target = get_or_create_target_spreadsheet(gc)
         tabs = ensure_tabs(target)
 
