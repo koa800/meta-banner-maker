@@ -564,15 +564,6 @@ def style_table(spreadsheet, ws, widths: Sequence[int], *, center_cols: Sequence
             },
             "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,wrapStrategy,textFormat)",
         ),
-        repeat_cell_request(
-            ws.id,
-            1,
-            ws.row_count,
-            0,
-            1,
-            {"numberFormat": {"type": "DATE", "pattern": "yyyy/mm/dd"}, "horizontalAlignment": "CENTER"},
-            "userEnteredFormat(numberFormat,horizontalAlignment)",
-        ),
         set_row_height_request(ws.id, 0, 1, 28),
         set_row_height_request(ws.id, 1, ws.row_count, 24),
         set_sheet_properties_request(ws.id, {"gridProperties": {"frozenRowCount": 1}}, "gridProperties.frozenRowCount"),
@@ -713,12 +704,20 @@ def build_student_header_spec(headers: list[str]) -> dict[str, object]:
         "display_name_indexes": header_indexes_by_contains(headers, ["回答者名", "表示名"]),
         "nickname_indexes": header_indexes_by_contains(headers, ["ニックネーム"]),
         "furigana_indexes": header_indexes_by_contains(headers, ["ふりがな"]),
-        "admission_indexes": header_indexes_by_contains(headers, ["入会日", "ご入会日"]),
         "response_at_indexes": header_indexes_by_contains(headers, ["回答日時"]),
         "response_id_index": header_index_by_exact(headers, ["回答ID"]),
         "responder_id_index": header_index_by_exact(headers, ["回答者ID"]),
         "surname_index": header_index_by_exact(headers, ["姓", "姓（せい）"]),
         "given_name_index": header_index_by_exact(headers, ["名"]),
+        "birthdate_indexes": header_indexes_by_contains(headers, ["生年月日"]),
+        "gender_indexes": header_indexes_by_contains(headers, ["性別"]),
+        "occupation_indexes": header_indexes_by_contains(headers, ["ご職業", "職業"]),
+        "income_indexes": header_indexes_by_contains(headers, ["収入", "月収", "年収"]),
+        "postal_indexes": header_indexes_by_contains(headers, ["郵便番号"]),
+        "address_indexes": header_indexes_by_contains(headers, ["住所", "ご住所"]),
+        "source_indexes": header_indexes_by_contains(headers, ["どこで"]),
+        "worry_indexes": header_indexes_by_contains(headers, ["悩み"]),
+        "goal_indexes": header_indexes_by_contains(headers, ["目標", "ゴール"]),
     }
 
 
@@ -747,7 +746,7 @@ def build_identity(email: str, phone: str, full_name: str, furigana: str, displa
     if full_name:
         return f"name:{full_name}", "氏名", full_name
     if display_name:
-        return f"display:{display_name}", "表示名", display_name
+        return f"display:{display_name}", "ニックネーム", display_name
     if answerer_id:
         return f"responder:{answerer_id}", "回答者ID", answerer_id
     if answer_id:
@@ -757,6 +756,26 @@ def build_identity(email: str, phone: str, full_name: str, furigana: str, displa
 
 def merge_text(current: str, new_value: str) -> str:
     return current or new_value
+
+
+def merge_prefer_longer_text(current: str, new_value: str) -> str:
+    current_text = normalize_text(current)
+    new_text = normalize_text(new_value)
+    if not current_text:
+        return new_text
+    if not new_text:
+        return current_text
+    return new_text if len(new_text) > len(current_text) else current_text
+
+
+def merge_prefer_earliest_date(current: str, new_value: str) -> str:
+    current_text = normalize_date(current)
+    new_text = normalize_date(new_value)
+    if not current_text:
+        return new_text
+    if not new_text:
+        return current_text
+    return new_text if new_text < current_text else current_text
 
 
 def merge_earliest_datetime(current: str, new_value: str) -> str:
@@ -823,11 +842,20 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
                 given_name = normalize_text(row[spec["given_name_index"]]) if spec["given_name_index"] < len(row) else ""
                 full_name_source = f"{surname}{given_name}"
             furigana_source = pick_first_value(row, spec["furigana_indexes"])
-            display_name_source = pick_first_value(row, spec["display_name_indexes"]) or pick_first_value(row, spec["nickname_indexes"])
+            nickname_source = pick_first_value(row, spec["nickname_indexes"]) or pick_first_value(row, spec["display_name_indexes"])
+            birthdate_source = normalize_date(pick_first_value(row, spec["birthdate_indexes"]))
+            gender_source = pick_first_value(row, spec["gender_indexes"])
+            occupation_source = pick_first_value(row, spec["occupation_indexes"])
+            income_source = pick_first_value(row, spec["income_indexes"])
+            postal_code_source = pick_first_value(row, spec["postal_indexes"])
+            address_source = pick_first_value(row, spec["address_indexes"])
+            source_channel = pick_first_value(row, spec["source_indexes"])
+            current_worry = pick_first_value(row, spec["worry_indexes"])
+            goal = pick_first_value(row, spec["goal_indexes"])
 
             email = normalize_email(email_raw)
             phone = normalize_phone(phone_raw)
-            if should_exclude_student_row(email, phone, full_name_source, furigana_source, display_name_source):
+            if should_exclude_student_row(email, phone, full_name_source, furigana_source, nickname_source):
                 excluded_row_count += 1
                 continue
 
@@ -836,7 +864,7 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
 
             full_name = normalize_name_key(full_name_source)
             furigana = normalize_name_key(furigana_source)
-            display_name = normalize_name_key(display_name_source)
+            nickname_key = normalize_name_key(nickname_source)
             response_at = normalize_datetime(pick_first_value(row, spec["response_at_indexes"]))
             first_response_date = build_response_date(response_at)
             answer_id = normalize_text(row[spec["response_id_index"]]) if spec["response_id_index"] is not None and spec["response_id_index"] < len(row) else ""
@@ -847,7 +875,7 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
                 phone,
                 full_name,
                 furigana,
-                display_name,
+                nickname_key,
                 answerer_id,
                 answer_id,
                 ws.title,
@@ -866,9 +894,21 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
                     "last_response_at": response_at,
                     "email": email,
                     "phone": phone,
-                    "full_name": full_name,
-                    "furigana": furigana,
-                    "display_name": display_name,
+                    "full_name_key": full_name,
+                    "full_name": normalize_text(full_name_source),
+                    "furigana_key": furigana,
+                    "furigana": normalize_text(furigana_source),
+                    "nickname_key": nickname_key,
+                    "nickname": normalize_text(nickname_source),
+                    "birthdate": birthdate_source,
+                    "gender": normalize_text(gender_source),
+                    "occupation": normalize_text(occupation_source),
+                    "income": normalize_text(income_source),
+                    "postal_code": normalize_text(postal_code_source),
+                    "address": normalize_text(address_source),
+                    "source_channel": normalize_text(source_channel),
+                    "current_worry": normalize_text(current_worry),
+                    "goal": normalize_text(goal),
                     "response_count": 1,
                     "raw_tabs": {ws.title},
                     "answer_id": answer_id,
@@ -882,9 +922,21 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
             current["last_response_at"] = merge_latest_datetime(str(current["last_response_at"]), response_at)
             current["email"] = merge_text(str(current["email"]), email)
             current["phone"] = merge_text(str(current["phone"]), phone)
-            current["full_name"] = merge_text(str(current["full_name"]), full_name)
-            current["furigana"] = merge_text(str(current["furigana"]), furigana)
-            current["display_name"] = merge_text(str(current["display_name"]), display_name)
+            current["full_name_key"] = merge_text(str(current["full_name_key"]), full_name)
+            current["full_name"] = merge_prefer_longer_text(str(current["full_name"]), normalize_text(full_name_source))
+            current["furigana_key"] = merge_text(str(current["furigana_key"]), furigana)
+            current["furigana"] = merge_prefer_longer_text(str(current["furigana"]), normalize_text(furigana_source))
+            current["nickname_key"] = merge_text(str(current["nickname_key"]), nickname_key)
+            current["nickname"] = merge_prefer_longer_text(str(current["nickname"]), normalize_text(nickname_source))
+            current["birthdate"] = merge_prefer_earliest_date(str(current["birthdate"]), birthdate_source)
+            current["gender"] = merge_prefer_longer_text(str(current["gender"]), normalize_text(gender_source))
+            current["occupation"] = merge_prefer_longer_text(str(current["occupation"]), normalize_text(occupation_source))
+            current["income"] = merge_prefer_longer_text(str(current["income"]), normalize_text(income_source))
+            current["postal_code"] = merge_prefer_longer_text(str(current["postal_code"]), normalize_text(postal_code_source))
+            current["address"] = merge_prefer_longer_text(str(current["address"]), normalize_text(address_source))
+            current["source_channel"] = merge_prefer_longer_text(str(current["source_channel"]), normalize_text(source_channel))
+            current["current_worry"] = merge_prefer_longer_text(str(current["current_worry"]), normalize_text(current_worry))
+            current["goal"] = merge_prefer_longer_text(str(current["goal"]), normalize_text(goal))
             current["answer_id"] = merge_text(str(current["answer_id"]), answer_id)
             current["answerer_id"] = merge_text(str(current["answerer_id"]), answerer_id)
             current["response_count"] = int(current["response_count"]) + 1
@@ -911,7 +963,16 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
                 "phone": item["phone"],
                 "full_name": item["full_name"],
                 "furigana": item["furigana"],
-                "display_name": item["display_name"],
+                "nickname": item["nickname"],
+                "birthdate": item["birthdate"],
+                "gender": item["gender"],
+                "occupation": item["occupation"],
+                "income": item["income"],
+                "postal_code": item["postal_code"],
+                "address": item["address"],
+                "source_channel": item["source_channel"],
+                "current_worry": item["current_worry"],
+                "goal": item["goal"],
                 "response_count": item["response_count"],
                 "raw_tabs": raw_tabs,
                 "answer_id": item["answer_id"],
@@ -923,7 +984,7 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
         key=lambda item: (
             item["first_response_date"] or "0000/00/00",
             item["plan_group"],
-            item["full_name"] or item["display_name"] or item["email"] or item["phone"],
+            item["full_name"] or item["nickname"] or item["email"] or item["phone"],
         ),
         reverse=True,
     )
@@ -943,12 +1004,20 @@ def build_student_rows(students: list[dict[str, object]]) -> List[List[object]]:
     rows: List[List[object]] = [[
         "プラン",
         "初回回答日時",
-        "最終回答日時",
         "メールアドレス",
         "電話番号",
         "お名前",
         "ふりがな",
-        "表示名",
+        "ニックネーム",
+        "生年月日",
+        "性別",
+        "ご職業",
+        "収入",
+        "郵便番号",
+        "ご住所",
+        "どこで知ったか",
+        "現在の悩み",
+        "目標・ゴール",
         "最初の回答ID",
         "最初の回答者ID",
     ]]
@@ -957,12 +1026,20 @@ def build_student_rows(students: list[dict[str, object]]) -> List[List[object]]:
             [
                 student["plan_group"],
                 student["first_response_at"],
-                student["last_response_at"],
                 student["email"],
                 student["phone"],
                 student["full_name"],
                 student["furigana"],
-                student["display_name"],
+                student["nickname"],
+                student["birthdate"],
+                student["gender"],
+                student["occupation"],
+                student["income"],
+                student["postal_code"],
+                student["address"],
+                student["source_channel"],
+                student["current_worry"],
+                student["goal"],
                 student["answer_id"],
                 student["answerer_id"],
             ]
@@ -1038,17 +1115,17 @@ def build_source_management_rows(source_ss, stats: dict[str, object], checked_at
     rows.append(
         [
             STUDENT_TAB_NAME,
-            "プラン / 初回回答日時 / 最終回答日時 / メールアドレス / 電話番号 / お名前 / ふりがな / 表示名 / 回答ID",
+            "プラン / 初回回答日時 / メールアドレス / 電話番号 / お名前 / ふりがな / ニックネーム / 生年月日 / ご職業 / 住所 / 回答ID",
             "1",
             f'=HYPERLINK("{source_url}","スキルプラス受講生データ")',
             "（元）タブ群",
-            "メールアドレス / 電話番号 / お名前 / ふりがな / 回答者名 / 回答日時",
-            "同一プランかつ同一受講生とみなせる回答を内部キーで統合し、表示上は最小列だけ残す",
+            "メールアドレス / 電話番号 / お名前 / ふりがな / ニックネーム / 回答日時 / 属性回答",
+            "同一プランかつ同一受講生とみなせる回答を内部キーで統合し、プロフィール列は raw の回答から寄せる",
             base_status,
             f"'{checked_at}",
             stats.get("student_count", 0),
             len(skipped_tabs),
-            "受講生単位の正規化一覧",
+            "収集シート由来の受講生マスタ",
             "2025/01/01以降を主に利用",
             "決済加工ではこのタブを正の証拠として使う",
         ]
@@ -1100,10 +1177,11 @@ def build_source_management_rows(source_ss, stats: dict[str, object], checked_at
 def build_rule_rows() -> List[List[object]]:
     return [
         ["項目", "ルール", "補足"],
-        ["受講生一覧", "手入力で直さず、raw 形式のヘッダーを持つタブ群から再生成する", "表示列は決済照合に必要な項目だけに絞る"],
+        ["受講生一覧", "手入力で直さず、raw 形式のヘッダーを持つタブ群から再生成する", "収集シート由来の受講生マスタとして使う"],
         ["raw タブ判定", "タイトルではなくヘッダー構造で判定する", "`最新元データ一覧` と processed の管理タブを除外する"],
-        ["内部識別", "メール -> 電話番号 -> 氏名+ふりがな -> 氏名 -> 表示名 -> 回答者ID -> 回答ID の順で内部キーを作る", "内部キーはシートに出さず、重複統合だけに使う"],
+        ["内部識別", "メール -> 電話番号 -> 氏名+ふりがな -> 氏名 -> ニックネーム -> 回答者ID -> 回答ID の順で内部キーを作る", "内部キーはシートに出さず、重複統合だけに使う"],
         ["初回回答日時", "自己申告の入会日は使わず、raw に記録された初回回答日時だけを使う", "信頼できる一次データに寄せる"],
+        ["プロフィール列", "生年月日 / ご職業 / 収入 / 郵便番号 / ご住所 / 悩み / ゴールは raw 回答の実値を優先する", "統合シートの補完ではなく、受講生収集を正本にする"],
         ["プラン", "タブ名から `SPS / STD/オールインワン / プライム / エリート / ライト/秘密` を判定する", "どれにも当たらない raw タブは `その他` に残す"],
         ["除外ルール", "明確なテスト入力、または照合に使えない極端な疎データは取り込まない", "一文字名だけでは除外しない"],
         ["決済との接続", "決済加工はこの processed の `受講生一覧` を正の証拠に使う", "raw の受講生シートを直接読まない"],
@@ -1131,7 +1209,7 @@ def load_skillplus_student_identifiers_from_processed(ws) -> tuple[dict[str, set
         phone = normalize_phone(padded[idx["電話番号"]]) if "電話番号" in idx else ""
         full_name = normalize_name_key(padded[idx["お名前"]]) if "お名前" in idx else ""
         furigana = normalize_name_key(padded[idx["ふりがな"]]) if "ふりがな" in idx else ""
-        display_name = normalize_name_key(padded[idx["表示名"]]) if "表示名" in idx else ""
+        nickname = normalize_name_key(padded[idx["ニックネーム"]]) if "ニックネーム" in idx else ""
 
         if email:
             emails.add(email)
@@ -1141,8 +1219,8 @@ def load_skillplus_student_identifiers_from_processed(ws) -> tuple[dict[str, set
             names.add(full_name)
         if furigana:
             names.add(furigana)
-        if display_name:
-            names.add(display_name)
+        if nickname:
+            names.add(nickname)
     return {"emails": emails, "phones": phones, "names": names}, count
 
 
@@ -1210,9 +1288,10 @@ def sync_skillplus_student_metrics_sheet(dry_run: bool = False, gc=None) -> dict
         style_table(
             target,
             tabs[STUDENT_TAB_NAME],
-            widths=[150, 150, 150, 220, 120, 120, 120, 120, 120, 120],
+            widths=[150, 150, 220, 120, 140, 140, 140, 100, 80, 140, 140, 100, 260, 180, 260, 260, 120, 120],
             center_cols=[0],
-            left_cols=[3, 5, 6, 7],
+            left_cols=[2, 4, 5, 6, 9, 10, 12, 13, 14, 15],
+            date_cols=[7],
         )
         write_rows(target, tabs[SUMMARY_TAB_NAME], summary_rows)
         style_table(

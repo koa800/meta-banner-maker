@@ -2492,7 +2492,7 @@ def build_source_management_rows(payment_ws, mapping_ws, cs_ss, student_ws, stat
             "1",
             f'=HYPERLINK("{student_url}","【アドネス株式会社】スキルプラス受講生データ（加工）")',
             SKILLPLUS_STUDENT_PROCESSED_TAB_NAME,
-            "メールアドレス / 電話番号 / お名前 / ふりがな / 表示名 / ご入会日",
+            "メールアドレス / 電話番号 / お名前 / ふりがな / ニックネーム / 初回回答日時",
             "商品名空欄の銀行振込・信販売上の正の証拠として参照する",
             "正常",
             f"'{checked_at}",
