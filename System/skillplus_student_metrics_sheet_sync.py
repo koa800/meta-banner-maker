@@ -80,7 +80,7 @@ DATETIME_FORMATS = (
     "%Y-%m-%d %H:%M:%S",
     "%Y-%m-%d %H:%M",
 )
-SKILLPLUS_STUDENT_EXCLUDED_TABS = {"最新元データ一覧", "ライト/秘密（加工）"}
+SKILLPLUS_STUDENT_EXCLUDED_TABS = {"最新元データ一覧"}
 PLAN_GROUPS = ["SPS", "STD/オールインワン", "プライム", "エリート", "ライト/秘密", "その他"]
 PROCESSED_SOURCE_EXCLUDED_TABS = {
     STUDENT_TAB_NAME,
@@ -328,9 +328,7 @@ def parse_datetime(raw: object) -> Optional[datetime]:
     return datetime.strptime(value, "%Y/%m/%d %H:%M:%S")
 
 
-def build_response_date(response_at: str, admission_date: str) -> str:
-    if admission_date:
-        return admission_date
+def build_response_date(response_at: str) -> str:
     if response_at:
         return response_at.split(" ", 1)[0]
     return ""
@@ -789,16 +787,6 @@ def merge_latest_datetime(current: str, new_value: str) -> str:
     return new_value if new_dt > current_dt else current
 
 
-def merge_earliest_date(current: str, new_value: str) -> str:
-    if not current:
-        return new_value
-    if not new_value:
-        return current
-    current_dt = datetime.strptime(current, "%Y/%m/%d")
-    new_dt = datetime.strptime(new_value, "%Y/%m/%d")
-    return new_value if new_dt < current_dt else current
-
-
 def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[str, object]]:
     aggregates: dict[str, dict[str, object]] = {}
     source_rows_by_group: Counter[str] = Counter()
@@ -850,9 +838,7 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
             furigana = normalize_name_key(furigana_source)
             display_name = normalize_name_key(display_name_source)
             response_at = normalize_datetime(pick_first_value(row, spec["response_at_indexes"]))
-            admission_date = normalize_date(pick_first_value(row, spec["admission_indexes"]))
-            admission_basis_date = build_response_date(response_at, admission_date)
-            admission_basis_type = "入会日" if admission_date else ("初回回答日" if response_at else "")
+            first_response_date = build_response_date(response_at)
             answer_id = normalize_text(row[spec["response_id_index"]]) if spec["response_id_index"] is not None and spec["response_id_index"] < len(row) else ""
             answerer_id = normalize_text(row[spec["responder_id_index"]]) if spec["responder_id_index"] is not None and spec["responder_id_index"] < len(row) else ""
 
@@ -867,7 +853,7 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
                 ws.title,
                 source_offset,
             )
-            dedupe_key = f"{plan_group}|{identity_key}|{admission_date}"
+            dedupe_key = f"{plan_group}|{identity_key}|{first_response_date}"
             current = aggregates.get(dedupe_key)
             if current is None:
                 aggregates[dedupe_key] = {
@@ -875,9 +861,7 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
                     "identity_method": identity_method,
                     "identity_value": identity_value,
                     "plan_group": plan_group,
-                    "admission_basis_date": admission_basis_date,
-                    "admission_basis_type": admission_basis_type,
-                    "admission_date": admission_date,
+                    "first_response_date": first_response_date,
                     "first_response_at": response_at,
                     "last_response_at": response_at,
                     "email": email,
@@ -894,7 +878,6 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
 
             current["identity_method"] = merge_text(str(current["identity_method"]), identity_method)
             current["identity_value"] = merge_text(str(current["identity_value"]), identity_value)
-            current["admission_date"] = merge_earliest_date(str(current["admission_date"]), admission_date)
             current["first_response_at"] = merge_earliest_datetime(str(current["first_response_at"]), response_at)
             current["last_response_at"] = merge_latest_datetime(str(current["last_response_at"]), response_at)
             current["email"] = merge_text(str(current["email"]), email)
@@ -909,10 +892,8 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
             if isinstance(cast_tabs, set):
                 cast_tabs.add(ws.title)
 
-            admission_value = str(current["admission_date"])
             first_response_at = str(current["first_response_at"])
-            current["admission_basis_date"] = build_response_date(first_response_at, admission_value)
-            current["admission_basis_type"] = "入会日" if admission_value else ("初回回答日" if first_response_at else "")
+            current["first_response_date"] = build_response_date(first_response_at)
 
     students: list[dict[str, object]] = []
     for item in aggregates.values():
@@ -923,9 +904,7 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
                 "identity_method": item["identity_method"],
                 "identity_value": item["identity_value"],
                 "plan_group": item["plan_group"],
-                "admission_basis_date": item["admission_basis_date"],
-                "admission_basis_type": item["admission_basis_type"],
-                "admission_date": item["admission_date"],
+                "first_response_date": item["first_response_date"],
                 "first_response_at": item["first_response_at"],
                 "last_response_at": item["last_response_at"],
                 "email": item["email"],
@@ -942,7 +921,7 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
 
     students.sort(
         key=lambda item: (
-            item["admission_basis_date"] or "0000/00/00",
+            item["first_response_date"] or "0000/00/00",
             item["plan_group"],
             item["full_name"] or item["display_name"] or item["email"] or item["phone"],
         ),
@@ -963,8 +942,6 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
 def build_student_rows(students: list[dict[str, object]]) -> List[List[object]]:
     rows: List[List[object]] = [[
         "プラン",
-        "入会判定日",
-        "入会判定根拠",
         "初回回答日時",
         "最終回答日時",
         "メールアドレス",
@@ -979,8 +956,6 @@ def build_student_rows(students: list[dict[str, object]]) -> List[List[object]]:
         rows.append(
             [
                 student["plan_group"],
-                student["admission_basis_date"],
-                student["admission_basis_type"],
                 student["first_response_at"],
                 student["last_response_at"],
                 student["email"],
@@ -996,19 +971,22 @@ def build_student_rows(students: list[dict[str, object]]) -> List[List[object]]:
 
 
 def build_admission_stats(students: list[dict[str, object]]) -> dict[str, object]:
-    latest_basis_date = ""
-    missing_basis_count = 0
+    latest_first_response_at = ""
+    missing_first_response_count = 0
 
     for student in students:
-        basis_date = normalize_text(student["admission_basis_date"])
-        if not basis_date:
-            missing_basis_count += 1
+        first_response_at = normalize_text(student["first_response_at"])
+        if not first_response_at:
+            missing_first_response_count += 1
             continue
-        basis_dt = datetime.strptime(basis_date, "%Y/%m/%d")
-        if basis_dt < METRICS_START_DATE:
+        first_response_dt = datetime.strptime(first_response_at, "%Y/%m/%d %H:%M:%S")
+        if first_response_dt < METRICS_START_DATE:
             continue
-        latest_basis_date = max(latest_basis_date, basis_date)
-    return {"latest_basis_date": latest_basis_date, "missing_basis_count": missing_basis_count}
+        latest_first_response_at = max(latest_first_response_at, first_response_at)
+    return {
+        "latest_first_response_at": latest_first_response_at,
+        "missing_first_response_count": missing_first_response_count,
+    }
 
 
 def build_summary_rows(students: list[dict[str, object]], stats: dict[str, object], checked_at: str, admission_stats: dict[str, int]) -> List[List[object]]:
@@ -1017,11 +995,11 @@ def build_summary_rows(students: list[dict[str, object]], stats: dict[str, objec
         ["項目", "値", "補足"],
         ["最終更新日時", checked_at, "このシートを再生成した時刻"],
         ["集計開始日", METRICS_START_DATE.strftime("%Y/%m/%d"), "受講生加工で主要に扱う起点日"],
-        ["最新入会判定日", admission_stats.get("latest_basis_date", ""), "入会日優先。空なら初回回答日"],
+        ["最新初回回答日時", admission_stats.get("latest_first_response_at", ""), "受講生一覧の初回回答日時ベース"],
         ["受講生数", len(students), "受講生キー単位で正規化した件数"],
         ["採用元回答件数", stats.get("source_row_count", 0), "テスト入力と極端に情報不足な行を除外した件数"],
         ["除外件数", stats.get("excluded_row_count", 0), "明確なテスト入力、または照合に使えない極端な疎データ"],
-        ["入会判定日空欄件数", admission_stats.get("missing_basis_count", 0), "受講生一覧には残し、入会日ベースの集計には使わない"],
+        ["初回回答日時空欄件数", admission_stats.get("missing_first_response_count", 0), "受講生一覧に初回回答日時がない件数"],
         ["SPS受講生数", plan_counts.get("SPS", 0), ""],
         ["STD/オールインワン受講生数", plan_counts.get("STD/オールインワン", 0), ""],
         ["プライム受講生数", plan_counts.get("プライム", 0), ""],
@@ -1060,11 +1038,11 @@ def build_source_management_rows(source_ss, stats: dict[str, object], checked_at
     rows.append(
         [
             STUDENT_TAB_NAME,
-            "プラン / 入会判定日 / 入会判定根拠 / メールアドレス / 電話番号 / お名前 / ふりがな / 表示名 / 回答ID",
+            "プラン / 初回回答日時 / 最終回答日時 / メールアドレス / 電話番号 / お名前 / ふりがな / 表示名 / 回答ID",
             "1",
             f'=HYPERLINK("{source_url}","スキルプラス受講生データ")',
             "（元）タブ群",
-            "メールアドレス / 電話番号 / お名前 / ふりがな / 回答者名 / 入会日 / 回答日時",
+            "メールアドレス / 電話番号 / お名前 / ふりがな / 回答者名 / 回答日時",
             "同一プランかつ同一受講生とみなせる回答を内部キーで統合し、表示上は最小列だけ残す",
             base_status,
             f"'{checked_at}",
@@ -1122,10 +1100,10 @@ def build_source_management_rows(source_ss, stats: dict[str, object], checked_at
 def build_rule_rows() -> List[List[object]]:
     return [
         ["項目", "ルール", "補足"],
-        ["受講生一覧", "手入力で直さず、raw 形式のヘッダーを持つタブ群から再生成する", "表示列は入会判定と決済照合に必要な項目だけに絞る"],
-        ["raw タブ判定", "タイトルではなくヘッダー構造で判定する", "`最新元データ一覧` と `ライト/秘密（加工）` と processed の管理タブを除外する"],
+        ["受講生一覧", "手入力で直さず、raw 形式のヘッダーを持つタブ群から再生成する", "表示列は決済照合に必要な項目だけに絞る"],
+        ["raw タブ判定", "タイトルではなくヘッダー構造で判定する", "`最新元データ一覧` と processed の管理タブを除外する"],
         ["内部識別", "メール -> 電話番号 -> 氏名+ふりがな -> 氏名 -> 表示名 -> 回答者ID -> 回答ID の順で内部キーを作る", "内部キーはシートに出さず、重複統合だけに使う"],
-        ["入会判定日", "入会日があれば入会日、なければ初回回答日を使う", "`入会判定根拠` にどちらを使ったか残す"],
+        ["初回回答日時", "自己申告の入会日は使わず、raw に記録された初回回答日時だけを使う", "信頼できる一次データに寄せる"],
         ["プラン", "タブ名から `SPS / STD/オールインワン / プライム / エリート / ライト/秘密` を判定する", "どれにも当たらない raw タブは `その他` に残す"],
         ["除外ルール", "明確なテスト入力、または照合に使えない極端な疎データは取り込まない", "一文字名だけでは除外しない"],
         ["決済との接続", "決済加工はこの processed の `受講生一覧` を正の証拠に使う", "raw の受講生シートを直接読まない"],
@@ -1184,8 +1162,8 @@ def save_run_state(stats: Dict[str, object]) -> None:
         "student_count": stats["student_count"],
         "source_row_count": stats["source_row_count"],
         "excluded_row_count": stats.get("excluded_row_count", 0),
-        "latest_basis_date": stats["latest_basis_date"],
-        "missing_basis_count": stats["missing_basis_count"],
+        "latest_first_response_at": stats["latest_first_response_at"],
+        "missing_first_response_count": stats["missing_first_response_count"],
         "skipped_tabs": stats["skipped_tabs"],
     }
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -1209,8 +1187,8 @@ def sync_skillplus_student_metrics_sheet(dry_run: bool = False, gc=None) -> dict
             "student_count": len(students),
             "source_row_count": source_stats["source_row_count"],
             "excluded_row_count": source_stats.get("excluded_row_count", 0),
-            "latest_basis_date": admission_stats.get("latest_basis_date", ""),
-            "missing_basis_count": admission_stats.get("missing_basis_count", 0),
+            "latest_first_response_at": admission_stats.get("latest_first_response_at", ""),
+            "missing_first_response_count": admission_stats.get("missing_first_response_count", 0),
             "skipped_tabs": source_stats.get("skipped_tabs", []),
         }
 
@@ -1222,8 +1200,8 @@ def sync_skillplus_student_metrics_sheet(dry_run: bool = False, gc=None) -> dict
             print("【dry-run】受講生数:", stats["student_count"])
             print("【dry-run】採用元回答件数:", stats["source_row_count"])
             print("【dry-run】除外件数:", stats["excluded_row_count"])
-            print("【dry-run】最新入会判定日:", stats["latest_basis_date"])
-            print("【dry-run】入会判定日空欄件数:", stats["missing_basis_count"])
+            print("【dry-run】最新初回回答日時:", stats["latest_first_response_at"])
+            print("【dry-run】初回回答日時空欄件数:", stats["missing_first_response_count"])
             if stats["skipped_tabs"]:
                 print("【dry-run】要確認タブ:", ", ".join(stats["skipped_tabs"]))
             return stats
@@ -1232,10 +1210,9 @@ def sync_skillplus_student_metrics_sheet(dry_run: bool = False, gc=None) -> dict
         style_table(
             target,
             tabs[STUDENT_TAB_NAME],
-            widths=[150, 105, 120, 150, 150, 220, 120, 120, 120, 120, 120, 120],
-            center_cols=[0, 1, 2],
-            date_cols=[1],
-            left_cols=[5, 7, 8, 9],
+            widths=[150, 150, 150, 220, 120, 120, 120, 120, 120, 120],
+            center_cols=[0],
+            left_cols=[3, 5, 6, 7],
         )
         write_rows(target, tabs[SUMMARY_TAB_NAME], summary_rows)
         style_table(
