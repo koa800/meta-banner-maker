@@ -41,9 +41,53 @@ AUTO_TAB_NAME = "自動生成一覧"
 AUTO_SUMMARY_TAB_NAME = "自動生成サマリー"
 AUTO_SOURCE_MANAGEMENT_TAB_NAME = "自動生成_データソース管理"
 AUTO_RULE_TAB_NAME = "自動生成_データ追加ルール"
+STUDENT_ACTIVITY_COLUMNS = [
+    "連続アクション日数",
+    "累計アクション日数",
+    "ゴール達成数",
+    "イベント参加回数",
+    "初回イベント参加日",
+    "最終イベント参加日",
+    "最終アクション日",
+    "登録ID",
+    "LステップURL",
+]
+STUDENT_TAB_WIDTHS = [
+    120,
+    150,
+    220,
+    120,
+    140,
+    140,
+    140,
+    100,
+    80,
+    140,
+    120,
+    100,
+    260,
+    180,
+    220,
+    260,
+    260,
+    100,
+    100,
+    100,
+    100,
+    120,
+    120,
+    120,
+    120,
+    260,
+    120,
+    120,
+]
+STUDENT_TAB_CENTER_COLS = (0, 8, 11, 17, 18, 19, 20, 24, 26, 27)
+STUDENT_TAB_LEFT_COLS = (1, 2, 4, 5, 6, 9, 10, 12, 13, 14, 15, 16, 25)
+STUDENT_TAB_DATE_COLS = (7, 21, 22, 23)
 
 TAB_SPECS = {
-    STUDENT_TAB_NAME: (8000, 18),
+    STUDENT_TAB_NAME: (8000, 28),
     SUMMARY_TAB_NAME: (80, 3),
     SOURCE_MANAGEMENT_TAB_NAME: (80, 14),
     RULE_TAB_NAME: (60, 3),
@@ -815,7 +859,7 @@ def build_identity(email: str, phone: str, full_name: str, furigana: str, displa
     if full_name:
         return f"name:{full_name}", "氏名", full_name
     if display_name:
-        return f"display:{display_name}", "ニックネーム", display_name
+        return f"display:{display_name}", "LINE名", display_name
     if answer_id:
         return f"answer:{answer_id}", "回答ID", answer_id
     return f"row:{raw_tab}:{raw_row}", "行", f"{raw_tab}:{raw_row}"
@@ -1103,7 +1147,7 @@ def build_student_rows(students: list[dict[str, object]]) -> List[List[object]]:
         "電話番号",
         "お名前",
         "ふりがな",
-        "ニックネーム",
+        "LINE名",
         "生年月日",
         "性別",
         "ご職業",
@@ -1114,6 +1158,7 @@ def build_student_rows(students: list[dict[str, object]]) -> List[List[object]]:
         "学んでみたいコース",
         "現在の悩み",
         "目標・ゴール",
+        *STUDENT_ACTIVITY_COLUMNS,
         "最初の回答ID",
         "最初の回答者ID",
     ]]
@@ -1137,11 +1182,133 @@ def build_student_rows(students: list[dict[str, object]]) -> List[List[object]]:
                 student["course_interest"],
                 student["current_worry"],
                 student["goal"],
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
                 student["answer_id"],
                 student["answerer_id"],
             ]
         )
     return rows
+
+
+def build_student_identity_candidates(
+    *,
+    registration_id: str,
+    email: str,
+    phone: str,
+    full_name: str,
+    line_name: str,
+) -> list[str]:
+    candidates: list[str] = []
+    full_name_key = normalize_name_key(full_name)
+    line_name_key = normalize_name_key(line_name)
+    if registration_id:
+        candidates.append(f"registration:{registration_id}")
+    if email:
+        candidates.append(f"email:{normalize_email(email)}")
+    if phone:
+        candidates.append(f"phone:{normalize_phone(phone)}")
+    if full_name_key and line_name_key:
+        candidates.append(f"name_line:{full_name_key}:{line_name_key}")
+    if full_name_key:
+        candidates.append(f"name:{full_name_key}")
+    if line_name_key:
+        candidates.append(f"line:{line_name_key}")
+    return candidates
+
+
+def build_activity_map_from_rows(rows: List[List[object]]) -> dict[str, dict[str, str]]:
+    if not rows:
+        return {}
+    headers = [normalize_text(value) for value in rows[0]]
+    idx = {header: i for i, header in enumerate(headers)}
+    required_headers = {"メールアドレス", "電話番号", "お名前", "LINE名", "登録ID"}
+    if not required_headers.intersection(idx):
+        return {}
+
+    activity_headers = [column for column in STUDENT_ACTIVITY_COLUMNS if column in idx]
+    activity_map: dict[str, dict[str, str]] = {}
+
+    for row in rows[1:]:
+        padded = list(row) + [""] * max(0, len(headers) - len(row))
+        if not any(normalize_text(cell) for cell in padded):
+            continue
+        entry = {
+            "LINE名": normalize_text(padded[idx["LINE名"]]) if "LINE名" in idx else "",
+        }
+        for header in activity_headers:
+            entry[header] = normalize_text(padded[idx[header]])
+        candidates = build_student_identity_candidates(
+            registration_id=normalize_text(padded[idx["登録ID"]]) if "登録ID" in idx else "",
+            email=normalize_text(padded[idx["メールアドレス"]]) if "メールアドレス" in idx else "",
+            phone=normalize_text(padded[idx["電話番号"]]) if "電話番号" in idx else "",
+            full_name=normalize_text(padded[idx["お名前"]]) if "お名前" in idx else "",
+            line_name=normalize_text(padded[idx["LINE名"]]) if "LINE名" in idx else "",
+        )
+        for candidate in candidates:
+            activity_map.setdefault(candidate, entry)
+    return activity_map
+
+
+def merge_student_rows_with_activity_rows(
+    student_rows: List[List[object]],
+    activity_rows: List[List[object]],
+) -> tuple[List[List[object]], dict[str, int]]:
+    if not student_rows:
+        return student_rows, {"matched_rows": 0, "updated_cells": 0}
+
+    headers = [normalize_text(value) for value in student_rows[0]]
+    idx = {header: i for i, header in enumerate(headers)}
+    activity_map = build_activity_map_from_rows(activity_rows)
+    if not activity_map:
+        return student_rows, {"matched_rows": 0, "updated_cells": 0}
+
+    merged_rows = [student_rows[0]]
+    matched_rows = 0
+    updated_cells = 0
+
+    for row in student_rows[1:]:
+        padded = list(row) + [""] * max(0, len(headers) - len(row))
+        candidates = build_student_identity_candidates(
+            registration_id=normalize_text(padded[idx["登録ID"]]) if "登録ID" in idx else "",
+            email=normalize_text(padded[idx["メールアドレス"]]) if "メールアドレス" in idx else "",
+            phone=normalize_text(padded[idx["電話番号"]]) if "電話番号" in idx else "",
+            full_name=normalize_text(padded[idx["お名前"]]) if "お名前" in idx else "",
+            line_name=normalize_text(padded[idx["LINE名"]]) if "LINE名" in idx else "",
+        )
+        matched_entry = next((activity_map[candidate] for candidate in candidates if candidate in activity_map), None)
+        if matched_entry:
+            matched_rows += 1
+            if "LINE名" in idx and matched_entry.get("LINE名") and normalize_text(padded[idx["LINE名"]]) != matched_entry["LINE名"]:
+                padded[idx["LINE名"]] = matched_entry["LINE名"]
+                updated_cells += 1
+            for header in STUDENT_ACTIVITY_COLUMNS:
+                if header not in idx:
+                    continue
+                new_value = matched_entry.get(header, "")
+                if normalize_text(padded[idx[header]]) != new_value:
+                    padded[idx[header]] = new_value
+                    updated_cells += 1
+        merged_rows.append(padded)
+    return merged_rows, {"matched_rows": matched_rows, "updated_cells": updated_cells}
+
+
+def style_student_tab(spreadsheet, ws) -> None:
+    style_table(
+        spreadsheet,
+        ws,
+        widths=STUDENT_TAB_WIDTHS,
+        center_cols=STUDENT_TAB_CENTER_COLS,
+        left_cols=STUDENT_TAB_LEFT_COLS,
+        date_cols=STUDENT_TAB_DATE_COLS,
+    )
 
 
 def build_admission_stats(students: list[dict[str, object]]) -> dict[str, object]:
@@ -1212,11 +1379,11 @@ def build_source_management_rows(source_ss, stats: dict[str, object], checked_at
     rows.append(
         [
             STUDENT_TAB_NAME,
-            "プラン / 初回回答日時 / メールアドレス / 電話番号 / お名前 / ふりがな / ニックネーム / 生年月日 / 性別 / ご職業 / 収入 / 郵便番号 / ご住所 / どこで知ったか / 学んでみたいコース / 現在の悩み / 目標・ゴール / 最初の回答ID / 最初の回答者ID",
+            "プラン / 初回回答日時 / メールアドレス / 電話番号 / お名前 / ふりがな / LINE名 / 生年月日 / 性別 / ご職業 / 収入 / 郵便番号 / ご住所 / どこで知ったか / 学んでみたいコース / 現在の悩み / 目標・ゴール / 活動列 / 最初の回答ID / 最初の回答者ID",
             "1",
             f'=HYPERLINK("{source_url}","スキルプラス受講生データ")',
             "（元）タブ群",
-            "メールアドレス / 電話番号 / お名前 / ふりがな / ニックネーム / 回答日時 / 属性回答 / 学んでみたいコース",
+            "メールアドレス / 電話番号 / お名前 / ふりがな / LINE名 / 回答日時 / 属性回答 / 学んでみたいコース",
             "同一プランかつ同一受講生とみなせる回答を内部キーで統合し、プロフィール列は raw の回答から寄せる",
             base_status,
             f"'{checked_at}",
@@ -1274,11 +1441,12 @@ def build_source_management_rows(source_ss, stats: dict[str, object], checked_at
 def build_rule_rows() -> List[List[object]]:
     return [
         ["項目", "ルール", "補足"],
-        ["受講生一覧", "手入力で直さず、raw 形式のヘッダーを持つタブ群から再生成する", "収集シート由来の受講生マスタとして使う"],
+        ["受講生一覧", "手入力で直さず、raw 形式のヘッダーを持つタブ群と自動生成データを再生成で統合する", "左側は受講生収集、活動列は同じシート内の自動生成データを正本にする"],
         ["raw タブ判定", "タイトルではなくヘッダー構造で判定する", "`最新元データ一覧` と processed の管理タブを除外する"],
-        ["内部識別", "回答者ID -> メール -> 電話番号 -> 氏名+ふりがな -> 氏名 -> ニックネーム -> 回答ID の順で内部キーを作る", "内部キーはシートに出さず、重複統合だけに使う"],
+        ["内部識別", "回答者ID -> メール -> 電話番号 -> 氏名+ふりがな -> 氏名 -> LINE名 -> 回答ID の順で内部キーを作る", "内部キーはシートに出さず、重複統合だけに使う"],
         ["初回回答日時", "自己申告の入会日は使わず、raw に記録された初回回答日時だけを使う", "信頼できる一次データに寄せる"],
         ["プロフィール列", "生年月日 / ご職業 / 収入 / 郵便番号 / ご住所 / 学んでみたいコース / 悩み / ゴールは raw 回答の実値を優先する", "統合シートの補完ではなく、受講生収集を正本にする"],
+        ["活動列", "連続アクション日数 / 累計アクション日数 / ゴール達成数 / イベント参加回数 / 初回イベント参加日 / 最終イベント参加日 / 最終アクション日 / 登録ID / LステップURL は自動生成データを正本にして受講生一覧へ統合する", "同じシート内の `自動生成一覧` と同じ値に揃える"],
         ["プラン", "タブ名から `SPS / STD/オールインワン / プライム / エリート / ライト/秘密` を判定する", "どれにも当たらない raw タブは `その他` に残す"],
         ["除外ルール", "明確なテスト入力、または照合に使えない極端な疎データは取り込まない", "一文字名だけでは除外しない"],
         ["決済との接続", "決済加工はこの processed の `受講生一覧` を正の証拠に使う", "raw の受講生シートを直接読まない"],
@@ -1306,7 +1474,7 @@ def load_skillplus_student_identifiers_from_processed(ws) -> tuple[dict[str, set
         phone = normalize_phone(padded[idx["電話番号"]]) if "電話番号" in idx else ""
         full_name = normalize_name_key(padded[idx["お名前"]]) if "お名前" in idx else ""
         furigana = normalize_name_key(padded[idx["ふりがな"]]) if "ふりがな" in idx else ""
-        nickname = normalize_name_key(padded[idx["ニックネーム"]]) if "ニックネーム" in idx else ""
+        nickname = normalize_name_key(padded[idx["LINE名"]]) if "LINE名" in idx else ""
 
         if email:
             emails.add(email)
@@ -1357,6 +1525,8 @@ def sync_skillplus_student_metrics_sheet(dry_run: bool = False, gc=None) -> dict
 
         students, source_stats = build_student_aggregates(source_ss)
         student_rows = build_student_rows(students)
+        auto_rows = get_all_values_with_retry(tabs[AUTO_TAB_NAME]) if AUTO_TAB_NAME in tabs else []
+        student_rows, _ = merge_student_rows_with_activity_rows(student_rows, auto_rows)
         admission_stats = build_admission_stats(students)
         checked_at = datetime.now().strftime("%Y/%m/%d %H:%M")
 
@@ -1385,14 +1555,7 @@ def sync_skillplus_student_metrics_sheet(dry_run: bool = False, gc=None) -> dict
             return stats
 
         write_rows(target, tabs[STUDENT_TAB_NAME], student_rows)
-        style_table(
-            target,
-            tabs[STUDENT_TAB_NAME],
-            widths=[150, 150, 220, 120, 140, 140, 140, 100, 80, 140, 140, 100, 260, 180, 240, 260, 260, 120, 120],
-            center_cols=[0],
-            left_cols=[2, 4, 5, 6, 9, 10, 12, 13, 14, 15, 16],
-            date_cols=[7],
-        )
+        style_student_tab(target, tabs[STUDENT_TAB_NAME])
         write_rows(target, tabs[SUMMARY_TAB_NAME], summary_rows)
         style_table(
             target,
