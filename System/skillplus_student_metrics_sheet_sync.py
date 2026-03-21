@@ -90,8 +90,27 @@ PROCESSED_SOURCE_EXCLUDED_TABS = {
 }
 TEST_MARKERS = ("test", "テスト", "てすと", "dummy", "sample", "サンプル", "確認用")
 DUMMY_EMAIL_LOCALS = {"a", "abc", "i", "test", "testo", "dummy", "sample"}
-INTERNAL_EXCLUDED_EMAILS = {"koa800sea.nifs@gmail.com"}
+INTERNAL_EXCLUDED_EMAILS = {
+    "koa800sea.nifs@gmail.com",
+    "sakata28.04@gmail.com",
+    "shihokomai.98@gmail.com",
+    "nene.m.marching@gmail.com",
+    "cheerywisdom008@gmail.com",
+}
+INTERNAL_EXCLUDED_PHONES = {
+    "8016649683",
+    "9060500388",
+    "8015439607",
+    "8018141873",
+}
 INTERNAL_EXCLUDED_NAME_MARKERS = ("甲原",)
+INTERNAL_EXCLUDED_EXACT_NAMES = (
+    "ああ",
+    "takamizawa",
+    "高見澤@急ぎはﾜﾝｺｰﾙでﾗｲﾝ見ます?",
+    "小笠原たつひと",
+)
+INTERNAL_EXCLUDED_ADDRESS_MARKERS = ("四谷トーセイビル",)
 
 
 class FileLock:
@@ -312,14 +331,22 @@ def should_exclude_student_row(
     full_name_source: str,
     furigana_source: str,
     display_name_source: str,
+    address_source: str,
 ) -> bool:
     if contains_test_marker(full_name_source, furigana_source, display_name_source):
         return True
     normalized_full_name = normalize_marker_text(full_name_source)
     normalized_display_name = normalize_marker_text(display_name_source)
+    normalized_address = normalize_marker_text(address_source)
     if any(marker in normalized_full_name or marker in normalized_display_name for marker in INTERNAL_EXCLUDED_NAME_MARKERS):
         return True
     if email and email in INTERNAL_EXCLUDED_EMAILS:
+        return True
+    if phone and phone in INTERNAL_EXCLUDED_PHONES:
+        return True
+    if any(name == normalized_full_name or name == normalized_display_name for name in INTERNAL_EXCLUDED_EXACT_NAMES):
+        return True
+    if any(marker in normalized_address for marker in INTERNAL_EXCLUDED_ADDRESS_MARKERS):
         return True
     email_local = email_local_part(email)
     if email_local in DUMMY_EMAIL_LOCALS and contains_test_marker(email_local):
@@ -886,7 +913,7 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
 
             email = normalize_email(email_raw)
             phone = normalize_phone(phone_raw)
-            if should_exclude_student_row(email, phone, full_name_source, furigana_source, nickname_source):
+            if should_exclude_student_row(email, phone, full_name_source, furigana_source, nickname_source, address_source):
                 excluded_row_count += 1
                 continue
 
