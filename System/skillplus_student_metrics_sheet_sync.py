@@ -5,7 +5,7 @@
 方針:
 - raw の `（元）` タブ群を正本にし、`（加工）` タブ群は読まない
 - processed では `受講生単位` に正規化し、決済加工の正の証拠として再利用できる形にする
-- このシートは `受講生一覧 / 受講生サマリー / 自動生成一覧 / 自動生成サマリー / データソース管理 / データ追加ルール` を同居させる
+- visible は `受講生一覧 / 受講生サマリー / データソース管理 / データ追加ルール` に絞り、`自動生成` タブ群は内部タブとして hidden で持つ
 - 決済側は processed の `受講生一覧` を読む。raw シートを直接読まない
 """
 
@@ -42,24 +42,27 @@ AUTO_SUMMARY_TAB_NAME = "自動生成サマリー"
 AUTO_SOURCE_MANAGEMENT_TAB_NAME = "自動生成_データソース管理"
 AUTO_RULE_TAB_NAME = "自動生成_データ追加ルール"
 STUDENT_ACTIVITY_COLUMNS = [
+    "オンラインイベント参加回数",
+    "初回オンラインイベント参加日",
+    "最終オンラインイベント参加日",
+    "オフラインイベント参加回数",
+    "初回オフラインイベント参加日",
+    "最終オフラインイベント参加日",
+    "Lステップ登録ID",
+    "LステップURL",
     "連続アクション日数",
     "累計アクション日数",
     "ゴール達成数",
-    "イベント参加回数",
-    "初回イベント参加日",
-    "最終イベント参加日",
     "最終アクション日",
-    "登録ID",
-    "LステップURL",
 ]
 STUDENT_TAB_WIDTHS = [
     120,
     150,
+    140,
+    140,
+    140,
     220,
     120,
-    140,
-    140,
-    140,
     100,
     80,
     140,
@@ -71,23 +74,24 @@ STUDENT_TAB_WIDTHS = [
     260,
     260,
     100,
+    120,
+    120,
     100,
-    100,
-    100,
     120,
     120,
-    120,
-    120,
+    140,
     260,
     120,
     120,
+    120,
+    120,
 ]
-STUDENT_TAB_CENTER_COLS = (0, 8, 11, 17, 18, 19, 20, 24, 26, 27)
-STUDENT_TAB_LEFT_COLS = (1, 2, 4, 5, 6, 9, 10, 12, 13, 14, 15, 16, 25)
-STUDENT_TAB_DATE_COLS = (7, 21, 22, 23)
+STUDENT_TAB_CENTER_COLS = (0, 8, 10, 17, 18, 19, 20, 21, 22, 25, 26, 27, 28)
+STUDENT_TAB_LEFT_COLS = (2, 3, 4, 5, 6, 9, 12, 13, 14, 15, 16, 23, 24)
+STUDENT_TAB_DATE_COLS = (1, 7, 18, 19, 21, 22, 28)
 
 TAB_SPECS = {
-    STUDENT_TAB_NAME: (8000, 28),
+    STUDENT_TAB_NAME: (8000, 29),
     SUMMARY_TAB_NAME: (80, 3),
     SOURCE_MANAGEMENT_TAB_NAME: (80, 14),
     RULE_TAB_NAME: (60, 3),
@@ -615,7 +619,12 @@ def ensure_tabs(spreadsheet):
         if name not in tabs:
             continue
         ws = tabs[name]
-        is_hidden = name in {AUTO_SOURCE_MANAGEMENT_TAB_NAME, AUTO_RULE_TAB_NAME}
+        is_hidden = name in {
+            AUTO_TAB_NAME,
+            AUTO_SUMMARY_TAB_NAME,
+            AUTO_SOURCE_MANAGEMENT_TAB_NAME,
+            AUTO_RULE_TAB_NAME,
+        }
         requests.append(set_sheet_properties_request(ws.id, {"index": idx, "hidden": is_hidden}, "index,hidden"))
         requests.append(
             set_sheet_properties_request(
@@ -747,11 +756,14 @@ def apply_status_cell_colors(spreadsheet, ws, rows: List[List[object]], status_c
 def apply_protections(spreadsheet, tabs) -> None:
     protected_names = list(TAB_SPECS.keys())
     target_sheet_ids = {tabs[name].id for name in protected_names}
-    metadata = spreadsheet.fetch_sheet_metadata(
-        {
-            "includeGridData": False,
-            "fields": "sheets(properties.sheetId,protectedRanges(protectedRangeId,description,range(sheetId,startRowIndex,endRowIndex,startColumnIndex,endColumnIndex)))",
-        }
+    metadata = run_read_with_retry(
+        "スキルプラス受講生データ（加工）の保護設定取得",
+        lambda: spreadsheet.fetch_sheet_metadata(
+            {
+                "includeGridData": False,
+                "fields": "sheets(properties.sheetId,protectedRanges(protectedRangeId,description,range(sheetId,startRowIndex,endRowIndex,startColumnIndex,endColumnIndex)))",
+            }
+        ),
     )
 
     requests = []
@@ -1143,11 +1155,11 @@ def build_student_rows(students: list[dict[str, object]]) -> List[List[object]]:
     rows: List[List[object]] = [[
         "プラン",
         "初回回答日時",
-        "メールアドレス",
-        "電話番号",
+        "LINE名",
         "お名前",
         "ふりがな",
-        "LINE名",
+        "メールアドレス",
+        "電話番号",
         "生年月日",
         "性別",
         "ご職業",
@@ -1159,19 +1171,17 @@ def build_student_rows(students: list[dict[str, object]]) -> List[List[object]]:
         "現在の悩み",
         "目標・ゴール",
         *STUDENT_ACTIVITY_COLUMNS,
-        "最初の回答ID",
-        "最初の回答者ID",
     ]]
     for student in students:
         rows.append(
             [
                 student["plan_group"],
                 student["first_response_at"],
-                student["email"],
-                student["phone"],
+                student["nickname"],
                 student["full_name"],
                 student["furigana"],
-                student["nickname"],
+                student["email"],
+                student["phone"],
                 student["birthdate"],
                 student["gender"],
                 student["occupation"],
@@ -1191,8 +1201,9 @@ def build_student_rows(students: list[dict[str, object]]) -> List[List[object]]:
                 "",
                 "",
                 "",
-                student["answer_id"],
-                student["answerer_id"],
+                "",
+                "",
+                "",
             ]
         )
     return rows
@@ -1229,7 +1240,7 @@ def build_activity_map_from_rows(rows: List[List[object]]) -> dict[str, dict[str
         return {}
     headers = [normalize_text(value) for value in rows[0]]
     idx = {header: i for i, header in enumerate(headers)}
-    required_headers = {"メールアドレス", "電話番号", "お名前", "LINE名", "登録ID"}
+    required_headers = {"メールアドレス", "電話番号", "お名前", "LINE名", "登録ID", "Lステップ登録ID"}
     if not required_headers.intersection(idx):
         return {}
 
@@ -1240,13 +1251,16 @@ def build_activity_map_from_rows(rows: List[List[object]]) -> dict[str, dict[str
         padded = list(row) + [""] * max(0, len(headers) - len(row))
         if not any(normalize_text(cell) for cell in padded):
             continue
-        entry = {
-            "LINE名": normalize_text(padded[idx["LINE名"]]) if "LINE名" in idx else "",
-        }
+        entry = {"LINE名": normalize_text(padded[idx["LINE名"]]) if "LINE名" in idx else ""}
         for header in activity_headers:
-            entry[header] = normalize_text(padded[idx[header]])
+            source_header = "登録ID" if header == "Lステップ登録ID" and "登録ID" in idx else header
+            entry[header] = normalize_text(padded[idx[source_header]]) if source_header in idx else ""
         candidates = build_student_identity_candidates(
-            registration_id=normalize_text(padded[idx["登録ID"]]) if "登録ID" in idx else "",
+            registration_id=normalize_text(
+                padded[idx["Lステップ登録ID"]]
+                if "Lステップ登録ID" in idx
+                else padded[idx["登録ID"]] if "登録ID" in idx else ""
+            ),
             email=normalize_text(padded[idx["メールアドレス"]]) if "メールアドレス" in idx else "",
             phone=normalize_text(padded[idx["電話番号"]]) if "電話番号" in idx else "",
             full_name=normalize_text(padded[idx["お名前"]]) if "お名前" in idx else "",
@@ -1277,7 +1291,7 @@ def merge_student_rows_with_activity_rows(
     for row in student_rows[1:]:
         padded = list(row) + [""] * max(0, len(headers) - len(row))
         candidates = build_student_identity_candidates(
-            registration_id=normalize_text(padded[idx["登録ID"]]) if "登録ID" in idx else "",
+            registration_id=normalize_text(padded[idx["Lステップ登録ID"]]) if "Lステップ登録ID" in idx else "",
             email=normalize_text(padded[idx["メールアドレス"]]) if "メールアドレス" in idx else "",
             phone=normalize_text(padded[idx["電話番号"]]) if "電話番号" in idx else "",
             full_name=normalize_text(padded[idx["お名前"]]) if "お名前" in idx else "",
@@ -1379,7 +1393,7 @@ def build_source_management_rows(source_ss, stats: dict[str, object], checked_at
     rows.append(
         [
             STUDENT_TAB_NAME,
-            "プラン / 初回回答日時 / メールアドレス / 電話番号 / お名前 / ふりがな / LINE名 / 生年月日 / 性別 / ご職業 / 収入 / 郵便番号 / ご住所 / どこで知ったか / 学んでみたいコース / 現在の悩み / 目標・ゴール / 活動列 / 最初の回答ID / 最初の回答者ID",
+            "プラン / 初回回答日時 / LINE名 / お名前 / ふりがな / メールアドレス / 電話番号 / 生年月日 / 性別 / ご職業 / 収入 / 郵便番号 / ご住所 / どこで知ったか / 学んでみたいコース / 現在の悩み / 目標・ゴール / 活動列",
             "1",
             f'=HYPERLINK("{source_url}","スキルプラス受講生データ")',
             "（元）タブ群",
@@ -1389,7 +1403,7 @@ def build_source_management_rows(source_ss, stats: dict[str, object], checked_at
             f"'{checked_at}",
             stats.get("student_count", 0),
             len(skipped_tabs),
-            "収集シート由来の受講生マスタ",
+            "収集シート由来の受講生マスタ。活動列は hidden の自動生成タブから補完する",
             "2025/01/01以降を主に利用",
             "決済加工ではこのタブを正の証拠として使う",
         ]
@@ -1446,7 +1460,7 @@ def build_rule_rows() -> List[List[object]]:
         ["内部識別", "回答者ID -> メール -> 電話番号 -> 氏名+ふりがな -> 氏名 -> LINE名 -> 回答ID の順で内部キーを作る", "内部キーはシートに出さず、重複統合だけに使う"],
         ["初回回答日時", "自己申告の入会日は使わず、raw に記録された初回回答日時だけを使う", "信頼できる一次データに寄せる"],
         ["プロフィール列", "生年月日 / ご職業 / 収入 / 郵便番号 / ご住所 / 学んでみたいコース / 悩み / ゴールは raw 回答の実値を優先する", "統合シートの補完ではなく、受講生収集を正本にする"],
-        ["活動列", "連続アクション日数 / 累計アクション日数 / ゴール達成数 / イベント参加回数 / 初回イベント参加日 / 最終イベント参加日 / 最終アクション日 / 登録ID / LステップURL は自動生成データを正本にして受講生一覧へ統合する", "同じシート内の `自動生成一覧` と同じ値に揃える"],
+        ["活動列", "オンライン/オフライン別イベント参加列と、Lステップ登録ID / LステップURL / 連続アクション日数 / 累計アクション日数 / ゴール達成数 / 最終アクション日 は自動生成データを正本にして受講生一覧へ統合する", "同じシート内の `自動生成一覧` と同じ値に揃える"],
         ["プラン", "タブ名から `SPS / STD/オールインワン / プライム / エリート / ライト/秘密` を判定する", "どれにも当たらない raw タブは `その他` に残す"],
         ["除外ルール", "明確なテスト入力、または照合に使えない極端な疎データは取り込まない", "一文字名だけでは除外しない"],
         ["決済との接続", "決済加工はこの processed の `受講生一覧` を正の証拠に使う", "raw の受講生シートを直接読まない"],

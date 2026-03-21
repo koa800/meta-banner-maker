@@ -5,7 +5,7 @@
 方針:
 - 正本は `【スキルプラス】イベント管理シート` の raw タブ群
 - 取れる指標だけを正本化し、取れない指標は無理に埋めない
-- `【アドネス株式会社】スキルプラス受講生データ（加工）` の中に `自動生成` タブ群を同居させる
+- `【アドネス株式会社】スキルプラス受講生データ（加工）` の中に `自動生成` タブ群を内部タブとして同居させる
 - `連続アクション日数 / 累計アクション日数 / ゴール達成数 / 最終アクション日` は将来接続用の列として持つが、現時点では未接続
 """
 
@@ -196,6 +196,18 @@ def parse_int(value: object) -> int:
         return 0
 
 
+def classify_event_channel(event_kind: str, venue: str) -> str:
+    normalized_kind = normalize_text(event_kind).lower()
+    normalized_venue = normalize_text(venue).lower()
+    if "ランチ会" in normalize_text(event_kind):
+        return "offline"
+    if "zoom" in normalized_venue or "online" in normalized_venue or "オンライン" in normalize_text(venue):
+        return "online"
+    if "zoom" in normalized_kind or "online" in normalized_kind or "オンライン" in normalize_text(event_kind):
+        return "online"
+    return "offline"
+
+
 def header_index(headers: Sequence[str], candidates: Iterable[str]) -> Optional[int]:
     normalized = {normalize_text(candidate).replace(" ", "") for candidate in candidates}
     for index, header in enumerate(headers):
@@ -212,7 +224,7 @@ def pick_value(row: Sequence[str], index: Optional[int]) -> str:
 
 def build_identity(email: str, phone: str, full_name: str, line_name: str, registration_id: str) -> tuple[str, str]:
     if registration_id:
-        return f"registration:{registration_id}", "登録ID"
+        return f"registration:{registration_id}", "Lステップ登録ID"
     if email:
         return f"email:{email}", "メールアドレス"
     if phone:
@@ -319,7 +331,7 @@ def ensure_tabs(spreadsheet):
         if name not in tabs:
             continue
         ws = tabs[name]
-        is_hidden = name in {SOURCE_MANAGEMENT_TAB_NAME, RULE_TAB_NAME}
+        is_hidden = name in {AUTO_TAB_NAME, SUMMARY_TAB_NAME, SOURCE_MANAGEMENT_TAB_NAME, RULE_TAB_NAME}
         requests.append(set_sheet_properties_request(ws.id, {"index": idx, "hidden": is_hidden}, "index,hidden"))
         if name in TAB_COLORS:
             requests.append(
@@ -352,11 +364,14 @@ def write_rows(spreadsheet, ws, rows: List[List[object]]) -> None:
 def apply_protections(spreadsheet, tabs) -> None:
     protected_names = list(TAB_SPECS.keys())
     target_sheet_ids = {tabs[name].id for name in protected_names}
-    metadata = spreadsheet.fetch_sheet_metadata(
-        {
-            "includeGridData": False,
-            "fields": "sheets(properties.sheetId,protectedRanges(protectedRangeId,description,range(sheetId,startRowIndex,endRowIndex,startColumnIndex,endColumnIndex)))",
-        }
+    metadata = run_read_with_retry(
+        "スキルプラス自動生成データ（加工）の保護設定取得",
+        lambda: spreadsheet.fetch_sheet_metadata(
+            {
+                "includeGridData": False,
+                "fields": "sheets(properties.sheetId,protectedRanges(protectedRangeId,description,range(sheetId,startRowIndex,endRowIndex,startColumnIndex,endColumnIndex)))",
+            }
+        ),
     )
 
     requests = []
@@ -425,8 +440,6 @@ def build_auto_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[str,
         line_inflow_idx = header_index(headers, ("LINE流入日",))
         admission_idx = header_index(headers, ("入会日",))
         status_idx = header_index(headers, ("ステータス",))
-        participation_idx = header_index(headers, ("イベント参加回数",))
-        last_event_idx = header_index(headers, ("最終参加日",))
         memo_idx = header_index(headers, ("メモ",))
         plan_idx = header_index(headers, ("プラン名",))
 
@@ -451,9 +464,6 @@ def build_auto_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[str,
             normalized_plan = pick_value(row, plan_idx) or default_plan
             line_inflow_at = normalize_datetime(pick_value(row, line_inflow_idx))
             admission_date = normalize_date(pick_value(row, admission_idx))
-            last_event_date = normalize_date(pick_value(row, last_event_idx))
-            participation_count = parse_int(pick_value(row, participation_idx))
-
             student = students.get(identity_key)
             if not student:
                 student = {
@@ -472,9 +482,12 @@ def build_auto_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[str,
                     "continuous_action_days": "",
                     "cumulative_action_days": "",
                     "goal_achievement_count": "",
-                    "event_count": participation_count,
-                    "first_event_date": "",
-                    "last_event_date": last_event_date,
+                    "online_event_count": 0,
+                    "first_online_event_date": "",
+                    "last_online_event_date": "",
+                    "offline_event_count": 0,
+                    "first_offline_event_date": "",
+                    "last_offline_event_date": "",
                     "last_action_date": "",
                     "memo": memo,
                 }
@@ -498,9 +511,6 @@ def build_auto_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[str,
                     student["line_name"] = line_name
                 if registration_id and not student["registration_id"]:
                     student["registration_id"] = registration_id
-                student["event_count"] = max(student["event_count"], participation_count)
-                if last_event_date and (not student["last_event_date"] or last_event_date > student["last_event_date"]):
-                    student["last_event_date"] = last_event_date
 
             roster_counts[tab_name] += 1
 
@@ -535,6 +545,8 @@ def build_auto_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[str,
         line_name = pick_value(row, line_name_idx)
         full_name = pick_value(row, full_name_idx)
         lstep_url = pick_value(row, url_idx)
+        event_kind = pick_value(row, header_index(event_headers, ("イベント種別",)))
+        venue = pick_value(row, header_index(event_headers, ("会場",)))
 
         identity_candidates = []
         if registration_id:
@@ -559,10 +571,31 @@ def build_auto_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[str,
         if not matched_student:
             continue
 
-        if event_date and (not matched_student["first_event_date"] or event_date < matched_student["first_event_date"]):
-            matched_student["first_event_date"] = event_date
-        if event_date and (not matched_student["last_event_date"] or event_date > matched_student["last_event_date"]):
-            matched_student["last_event_date"] = event_date
+        channel = classify_event_channel(event_kind, venue)
+        if channel == "online":
+            matched_student["online_event_count"] += 1
+            if event_date and (
+                not matched_student["first_online_event_date"]
+                or event_date < matched_student["first_online_event_date"]
+            ):
+                matched_student["first_online_event_date"] = event_date
+            if event_date and (
+                not matched_student["last_online_event_date"]
+                or event_date > matched_student["last_online_event_date"]
+            ):
+                matched_student["last_online_event_date"] = event_date
+        else:
+            matched_student["offline_event_count"] += 1
+            if event_date and (
+                not matched_student["first_offline_event_date"]
+                or event_date < matched_student["first_offline_event_date"]
+            ):
+                matched_student["first_offline_event_date"] = event_date
+            if event_date and (
+                not matched_student["last_offline_event_date"]
+                or event_date > matched_student["last_offline_event_date"]
+            ):
+                matched_student["last_offline_event_date"] = event_date
         if lstep_url and not matched_student["lstep_url"]:
             matched_student["lstep_url"] = lstep_url
 
@@ -597,14 +630,17 @@ def build_auto_rows(students: list[dict[str, object]]) -> List[List[object]]:
             "電話番号",
             "お名前",
             "LINE名",
+            "オンラインイベント参加回数",
+            "初回オンラインイベント参加日",
+            "最終オンラインイベント参加日",
+            "オフラインイベント参加回数",
+            "初回オフラインイベント参加日",
+            "最終オフラインイベント参加日",
             "連続アクション日数",
             "累計アクション日数",
             "ゴール達成数",
-            "イベント参加回数",
-            "初回イベント参加日",
-            "最終イベント参加日",
             "最終アクション日",
-            "登録ID",
+            "Lステップ登録ID",
             "LステップURL",
         ]
     ]
@@ -619,12 +655,15 @@ def build_auto_rows(students: list[dict[str, object]]) -> List[List[object]]:
                 student["phone"],
                 student["full_name"],
                 student["line_name"],
+                student["online_event_count"],
+                student["first_online_event_date"],
+                student["last_online_event_date"],
+                student["offline_event_count"],
+                student["first_offline_event_date"],
+                student["last_offline_event_date"],
                 student["continuous_action_days"],
                 student["cumulative_action_days"],
                 student["goal_achievement_count"],
-                student["event_count"],
-                student["first_event_date"],
-                student["last_event_date"],
                 student["last_action_date"],
                 student["registration_id"],
                 student["lstep_url"],
@@ -634,10 +673,14 @@ def build_auto_rows(students: list[dict[str, object]]) -> List[List[object]]:
 
 
 def build_summary_rows(students: list[dict[str, object]], stats: dict[str, object], checked_at: str) -> List[List[object]]:
-    event_participants = sum(1 for student in students if parse_int(student["event_count"]) > 0)
-    total_events = sum(parse_int(student["event_count"]) for student in students)
-    first_event_dates = [student["first_event_date"] for student in students if student["first_event_date"]]
-    last_event_dates = [student["last_event_date"] for student in students if student["last_event_date"]]
+    online_participants = sum(1 for student in students if parse_int(student["online_event_count"]) > 0)
+    offline_participants = sum(1 for student in students if parse_int(student["offline_event_count"]) > 0)
+    total_online_events = sum(parse_int(student["online_event_count"]) for student in students)
+    total_offline_events = sum(parse_int(student["offline_event_count"]) for student in students)
+    first_online_dates = [student["first_online_event_date"] for student in students if student["first_online_event_date"]]
+    last_online_dates = [student["last_online_event_date"] for student in students if student["last_online_event_date"]]
+    first_offline_dates = [student["first_offline_event_date"] for student in students if student["first_offline_event_date"]]
+    last_offline_dates = [student["last_offline_event_date"] for student in students if student["last_offline_event_date"]]
     admission_dates = [student["admission_date"] for student in students if student["admission_date"]]
     return [
         ["項目", "値", "補足"],
@@ -645,11 +688,15 @@ def build_summary_rows(students: list[dict[str, object]], stats: dict[str, objec
         ["受講生数", stats["student_count"], "自動生成一覧の行数"],
         ["採用元行数", stats["source_row_count"], "受講生データ_STD / PRM / 合宿の採用行数合計"],
         ["除外行数", stats["excluded_row_count"], "テスト入力・社内スタッフ・極端な疎データを除外"],
-        ["イベント参加者数", event_participants, "イベント参加回数が1以上の受講生数"],
-        ["累計イベント参加回数", total_events, "受講生タブに記録された参加回数の合計"],
+        ["オンラインイベント参加者数", online_participants, "オンラインイベント参加回数が1以上の受講生数"],
+        ["累計オンラインイベント参加回数", total_online_events, "受講生タブに記録されたオンライン参加回数の合計"],
+        ["オフラインイベント参加者数", offline_participants, "オフラインイベント参加回数が1以上の受講生数"],
+        ["累計オフラインイベント参加回数", total_offline_events, "受講生タブに記録されたオフライン参加回数の合計"],
         ["最初の入会日", min(admission_dates) if admission_dates else "", "受講生タブの入会日最小値"],
-        ["最初のイベント参加日", min(first_event_dates) if first_event_dates else "", "イベント予約管理の TRUE 行から算出"],
-        ["最新イベント参加日", max(last_event_dates) if last_event_dates else "", "受講生タブの最終参加日とイベント予約管理の TRUE 行の最大値"],
+        ["最初のオンラインイベント参加日", min(first_online_dates) if first_online_dates else "", "イベント予約管理の TRUE 行から算出"],
+        ["最新オンラインイベント参加日", max(last_online_dates) if last_online_dates else "", "イベント予約管理の TRUE 行から算出"],
+        ["最初のオフラインイベント参加日", min(first_offline_dates) if first_offline_dates else "", "イベント予約管理の TRUE 行から算出"],
+        ["最新オフラインイベント参加日", max(last_offline_dates) if last_offline_dates else "", "イベント予約管理の TRUE 行から算出"],
         ["連続アクション日数 連携件数", 0, "未接続"],
         ["累計アクション日数 連携件数", 0, "未接続"],
         ["ゴール達成数 連携件数", 0, "未接続"],
@@ -703,13 +750,13 @@ def build_source_management_rows(source_ss, stats: dict[str, object], checked_at
             "raw 正本",
             EVENT_TAB_NAME,
             len(ROSTER_TAB_SPECS) + 1,
-            f'=HYPERLINK("{source_url}","【スキルプラス】イベント管理シート")',
-            EVENT_TAB_NAME,
-            "イベント日 / 友だちID / LINE名 / 氏名 / LステップURL / 出欠",
-            "初回イベント参加日と最終イベント参加日の補完",
-            "正常",
-            f"'{checked_at}",
-            stats["event_true_count"],
+                f'=HYPERLINK("{source_url}","【スキルプラス】イベント管理シート")',
+                EVENT_TAB_NAME,
+                "イベント日 / イベント種別 / 会場 / 友だちID / LINE名 / 氏名 / LステップURL / 出欠",
+                "オンライン/オフライン別のイベント参加日と参加回数の補完",
+                "正常",
+                f"'{checked_at}",
+                stats["event_true_count"],
             stats["event_false_count"],
             "出欠=TRUE だけをイベント参加として採用",
             "全期間",
@@ -743,9 +790,9 @@ def build_rule_rows() -> List[List[object]]:
     return [
         ["項目", "ルール", "補足"],
         ["正本", "イベント管理シートの raw タブだけを読む", "統合シートや他の加工シートは参照しない"],
-        ["visible タブ", "自動生成一覧 / 自動生成サマリー / データソース管理 / データ追加ルールだけを持つ", "管理タブを増やしすぎない"],
-        ["自動生成一覧", "1行=1受講生", "登録ID -> メール -> 電話 -> 氏名+LINE名 -> 氏名 -> LINE名 の順で重複統合する"],
-        ["イベント参加", "受講生タブのイベント参加回数を正本にし、初回イベント参加日はイベント予約管理の出欠=TRUEから補完する", "最終イベント参加日は受講生タブの最終参加日と TRUE 行の最大値を使う"],
+        ["タブ運用", "自動生成一覧 / 自動生成サマリー / データソース管理 / データ追加ルールは内部タブとして hidden で持つ", "受講生一覧を人が見る正面にする"],
+        ["自動生成一覧", "1行=1受講生", "Lステップ登録ID -> メール -> 電話 -> 氏名+LINE名 -> 氏名 -> LINE名 の順で重複統合する"],
+        ["イベント参加", "イベント予約管理の出欠=TRUEを会場とイベント種別でオンライン/オフラインに分けて採用する", "会場に Zoom を含む行、またはイベント種別にオンラインを含む行だけをオンライン扱いにする"],
         ["未接続指標", "連続アクション日数 / 累計アクション日数 / ゴール達成数 / 最終アクション日は未接続のまま残す", "推測で埋めない"],
         ["除外ルール", "明確なテスト入力、社内スタッフ、会社住所、極端に疎な行は取り込まない", "一文字名だけでは除外しない"],
         ["更新方法", "手入力せず、スクリプト再生成で更新する", "正本は raw シート"],
