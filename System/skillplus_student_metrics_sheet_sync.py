@@ -90,6 +90,8 @@ PROCESSED_SOURCE_EXCLUDED_TABS = {
 }
 TEST_MARKERS = ("test", "テスト", "てすと", "dummy", "sample", "サンプル", "確認用")
 DUMMY_EMAIL_LOCALS = {"a", "abc", "i", "test", "testo", "dummy", "sample"}
+INTERNAL_EXCLUDED_EMAILS = {"koa800sea.nifs@gmail.com"}
+INTERNAL_EXCLUDED_NAME_MARKERS = ("甲原",)
 
 
 class FileLock:
@@ -312,6 +314,12 @@ def should_exclude_student_row(
     display_name_source: str,
 ) -> bool:
     if contains_test_marker(full_name_source, furigana_source, display_name_source):
+        return True
+    normalized_full_name = normalize_marker_text(full_name_source)
+    normalized_display_name = normalize_marker_text(display_name_source)
+    if any(marker in normalized_full_name or marker in normalized_display_name for marker in INTERNAL_EXCLUDED_NAME_MARKERS):
+        return True
+    if email and email in INTERNAL_EXCLUDED_EMAILS:
         return True
     email_local = email_local_part(email)
     if email_local in DUMMY_EMAIL_LOCALS and contains_test_marker(email_local):
@@ -647,15 +655,12 @@ def apply_protections(spreadsheet, tabs) -> None:
         sheet_id = sheet.get("properties", {}).get("sheetId")
         for protected_range in sheet.get("protectedRanges", []):
             range_info = protected_range.get("range", {})
-            description = protected_range.get("description", "")
             range_sheet_id = range_info.get("sheetId", sheet_id)
             if range_sheet_id in target_sheet_ids:
                 has_row = any(key in range_info for key in ("startRowIndex", "endRowIndex"))
                 has_col = any(key in range_info for key in ("startColumnIndex", "endColumnIndex"))
                 if not has_row and not has_col:
                     existing_sheet_protection.add(range_sheet_id)
-            if range_sheet_id in target_sheet_ids and str(description).startswith(PROTECTION_PREFIX):
-                requests.append({"deleteProtectedRange": {"protectedRangeId": protected_range["protectedRangeId"]}})
 
     for name in protected_names:
         if tabs[name].id in existing_sheet_protection:
@@ -716,6 +721,7 @@ def build_student_header_spec(headers: list[str]) -> dict[str, object]:
         "postal_indexes": header_indexes_by_contains(headers, ["郵便番号"]),
         "address_indexes": header_indexes_by_contains(headers, ["住所", "ご住所"]),
         "source_indexes": header_indexes_by_contains(headers, ["どこで"]),
+        "course_interest_indexes": header_indexes_by_contains(headers, ["学んでみたいコース"]),
         "worry_indexes": header_indexes_by_contains(headers, ["悩み"]),
         "goal_indexes": header_indexes_by_contains(headers, ["目標", "ゴール"]),
     }
@@ -737,6 +743,8 @@ def plan_group_from_title(title: str) -> str:
 
 
 def build_identity(email: str, phone: str, full_name: str, furigana: str, display_name: str, answerer_id: str, answer_id: str, raw_tab: str, raw_row: int) -> tuple[str, str, str]:
+    if answerer_id:
+        return f"responder:{answerer_id}", "回答者ID", answerer_id
     if email:
         return f"email:{email}", "メール", email
     if phone:
@@ -747,8 +755,6 @@ def build_identity(email: str, phone: str, full_name: str, furigana: str, displa
         return f"name:{full_name}", "氏名", full_name
     if display_name:
         return f"display:{display_name}", "ニックネーム", display_name
-    if answerer_id:
-        return f"responder:{answerer_id}", "回答者ID", answerer_id
     if answer_id:
         return f"answer:{answer_id}", "回答ID", answer_id
     return f"row:{raw_tab}:{raw_row}", "行", f"{raw_tab}:{raw_row}"
@@ -776,6 +782,30 @@ def merge_prefer_earliest_date(current: str, new_value: str) -> str:
     if not new_text:
         return current_text
     return new_text if new_text < current_text else current_text
+
+
+def normalize_multiline_choice(value: object) -> str:
+    text = normalize_text(value)
+    if not text:
+        return ""
+    parts: list[str] = []
+    for raw_part in re.split(r"[\r\n]+", text):
+        part = normalize_text(raw_part)
+        if part and part not in parts:
+            parts.append(part)
+    return " / ".join(parts)
+
+
+def merge_multiline_choice(current: str, new_value: str) -> str:
+    merged_parts: list[str] = []
+    for source in (current, new_value):
+        normalized = normalize_multiline_choice(source)
+        if not normalized:
+            continue
+        for part in normalized.split(" / "):
+            if part and part not in merged_parts:
+                merged_parts.append(part)
+    return " / ".join(merged_parts)
 
 
 def merge_earliest_datetime(current: str, new_value: str) -> str:
@@ -850,6 +880,7 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
             postal_code_source = pick_first_value(row, spec["postal_indexes"])
             address_source = pick_first_value(row, spec["address_indexes"])
             source_channel = pick_first_value(row, spec["source_indexes"])
+            course_interest = normalize_multiline_choice(pick_first_value(row, spec["course_interest_indexes"]))
             current_worry = pick_first_value(row, spec["worry_indexes"])
             goal = pick_first_value(row, spec["goal_indexes"])
 
@@ -907,6 +938,7 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
                     "postal_code": normalize_text(postal_code_source),
                     "address": normalize_text(address_source),
                     "source_channel": normalize_text(source_channel),
+                    "course_interest": course_interest,
                     "current_worry": normalize_text(current_worry),
                     "goal": normalize_text(goal),
                     "response_count": 1,
@@ -935,6 +967,7 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
             current["postal_code"] = merge_prefer_longer_text(str(current["postal_code"]), normalize_text(postal_code_source))
             current["address"] = merge_prefer_longer_text(str(current["address"]), normalize_text(address_source))
             current["source_channel"] = merge_prefer_longer_text(str(current["source_channel"]), normalize_text(source_channel))
+            current["course_interest"] = merge_multiline_choice(str(current["course_interest"]), course_interest)
             current["current_worry"] = merge_prefer_longer_text(str(current["current_worry"]), normalize_text(current_worry))
             current["goal"] = merge_prefer_longer_text(str(current["goal"]), normalize_text(goal))
             current["answer_id"] = merge_text(str(current["answer_id"]), answer_id)
@@ -971,6 +1004,7 @@ def build_student_aggregates(source_ss) -> tuple[list[dict[str, object]], dict[s
                 "postal_code": item["postal_code"],
                 "address": item["address"],
                 "source_channel": item["source_channel"],
+                "course_interest": item["course_interest"],
                 "current_worry": item["current_worry"],
                 "goal": item["goal"],
                 "response_count": item["response_count"],
@@ -1016,6 +1050,7 @@ def build_student_rows(students: list[dict[str, object]]) -> List[List[object]]:
         "郵便番号",
         "ご住所",
         "どこで知ったか",
+        "学んでみたいコース",
         "現在の悩み",
         "目標・ゴール",
         "最初の回答ID",
@@ -1038,6 +1073,7 @@ def build_student_rows(students: list[dict[str, object]]) -> List[List[object]]:
                 student["postal_code"],
                 student["address"],
                 student["source_channel"],
+                student["course_interest"],
                 student["current_worry"],
                 student["goal"],
                 student["answer_id"],
@@ -1115,11 +1151,11 @@ def build_source_management_rows(source_ss, stats: dict[str, object], checked_at
     rows.append(
         [
             STUDENT_TAB_NAME,
-            "プラン / 初回回答日時 / メールアドレス / 電話番号 / お名前 / ふりがな / ニックネーム / 生年月日 / ご職業 / 住所 / 回答ID",
+            "プラン / 初回回答日時 / メールアドレス / 電話番号 / お名前 / ふりがな / ニックネーム / 生年月日 / 性別 / ご職業 / 収入 / 郵便番号 / ご住所 / どこで知ったか / 学んでみたいコース / 現在の悩み / 目標・ゴール / 最初の回答ID / 最初の回答者ID",
             "1",
             f'=HYPERLINK("{source_url}","スキルプラス受講生データ")',
             "（元）タブ群",
-            "メールアドレス / 電話番号 / お名前 / ふりがな / ニックネーム / 回答日時 / 属性回答",
+            "メールアドレス / 電話番号 / お名前 / ふりがな / ニックネーム / 回答日時 / 属性回答 / 学んでみたいコース",
             "同一プランかつ同一受講生とみなせる回答を内部キーで統合し、プロフィール列は raw の回答から寄せる",
             base_status,
             f"'{checked_at}",
@@ -1179,9 +1215,9 @@ def build_rule_rows() -> List[List[object]]:
         ["項目", "ルール", "補足"],
         ["受講生一覧", "手入力で直さず、raw 形式のヘッダーを持つタブ群から再生成する", "収集シート由来の受講生マスタとして使う"],
         ["raw タブ判定", "タイトルではなくヘッダー構造で判定する", "`最新元データ一覧` と processed の管理タブを除外する"],
-        ["内部識別", "メール -> 電話番号 -> 氏名+ふりがな -> 氏名 -> ニックネーム -> 回答者ID -> 回答ID の順で内部キーを作る", "内部キーはシートに出さず、重複統合だけに使う"],
+        ["内部識別", "回答者ID -> メール -> 電話番号 -> 氏名+ふりがな -> 氏名 -> ニックネーム -> 回答ID の順で内部キーを作る", "内部キーはシートに出さず、重複統合だけに使う"],
         ["初回回答日時", "自己申告の入会日は使わず、raw に記録された初回回答日時だけを使う", "信頼できる一次データに寄せる"],
-        ["プロフィール列", "生年月日 / ご職業 / 収入 / 郵便番号 / ご住所 / 悩み / ゴールは raw 回答の実値を優先する", "統合シートの補完ではなく、受講生収集を正本にする"],
+        ["プロフィール列", "生年月日 / ご職業 / 収入 / 郵便番号 / ご住所 / 学んでみたいコース / 悩み / ゴールは raw 回答の実値を優先する", "統合シートの補完ではなく、受講生収集を正本にする"],
         ["プラン", "タブ名から `SPS / STD/オールインワン / プライム / エリート / ライト/秘密` を判定する", "どれにも当たらない raw タブは `その他` に残す"],
         ["除外ルール", "明確なテスト入力、または照合に使えない極端な疎データは取り込まない", "一文字名だけでは除外しない"],
         ["決済との接続", "決済加工はこの processed の `受講生一覧` を正の証拠に使う", "raw の受講生シートを直接読まない"],
@@ -1288,9 +1324,9 @@ def sync_skillplus_student_metrics_sheet(dry_run: bool = False, gc=None) -> dict
         style_table(
             target,
             tabs[STUDENT_TAB_NAME],
-            widths=[150, 150, 220, 120, 140, 140, 140, 100, 80, 140, 140, 100, 260, 180, 260, 260, 120, 120],
+            widths=[150, 150, 220, 120, 140, 140, 140, 100, 80, 140, 140, 100, 260, 180, 240, 260, 260, 120, 120],
             center_cols=[0],
-            left_cols=[2, 4, 5, 6, 9, 10, 12, 13, 14, 15],
+            left_cols=[2, 4, 5, 6, 9, 10, 12, 13, 14, 15, 16],
             date_cols=[7],
         )
         write_rows(target, tabs[SUMMARY_TAB_NAME], summary_rows)
